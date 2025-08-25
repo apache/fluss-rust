@@ -1,0 +1,197 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto2";
+
+package proto;
+
+// metadata request and response, request send from client to each server.
+message MetadataRequest {
+  repeated PbTablePath table_path = 1;
+  repeated PbPhysicalTablePath partitions_path = 2;
+
+  // note: currently, we assume the partition ids must belong to the table_paths in the
+  // metadata request
+  // todo: we won't need the assumption after we introduce metadata cache in server
+  repeated int64 partitions_id = 3 [packed = true];
+}
+
+message MetadataResponse {
+  optional PbServerNode coordinator_server = 1;
+  repeated PbServerNode tablet_servers = 2;
+  repeated PbTableMetadata table_metadata = 3;
+  repeated PbPartitionMetadata partition_metadata = 4;
+}
+
+// produce log request and response
+message ProduceLogRequest {
+  required int32 acks = 1;
+  required int64 table_id = 2;
+  required int32 timeout_ms = 3;
+  repeated PbProduceLogReqForBucket buckets_req = 4;
+}
+
+
+message ProduceLogResponse {
+  repeated PbProduceLogRespForBucket buckets_resp = 1;
+}
+
+
+// --------------- Inner classes ----------------
+message PbTablePath {
+  required string database_name = 1;
+  required string table_name = 2;
+}
+
+message PbPhysicalTablePath {
+  required string database_name = 1;
+  required string table_name = 2;
+  optional string partition_name = 3;
+}
+
+// For MetadataResponse, host and port are still used for all versions.
+// For UpdateMetadataRequest,
+//   * versions <= 0.6: host and port are used.
+//   * versions >= 0.7: listeners is used to replace host and port.
+message PbServerNode {
+  required int32 node_id = 1;
+  required string host = 2;
+  required int32 port = 3;
+  optional string listeners = 4;
+}
+
+message PbTableMetadata {
+  required PbTablePath table_path = 1;
+  required int64 table_id = 2;
+  required int32 schema_id = 3;
+  required bytes table_json = 4;
+  repeated PbBucketMetadata bucket_metadata = 5;
+  required int64 created_time = 6;
+  required int64 modified_time = 7;
+}
+
+message PbPartitionMetadata {
+  required int64 table_id = 1;
+  // the partition name and id for the partition
+  required string partition_name = 2;
+  required int64 partition_id = 3;
+  repeated PbBucketMetadata bucket_metadata = 4;
+}
+
+message PbBucketMetadata {
+  required int32 bucket_id = 1;
+  // optional as some time the leader may not elected yet
+  optional int32 leader_id = 2;
+  repeated int32 replica_id = 3 [packed = true];
+  // TODO: Add isr here.
+}
+
+message PbProduceLogReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required bytes records = 3;
+}
+
+message PbProduceLogRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  optional int64 base_offset = 5;
+}
+
+message CreateTableRequest {
+  required PbTablePath table_path = 1;
+  required bytes table_json = 2;
+  required bool ignore_if_exists = 3;
+}
+
+message CreateTableResponse {
+}
+
+
+message GetTableInfoRequest {
+  required PbTablePath table_path = 1;
+}
+
+message GetTableInfoResponse {
+  required int64 table_id = 1;
+  required int32 schema_id = 2;
+  required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+}
+
+
+// fetch log request and response
+message FetchLogRequest {
+  required int32 follower_server_id = 1;  // value -1 indicate the request from client.
+  required int32 max_bytes = 2;
+  repeated PbFetchLogReqForTable tables_req = 3;
+  optional int32 max_wait_ms = 4;
+  optional int32 min_bytes = 5;
+}
+
+message FetchLogResponse {
+  repeated PbFetchLogRespForTable tables_resp = 1;
+}
+
+message PbFetchLogReqForTable {
+  required int64 table_id = 1;
+  required bool projection_pushdown_enabled = 2;
+  repeated int32 projected_fields = 3 [packed = true];
+  repeated PbFetchLogReqForBucket buckets_req = 4;
+}
+
+
+message PbFetchLogReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // TODO leader epoch
+  required int64 fetch_offset = 3;
+  required int32 max_fetch_bytes = 4;
+}
+
+
+message PbFetchLogRespForTable {
+  required int64 table_id = 1;
+  repeated PbFetchLogRespForBucket buckets_resp = 2;
+}
+message PbFetchLogRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  optional int64 high_watermark = 5;
+  optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
+  optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
+  optional bytes records = 8;
+}
+
+message PbRemoteLogFetchInfo {
+  required string remote_log_tablet_dir = 1;
+  optional string partition_name = 2;
+  repeated PbRemoteLogSegment remote_log_segments = 3;
+  optional int32 first_start_pos = 4;
+}
+
+message PbRemoteLogSegment {
+  required string remote_log_segment_id = 1;
+  required int64 remote_log_start_offset = 2;
+  required int64 remote_log_end_offset = 3;
+  required int32 segment_size_in_bytes = 4;
+}
