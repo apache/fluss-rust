@@ -1,0 +1,21 @@
+[package]
+name = "fluss-python"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "fluss_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["extension-module"] }
+fluss = { workspace = true }
+tokio = { workspace = true }
+arrow = "55.1.0"
+arrow-pyarrow = "55.1.0"
+pyo3-async-runtimes = { version = "0.24.0", features = ["tokio-runtime"] }
+chrono = "0.4.41"
+once_cell = "1.21.3"
+pyo3-stub-gen = "0.12.2"

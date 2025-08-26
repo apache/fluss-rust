@@ -1,0 +1,82 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fluss-python"
+description = "Python bindings for Fluss"
+authors = [{name = "Fluss Team"}]
+license = {text = "Apache-2.0"}
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+
+dynamic = ["version"]
+
+dependencies = [
+    "mypy>=1.17.1",
+    "pandas>=2.3.1",
+    "pyarrow>=10.0.0",
+    "pandas>=1.5.0",
+    "duckdb>=0.9.0",
+    "pylance>=0.33.0",
+    "tqdm>=4.67.1",
+]
+
+[project.urls]
+Repository = "https://github.com/fluss-rust/fluss-rust"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.25.3",
+    "ruff>=0.9.10",
+    "maturin>=1.8.2",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "fluss_python"
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.toml" },
+  { file = "src/**/*.rs" },
+  { file = "../../crates/**/*.rs" },
+]
+
+[tool.ruff]
+line-length = 88
+fix = true
+
+[tool.ruff.lint]
+ignore = ["E402", "F403", "F405"]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 88
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint.isort]
+known-first-party = ["fluss_python"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "pdoc>=15.0.4",
+]

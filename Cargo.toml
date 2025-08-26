@@ -28,7 +28,7 @@ rust-version = "1.85"
 
 [workspace]
 resolver = "2"
-members = ["crates/fluss", "crates/examples"]
+members = ["crates/fluss", "crates/examples", "bindings/python"]
 
 [workspace.dependencies]
 fluss = { version = "0.1.0", path = "./crates/fluss" }
