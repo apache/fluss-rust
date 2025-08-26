@@ -1,0 +1,38 @@
+use crate::proto;
+use crate::proto::PbTablePath;
+use crate::rpc::api_key::ApiKey;
+use crate::rpc::api_version::ApiVersion;
+use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+
+use crate::metadata::TablePath;
+use crate::{impl_read_version_type, impl_write_version_type};
+use bytes::{Buf, BufMut};
+use prost::Message;
+
+#[derive(Debug)]
+pub struct GetLatestLakeSnapshotRequest {
+    pub inner_request: proto::GetLatestLakeSnapshotRequest,
+}
+
+impl GetLatestLakeSnapshotRequest {
+    pub fn new(table_path: &TablePath) -> Self {
+        let inner_request = proto::GetLatestLakeSnapshotRequest {
+            table_path: PbTablePath {
+                database_name: table_path.database().to_string(),
+                table_name: table_path.table().to_string(),
+            },
+        };
+
+        Self { inner_request }
+    }
+}
+
+impl RequestBody for GetLatestLakeSnapshotRequest {
+    type ResponseBody = proto::GetLatestLakeSnapshotResponse;
+    const API_KEY: ApiKey = ApiKey::GetLatestLakeSnapshot;
+    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
+}
+
+impl_write_version_type!(GetLatestLakeSnapshotRequest);
+impl_read_version_type!(proto::GetLatestLakeSnapshotResponse);

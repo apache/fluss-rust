@@ -24,6 +24,7 @@ use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_a
 use crate::rpc::RpcClient;
 use crate::util::FairBucketStatusMap;
 use parking_lot::RwLock;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::slice::from_ref;
 use std::sync::Arc;
@@ -31,6 +32,7 @@ use std::time::Duration;
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 #[allow(dead_code)]
+const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 const LOG_FETCH_MAX_BYTES_FOR_BUCKET: i32 = 1024;
 const LOG_FETCH_MIN_BYTES: i32 = 1;
 const LOG_FETCH_WAIT_MAX_TIME: i32 = 500;

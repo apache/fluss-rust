@@ -72,7 +72,6 @@ impl RpcClient {
                 return Ok(connection.clone());
             }
         }
-
         let new_server = self.connect(server_node).await?;
         self.connections
             .write()
