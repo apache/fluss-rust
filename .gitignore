@@ -18,3 +18,14 @@ Cargo.lock
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 .vscode/
+.venv/
+*.so
+
+# Python bindings generated files
+bindings/python/python/fluss_python/*.so
+bindings/python/python/fluss_python/*.dylib
+bindings/python/python/fluss_python/*.pyd
+bindings/python/python/fluss_python/fluss_python.cpython-*
+bindings/python/python/fluss_python/__pycache__/
+*.pyc
+*.png
