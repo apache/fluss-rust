@@ -26,4 +26,5 @@ header:
     - 'LICENSE'
     - 'NOTICE'
     - 'DISCLAIMER'
+    - 'bindings/python/uv.lock'
   comment: on-failure
