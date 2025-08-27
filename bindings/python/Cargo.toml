@@ -17,19 +17,21 @@
 
 [package]
 name = "fluss_python"
-edition.workspace = true
-version.workspace = true
-license.workspace = true
-rust-version.workspace = true
+edition = "2024"
+version = "0.1.0"
+license = "apache-2.0"
+rust-version = "1.85"
 
 [lib]
 name = "fluss_python"
 crate-type = ["cdylib"]
 
+[workspace]
+
 [dependencies]
 pyo3 = { version = "0.24", features = ["extension-module"] }
-fluss = { workspace = true }
-tokio = { workspace = true }
+fluss = { path = "../../crates/fluss" }
+tokio = { version = "1.44.2", features = ["full"] }
 arrow = "55.1.0"
 arrow-pyarrow = "55.1.0"
 pyo3-async-runtimes = { version = "0.24.0", features = ["tokio-runtime"] }
