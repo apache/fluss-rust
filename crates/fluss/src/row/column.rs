@@ -45,6 +45,14 @@ impl ColumnarRow {
     pub fn set_row_id(&mut self, row_id: usize) {
         self.row_id = row_id
     }
+
+    pub fn get_row_id(&self) -> usize {
+        self.row_id
+    }
+
+    pub fn get_record_batch(&self) -> &Arc<RecordBatch> {
+        &self.record_batch
+    }
 }
 
 impl InternalRow for ColumnarRow {

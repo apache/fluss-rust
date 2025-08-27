@@ -126,6 +126,7 @@ impl Cluster {
                 table_metadata.modified_time,
             );
             table_info_by_path.insert(table_path.clone(), table_info);
+            table_id_by_path.insert(table_path.clone(), table_id);
 
             // now, get bucket matadata
             let mut found_unavailable_bucket = false;

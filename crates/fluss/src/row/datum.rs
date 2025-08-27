@@ -19,7 +19,7 @@ use chrono::Datelike;
 
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
-use arrow::array::{ArrayBuilder, Int8Builder, Int16Builder, Int32Builder, StringBuilder};
+use arrow::array::{ArrayBuilder, Int8Builder, Int16Builder, Int32Builder, Int64Builder, Float32Builder, Float64Builder, BooleanBuilder, StringBuilder, BinaryBuilder, Date32Builder, TimestampNanosecondBuilder};
 use chrono::NaiveDate;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
@@ -46,6 +46,8 @@ pub enum Datum<'a> {
     Int32(i32),
     #[display("{0}")]
     Int64(i64),
+    #[display("{0}")]
+    Float32(F32), 
     #[display("{0}")]
     Float64(F64),
     #[display("'{0}'")]
@@ -96,6 +98,20 @@ impl From<Option<&()>> for Datum<'_> {
     }
 }
 
+impl<'a> From<f32> for Datum<'a> {
+    #[inline]
+    fn from(f: f32) -> Datum<'a> {
+        Datum::Float32(F32::from(f))
+    }
+}
+
+impl<'a> From<f64> for Datum<'a> {
+    #[inline]
+    fn from(f: f64) -> Datum<'a> {
+        Datum::Float64(F64::from(f))
+    }
+}
+
 impl TryFrom<&Datum<'_>> for i32 {
     type Error = ();
 
@@ -126,45 +142,53 @@ pub trait ToArrow {
 
 impl Datum<'_> {
     pub fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()> {
+        macro_rules! append_by_type {
+            ($builder_type:ty, append_null) => {
+                if let Some(b) = builder.as_any_mut().downcast_mut::<$builder_type>() {
+                    b.append_null();
+                    return Ok(());
+                }
+            };
+            ($builder_type:ty, append_value, $value:expr) => {
+                if let Some(b) = builder.as_any_mut().downcast_mut::<$builder_type>() {
+                    b.append_value($value);
+                    return Ok(());
+                }
+            };
+        }
+        
         match self {
             Datum::Null => {
-                todo!()
+                append_by_type!(BooleanBuilder, append_null);
+                append_by_type!(Int16Builder, append_null);
+                append_by_type!(Int32Builder, append_null);
+                append_by_type!(Int64Builder, append_null);
+                append_by_type!(Float32Builder, append_null);
+                append_by_type!(Float64Builder, append_null);
+                append_by_type!(StringBuilder, append_null);
+                append_by_type!(BinaryBuilder, append_null);
             }
-            Datum::Bool(_v) => {
-                todo!()
-            }
-            Datum::Int16(_v) => {
-                todo!()
-            }
-            Datum::Int32(v) => {
-                v.append_to(builder)?;
-            }
-            Datum::Int64(_v) => {
-                todo!()
-            }
-            Datum::Float64(_v) => {
-                todo!()
-            }
-            Datum::String(v) => {
-                v.append_to(builder)?;
-            }
-            Datum::Blob(_v) => {
-                todo!()
-            }
-            Datum::Decimal(_v) => {
-                todo!()
-            }
-            Datum::Date(_v) => {
-                todo!()
-            }
-            Datum::Timestamp(_v) => {
-                todo!()
-            }
-            Datum::TimestampTz(_v) => {
-                todo!()
+            Datum::Bool(v) => append_by_type!(BooleanBuilder, append_value, *v),
+            Datum::Int16(v) => append_by_type!(Int16Builder, append_value, *v),
+            Datum::Int32(v) => append_by_type!(Int32Builder, append_value, *v),
+            Datum::Int64(v) => append_by_type!(Int64Builder, append_value, *v),
+            Datum::Float32(v) => append_by_type!(Float32Builder, append_value, v.into_inner()),
+            Datum::Float64(v) => append_by_type!(Float64Builder, append_value, v.into_inner()),
+            Datum::String(v) => append_by_type!(StringBuilder, append_value, *v),
+            Datum::Blob(v) => append_by_type!(BinaryBuilder, append_value, v.as_ref()),
+            Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {
+                return Err(RowConvertError(format!(
+                    "Type {:?} is not yet supported for Arrow conversion", 
+                    std::mem::discriminant(self)
+                )));
             }
         }
-        Ok(())
+
+        Err(RowConvertError(format!(
+            "Cannot append {:?} to builder of type {}",
+            self,
+            std::any::type_name_of_val(builder)
+        )))
     }
 }
 
@@ -190,6 +214,8 @@ macro_rules! impl_to_arrow {
 impl_to_arrow!(i8, Int8Builder);
 impl_to_arrow!(i16, Int16Builder);
 impl_to_arrow!(i32, Int32Builder);
+impl_to_arrow!(f32, Float32Builder);
+impl_to_arrow!(f64, Float64Builder);
 impl_to_arrow!(&str, StringBuilder);
 
 #[allow(dead_code)]

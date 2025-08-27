@@ -93,13 +93,15 @@ impl RecordAccumulator {
         }
 
         let table_path = &record.table_path;
-
+        let table_info = cluster.get_table(table_path);
         let row_type = &cluster.get_table(table_path).row_type;
 
+        let schema_id = table_info.schema_id;
+        
         let mut batch = ArrowLog(ArrowLogWriteBatch::new(
             self.batch_id.fetch_add(1, Ordering::Relaxed),
             table_path.as_ref().clone(),
-            0,
+            schema_id,
             row_type,
             bucket_id,
             current_time_ms(),

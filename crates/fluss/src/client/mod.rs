@@ -16,11 +16,13 @@
 // under the License.
 
 mod admin;
-mod connection;
 mod table;
 mod write;
-
-pub use connection::*;
+mod connection;
 mod metadata;
 
+pub use admin::*;
+pub use table::*;
 pub use write::*;
+pub use connection::*;
+pub use metadata::*;

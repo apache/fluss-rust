@@ -584,6 +584,18 @@ impl Display for LogFormat {
     }
 }
 
+impl LogFormat {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_uppercase().as_str() {
+            "ARROW" => Ok(LogFormat::ARROW),
+            "INDEXED" => Ok(LogFormat::INDEXED),
+            _ => Err(crate::error::Error::InvalidTableError(
+                format!("Unknown log format: {}", s)
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum KvFormat {
     INDEXED,
@@ -597,6 +609,18 @@ impl Display for KvFormat {
             KvFormat::INDEXED => write!(f, "INDEXED")?,
         }
         Ok(())
+    }
+}
+
+impl KvFormat {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_uppercase().as_str() {
+            "INDEXED" => Ok(KvFormat::INDEXED),
+            "COMPACTED" => Ok(KvFormat::COMPACTED),
+            _ => Err(crate::error::Error::InvalidTableError(
+                format!("Unknown kv format: {}", s)
+            )),
+        }
     }
 }
 
@@ -628,6 +652,27 @@ impl TablePath {
     #[inline]
     pub fn table(&self) -> &str {
         &self.table
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PhysicalTablePath {
+    table_path: TablePath,
+    partition: Option<String>,
+}
+
+impl PhysicalTablePath {
+    pub fn of(table_path: TablePath) -> Self {
+        Self {
+            table_path,
+            partition: None,
+        }
+    }
+
+    // TODO: support partition
+
+    pub fn get_table_path(&self) -> &TablePath {
+        &self.table_path
     }
 }
 
@@ -916,5 +961,28 @@ impl TableBucket {
 
     pub fn partition_id(&self) -> Option<i64> {
         self.partition_id
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LakeSnapshot {
+    pub snapshot_id: i64,
+    pub table_buckets_offset: HashMap<TableBucket, i64>,
+}
+
+impl LakeSnapshot {
+    pub fn new(snapshot_id: i64, table_buckets_offset: HashMap<TableBucket, i64>) -> Self {
+        Self {
+            snapshot_id,
+            table_buckets_offset,
+        }
+    }
+
+    pub fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
+    }
+
+    pub fn table_buckets_offset(&self) -> &HashMap<TableBucket, i64> {
+        &self.table_buckets_offset
     }
 }

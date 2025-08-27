@@ -63,6 +63,26 @@ message PbPhysicalTablePath {
   optional string partition_name = 3;
 }
 
+message ListOffsetsRequest {
+  required int32 follower_server_id = 1;  // value -1 indicate the request from client.
+  required int32 offset_type = 2; // value can be 0,1,2 (see ListOffsetsParam for more details)
+  required int64 table_id = 3;
+  optional int64 partition_id = 4;
+  repeated int32 bucket_id = 5 [packed = true]; // it is recommended to use packed for repeated numerics to get more efficient encoding
+  optional int64 startTimestamp = 6;
+}
+
+message ListOffsetsResponse {
+  repeated PbListOffsetsRespForBucket buckets_resp = 1;
+}
+
+message PbListOffsetsRespForBucket {
+  required int32 bucket_id = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+  optional int64 offset = 4;
+}
+
 // For MetadataResponse, host and port are still used for all versions.
 // For UpdateMetadataRequest,
 //   * versions <= 0.6: host and port are used.
@@ -123,6 +143,21 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+message DropTableRequest {
+  required PbTablePath table_path = 1;
+  required bool ignore_if_not_exists = 2;
+}
+
+message DropTableResponse {
+}
+
+message TableExistsRequest {
+  required PbTablePath table_path = 1;
+}
+
+message TableExistsResponse {
+  required bool exists = 1;
+}
 
 message GetTableInfoRequest {
   required PbTablePath table_path = 1;
@@ -134,6 +169,57 @@ message GetTableInfoResponse {
   required bytes table_json = 3;
   required int64 created_time = 4;
   required int64 modified_time = 5;
+}
+
+message ListTablesRequest {
+  required string database_name = 1;
+}
+
+message ListTablesResponse {
+  repeated string table_name = 1;
+}
+
+message CreateDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_exists = 2;
+  optional bytes database_json = 3;
+}
+
+message CreateDatabaseResponse {
+}
+
+message GetDatabaseInfoRequest {
+  required string database_name = 1;
+}
+
+message GetDatabaseInfoResponse {
+  required bytes database_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+}
+
+message DropDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_not_exists = 2;
+  required bool cascade = 3;
+}
+
+message DropDatabaseResponse {
+}
+
+message DatabaseExistsRequest {
+  required string database_name = 1;
+}
+
+message DatabaseExistsResponse {
+  required bool exists = 1;
+}
+
+message ListDatabasesRequest {
+}
+
+message ListDatabasesResponse {
+  repeated string database_name = 1;
 }
 
 
@@ -194,4 +280,21 @@ message PbRemoteLogSegment {
   required int64 remote_log_start_offset = 2;
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
+}
+
+// fetch latest lake snapshot
+message GetLatestLakeSnapshotRequest {
+  required PbTablePath table_path = 1;
+}
+
+message GetLatestLakeSnapshotResponse {
+  required int64 table_id = 1;
+  required int64 snapshotId = 2;
+  repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
+}
+
+message PbLakeSnapshotForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int64 log_offset = 3;
 }
