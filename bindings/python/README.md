@@ -19,7 +19,7 @@ Python bindings for Fluss using PyO3 and Maturin.
 
 ```bash
 cd bindings/python
-uv sync --extra dev
+uv sync --all-extras
 ```
 
 ### 2. Build Development Version

@@ -85,45 +85,42 @@ wheels = [
 name = "fluss-python"
 source = { editable = "." }
 dependencies = [
-    { name = "duckdb" },
-    { name = "mypy" },
     { name = "pandas" },
     { name = "pyarrow" },
-    { name = "pylance" },
-    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
 dev = [
     { name = "maturin" },
+    { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
-
-[package.dev-dependencies]
-dev = [
+docs = [
     { name = "pdoc" },
+]
+extra = [
+    { name = "duckdb" },
+    { name = "pylance" },
+    { name = "tqdm" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "duckdb", specifier = ">=0.9.0" },
+    { name = "duckdb", marker = "extra == 'extra'", specifier = ">=0.9.0" },
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.8.2" },
-    { name = "mypy", specifier = ">=1.17.1" },
-    { name = "pandas", specifier = ">=1.5.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.17.1" },
     { name = "pandas", specifier = ">=2.3.1" },
+    { name = "pdoc", marker = "extra == 'docs'", specifier = ">=15.0.4" },
     { name = "pyarrow", specifier = ">=10.0.0" },
-    { name = "pylance", specifier = ">=0.33.0" },
+    { name = "pylance", marker = "extra == 'extra'", specifier = ">=0.33.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.5" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.10" },
-    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "tqdm", marker = "extra == 'extra'", specifier = ">=4.67.1" },
 ]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pdoc", specifier = ">=15.0.4" }]
+provides-extras = ["dev", "docs", "extra"]
 
 [[package]]
 name = "iniconfig"
