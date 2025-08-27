@@ -142,7 +142,6 @@ async def main():
     # Now scan the table to verify data was written
     print("\n--- Scanning table ---")
     try:
-        # TODO: support async log scanner
         log_scanner = table.new_log_scanner_sync()
         print(f"Created log scanner: {log_scanner}")
 
@@ -171,11 +170,6 @@ async def main():
             print(f"\nAs Pandas DataFrame:\n{df_result}")
         except Exception as e:
             print(f"Could not convert to Pandas: {e}")
-
-        # TODO: support to_arrow_batch_reader()
-        # which is reserved for streaming use cases
-
-        # TODO: support to_duckdb()
 
     except Exception as e:
         print(f"Error during scanning: {e}")
