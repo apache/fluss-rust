@@ -415,38 +415,4 @@ impl LogScanner {
             end_timestamp: None,
         }
     }
-
-    /// Filter scan records by timestamp, returns (filtered_records, reached_end)
-    // TODO: revise this function after implementing list_offsets
-    fn filter_records_by_timestamp(
-        scan_records: fcore::record::ScanRecords, 
-        end_timestamp: i64
-    ) -> (fcore::record::ScanRecords, bool) {
-        use std::collections::HashMap;
-        
-        let records_map = scan_records.into_records();
-        let mut filtered_map = HashMap::new();
-        let mut reached_end = false;
-        
-        for (table_bucket, records) in records_map {
-            let mut filtered_records = Vec::new();
-            
-            for record in records {
-                // Check if this record's timestamp exceeds end_timestamp
-                if record.timestamp() > end_timestamp {
-                    reached_end = true;
-                    break; // Stop processing records for this bucket
-                }
-                
-                // Include this record since it's within the time range
-                filtered_records.push(record);
-            }
-            
-            if !filtered_records.is_empty() {
-                filtered_map.insert(table_bucket, filtered_records);
-            }
-        }
-        
-        (fcore::record::ScanRecords::new(filtered_map), reached_end)
-    }
 }
