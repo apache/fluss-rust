@@ -15,16 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+[package]
+name = "fluss_python"
+edition = "2024"
+version = "0.1.0"
+license = "apache-2.0"
+rust-version = "1.85"
 
-  paths-ignore:
-    - '.github/PULL_REQUEST_TEMPLATE.md'
-    - '.gitignore'
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'bindings/python/uv.lock'
-  comment: on-failure
+[lib]
+name = "fluss_python"
+crate-type = ["cdylib"]
+
+[workspace]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["extension-module"] }
+fluss = { path = "../../crates/fluss" }
+tokio = { version = "1.44.2", features = ["full"] }
+arrow = "55.1.0"
+arrow-pyarrow = "55.1.0"
+pyo3-async-runtimes = { version = "0.24.0", features = ["tokio-runtime"] }
+chrono = "0.4.41"
+once_cell = "1.21.3"
