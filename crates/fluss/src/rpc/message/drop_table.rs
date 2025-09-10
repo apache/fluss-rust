@@ -23,8 +23,8 @@ use crate::proto::DropTableResponse;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
-use crate::rpc::message::{RequestBody, ReadVersionedType, WriteVersionedType};
 use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 
 use bytes::{Buf, BufMut};
 use prost::Message;
@@ -35,10 +35,7 @@ pub struct DropTableRequest {
 }
 
 impl DropTableRequest {
-    pub fn new(
-        table_path: &TablePath,
-        ignore_if_not_exists: bool,
-    ) -> FlussResult<Self> {
+    pub fn new(table_path: &TablePath, ignore_if_not_exists: bool) -> FlussResult<Self> {
         Ok(DropTableRequest {
             inner_request: proto::DropTableRequest {
                 table_path: to_table_path(table_path),

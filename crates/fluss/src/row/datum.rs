@@ -19,7 +19,11 @@ use chrono::Datelike;
 
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
-use arrow::array::{ArrayBuilder, Int8Builder, Int16Builder, Int32Builder, Int64Builder, Float32Builder, Float64Builder, BooleanBuilder, StringBuilder, BinaryBuilder, Date32Builder, TimestampNanosecondBuilder};
+use arrow::array::{
+    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+    Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder,
+    TimestampNanosecondBuilder,
+};
 use chrono::NaiveDate;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
@@ -47,7 +51,7 @@ pub enum Datum<'a> {
     #[display("{0}")]
     Int64(i64),
     #[display("{0}")]
-    Float32(F32), 
+    Float32(F32),
     #[display("{0}")]
     Float64(F64),
     #[display("'{0}'")]
@@ -156,7 +160,7 @@ impl Datum<'_> {
                 }
             };
         }
-        
+
         match self {
             Datum::Null => {
                 append_by_type!(BooleanBuilder, append_null);
@@ -178,7 +182,7 @@ impl Datum<'_> {
             Datum::Blob(v) => append_by_type!(BinaryBuilder, append_value, v.as_ref()),
             Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {
                 return Err(RowConvertError(format!(
-                    "Type {:?} is not yet supported for Arrow conversion", 
+                    "Type {:?} is not yet supported for Arrow conversion",
                     std::mem::discriminant(self)
                 )));
             }

@@ -589,9 +589,10 @@ impl LogFormat {
         match s.to_uppercase().as_str() {
             "ARROW" => Ok(LogFormat::ARROW),
             "INDEXED" => Ok(LogFormat::INDEXED),
-            _ => Err(crate::error::Error::InvalidTableError(
-                format!("Unknown log format: {}", s)
-            )),
+            _ => Err(crate::error::Error::InvalidTableError(format!(
+                "Unknown log format: {}",
+                s
+            ))),
         }
     }
 }
@@ -617,9 +618,10 @@ impl KvFormat {
         match s.to_uppercase().as_str() {
             "INDEXED" => Ok(KvFormat::INDEXED),
             "COMPACTED" => Ok(KvFormat::COMPACTED),
-            _ => Err(crate::error::Error::InvalidTableError(
-                format!("Unknown kv format: {}", s)
-            )),
+            _ => Err(crate::error::Error::InvalidTableError(format!(
+                "Unknown kv format: {}",
+                s
+            ))),
         }
     }
 }

@@ -21,8 +21,8 @@ use crate::error::Result as FlussResult;
 use crate::proto::ListTablesResponse;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
-use crate::rpc::message::{RequestBody, ReadVersionedType, WriteVersionedType};
 use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 
 use bytes::{Buf, BufMut};
 use prost::Message;

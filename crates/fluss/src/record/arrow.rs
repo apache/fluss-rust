@@ -16,9 +16,9 @@
 // under the License.
 
 use arrow::array::{
-    ArrayBuilder, ArrayRef, BooleanBuilder, Float32Builder, Float64Builder, Int8Builder,
-    Int16Builder, Int32Builder, Int64Builder, StringBuilder, UInt8Builder, UInt16Builder,
-    UInt32Builder, UInt64Builder, BinaryBuilder,
+    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
+    Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder, UInt8Builder,
+    UInt16Builder, UInt32Builder, UInt64Builder,
 };
 use arrow::{
     array::RecordBatch,

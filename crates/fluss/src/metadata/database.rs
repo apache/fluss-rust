@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use crate::metadata::JsonSerde;
-use serde_json::{json, Value};
 use crate::error::Error::JsonSerdeError;
+use crate::error::Result;
+use crate::metadata::JsonSerde;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DatabaseDescriptor {
@@ -104,7 +104,8 @@ impl DatabaseDescriptorBuilder {
     }
 
     pub fn custom_property(mut self, key: &str, value: &str) -> Self {
-        self.custom_properties.insert(key.to_string(), value.to_string());
+        self.custom_properties
+            .insert(key.to_string(), value.to_string());
         self
     }
 

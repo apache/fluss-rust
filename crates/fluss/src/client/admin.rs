@@ -16,12 +16,20 @@
 // under the License.
 
 use crate::client::metadata::Metadata;
-use crate::metadata::{DatabaseDescriptor, DatabaseInfo, JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath, LakeSnapshot};
+use crate::metadata::{
+    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, PhysicalTablePath, TableBucket,
+    TableDescriptor, TableInfo, TablePath,
+};
+use crate::rpc::message::{
+    CreateDatabaseRequest, CreateTableRequest, DatabaseExistsRequest, DropDatabaseRequest,
+    DropTableRequest, GetDatabaseInfoRequest, GetLatestLakeSnapshotRequest, GetTableRequest,
+    ListDatabasesRequest, ListOffsetsRequest, ListOffsetsResult, ListTablesRequest, OffsetSpec,
+    TableExistsRequest,
+};
 use crate::rpc::{RpcClient, ServerConnection};
-use crate::rpc::message::{GetTableRequest, CreateTableRequest, DropTableRequest, CreateDatabaseRequest, ListTablesRequest, TableExistsRequest, DropDatabaseRequest, ListDatabasesRequest, DatabaseExistsRequest, GetDatabaseInfoRequest, OffsetSpec, ListOffsetsRequest, ListOffsetsResult, GetLatestLakeSnapshotRequest};
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
 use crate::error::Result;
@@ -85,17 +93,10 @@ impl FlussAdmin {
         Ok(())
     }
 
-    pub async fn drop_table(
-        &self,
-        table_path: &TablePath,
-        ignore_if_exists: bool,
-    ) -> Result<()> {
+    pub async fn drop_table(&self, table_path: &TablePath, ignore_if_exists: bool) -> Result<()> {
         let _response = self
             .admin_gateway
-            .request(DropTableRequest::new(
-                table_path,
-                ignore_if_exists,
-            )?)
+            .request(DropTableRequest::new(table_path, ignore_if_exists)?)
             .await?;
         Ok(())
     }
@@ -152,7 +153,11 @@ impl FlussAdmin {
     ) -> Result<()> {
         let _response = self
             .admin_gateway
-            .request(DropDatabaseRequest::new(database_name, ignore_if_not_exists, cascade)?)
+            .request(DropDatabaseRequest::new(
+                database_name,
+                ignore_if_not_exists,
+                cascade,
+            )?)
             .await?;
         Ok(())
     }
@@ -178,14 +183,11 @@ impl FlussAdmin {
     /// Get database information
     pub async fn get_database_info(&self, database_name: &str) -> Result<DatabaseInfo> {
         let request = GetDatabaseInfoRequest::new(database_name)?;
-        let response = self
-            .admin_gateway
-            .request(request)
-            .await?;
-        
+        let response = self.admin_gateway.request(request).await?;
+
         // Convert proto response to DatabaseInfo
         let database_descriptor = DatabaseDescriptor::from_json_bytes(&response.database_json)?;
-        
+
         Ok(DatabaseInfo::new(
             database_name.to_string(),
             database_descriptor,
@@ -204,29 +206,30 @@ impl FlussAdmin {
         // TODO: support partition_id
         let partition_id = None;
 
-        self.metadata.check_and_update_table_metadata(&[table_path.get_table_path().clone()]).await?;
+        self.metadata
+            .check_and_update_table_metadata(&[table_path.get_table_path().clone()])
+            .await?;
 
         let cluster = self.metadata.get_cluster();
         let table_id_map = cluster.get_table_id_by_path();
         let table_id = table_id_map
             .get(table_path.get_table_path())
             .copied()
-            .ok_or_else(|| crate::error::Error::InvalidTableError(format!(
-                "Table not found: {}", table_path.get_table_path()
-            )))?;
-        
+            .ok_or_else(|| {
+                crate::error::Error::InvalidTableError(format!(
+                    "Table not found: {}",
+                    table_path.get_table_path()
+                ))
+            })?;
+
         // Prepare requests
-        let request_map = self.prepare_list_offsets_requests(
-            table_id,
-            partition_id,
-            buckets,
-            offset_spec
-        )?;
+        let request_map =
+            self.prepare_list_offsets_requests(table_id, partition_id, buckets, offset_spec)?;
 
         // Create channels for results
         let mut bucket_to_offset_map = HashMap::new();
         let mut senders = HashMap::new();
-        
+
         for &bucket in buckets {
             let (sender, receiver) = oneshot::channel();
             bucket_to_offset_map.insert(bucket, receiver);
@@ -240,7 +243,7 @@ impl FlussAdmin {
     }
 
     fn prepare_list_offsets_requests(
-        &self, 
+        &self,
         table_id: i64,
         partition_id: Option<i64>,
         buckets: &[i32],
@@ -248,14 +251,16 @@ impl FlussAdmin {
     ) -> Result<HashMap<i32, ListOffsetsRequest>> {
         let cluster = self.metadata.get_cluster();
         let mut node_for_bucket_list: HashMap<i32, Vec<i32>> = HashMap::new();
-        
+
         for &bucket_id in buckets {
             let table_bucket = TableBucket::new(table_id, bucket_id);
-            let leader = cluster.leader_for(&table_bucket)
-                .ok_or_else(|| crate::error::Error::InvalidTableError(
-                    format!("No leader found for table bucket: table_id={}, bucket_id={}", table_id, bucket_id)
-                ))?;
-            
+            let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
+                crate::error::Error::InvalidTableError(format!(
+                    "No leader found for table bucket: table_id={}, bucket_id={}",
+                    table_id, bucket_id
+                ))
+            })?;
+
             node_for_bucket_list
                 .entry(leader.id())
                 .or_insert_with(Vec::new)
@@ -263,7 +268,7 @@ impl FlussAdmin {
         }
 
         let mut list_offsets_requests = HashMap::new();
-        for(leader_id, bucket_ids) in node_for_bucket_list {
+        for (leader_id, bucket_ids) in node_for_bucket_list {
             let request = Self::make_list_offsets_request(
                 table_id,
                 partition_id,
@@ -291,36 +296,39 @@ impl FlussAdmin {
         mut senders: HashMap<i32, oneshot::Sender<Result<i64>>>,
     ) -> Result<()> {
         let mut tasks = Vec::new();
-        
+
         for (leader_id, request) in request_map {
             let rpc_client = self.rpc_client.clone();
             let metadata = self.metadata.clone();
-            
+
             let mut bucket_senders = HashMap::new();
             for &bucket_id in &request.inner_request.bucket_id {
                 if let Some(sender) = senders.remove(&bucket_id) {
                     bucket_senders.insert(bucket_id, sender);
                 }
             }
-            
+
             let task = tokio::spawn(async move {
                 let cluster = metadata.get_cluster();
-                let tablet_server = cluster.get_tablet_server(leader_id)
-                    .ok_or_else(|| crate::error::Error::InvalidTableError(
-                        format!("Tablet server {} not found", leader_id)
-                    ))?;
-                
+                let tablet_server = cluster.get_tablet_server(leader_id).ok_or_else(|| {
+                    crate::error::Error::InvalidTableError(format!(
+                        "Tablet server {} not found",
+                        leader_id
+                    ))
+                })?;
+
                 let connection = rpc_client.get_connection(tablet_server).await?;
-            
+
                 let response = connection.request(request).await?;
-                
+
                 for bucket_resp in response.buckets_resp {
                     if let Some(sender) = bucket_senders.remove(&bucket_resp.bucket_id) {
                         let result = if let Some(error_code) = bucket_resp.error_code {
                             if error_code != 0 {
                                 Err(crate::error::Error::WriteError(
-                                    bucket_resp.error_message
-                                        .unwrap_or_else(|| format!("Error code: {}", error_code))
+                                    bucket_resp
+                                        .error_message
+                                        .unwrap_or_else(|| format!("Error code: {}", error_code)),
                                 ))
                             } else {
                                 Ok(bucket_resp.offset.unwrap_or(0))
@@ -328,22 +336,23 @@ impl FlussAdmin {
                         } else {
                             Ok(bucket_resp.offset.unwrap_or(0))
                         };
-                        
+
                         let _ = sender.send(result);
                     }
                 }
-                
+
                 Ok::<(), crate::error::Error>(())
             });
-            
+
             tasks.push(task);
         }
-        
+
         for task in tasks {
-            task.await
-                .map_err(|e| crate::error::Error::WriteError(format!("Task join error: {}", e)))??;
+            task.await.map_err(|e| {
+                crate::error::Error::WriteError(format!("Task join error: {}", e))
+            })??;
         }
-        
+
         Ok(())
     }
 
@@ -363,6 +372,9 @@ impl FlussAdmin {
             }
         }
 
-        Ok(LakeSnapshot::new(response.snapshot_id, table_buckets_offset))
+        Ok(LakeSnapshot::new(
+            response.snapshot_id,
+            table_buckets_offset,
+        ))
     }
 }
