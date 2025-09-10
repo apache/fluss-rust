@@ -155,34 +155,31 @@ impl JsonSerde for DatabaseDescriptor {
             builder = builder.comment(&comment);
         }
 
-        // Deserialize custom properties
+        // Deserialize custom properties directly
         let custom_properties = if let Some(props_node) = node.get(Self::CUSTOM_PROPERTIES_NAME) {
-            Self::deserialize_properties(props_node)?
+            let obj = props_node.as_object().ok_or_else(|| {
+                JsonSerdeError("Custom properties should be an object".to_string())
+            })?;
+
+            let mut properties = HashMap::with_capacity(obj.len());
+            for (key, value) in obj {
+                properties.insert(
+                    key.clone(),
+                    value
+                        .as_str()
+                        .ok_or_else(|| {
+                            JsonSerdeError("Property value should be a string".to_string())
+                        })?
+                        .to_owned(),
+                );
+            }
+            properties
         } else {
             HashMap::new()
         };
         builder = builder.custom_properties(custom_properties);
 
         builder.build()
-    }
-
-    fn deserialize_properties(node: &Value) -> Result<HashMap<String, String>> {
-        let obj = node
-            .as_object()
-            .ok_or_else(|| JsonSerdeError("Custom properties should be an object".to_string()))?;
-
-        let mut properties = HashMap::with_capacity(obj.len());
-        for (key, value) in obj {
-            properties.insert(
-                key.clone(),
-                value
-                    .as_str()
-                    .ok_or_else(|| JsonSerdeError("Property value should be a string".to_string()))?
-                    .to_owned(),
-            );
-        }
-
-        Ok(properties)
     }
 }
 
