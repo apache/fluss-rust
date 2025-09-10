@@ -35,13 +35,13 @@ pub struct DropTableRequest {
 }
 
 impl DropTableRequest {
-    pub fn new(table_path: &TablePath, ignore_if_not_exists: bool) -> FlussResult<Self> {
-        Ok(DropTableRequest {
+    pub fn new(table_path: &TablePath, ignore_if_not_exists: bool) -> Self {
+        DropTableRequest {
             inner_request: proto::DropTableRequest {
                 table_path: to_table_path(table_path),
                 ignore_if_not_exists,
             },
-        })
+        }
     }
 }
 

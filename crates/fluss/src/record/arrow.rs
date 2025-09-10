@@ -439,7 +439,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
         DataType::Time(_) => todo!(),
         DataType::Timestamp(_) => todo!(),
         DataType::TimestampLTz(_) => todo!(),
-        DataType::Bytes(_) => ArrowDataType::Binary,
+        DataType::Bytes(_) => todo!(),
         DataType::Binary(_) => todo!(),
         DataType::Array(_data_type) => todo!(),
         DataType::Map(_data_type) => todo!(),

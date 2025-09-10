@@ -35,12 +35,12 @@ pub struct TableExistsRequest {
 }
 
 impl TableExistsRequest {
-    pub fn new(table_path: &TablePath) -> FlussResult<Self> {
-        Ok(TableExistsRequest {
+    pub fn new(table_path: &TablePath) -> Self {
+        TableExistsRequest {
             inner_request: proto::TableExistsRequest {
                 table_path: to_table_path(table_path),
             },
-        })
+        }
     }
 }
 

@@ -33,12 +33,12 @@ pub struct ListTablesRequest {
 }
 
 impl ListTablesRequest {
-    pub fn new(database_name: &str) -> FlussResult<Self> {
-        Ok(ListTablesRequest {
+    pub fn new(database_name: &str) -> Self {
+        ListTablesRequest {
             inner_request: proto::ListTablesRequest {
                 database_name: database_name.to_string(),
             },
-        })
+        }
     }
 }
 

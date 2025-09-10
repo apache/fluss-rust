@@ -30,12 +30,12 @@ pub struct GetDatabaseInfoRequest {
 }
 
 impl GetDatabaseInfoRequest {
-    pub fn new(database_name: &str) -> FlussResult<Self> {
-        Ok(GetDatabaseInfoRequest {
+    pub fn new(database_name: &str) -> Self {
+        GetDatabaseInfoRequest {
             inner_request: proto::GetDatabaseInfoRequest {
                 database_name: database_name.to_string(),
             },
-        })
+        }
     }
 }
 

@@ -89,10 +89,6 @@ impl DatabaseDescriptor {
 }
 
 impl DatabaseDescriptorBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn comment(mut self, comment: &str) -> Self {
         self.comment = Some(comment.to_string());
         self
@@ -122,25 +118,6 @@ impl DatabaseDescriptor {
     const COMMENT_NAME: &'static str = "comment";
     const VERSION_KEY: &'static str = "version";
     const VERSION: u32 = 1;
-
-    fn deserialize_properties(node: &Value) -> Result<HashMap<String, String>> {
-        let obj = node
-            .as_object()
-            .ok_or_else(|| JsonSerdeError("Custom properties should be an object".to_string()))?;
-
-        let mut properties = HashMap::with_capacity(obj.len());
-        for (key, value) in obj {
-            properties.insert(
-                key.clone(),
-                value
-                    .as_str()
-                    .ok_or_else(|| JsonSerdeError("Property value should be a string".to_string()))?
-                    .to_owned(),
-            );
-        }
-
-        Ok(properties)
-    }
 }
 
 impl JsonSerde for DatabaseDescriptor {
@@ -187,6 +164,25 @@ impl JsonSerde for DatabaseDescriptor {
         builder = builder.custom_properties(custom_properties);
 
         builder.build()
+    }
+
+    fn deserialize_properties(node: &Value) -> Result<HashMap<String, String>> {
+        let obj = node
+            .as_object()
+            .ok_or_else(|| JsonSerdeError("Custom properties should be an object".to_string()))?;
+
+        let mut properties = HashMap::with_capacity(obj.len());
+        for (key, value) in obj {
+            properties.insert(
+                key.clone(),
+                value
+                    .as_str()
+                    .ok_or_else(|| JsonSerdeError("Property value should be a string".to_string()))?
+                    .to_owned(),
+            );
+        }
+
+        Ok(properties)
     }
 }
 

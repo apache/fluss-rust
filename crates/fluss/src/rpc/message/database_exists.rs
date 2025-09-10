@@ -30,12 +30,12 @@ pub struct DatabaseExistsRequest {
 }
 
 impl DatabaseExistsRequest {
-    pub fn new(database_name: &str) -> FlussResult<Self> {
-        Ok(DatabaseExistsRequest {
+    pub fn new(database_name: &str) -> Self {
+        DatabaseExistsRequest {
             inner_request: proto::DatabaseExistsRequest {
                 database_name: database_name.to_string(),
             },
-        })
+        }
     }
 }
 

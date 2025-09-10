@@ -63,26 +63,6 @@ message PbPhysicalTablePath {
   optional string partition_name = 3;
 }
 
-message ListOffsetsRequest {
-  required int32 follower_server_id = 1;  // value -1 indicate the request from client.
-  required int32 offset_type = 2; // value can be 0,1,2 (see ListOffsetsParam for more details)
-  required int64 table_id = 3;
-  optional int64 partition_id = 4;
-  repeated int32 bucket_id = 5 [packed = true]; // it is recommended to use packed for repeated numerics to get more efficient encoding
-  optional int64 startTimestamp = 6;
-}
-
-message ListOffsetsResponse {
-  repeated PbListOffsetsRespForBucket buckets_resp = 1;
-}
-
-message PbListOffsetsRespForBucket {
-  required int32 bucket_id = 1;
-  optional int32 error_code = 2;
-  optional string error_message = 3;
-  optional int64 offset = 4;
-}
-
 // For MetadataResponse, host and port are still used for all versions.
 // For UpdateMetadataRequest,
 //   * versions <= 0.6: host and port are used.

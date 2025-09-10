@@ -30,17 +30,13 @@ pub struct DropDatabaseRequest {
 }
 
 impl DropDatabaseRequest {
-    pub fn new(
-        database_name: &str,
-        ignore_if_not_exists: bool,
-        cascade: bool,
-    ) -> FlussResult<Self> {
+    pub fn new(database_name: &str, ignore_if_not_exists: bool, cascade: bool) -> Self {
         let mut inner_request = proto::DropDatabaseRequest::default();
         inner_request.database_name = database_name.to_string();
         inner_request.ignore_if_not_exists = ignore_if_not_exists;
         inner_request.cascade = cascade;
 
-        Ok(Self { inner_request })
+        Self { inner_request }
     }
 }
 

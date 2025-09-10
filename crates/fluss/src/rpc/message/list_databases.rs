@@ -30,10 +30,10 @@ pub struct ListDatabasesRequest {
 }
 
 impl ListDatabasesRequest {
-    pub fn new() -> FlussResult<Self> {
-        Ok(ListDatabasesRequest {
+    pub fn new() -> Self {
+        ListDatabasesRequest {
             inner_request: proto::ListDatabasesRequest {},
-        })
+        }
     }
 }
 
