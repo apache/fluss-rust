@@ -24,7 +24,7 @@ build = "src/build.rs"
 
 [dependencies]
 arrow = "55.1.0"
-arrow-schema = "55.1.0"
+arrow-schema = "56.1.0"
 byteorder = "1.5"
 futures = "0.3"
 clap = { workspace = true }
