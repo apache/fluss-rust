@@ -20,9 +20,8 @@ use chrono::Datelike;
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use arrow::array::{
-    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+    ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
     Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder,
-    TimestampNanosecondBuilder,
 };
 use chrono::NaiveDate;
 use ordered_float::OrderedFloat;

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result as FlussResult;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
@@ -31,12 +30,13 @@ pub struct DropDatabaseRequest {
 
 impl DropDatabaseRequest {
     pub fn new(database_name: &str, ignore_if_not_exists: bool, cascade: bool) -> Self {
-        let mut inner_request = proto::DropDatabaseRequest::default();
-        inner_request.database_name = database_name.to_string();
-        inner_request.ignore_if_not_exists = ignore_if_not_exists;
-        inner_request.cascade = cascade;
-
-        Self { inner_request }
+        DropDatabaseRequest {
+            inner_request: proto::DropDatabaseRequest {
+                database_name: database_name.to_string(),
+                ignore_if_not_exists,
+                cascade,
+            },
+        }
     }
 }
 

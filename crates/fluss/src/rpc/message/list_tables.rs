@@ -17,7 +17,6 @@
 
 use crate::{impl_read_version_type, impl_write_version_type, proto};
 
-use crate::error::Result as FlussResult;
 use crate::proto::ListTablesResponse;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;

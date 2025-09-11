@@ -17,26 +17,27 @@
 
 use crate::client::metadata::Metadata;
 use crate::metadata::{
-    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, PhysicalTablePath, TableBucket,
+    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, TableBucket,
     TableDescriptor, TableInfo, TablePath,
 };
 use crate::rpc::message::{
     CreateDatabaseRequest, CreateTableRequest, DatabaseExistsRequest, DropDatabaseRequest,
     DropTableRequest, GetDatabaseInfoRequest, GetLatestLakeSnapshotRequest, GetTableRequest,
-    ListDatabasesRequest, ListTablesRequest, OffsetSpec, TableExistsRequest,
+    ListDatabasesRequest, ListTablesRequest, TableExistsRequest,
 };
 use crate::rpc::{RpcClient, ServerConnection};
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::oneshot;
 
 use crate::error::Result;
 use crate::proto::GetTableInfoResponse;
 
 pub struct FlussAdmin {
     admin_gateway: ServerConnection,
+    #[allow(dead_code)]
     metadata: Arc<Metadata>,
+    #[allow(dead_code)]
     rpc_client: Arc<RpcClient>,
 }
 

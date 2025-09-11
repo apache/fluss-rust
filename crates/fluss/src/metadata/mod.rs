@@ -16,7 +16,6 @@
 // under the License.
 
 mod datatype;
-pub use datatype::*;
 mod database;
 mod json_serde;
 mod table;

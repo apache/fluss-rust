@@ -654,6 +654,7 @@ impl TablePath {
 #[derive(Debug, Clone)]
 pub struct PhysicalTablePath {
     table_path: TablePath,
+    #[allow(dead_code)]
     partition: Option<String>,
 }
 
