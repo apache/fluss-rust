@@ -123,6 +123,21 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+message DropTableRequest {
+  required PbTablePath table_path = 1;
+  required bool ignore_if_not_exists = 2;
+}
+
+message DropTableResponse {
+}
+
+message TableExistsRequest {
+  required PbTablePath table_path = 1;
+}
+
+message TableExistsResponse {
+  required bool exists = 1;
+}
 
 message GetTableInfoRequest {
   required PbTablePath table_path = 1;
@@ -134,6 +149,57 @@ message GetTableInfoResponse {
   required bytes table_json = 3;
   required int64 created_time = 4;
   required int64 modified_time = 5;
+}
+
+message ListTablesRequest {
+  required string database_name = 1;
+}
+
+message ListTablesResponse {
+  repeated string table_name = 1;
+}
+
+message CreateDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_exists = 2;
+  optional bytes database_json = 3;
+}
+
+message CreateDatabaseResponse {
+}
+
+message GetDatabaseInfoRequest {
+  required string database_name = 1;
+}
+
+message GetDatabaseInfoResponse {
+  required bytes database_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+}
+
+message DropDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_not_exists = 2;
+  required bool cascade = 3;
+}
+
+message DropDatabaseResponse {
+}
+
+message DatabaseExistsRequest {
+  required string database_name = 1;
+}
+
+message DatabaseExistsResponse {
+  required bool exists = 1;
+}
+
+message ListDatabasesRequest {
+}
+
+message ListDatabasesResponse {
+  repeated string database_name = 1;
 }
 
 
@@ -194,4 +260,21 @@ message PbRemoteLogSegment {
   required int64 remote_log_start_offset = 2;
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
+}
+
+// fetch latest lake snapshot
+message GetLatestLakeSnapshotRequest {
+  required PbTablePath table_path = 1;
+}
+
+message GetLatestLakeSnapshotResponse {
+  required int64 table_id = 1;
+  required int64 snapshotId = 2;
+  repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
+}
+
+message PbLakeSnapshotForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int64 log_offset = 3;
 }

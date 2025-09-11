@@ -17,10 +17,12 @@
 
 mod admin;
 mod connection;
+mod metadata;
 mod table;
 mod write;
 
+pub use admin::*;
 pub use connection::*;
-mod metadata;
-
+pub use metadata::*;
+pub use table::*;
 pub use write::*;
