@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod datatype;
 mod database;
+mod datatype;
 mod json_serde;
 mod table;
 

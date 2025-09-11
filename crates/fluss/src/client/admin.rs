@@ -17,8 +17,8 @@
 
 use crate::client::metadata::Metadata;
 use crate::metadata::{
-    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, TableBucket,
-    TableDescriptor, TableInfo, TablePath,
+    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, TableBucket, TableDescriptor,
+    TableInfo, TablePath,
 };
 use crate::rpc::message::{
     CreateDatabaseRequest, CreateTableRequest, DatabaseExistsRequest, DropDatabaseRequest,
