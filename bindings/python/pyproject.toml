@@ -20,15 +20,18 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fluss_python"
-description = "Python bindings for Fluss"
+name = "fluss"
+description = "Python bindings for Fluss on fluss-rust with Pandas integration"
 authors = [{name = "Fluss Team"}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
-  "Programming Language :: Rust",
-  "Programming Language :: Python :: Implementation :: CPython",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 
 dynamic = ["version"]
@@ -52,15 +55,10 @@ dev = [
 docs = [
     "pdoc>=15.0.4",
 ]
-extra = [
-    "tqdm>=4.67.1",
-    "duckdb>=0.9.0",
-    "pylance>=0.33.0",
-]
 
 [tool.maturin]
 python-source = "python"
-module-name = "fluss_python"
+module-name = "fluss._fluss"
 features = ["pyo3/extension-module"]
 
 [tool.uv]
@@ -89,7 +87,7 @@ convention = "numpy"
 docstring-code-format = true
 
 [tool.ruff.lint.isort]
-known-first-party = ["fluss_python"]
+known-first-party = ["fluss"]
 
 [tool.mypy]
 python_version = "3.9"

@@ -23,7 +23,7 @@ license = "apache-2.0"
 rust-version = "1.85"
 
 [lib]
-name = "fluss_python"
+name = "fluss"
 crate-type = ["cdylib"]
 
 [workspace]
@@ -31,9 +31,8 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.24", features = ["extension-module"] }
 fluss = { path = "../../crates/fluss" }
-tokio = { version = "1.44.2", features = ["full"] }
-arrow = "55.1.0"
+tokio = { workspace = true }
+arrow = { workspace = true }
 arrow-pyarrow = "55.1.0"
 pyo3-async-runtimes = { version = "0.24.0", features = ["tokio-runtime"] }
-chrono = "0.4.41"
-once_cell = "1.21.3"
+chrono = { workspace = true }
