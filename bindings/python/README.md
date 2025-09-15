@@ -138,7 +138,7 @@ bindings/python/
 ├── python/               # Python package source
 │   └── fluss_python/
 │       ├── __init__.py   # Python package entry
-        ├── __init__.pyi  # Stub file
+│       ├── __init__.pyi  # Stub file
 │       └── py.typed      # Type declarations
 └── example/              # Example code
     └── example.py
