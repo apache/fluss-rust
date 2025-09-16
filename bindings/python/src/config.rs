@@ -33,12 +33,11 @@ impl Config {
     #[pyo3(signature = (properties = None))]
     fn new(properties: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let mut config = fcore::config::Config::default();
-        config.writer_acks = "all".to_string();
         
         if let Some(props) = properties {
             for item in props.iter() {
-                let key: String = item.0.extract().unwrap();
-                let value: String = item.1.extract().unwrap();
+                let key: String = item.0.extract()?;
+                let value: String = item.1.extract()?;
 
                 match key.as_str() {
                     "bootstrap.servers" => {

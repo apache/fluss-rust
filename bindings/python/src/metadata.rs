@@ -57,11 +57,28 @@ impl TablePath {
     }
 
     pub fn __str__(&self) -> String {
-        format!("{}.{}", self.database_name, self.table_name)
+        self.table_path_str()
     }
     
     fn __repr__(&self) -> String {
         format!("TablePath('{}', '{}')", self.database_name, self.table_name)
+    }
+
+    /// Hash implementation for Python
+    pub fn __hash__(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        self.database_name.hash(&mut hasher);
+        self.table_name.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Equality implementation for Python
+    pub fn __eq__(&self, other: &TablePath) -> bool {
+        self.database_name == other.database_name 
+            && self.table_name == other.table_name
     }
 }
 
@@ -89,11 +106,10 @@ pub struct Schema {
 impl Schema {
     /// Create a new Schema from PyArrow schema with optional primary keys
     #[new]
-    #[pyo3(signature = (schema, primary_keys=None, primary_key_name=None))]
+    #[pyo3(signature = (schema, primary_keys=None))]
     pub fn new(
         schema: PyObject, // PyArrow schema
         primary_keys: Option<Vec<String>>,
-        primary_key_name: Option<String>,
     ) -> PyResult<Self> {
         let arrow_schema = crate::utils::Utils::pyarrow_to_arrow_schema(&schema)?;
         
@@ -110,11 +126,7 @@ impl Schema {
         
         if let Some(pk_columns) = primary_keys {
             if !pk_columns.is_empty() {
-                if let Some(pk_name) = primary_key_name {
-                    builder = builder.primary_key_named(&pk_name, pk_columns);
-                } else {
-                    builder = builder.primary_key(pk_columns);
-                }
+                builder = builder.primary_key(pk_columns);
             }
         }
         
@@ -497,7 +509,7 @@ impl TableBucket {
 
     /// Convert to core TableBucket (internal use)
     pub fn to_core(&self) -> fcore::metadata::TableBucket {
-        fcore::metadata::TableBucket::new(self.table_id, self.bucket)
+        fcore::metadata::TableBucket::new(self.table_id, self.partition_id, self.bucket)
     }
 }
 
