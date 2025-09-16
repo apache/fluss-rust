@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod database;
 mod datatype;
-pub use datatype::*;
 mod json_serde;
 mod table;
 
+pub use database::*;
+pub use datatype::*;
 pub use json_serde::*;
 pub use table::*;

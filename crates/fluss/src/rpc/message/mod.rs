@@ -20,18 +20,36 @@ use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
 use bytes::{Buf, BufMut};
 
+mod create_database;
 mod create_table;
+mod database_exists;
+mod drop_database;
+mod drop_table;
 mod fetch;
+mod get_database_info;
+mod get_latest_lake_snapshot;
 mod get_table;
 mod header;
+mod list_databases;
+mod list_tables;
 mod produce_log;
+mod table_exists;
 mod update_metadata;
 
+pub use create_database::*;
 pub use create_table::*;
+pub use database_exists::*;
+pub use drop_database::*;
+pub use drop_table::*;
 pub use fetch::*;
+pub use get_database_info::*;
+pub use get_latest_lake_snapshot::*;
 pub use get_table::*;
 pub use header::*;
+pub use list_databases::*;
+pub use list_tables::*;
 pub use produce_log::*;
+pub use table_exists::*;
 pub use update_metadata::*;
 
 pub trait RequestBody {
