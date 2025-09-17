@@ -28,12 +28,6 @@ pub struct FlussConnection {
 
 #[pymethods]
 impl FlussConnection {
-    #[new]
-    fn new(config: &Config) -> PyResult<Self> {
-        // Always use connect to create a new connection
-        Err(FlussError::new_err("Use FlussConnection.connect() instead."))
-    }
-
     /// Create a new FlussConnection (async)
     #[staticmethod]
     fn connect<'py>(py: Python<'py>, config: &Config) -> PyResult<Bound<'py, PyAny>> {
@@ -77,21 +71,16 @@ impl FlussConnection {
         let core_path = table_path.to_core().clone();
 
         future_into_py(py, async move {
-            let metadata = client.get_metadata();
-            
-            metadata.update_table_metadata(&core_path).await
+            let core_table = client.get_table(&core_path)
+                .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
-            
-            let table_info = metadata.get_cluster().get_table(&core_path).clone();
-            let table_path = table_info.table_path.clone();
-            let has_primary_key = table_info.has_primary_key();
-
+        
             let py_table = FlussTable::new_table(
-                client,          
-                metadata,        
-                table_info,
-                table_path,
-                has_primary_key,
+                client,
+                core_table.metadata,
+                core_table.table_info,
+                core_table.table_path,
+                core_table.has_primary_key,
             );
 
             Python::with_gil(|py| {
