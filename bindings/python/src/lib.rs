@@ -16,24 +16,24 @@
 // under the License.
 
 pub use ::fluss as fcore;
-use pyo3::prelude::*;
 use once_cell::sync::Lazy;
+use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
+mod admin;
 mod config;
 mod connection;
-mod table;
-mod admin;
-mod types;
 mod error;
+mod metadata;
+mod table;
 mod utils;
 
+pub use admin::*;
 pub use config::*;
 pub use connection::*;
-pub use table::*;
-pub use admin::*;
-pub use types::*;
 pub use error::*;
+pub use metadata::*;
+pub use table::*;
 pub use utils::*;
 
 static TOKIO_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
@@ -44,7 +44,7 @@ static TOKIO_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 });
 
 #[pymodule]
-fn fluss_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register all classes
     m.add_class::<Config>()?;
     m.add_class::<FlussConnection>()?;
@@ -58,10 +58,9 @@ fn fluss_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LogScanner>()?;
     m.add_class::<LakeSnapshot>()?;
     m.add_class::<TableBucket>()?;
-    
+
     // Register exception types
-    // TODO: maybe implement a separate module for exceptions
-    m.add("FlussError", m.py().get_type::<FlussError>())?;
-    
+    m.add_class::<FlussError>()?;
+
     Ok(())
 }

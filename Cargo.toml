@@ -28,9 +28,11 @@ rust-version = "1.85"
 
 [workspace]
 resolver = "2"
-members = ["crates/fluss", "crates/examples"]
+members = ["crates/fluss", "crates/examples", "bindings/python"]
 
 [workspace.dependencies]
 fluss = { version = "0.1.0", path = "./crates/fluss" }
 tokio = { version = "1.44.2", features = ["full"] }
 clap = { version = "4.5.37", features = ["derive"] }
+arrow = "55.1.0"
+chrono = { version = "0.4", features = ["clock", "std", "wasmbind"] }

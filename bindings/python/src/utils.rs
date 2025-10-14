@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::prelude::*;
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef};
-use std::sync::Arc;
-use arrow_pyarrow::ToPyArrow;
 use crate::*;
+use arrow::datatypes::{Schema as ArrowSchema, SchemaRef};
+use arrow_pyarrow::ToPyArrow;
+use std::sync::Arc;
 
 /// Utilities for schema conversion between PyArrow, Arrow, and Fluss
 pub struct Utils;
@@ -29,15 +28,19 @@ impl Utils {
     pub fn pyarrow_to_arrow_schema(py_schema: &PyObject) -> PyResult<SchemaRef> {
         Python::with_gil(|py| {
             let schema_bound = py_schema.bind(py);
-            
-            let schema: ArrowSchema = arrow_pyarrow::FromPyArrow::from_pyarrow_bound(&schema_bound)
-                .map_err(|e| FlussError::new_err(format!("Failed to convert PyArrow schema: {}", e)))?;
+
+            let schema: ArrowSchema = arrow_pyarrow::FromPyArrow::from_pyarrow_bound(schema_bound)
+                .map_err(|e| {
+                    FlussError::new_err(format!("Failed to convert PyArrow schema: {}", e))
+                })?;
             Ok(Arc::new(schema))
         })
     }
 
     /// Convert Arrow DataType to Fluss DataType
-    pub fn arrow_type_to_fluss_type(arrow_type: &arrow::datatypes::DataType) -> PyResult<fcore::metadata::DataType> {
+    pub fn arrow_type_to_fluss_type(
+        arrow_type: &arrow::datatypes::DataType,
+    ) -> PyResult<fcore::metadata::DataType> {
         use arrow::datatypes::DataType as ArrowDataType;
         use fcore::metadata::DataTypes;
 
@@ -59,10 +62,13 @@ impl Utils {
             ArrowDataType::Date64 => DataTypes::date(),
             ArrowDataType::Time32(_) | ArrowDataType::Time64(_) => DataTypes::time(),
             ArrowDataType::Timestamp(_, _) => DataTypes::timestamp(),
-            ArrowDataType::Decimal128(precision, scale) => DataTypes::decimal(*precision as u32, *scale as u32),
+            ArrowDataType::Decimal128(precision, scale) => {
+                DataTypes::decimal(*precision as u32, *scale as u32)
+            }
             _ => {
                 return Err(FlussError::new_err(format!(
-                    "Unsupported Arrow data type: {:?}", arrow_type
+                    "Unsupported Arrow data type: {:?}",
+                    arrow_type
                 )));
             }
         };
@@ -89,34 +95,49 @@ impl Utils {
                 } else {
                     format!("time({})", t.precision())
                 }
-            },
+            }
             fcore::metadata::DataType::Timestamp(t) => {
                 if t.precision() == 6 {
                     "timestamp".to_string()
                 } else {
                     format!("timestamp({})", t.precision())
                 }
-            },
+            }
             fcore::metadata::DataType::TimestampLTz(t) => {
                 if t.precision() == 6 {
                     "timestamp_ltz".to_string()
                 } else {
                     format!("timestamp_ltz({})", t.precision())
                 }
-            },
+            }
             fcore::metadata::DataType::Char(c) => format!("char({})", c.length()),
-            fcore::metadata::DataType::Decimal(d) => format!("decimal({},{})", d.precision(), d.scale()),
+            fcore::metadata::DataType::Decimal(d) => {
+                format!("decimal({},{})", d.precision(), d.scale())
+            }
             fcore::metadata::DataType::Binary(b) => format!("binary({})", b.length()),
-            fcore::metadata::DataType::Array(arr) => format!("array<{}>", Utils::datatype_to_string(arr.get_element_type())),
-            fcore::metadata::DataType::Map(map) => format!("map<{},{}>", 
-                                        Utils::datatype_to_string(map.key_type()), 
-                                        Utils::datatype_to_string(map.value_type())),
+            fcore::metadata::DataType::Array(arr) => format!(
+                "array<{}>",
+                Utils::datatype_to_string(arr.get_element_type())
+            ),
+            fcore::metadata::DataType::Map(map) => format!(
+                "map<{},{}>",
+                Utils::datatype_to_string(map.key_type()),
+                Utils::datatype_to_string(map.value_type())
+            ),
             fcore::metadata::DataType::Row(row) => {
-                let fields: Vec<String> = row.fields().iter()
-                    .map(|field| format!("{}: {}", field.name(), Utils::datatype_to_string(field.data_type())))
+                let fields: Vec<String> = row
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        format!(
+                            "{}: {}",
+                            field.name(),
+                            Utils::datatype_to_string(field.data_type())
+                        )
+                    })
                     .collect();
                 format!("row<{}>", fields.join(", "))
-            },
+            }
         }
     }
 
@@ -137,51 +158,41 @@ impl Utils {
         _scan_records: fcore::record::ScanRecords,
     ) -> Vec<Arc<arrow::record_batch::RecordBatch>> {
         let mut result = Vec::new();
-        for(_, records) in _scan_records.into_records() {
-            for record in records {
-                let columnar_row = record.row();
-                let row_id = columnar_row.get_row_id();
-                if row_id == 0 {
-                    let record_batch = columnar_row.get_record_batch();
-                    result.push(record_batch.clone());
-                }
+        for record in _scan_records {
+            let columnar_row = record.row();
+            let row_id = columnar_row.get_row_id();
+            if row_id == 0 {
+                let record_batch = columnar_row.get_record_batch();
+                result.push(Arc::new(record_batch.clone()));
             }
         }
         result
     }
-    
+
     /// Combine multiple Arrow batches into a single Table
-    pub fn combine_batches_to_table(py: Python, batches: Vec<Arc<arrow::record_batch::RecordBatch>>) -> PyResult<PyObject> {
-        let pyarrow = py.import("pyarrow")?;
-        let table_class = pyarrow.getattr("Table")?;
-
-        // If there are no batches, create and return an empty table with the correct schema.
-        if batches.is_empty() {
-            use pyo3::types::PyList;
-
-            let py_schema = schema.to_pyarrow(py)?;
-            let empty_arrays = PyList::empty(py);
-            let empty_table = table_class.call_method1("from_arrays", (empty_arrays, py_schema))?;
-            return Ok(empty_table.into());
-        }
-        
+    pub fn combine_batches_to_table(
+        py: Python,
+        batches: Vec<Arc<arrow::record_batch::RecordBatch>>,
+    ) -> PyResult<PyObject> {
         // Convert Rust Arrow RecordBatch to PyObject
-        let py_batches: Result<Vec<PyObject>, _> = batches.iter()
+        let py_batches: Result<Vec<PyObject>, _> = batches
+            .iter()
             .map(|batch| {
-                batch.as_ref().to_pyarrow(py)
-                    .map_err(|e| FlussError::new_err(format!("Failed to convert RecordBatch to PyObject: {}", e)))
+                batch.as_ref().to_pyarrow(py).map_err(|e| {
+                    FlussError::new_err(format!("Failed to convert RecordBatch to PyObject: {}", e))
+                })
             })
             .collect();
-        
+
         let py_batches = py_batches?;
-        
+
         let pyarrow = py.import("pyarrow")?;
-        
+
         // Use pyarrow.Table.from_batches to combine batches
         let table = pyarrow
             .getattr("Table")?
             .call_method1("from_batches", (py_batches,))?;
-        
+
         Ok(table.into())
     }
 }

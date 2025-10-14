@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::prelude::*;
 use crate::*;
-use std::sync::Arc;
 use pyo3_async_runtimes::tokio::future_into_py;
+use std::sync::Arc;
 
 /// Connection to a Fluss cluster
 #[pyclass]
@@ -37,55 +36,55 @@ impl FlussConnection {
             let connection = fcore::client::FlussConnection::new(rust_config)
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
-        
+
             let py_connection = FlussConnection {
                 inner: Arc::new(connection),
             };
 
-            Python::with_gil(|py| {
-                Py::new(py, py_connection)
-            })
+            Python::with_gil(|py| Py::new(py, py_connection))
         })
     }
-    
+
     /// Get admin interface
     fn get_admin<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.inner.clone();
 
         future_into_py(py, async move {
-            let admin = client.get_admin()
+            let admin = client
+                .get_admin()
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
 
             let py_admin = FlussAdmin::from_core(admin);
 
-            Python::with_gil(|py| {
-                Py::new(py, py_admin)
-            })
+            Python::with_gil(|py| Py::new(py, py_admin))
         })
     }
 
     /// Get a table
-    fn get_table<'py>(&self, py: Python<'py>, table_path: &TablePath) -> PyResult<Bound<'py, PyAny>> {
+    fn get_table<'py>(
+        &self,
+        py: Python<'py>,
+        table_path: &TablePath,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.inner.clone();
         let core_path = table_path.to_core().clone();
 
         future_into_py(py, async move {
-            let core_table = client.get_table(&core_path)
+            let core_table = client
+                .get_table(&core_path)
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
-        
+
             let py_table = FlussTable::new_table(
-                client,
-                core_table.metadata,
-                core_table.table_info,
-                core_table.table_path,
-                core_table.has_primary_key,
+                client.clone(),
+                core_table.metadata().clone(),
+                core_table.table_info().clone(),
+                core_table.table_path().clone(),
+                core_table.has_primary_key(),
             );
 
-            Python::with_gil(|py| {
-                Py::new(py, py_table)
-            })
+            Python::with_gil(|py| Py::new(py, py_table))
         })
     }
 
@@ -98,7 +97,7 @@ impl FlussConnection {
     fn __enter__(slf: PyRef<Self>) -> PyRef<Self> {
         slf
     }
-    
+
     // Exit the runtime context (for 'with' statement)
     #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
     fn __exit__(
