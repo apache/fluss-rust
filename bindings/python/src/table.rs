@@ -60,7 +60,6 @@ impl FlussTable {
     }
 
     /// Create a new log scanner for the table
-    // Note: LogScanner is not Send, so this may cause issues in async contexts
     fn new_log_scanner<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let conn = self.connection.clone();
         let metadata = self.metadata.clone();
@@ -88,7 +87,7 @@ impl FlussTable {
         })
     }
 
-    /// current workaround - synchronous version of new_log_scanner
+    /// synchronous version of new_log_scanner
     fn new_log_scanner_sync(&self) -> PyResult<LogScanner> {
         let conn = self.connection.clone();
         let metadata = self.metadata.clone();
@@ -114,13 +113,13 @@ impl FlussTable {
     }
 
     /// Get table information
-    pub fn get_table_info(&self) -> PyResult<TableInfo> {
-        Ok(TableInfo::from_core(self.table_info.clone()))
+    pub fn get_table_info(&self) -> TableInfo {
+        TableInfo::from_core(self.table_info.clone())
     }
 
     /// Get table path
-    pub fn get_table_path(&self) -> PyResult<TablePath> {
-        Ok(TablePath::from_core(self.table_path.clone()))
+    pub fn get_table_path(&self) -> TablePath {
+        TablePath::from_core(self.table_path.clone())
     }
 
     /// Check if table has primary key
@@ -227,13 +226,6 @@ impl AppendWriter {
         })
     }
 
-    /// Close the writer and flush any pending data
-    pub fn close(&mut self) -> PyResult<()> {
-        self.flush()?;
-        println!("AppendWriter closed");
-        Ok(())
-    }
-
     fn __repr__(&self) -> String {
         "AppendWriter()".to_string()
     }
@@ -297,7 +289,7 @@ impl AppendWriter {
 }
 
 /// Scanner for reading log data from a Fluss table
-#[pyclass(unsendable)]
+#[pyclass]
 pub struct LogScanner {
     inner: fcore::client::LogScanner,
     table_info: fcore::metadata::TableInfo,
@@ -313,6 +305,12 @@ impl LogScanner {
         _start_timestamp: Option<i64>,
         _end_timestamp: Option<i64>,
     ) -> PyResult<()> {
+        if _start_timestamp.is_some() {
+            return Err(FlussError::new_err(
+                "Specifying start_timestamp is not yet supported. Please use None.".to_string()
+            ));
+        }
+
         let end_timestamp = match _end_timestamp {
             Some(ts) => ts,
             None => {
@@ -328,13 +326,7 @@ impl LogScanner {
         let start_timestamp = self.start_timestamp; 
 
         for bucket_id in 0..num_buckets {
-            let start_offset = match start_timestamp {
-                Some(_ts) => {
-                    // TODO: implement timestampIntoOffset in Rust client.
-                    0
-                },
-                None => 0, // earliest
-            };
+            let start_offset = -2;
 
             TOKIO_RUNTIME.block_on(async {
                 self.inner.subscribe(bucket_id, start_offset).await
@@ -346,7 +338,7 @@ impl LogScanner {
     }
 
     /// Convert all data to Arrow Table
-    fn to_arrow(&mut self, py: Python) -> PyResult<PyObject> {
+    fn to_arrow(&self, py: Python) -> PyResult<PyObject> {
         let mut all_batches = Vec::new();
         let end_timestamp = self.end_timestamp;
         // Poll all data from the scanner
@@ -397,27 +389,17 @@ impl LogScanner {
             }
         }
         
-        if all_batches.is_empty() {
-            return Err(FlussError::new_err("No data available"));
-        }
-        
         // Combine all batches into a single Arrow Table
         Utils::combine_batches_to_table(py, all_batches)
     }
 
     /// Convert all data to Pandas DataFrame
-    fn to_pandas(&mut self, py: Python) -> PyResult<PyObject> {
+    fn to_pandas(&self, py: Python) -> PyResult<PyObject> {
         let arrow_table = self.to_arrow(py)?;
         
         // Convert Arrow Table to Pandas DataFrame using pyarrow
         let df = arrow_table.call_method0(py, "to_pandas")?;
         Ok(df)
-    }
-
-    /// Return an Arrow RecordBatchReader for streaming data
-    // TODO: Support this for streaming reads
-    fn to_arrow_batch_reader(&mut self, py: Python) -> PyResult<()> {
-        Ok(())
     }
 
     fn __repr__(&self) -> String {
@@ -440,6 +422,7 @@ impl LogScanner {
     }
 
     /// Filter scan records by timestamp, returns (filtered_records, reached_end)
+    // TODO: revise this function after implementing list_offsets
     fn filter_records_by_timestamp(
         scan_records: fcore::record::ScanRecords, 
         end_timestamp: i64
