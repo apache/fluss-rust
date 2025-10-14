@@ -15,6 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from .fluss_python import *
+from ._fluss import *
 
 __version__ = "0.1.0"

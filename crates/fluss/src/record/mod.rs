@@ -158,6 +158,10 @@ impl ScanRecords {
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
+
+    pub fn buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>> {
+        &self.records
+    }
 }
 
 impl IntoIterator for ScanRecords {

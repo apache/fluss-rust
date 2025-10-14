@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::prelude::*;
 use crate::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
@@ -38,13 +37,13 @@ impl TablePath {
             table_name,
         }
     }
-    
+
     /// Get the database name
     #[getter]
     pub fn database_name(&self) -> String {
         self.database_name.clone()
     }
-    
+
     /// Get the table name  
     #[getter]
     pub fn table_name(&self) -> String {
@@ -59,7 +58,7 @@ impl TablePath {
     pub fn __str__(&self) -> String {
         self.table_path_str()
     }
-    
+
     fn __repr__(&self) -> String {
         format!("TablePath('{}', '{}')", self.database_name, self.table_name)
     }
@@ -68,7 +67,7 @@ impl TablePath {
     pub fn __hash__(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         self.database_name.hash(&mut hasher);
         self.table_name.hash(&mut hasher);
@@ -77,8 +76,7 @@ impl TablePath {
 
     /// Equality implementation for Python
     pub fn __eq__(&self, other: &TablePath) -> bool {
-        self.database_name == other.database_name 
-            && self.table_name == other.table_name
+        self.database_name == other.database_name && self.table_name == other.table_name
     }
 }
 
@@ -112,27 +110,28 @@ impl Schema {
         primary_keys: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let arrow_schema = crate::utils::Utils::pyarrow_to_arrow_schema(&schema)?;
-        
+
         let mut builder = fcore::metadata::Schema::builder();
-        
+
         for field in arrow_schema.fields() {
             let fluss_data_type = crate::utils::Utils::arrow_type_to_fluss_type(field.data_type())?;
             builder = builder.column(field.name(), fluss_data_type);
-            
+
             if let Some(comment) = field.metadata().get("comment") {
                 builder = builder.with_comment(comment);
             }
         }
-        
+
         if let Some(pk_columns) = primary_keys {
             if !pk_columns.is_empty() {
                 builder = builder.primary_key(pk_columns);
             }
         }
-        
-        let fluss_schema = builder.build()
+
+        let fluss_schema = builder
+            .build()
             .map_err(|e| FlussError::new_err(format!("Failed to build schema: {}", e)))?;
-        
+
         Ok(Self {
             __schema: fluss_schema,
         })
@@ -140,20 +139,33 @@ impl Schema {
 
     /// Get column names
     fn get_column_names(&self) -> Vec<String> {
-        self.__schema.columns().iter().map(|col| col.name().to_string()).collect()
+        self.__schema
+            .columns()
+            .iter()
+            .map(|col| col.name().to_string())
+            .collect()
     }
 
     /// Get column types
     fn get_column_types(&self) -> Vec<String> {
-        self.__schema.columns().iter()
+        self.__schema
+            .columns()
+            .iter()
             .map(|col| Utils::datatype_to_string(col.data_type()))
             .collect()
     }
 
     /// Get columns as (name, type) pairs
     fn get_columns(&self) -> Vec<(String, String)> {
-        self.__schema.columns().iter()
-            .map(|col| (col.name().to_string(), Utils::datatype_to_string(col.data_type())))
+        self.__schema
+            .columns()
+            .iter()
+            .map(|col| {
+                (
+                    col.name().to_string(),
+                    Utils::datatype_to_string(col.data_type()),
+                )
+            })
             .collect()
     }
 
@@ -190,7 +202,6 @@ impl TableDistribution {
     }
 }
 
-
 /// Table descriptor containing schema and metadata
 #[pyclass]
 #[derive(Clone)]
@@ -204,7 +215,7 @@ impl TableDescriptor {
     #[new]
     #[pyo3(signature = (schema, **kwargs))]
     pub fn new(
-        schema: &Schema,  // fluss schema
+        schema: &Schema, // fluss schema
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         let mut partition_keys = Vec::new();
@@ -237,18 +248,22 @@ impl TableDescriptor {
             }
             if let Ok(Some(lformat)) = kwargs.get_item("log_format") {
                 let format_str: String = lformat.extract()?;
-                log_format = Some(fcore::metadata::LogFormat::parse(&format_str)
-                    .map_err(|e| FlussError::new_err(e.to_string()))?);
+                log_format = Some(
+                    fcore::metadata::LogFormat::parse(&format_str)
+                        .map_err(|e| FlussError::new_err(e.to_string()))?,
+                );
             }
             if let Ok(Some(kformat)) = kwargs.get_item("kv_format") {
                 let format_str: String = kformat.extract()?;
-                kv_format = Some(fcore::metadata::KvFormat::parse(&format_str)
-                    .map_err(|e| FlussError::new_err(e.to_string()))?);
+                kv_format = Some(
+                    fcore::metadata::KvFormat::parse(&format_str)
+                        .map_err(|e| FlussError::new_err(e.to_string()))?,
+                );
             }
         }
 
         let fluss_schema = schema.to_core().clone();
-        
+
         let mut builder = fcore::metadata::TableDescriptor::builder()
             .schema(fluss_schema)
             .properties(properties)
@@ -266,7 +281,8 @@ impl TableDescriptor {
             builder = builder.kv_format(kv_format);
         }
 
-        let core_descriptor = builder.build()
+        let core_descriptor = builder
+            .build()
             .map_err(|e| FlussError::new_err(format!("Failed to build TableDescriptor: {}", e)))?;
 
         Ok(Self {
@@ -303,13 +319,13 @@ impl TableInfo {
     pub fn table_id(&self) -> i64 {
         self.__table_info.get_table_id()
     }
-    
+
     /// Get the schema ID
     #[getter]
     pub fn schema_id(&self) -> i32 {
         self.__table_info.get_schema_id()
     }
-    
+
     /// Get the table path
     #[getter]
     pub fn table_path(&self) -> TablePath {
@@ -321,13 +337,13 @@ impl TableInfo {
     pub fn created_time(&self) -> i64 {
         self.__table_info.get_created_time()
     }
-    
+
     /// Get the modified time
     #[getter]
     pub fn modified_time(&self) -> i64 {
         self.__table_info.get_modified_time()
     }
-    
+
     /// Get the primary keys
     pub fn get_primary_keys(&self) -> Vec<String> {
         self.__table_info.get_primary_keys().clone()
@@ -384,7 +400,10 @@ impl TableInfo {
 
     /// Get column names
     pub fn get_column_names(&self) -> Vec<String> {
-        self.__table_info.get_schema().columns().iter()
+        self.__table_info
+            .get_schema()
+            .columns()
+            .iter()
             .map(|col| col.name().to_string())
             .collect()
     }
@@ -398,9 +417,7 @@ impl TableInfo {
 impl TableInfo {
     /// Create from core TableInfo (internal use)
     pub fn from_core(info: fcore::metadata::TableInfo) -> Self {
-        Self {
-            __table_info: info,
-        }
+        Self { __table_info: info }
     }
 }
 
@@ -464,11 +481,15 @@ impl TableBucket {
     /// String representation
     pub fn __str__(&self) -> String {
         if let Some(partition_id) = self.partition_id {
-            format!("TableBucket(table_id={}, partition_id={}, bucket={})", 
-                    self.table_id, partition_id, self.bucket)
+            format!(
+                "TableBucket(table_id={}, partition_id={}, bucket={})",
+                self.table_id, partition_id, self.bucket
+            )
         } else {
-            format!("TableBucket(table_id={}, bucket={})", 
-                    self.table_id, self.bucket)
+            format!(
+                "TableBucket(table_id={}, bucket={})",
+                self.table_id, self.bucket
+            )
         }
     }
 
@@ -481,7 +502,7 @@ impl TableBucket {
     pub fn __hash__(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         self.table_id.hash(&mut hasher);
         self.partition_id.hash(&mut hasher);
@@ -491,8 +512,8 @@ impl TableBucket {
 
     /// Equality implementation for Python
     pub fn __eq__(&self, other: &TableBucket) -> bool {
-        self.table_id == other.table_id 
-            && self.partition_id == other.partition_id 
+        self.table_id == other.table_id
+            && self.partition_id == other.partition_id
             && self.bucket == other.bucket
     }
 }
@@ -509,7 +530,7 @@ impl TableBucket {
 
     /// Convert to core TableBucket (internal use)
     pub fn to_core(&self) -> fcore::metadata::TableBucket {
-        fcore::metadata::TableBucket::new(self.table_id, self.partition_id, self.bucket)
+        fcore::metadata::TableBucket::new(self.table_id, self.bucket)
     }
 }
 
@@ -559,8 +580,11 @@ impl LakeSnapshot {
 
     /// String representation
     pub fn __str__(&self) -> String {
-        format!("LakeSnapshot(snapshot_id={}, buckets_count={})", 
-                self.snapshot_id, self.table_buckets_offset.len())
+        format!(
+            "LakeSnapshot(snapshot_id={}, buckets_count={})",
+            self.snapshot_id,
+            self.table_buckets_offset.len()
+        )
     }
 
     /// String representation
@@ -578,4 +602,3 @@ impl LakeSnapshot {
         }
     }
 }
-

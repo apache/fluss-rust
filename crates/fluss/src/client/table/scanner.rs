@@ -22,7 +22,7 @@ use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::RpcClient;
-use crate::rpc::message::list_offsets::{ListOffsetsRequest, OffsetSpec};
+use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::util::FairBucketStatusMap;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -83,11 +83,11 @@ impl LogScanner {
             log_scanner_status: log_scanner_status.clone(),
             log_fetcher: LogFetcher::new(
                 table_info.clone(),
-                connections,
+                connections.clone(),
                 metadata.clone(),
                 log_scanner_status.clone(),
             ),
-            conns: connections,
+            conns: connections.clone(),
         }
     }
 
@@ -106,9 +106,13 @@ impl LogScanner {
     }
 
     pub async fn list_offsets_latest(&self, bucket_ids: Vec<i32>) -> Result<HashMap<i32, i64>> {
+        let cluster = self.metadata.get_cluster();
+        let tablet_server = cluster.get_one_available_server();
+        let admin_con = self.conns.get_connection(tablet_server).await?;
+
         let request = ListOffsetsRequest::new(self.table_id, None, bucket_ids, OffsetSpec::Latest)?;
-        let response = self.conns.invoke(request).await?;
-        let offsets_map = response.body.offsets_map();
+        let response = admin_con.request(request).await?;
+        let offsets_map = response.offsets_map();
 
         Ok(offsets_map)
     }

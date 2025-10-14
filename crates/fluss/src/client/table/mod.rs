@@ -27,8 +27,8 @@ mod append;
 mod scanner;
 mod writer;
 
-pub use append::TableAppend;
-pub use scanner::TableScan;
+pub use append::{AppendWriter, TableAppend};
+pub use scanner::{LogScanner, TableScan};
 
 #[allow(dead_code)]
 pub struct FlussTable<'a> {
@@ -64,6 +64,22 @@ impl<'a> FlussTable<'a> {
 
     pub fn new_scan(&self) -> TableScan<'_> {
         TableScan::new(self.conn, self.table_info.clone(), self.metadata.clone())
+    }
+
+    pub fn metadata(&self) -> &Arc<Metadata> {
+        &self.metadata
+    }
+
+    pub fn table_info(&self) -> &TableInfo {
+        &self.table_info
+    }
+
+    pub fn table_path(&self) -> &TablePath {
+        &self.table_path
+    }
+
+    pub fn has_primary_key(&self) -> bool {
+        self.has_primary_key
     }
 }
 

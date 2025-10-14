@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::prelude::*;
-use pyo3_async_runtimes::tokio::future_into_py;
 use crate::*;
+use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
 
 /// Administrative client for managing Fluss tables
@@ -38,16 +37,17 @@ impl FlussAdmin {
         ignore_if_exists: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let ignore = ignore_if_exists.unwrap_or(false);
-        
+
         let core_table_path = table_path.to_core().clone();
         let core_descriptor = table_descriptor.to_core().clone();
         let admin = self.__admin.clone();
 
         future_into_py(py, async move {
-            admin.create_table(&core_table_path, &core_descriptor, ignore)
+            admin
+                .create_table(&core_table_path, &core_descriptor, ignore)
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
-        
+
             Python::with_gil(|py| Ok(py.None()))
         })
     }
@@ -60,9 +60,11 @@ impl FlussAdmin {
     ) -> PyResult<Bound<'py, PyAny>> {
         let core_table_path = table_path.to_core().clone();
         let admin = self.__admin.clone();
-        
+
         future_into_py(py, async move {
-            let core_table_info = admin.get_table(&core_table_path).await
+            let core_table_info = admin
+                .get_table(&core_table_path)
+                .await
                 .map_err(|e| FlussError::new_err(format!("Failed to get table: {}", e)))?;
 
             Python::with_gil(|py| {
@@ -80,9 +82,11 @@ impl FlussAdmin {
     ) -> PyResult<Bound<'py, PyAny>> {
         let core_table_path = table_path.to_core().clone();
         let admin = self.__admin.clone();
-        
+
         future_into_py(py, async move {
-            let core_lake_snapshot = admin.get_latest_lake_snapshot(&core_table_path).await
+            let core_lake_snapshot = admin
+                .get_latest_lake_snapshot(&core_table_path)
+                .await
                 .map_err(|e| FlussError::new_err(format!("Failed to get lake snapshot: {}", e)))?;
 
             Python::with_gil(|py| {

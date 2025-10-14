@@ -23,7 +23,7 @@ name = "fluss"
 build = "src/build.rs"
 
 [dependencies]
-arrow = "55.1.0"
+arrow = { workspace = true }
 arrow-schema = "55.1.0"
 byteorder = "1.5"
 futures = "0.3"
@@ -44,7 +44,7 @@ rust_decimal = "1"
 ordered-float = { version = "4", features = ["serde"] }
 parse-display = "0.10"
 ref-cast = "1.0"
-chrono = { version = "0.4", features = ["clock", "std", "wasmbind"] }
+chrono = { workspace = true }
 
 [dev-dependencies]
 testcontainers = "0.25.0"
