@@ -22,7 +22,7 @@ use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::RpcClient;
-use crate::rpc::message::list_offsets::{ListOffsetsRequest, OffsetSpec}; // Import new types
+use crate::rpc::message::list_offsets::{ListOffsetsRequest, OffsetSpec};
 use crate::util::FairBucketStatusMap;
 use parking_lot::RwLock;
 use std::collections::HashMap;
