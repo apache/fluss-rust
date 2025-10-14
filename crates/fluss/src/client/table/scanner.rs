@@ -22,6 +22,7 @@ use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::RpcClient;
+use crate::rpc::message::list_offsets::{ListOffsetsRequest, OffsetSpec}; // Import new types
 use crate::util::FairBucketStatusMap;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -65,6 +66,7 @@ pub struct LogScanner {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
+    conns: Arc<RpcClient>,
 }
 
 impl LogScanner {
@@ -85,6 +87,7 @@ impl LogScanner {
                 metadata.clone(),
                 log_scanner_status.clone(),
             ),
+            conns: connections,
         }
     }
 
@@ -100,6 +103,14 @@ impl LogScanner {
         self.log_scanner_status
             .assign_scan_bucket(table_bucket, offset);
         Ok(())
+    }
+
+    pub async fn list_offsets_latest(&self, bucket_ids: Vec<i32>) -> Result<HashMap<i32, i64>> {
+        let request = ListOffsetsRequest::new(self.table_id, None, bucket_ids, OffsetSpec::Latest)?;
+        let response = self.conns.invoke(request).await?;
+        let offsets_map = response.body.offsets_map();
+
+        Ok(offsets_map)
     }
 
     async fn poll_for_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {

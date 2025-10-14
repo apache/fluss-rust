@@ -307,29 +307,24 @@ impl LogScanner {
     ) -> PyResult<()> {
         if _start_timestamp.is_some() {
             return Err(FlussError::new_err(
-                "Specifying start_timestamp is not yet supported. Please use None.".to_string()
+                "Specifying start_timestamp is not yet supported. Please use None.".to_string(),
+            ));
+        }
+        if _end_timestamp.is_some() {
+            return Err(FlussError::new_err(
+                "Specifying end_timestamp is not yet supported. Please use None.".to_string(),
             ));
         }
 
-        let end_timestamp = match _end_timestamp {
-            Some(ts) => ts,
-            None => {
-                return Err(FlussError::new_err(
-                    "end_timestamp must be specified for LogScanner".to_string()));
-            }
-        };
-    
-        self.start_timestamp = _start_timestamp;
-        self.end_timestamp = Some(end_timestamp);
-
         let num_buckets = self.table_info.get_num_buckets();
-        let start_timestamp = self.start_timestamp; 
-
         for bucket_id in 0..num_buckets {
+            // -2 for the earliest offset.
             let start_offset = -2;
 
             TOKIO_RUNTIME.block_on(async {
-                self.inner.subscribe(bucket_id, start_offset).await
+                self.inner
+                    .subscribe(bucket_id, start_offset)
+                    .await
                     .map_err(|e| FlussError::new_err(e.to_string()))
             })?;
         }
@@ -339,57 +334,57 @@ impl LogScanner {
 
     /// Convert all data to Arrow Table
     fn to_arrow(&self, py: Python) -> PyResult<PyObject> {
+        use std::collections::HashMap;
+        use std::time::Duration;
+
         let mut all_batches = Vec::new();
-        let end_timestamp = self.end_timestamp;
-        // Poll all data from the scanner
-        loop {
-            let batch_result = TOKIO_RUNTIME.block_on(async {
-                use std::time::Duration;
-                self.inner.poll(Duration::from_millis(1000)).await
-            });
-            
-            match batch_result {
-                Ok(scan_records) => {
-                    let records_map = scan_records.into_records();
-                    
-                    let mut total_records = 0;
-                    for (bucket, records) in &records_map {
-                        total_records += records.len();
-                    }
 
-                    if total_records == 0 {
-                        break; // No more data
-                    }
+        let num_buckets = self.table_info.get_num_buckets();
+        let bucket_ids: Vec<i32> = (0..num_buckets).collect();
 
-                    let scan_records = fcore::record::ScanRecords::new(records_map);
+        // todo: after supporting list_offsets with timestamp, we can use start_timestamp and end_timestamp here
+        let target_offsets: HashMap<i32, i64> = if !bucket_ids.is_empty() {
+            TOKIO_RUNTIME
+                .block_on(async { self.inner.list_offsets_latest(bucket_ids).await })
+                .map_err(|e| FlussError::new_err(e.to_string()))?
+        } else {
+            HashMap::new()
+        };
 
-                    // Filter records by end_timestamp if specified
-                    let (filtered_records, reached_end) = if let Some(end_ts) = end_timestamp {
-                        Self::filter_records_by_timestamp(scan_records, end_ts)
-                    } else {
-                        (scan_records, false)
-                    };
-                    
-                    let filtered_records_map = filtered_records.into_records();
-                    
-                    let filtered_records = fcore::record::ScanRecords::new(filtered_records_map);
-                    
-                    if !filtered_records.is_empty() {
-                        // Convert ScanRecords to Arrow RecordBatch
-                        let arrow_batch = Utils::convert_scan_records_to_arrow(filtered_records);
-                        all_batches.extend(arrow_batch);
+        let mut current_offsets: HashMap<i32, i64> = HashMap::new();
+
+        if !target_offsets.is_empty() {
+            loop {
+                let batch_result = TOKIO_RUNTIME.block_on(async {
+                    self.inner.poll(Duration::from_millis(1000)).await
+                });
+
+                match batch_result {
+                    Ok(scan_records) => {
+                        if !scan_records.is_empty() {
+                            let records_map = scan_records.into_records();
+                            for (bucket_id, records) in &records_map {
+                                if let Some(last_record) = records.last() {
+                                    let max_offset_in_batch = last_record.offset();
+                                    let entry = current_offsets.entry(*bucket_id).or_insert(0);
+                                    *entry = (*entry).max(max_offset_in_batch);
+                                }
+                            }
+
+                            let scan_records = fcore::record::ScanRecords::new(records_map);
+                            let arrow_batch = Utils::convert_scan_records_to_arrow(scan_records);
+                            all_batches.extend(arrow_batch);
+                        }
+
+                        if Self::check_if_done(&target_offsets, &current_offsets) {
+                            break;
+                        }
                     }
-                    
-                    // If we reached the end timestamp, stop polling
-                    if reached_end {
-                        break;
-                    }
-                },
-                Err(e) => return Err(FlussError::new_err(e.to_string())),
+                    Err(e) => return Err(FlussError::new_err(e.to_string())),
+                }
             }
         }
-        
-        // Combine all batches into a single Arrow Table
+
         Utils::combine_batches_to_table(py, all_batches)
     }
 

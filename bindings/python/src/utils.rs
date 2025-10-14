@@ -152,8 +152,17 @@ impl Utils {
     
     /// Combine multiple Arrow batches into a single Table
     pub fn combine_batches_to_table(py: Python, batches: Vec<Arc<arrow::record_batch::RecordBatch>>) -> PyResult<PyObject> {
+        let pyarrow = py.import("pyarrow")?;
+        let table_class = pyarrow.getattr("Table")?;
+
+        // If there are no batches, create and return an empty table with the correct schema.
         if batches.is_empty() {
-            return Err(FlussError::new_err("No batches to combine"));
+            use pyo3::types::PyList;
+
+            let py_schema = schema.to_pyarrow(py)?;
+            let empty_arrays = PyList::empty(py);
+            let empty_table = table_class.call_method1("from_arrays", (empty_arrays, py_schema))?;
+            return Ok(empty_table.into());
         }
         
         // Convert Rust Arrow RecordBatch to PyObject
