@@ -20,6 +20,6 @@ extern crate fluss;
 
 #[cfg(feature = "integration_tests")]
 mod integration {
-
-    mod client;
+    mod admin;
+    mod fluss_cluster;
 }

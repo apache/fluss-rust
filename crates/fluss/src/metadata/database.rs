@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DatabaseDescriptor {
     comment: Option<String>,
     custom_properties: HashMap<String, String>,
@@ -105,11 +105,11 @@ impl DatabaseDescriptorBuilder {
         self
     }
 
-    pub fn build(self) -> Result<DatabaseDescriptor> {
-        Ok(DatabaseDescriptor {
+    pub fn build(self) -> DatabaseDescriptor {
+        DatabaseDescriptor {
             comment: self.comment,
             custom_properties: self.custom_properties,
-        })
+        }
     }
 }
 
@@ -179,7 +179,7 @@ impl JsonSerde for DatabaseDescriptor {
         };
         builder = builder.custom_properties(custom_properties);
 
-        builder.build()
+        Ok(builder.build())
     }
 }
 
@@ -187,7 +187,7 @@ impl DatabaseDescriptor {
     /// Create DatabaseDescriptor from JSON bytes (equivalent to Java's fromJsonBytes)
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
         let json_value: Value = serde_json::from_slice(bytes)
-            .map_err(|e| JsonSerdeError(format!("Failed to parse JSON: {}", e)))?;
+            .map_err(|e| JsonSerdeError(format!("Failed to parse JSON: {e}")))?;
         Self::deserialize_json(&json_value)
     }
 
@@ -195,7 +195,7 @@ impl DatabaseDescriptor {
     pub fn to_json_bytes(&self) -> Result<Vec<u8>> {
         let json_value = self.serialize_json()?;
         serde_json::to_vec(&json_value)
-            .map_err(|e| JsonSerdeError(format!("Failed to serialize to JSON: {}", e)))
+            .map_err(|e| JsonSerdeError(format!("Failed to serialize to JSON: {e}")))
     }
 }
 
@@ -212,8 +212,7 @@ mod tests {
         let descriptor = DatabaseDescriptor::builder()
             .comment("Test database")
             .custom_properties(custom_props)
-            .build()
-            .unwrap();
+            .build();
 
         // Test serialization
         let json_bytes = descriptor.to_json_bytes().unwrap();
@@ -226,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_empty_database_descriptor() {
-        let descriptor = DatabaseDescriptor::builder().build().unwrap();
+        let descriptor = DatabaseDescriptor::builder().build();
         let json_bytes = descriptor.to_json_bytes().unwrap();
         let deserialized = DatabaseDescriptor::from_json_bytes(&json_bytes).unwrap();
         assert_eq!(descriptor, deserialized);

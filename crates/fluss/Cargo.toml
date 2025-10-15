@@ -46,6 +46,10 @@ parse-display = "0.10"
 ref-cast = "1.0"
 chrono = { version = "0.4", features = ["clock", "std", "wasmbind"] }
 
+[dev-dependencies]
+testcontainers = "0.25.0"
+once_cell = "1.19"
+test-env-helpers = "0.2.2"
 
 [features]
 integration_tests = []
