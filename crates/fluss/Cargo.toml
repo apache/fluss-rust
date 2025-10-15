@@ -45,6 +45,7 @@ ordered-float = { version = "4", features = ["serde"] }
 parse-display = "0.10"
 ref-cast = "1.0"
 chrono = { workspace = true }
+oneshot = "0.1.11"
 
 [dev-dependencies]
 testcontainers = "0.25.0"

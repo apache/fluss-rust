@@ -159,7 +159,7 @@ impl ScanRecords {
         self.records.is_empty()
     }
 
-    pub fn buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>> {
+    pub fn records_by_buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>> {
         &self.records
     }
 }
