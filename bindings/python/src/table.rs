@@ -21,6 +21,8 @@ use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+const EARLIEST_OFFSET: i64 = -2;
+
 /// Represents a Fluss table for data operations
 #[pyclass]
 pub struct FlussTable {
@@ -72,25 +74,6 @@ impl FlussTable {
 
             Python::with_gil(|py| Py::new(py, py_scanner))
         })
-    }
-
-    /// synchronous version of new_log_scanner
-    fn new_log_scanner_sync(&self) -> PyResult<LogScanner> {
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
-
-        let rust_scanner = TOKIO_RUNTIME.block_on(async {
-            let fluss_table =
-                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
-
-            let table_scan = fluss_table.new_scan();
-            table_scan.create_log_scanner()
-        });
-
-        let py_scanner = LogScanner::from_core(rust_scanner, table_info.clone());
-
-        Ok(py_scanner)
     }
 
     /// Get table information
@@ -321,8 +304,7 @@ impl LogScanner {
 
         let num_buckets = self.table_info.get_num_buckets();
         for bucket_id in 0..num_buckets {
-            // -2 for the earliest offset.
-            let start_offset = -2;
+            let start_offset = EARLIEST_OFFSET;
 
             TOKIO_RUNTIME.block_on(async {
                 self.inner
@@ -346,36 +328,27 @@ impl LogScanner {
         let bucket_ids: Vec<i32> = (0..num_buckets).collect();
 
         // todo: after supporting list_offsets with timestamp, we can use start_timestamp and end_timestamp here
-        let target_offsets: HashMap<i32, i64> = if !bucket_ids.is_empty() {
-            TOKIO_RUNTIME
-                .block_on(async { self.inner.list_offsets_latest(bucket_ids).await })
-                .map_err(|e| FlussError::new_err(e.to_string()))?
-        } else {
-            HashMap::new()
-        };
+        let target_offsets: HashMap<i32, i64> = TOKIO_RUNTIME
+            .block_on(async { self.inner.list_offsets_latest(bucket_ids).await })
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
 
         let mut current_offsets: HashMap<i32, i64> = HashMap::new();
 
         if !target_offsets.is_empty() {
             loop {
                 let batch_result = TOKIO_RUNTIME
-                    .block_on(async { self.inner.poll(Duration::from_millis(1000)).await });
+                    .block_on(async { self.inner.poll(Duration::from_millis(500)).await });
 
                 match batch_result {
                     Ok(scan_records) => {
-                        if !scan_records.is_empty() {
-                            for (bucket, records) in scan_records.buckets().iter() {
-                                if let Some(last_record) = records.last() {
-                                    let max_offset_in_batch = last_record.offset();
-                                    let entry =
-                                        current_offsets.entry(bucket.bucket_id()).or_insert(0);
-                                    *entry = (*entry).max(max_offset_in_batch);
-                                }
+                        for (bucket, records) in scan_records.records_by_buckets().iter() {
+                            if let Some(last_record) = records.last() {
+                                current_offsets.insert(bucket.bucket_id(), last_record.offset());
                             }
-
-                            let arrow_batch = Utils::convert_scan_records_to_arrow(scan_records);
-                            all_batches.extend(arrow_batch);
                         }
+
+                        let arrow_batch = Utils::convert_scan_records_to_arrow(scan_records);
+                        all_batches.extend(arrow_batch);
 
                         if Self::check_if_done(&target_offsets, &current_offsets) {
                             break;
@@ -417,17 +390,15 @@ impl LogScanner {
         }
     }
 
-    #[allow(clippy::unnecessary_map_or)]
     fn check_if_done(
         target_offsets: &HashMap<i32, i64>,
         current_offsets: &HashMap<i32, i64>,
     ) -> bool {
-        target_offsets.iter().all(|(bucket_id, target_offset)| {
-            current_offsets
-                .get(bucket_id)
-                .map_or(false, |current_offset| {
-                    *current_offset >= *target_offset - 1
-                })
+        target_offsets.iter().all(|(bucket_id, &target_offset)| {
+            matches!(
+                current_offsets.get(bucket_id).copied(),
+                Some(current_offset) if current_offset >= target_offset - 1
+            )
         })
     }
 }
