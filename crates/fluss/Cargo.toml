@@ -56,4 +56,4 @@ integration_tests = []
 
 
 [build-dependencies]
-prost-build = {  version = "0.13.5"  }
+prost-build = {  version = "0.14.1"  }
