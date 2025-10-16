@@ -21,7 +21,7 @@ import time
 import pandas as pd
 import pyarrow as pa
 
-import fluss_python as fluss
+import fluss
 
 
 async def main():
@@ -132,18 +132,6 @@ async def main():
         append_writer.write_pandas(df)
         print("Successfully wrote Pandas DataFrame")
 
-        # Test 4: Write individual rows using dictionaries
-        print("\n--- Testing individual row writes ---")
-        rows = [
-            {"id": 8, "name": "Henry", "score": 92.8, "age": 31},
-            {"id": 9, "name": "Ivy", "score": 87.9, "age": 26},
-            {"id": 10, "name": "Jack", "score": 90.5, "age": 33},
-        ]
-
-        for row in rows:
-            append_writer.append_row(row)
-        print("Successfully wrote individual rows")
-
         # Flush all pending data
         print("\n--- Flushing data ---")
         append_writer.flush()
@@ -151,22 +139,18 @@ async def main():
 
     except Exception as e:
         print(f"Error during writing: {e}")
-    finally:
-        # Close the writer
-        append_writer.close()
-        print("Closed append writer")
 
     # Now scan the table to verify data was written
     print("\n--- Scanning table ---")
     try:
-        log_scanner = table.new_log_scanner_sync()
+        log_scanner = await table.new_log_scanner()
         print(f"Created log scanner: {log_scanner}")
 
         # Subscribe to scan from earliest to current timestamp
         # current timestamp in microseconds
         cur_timestamp = time.time_ns() // 1_000
         # start_timestamp=None (earliest), end_timestamp=current
-        log_scanner.subscribe(None, cur_timestamp)
+        log_scanner.subscribe(None, None)
 
         print("Scanning results using to_arrow():")
 
@@ -179,7 +163,7 @@ async def main():
 
         # Let's subscribe from the beginning again.
         # Reset subscription
-        log_scanner.subscribe(None, cur_timestamp)
+        log_scanner.subscribe(None, None)
 
         # Try to get as Pandas DataFrame
         try:
@@ -187,6 +171,11 @@ async def main():
             print(f"\nAs Pandas DataFrame:\n{df_result}")
         except Exception as e:
             print(f"Could not convert to Pandas: {e}")
+
+        # TODO: support to_arrow_batch_reader()
+        # which is reserved for streaming use cases
+
+        # TODO: support to_duckdb()
 
     except Exception as e:
         print(f"Error during scanning: {e}")
