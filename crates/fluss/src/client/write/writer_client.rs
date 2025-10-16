@@ -90,20 +90,12 @@ impl WriterClient {
         let table_path = &record.table_path;
         let cluster = self.metadata.get_cluster();
 
-        let bucket_assigner = {
-            if let Some(assigner) = self.bucket_assigners.get(table_path) {
-                assigner.clone()
-            } else {
-                let assigner = Arc::new(Self::create_bucket_assigner(table_path.as_ref()));
-                self.bucket_assigners
-                    .insert(table_path.as_ref().clone(), assigner.clone());
-                assigner
-            }
-        };
+        let (bucket_assigner, bucket_id) = self.assign_bucket(table_path);
 
-        let bucket_id = bucket_assigner.assign_bucket(None, &cluster);
-
-        let mut result = self.accumulate.append(record, 1, &cluster, true).await?;
+        let mut result = self
+            .accumulate
+            .append(record, bucket_id, &cluster, true)
+            .await?;
 
         if result.abort_record_for_new_batch {
             let prev_bucket_id = bucket_id;
@@ -120,6 +112,21 @@ impl WriterClient {
         }
 
         Ok(result.result_handle.expect("result_handle should exist"))
+    }
+    fn assign_bucket(&self, table_path: &Arc<TablePath>) -> (Arc<Box<dyn BucketAssigner>>, i32) {
+        let cluster = self.metadata.get_cluster();
+        let bucket_assigner = {
+            if let Some(assigner) = self.bucket_assigners.get(table_path) {
+                assigner.clone()
+            } else {
+                let assigner = Arc::new(Self::create_bucket_assigner(table_path.as_ref()));
+                self.bucket_assigners
+                    .insert(table_path.as_ref().clone(), assigner.clone());
+                assigner
+            }
+        };
+        let bucket_id = bucket_assigner.assign_bucket(None, &cluster);
+        (bucket_assigner, bucket_id)
     }
 
     pub async fn close(self) -> Result<()> {

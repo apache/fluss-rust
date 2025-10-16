@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::{Record, WriteRecord};
+use crate::error::Result;
+use crate::metadata::DataType;
+use crate::record::{ChangeType, ScanRecord};
+use crate::row::{ColumnarRow, GenericRow};
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
     Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder, UInt8Builder,
@@ -34,11 +39,6 @@ use std::{
     io::{Cursor, Write},
     sync::Arc,
 };
-
-use crate::error::Result;
-use crate::metadata::DataType;
-use crate::record::{ChangeType, ScanRecord};
-use crate::row::{ColumnarRow, GenericRow};
 
 /// const for record batch
 pub const BASE_OFFSET_LENGTH: usize = 8;
@@ -95,14 +95,67 @@ pub struct MemoryLogRecordsArrowBuilder {
     magic: u8,
     writer_id: i64,
     batch_sequence: i32,
-    table_schema: SchemaRef,
-    record_count: i32,
-    arrow_column_builders: Mutex<Vec<Box<dyn ArrayBuilder>>>,
+    arrow_record_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder>,
     is_closed: bool,
 }
 
-impl MemoryLogRecordsArrowBuilder {
-    pub fn new(schema_id: i32, row_type: &DataType) -> Self {
+pub trait ArrowRecordBatchInnerBuilder: Send + Sync {
+    fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>>;
+
+    fn append(&mut self, row: &GenericRow) -> Result<bool>;
+
+    fn append_batch(&mut self, record_batch: Arc<RecordBatch>) -> Result<bool>;
+
+    fn schema(&self) -> SchemaRef;
+
+    fn records_count(&self) -> i32;
+
+    fn is_full(&self) -> bool;
+}
+
+#[derive(Default)]
+pub struct DefaultArrowRecordBatchBuilder {
+    arrow_record_batch: Option<Arc<RecordBatch>>,
+    records_count: i32,
+}
+
+impl ArrowRecordBatchInnerBuilder for DefaultArrowRecordBatchBuilder {
+    fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>> {
+        Ok(self.arrow_record_batch.as_ref().unwrap().clone())
+    }
+
+    fn append(&mut self, _row: &GenericRow) -> Result<bool> {
+        // append one single row is not supported, return false directly
+        Ok(false)
+    }
+
+    fn append_batch(&mut self, record_batch: Arc<RecordBatch>) -> Result<bool> {
+        self.arrow_record_batch = Some(record_batch);
+        Ok(true)
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.arrow_record_batch.as_ref().unwrap().schema()
+    }
+
+    fn records_count(&self) -> i32 {
+        self.records_count
+    }
+
+    fn is_full(&self) -> bool {
+        // full if has one record batch
+        self.arrow_record_batch.is_some()
+    }
+}
+
+pub struct RecordAppendArrowRecordBatchBuilder {
+    table_schema: SchemaRef,
+    arrow_column_builders: Mutex<Vec<Box<dyn ArrayBuilder>>>,
+    records_count: i32,
+}
+
+impl RecordAppendArrowRecordBatchBuilder {
+    pub fn new(row_type: &DataType) -> Self {
         let schema_ref = to_arrow_schema(row_type);
         let builders = Mutex::new(
             schema_ref
@@ -111,32 +164,106 @@ impl MemoryLogRecordsArrowBuilder {
                 .map(|field| Self::create_builder(field.data_type()))
                 .collect(),
         );
+        Self {
+            table_schema: schema_ref.clone(),
+            arrow_column_builders: builders,
+            records_count: 0,
+        }
+    }
+
+    fn create_builder(data_type: &arrow_schema::DataType) -> Box<dyn ArrayBuilder> {
+        match data_type {
+            arrow_schema::DataType::Int8 => Box::new(Int8Builder::new()),
+            arrow_schema::DataType::Int16 => Box::new(Int16Builder::new()),
+            arrow_schema::DataType::Int32 => Box::new(Int32Builder::new()),
+            arrow_schema::DataType::Int64 => Box::new(Int64Builder::new()),
+            arrow_schema::DataType::UInt8 => Box::new(UInt8Builder::new()),
+            arrow_schema::DataType::UInt16 => Box::new(UInt16Builder::new()),
+            arrow_schema::DataType::UInt32 => Box::new(UInt32Builder::new()),
+            arrow_schema::DataType::UInt64 => Box::new(UInt64Builder::new()),
+            arrow_schema::DataType::Float32 => Box::new(Float32Builder::new()),
+            arrow_schema::DataType::Float64 => Box::new(Float64Builder::new()),
+            arrow_schema::DataType::Boolean => Box::new(BooleanBuilder::new()),
+            arrow_schema::DataType::Utf8 => Box::new(StringBuilder::new()),
+            arrow_schema::DataType::Binary => Box::new(BinaryBuilder::new()),
+            dt => panic!("Unsupported data type: {dt:?}"),
+        }
+    }
+}
+
+impl ArrowRecordBatchInnerBuilder for RecordAppendArrowRecordBatchBuilder {
+    fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>> {
+        let arrays = self
+            .arrow_column_builders
+            .lock()
+            .iter_mut()
+            .map(|b| b.finish())
+            .collect::<Vec<ArrayRef>>();
+        Ok(Arc::new(RecordBatch::try_new(
+            self.table_schema.clone(),
+            arrays,
+        )?))
+    }
+
+    fn append(&mut self, row: &GenericRow) -> Result<bool> {
+        for (idx, value) in row.values.iter().enumerate() {
+            let mut builder_binding = self.arrow_column_builders.lock();
+            let builder = builder_binding.get_mut(idx).unwrap();
+            value.append_to(builder.as_mut())?;
+        }
+        self.records_count += 1;
+        Ok(true)
+    }
+
+    fn append_batch(&mut self, _record_batch: Arc<RecordBatch>) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.table_schema.clone()
+    }
+
+    fn records_count(&self) -> i32 {
+        self.records_count
+    }
+
+    fn is_full(&self) -> bool {
+        self.records_count() >= DEFAULT_MAX_RECORD
+    }
+}
+
+impl MemoryLogRecordsArrowBuilder {
+    pub fn new(schema_id: i32, row_type: &DataType, to_append_record_batch: bool) -> Self {
+        let arrow_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder> = {
+            if to_append_record_batch {
+                Box::new(DefaultArrowRecordBatchBuilder::default())
+            } else {
+                Box::new(RecordAppendArrowRecordBatchBuilder::new(row_type))
+            }
+        };
         MemoryLogRecordsArrowBuilder {
             base_log_offset: BUILDER_DEFAULT_OFFSET,
             schema_id,
             magic: CURRENT_LOG_MAGIC_VALUE,
             writer_id: NO_WRITER_ID,
             batch_sequence: NO_BATCH_SEQUENCE,
-            record_count: 0,
-            table_schema: schema_ref,
-            arrow_column_builders: builders,
             is_closed: false,
+            arrow_record_batch_builder: arrow_batch_builder,
         }
     }
 
-    pub fn append(&mut self, row: &GenericRow) -> Result<()> {
-        for (idx, value) in row.values.iter().enumerate() {
-            let mut builder_binding = self.arrow_column_builders.lock();
-            let builder = builder_binding.get_mut(idx).unwrap();
-            value.append_to(builder.as_mut())?;
+    pub fn append(&mut self, record: &WriteRecord) -> Result<bool> {
+        match &record.row {
+            Record::Row(row) => Ok(self.arrow_record_batch_builder.append(row)?),
+            Record::RecordBatch(record_batch) => Ok(self
+                .arrow_record_batch_builder
+                .append_batch(record_batch.clone())?),
         }
-        self.record_count += 1;
         // todo: consider write other change type
-        Ok(())
     }
 
     pub fn is_full(&self) -> bool {
-        self.record_count >= DEFAULT_MAX_RECORD
+        self.arrow_record_batch_builder.records_count() >= DEFAULT_MAX_RECORD
     }
 
     pub fn is_closed(&self) -> bool {
@@ -150,18 +277,12 @@ impl MemoryLogRecordsArrowBuilder {
     pub fn build(&self) -> Result<Vec<u8>> {
         // serialize arrow batch
         let mut arrow_batch_bytes = vec![];
-        let mut writer = StreamWriter::try_new(&mut arrow_batch_bytes, &self.table_schema)?;
-
-        let arrays = self
-            .arrow_column_builders
-            .lock()
-            .iter_mut()
-            .map(|b| b.finish())
-            .collect::<Vec<ArrayRef>>();
-        let record_batch = RecordBatch::try_new(self.table_schema.clone(), arrays)?;
+        let table_schema = self.arrow_record_batch_builder.schema();
+        let mut writer = StreamWriter::try_new(&mut arrow_batch_bytes, &table_schema)?;
         // get header len
         let header = writer.get_ref().len();
-        writer.write(&record_batch)?;
+        let record_batch = self.arrow_record_batch_builder.build_arrow_record_batch()?;
+        writer.write(record_batch.as_ref())?;
         // get real arrow batch bytes
         let real_arrow_batch_bytes = &arrow_batch_bytes[header..];
 
@@ -195,38 +316,20 @@ impl MemoryLogRecordsArrowBuilder {
         cursor.write_u32::<LittleEndian>(0)?; // crc placeholder
         cursor.write_i16::<LittleEndian>(self.schema_id as i16)?;
 
+        let record_count = self.arrow_record_batch_builder.records_count();
         // todo: curerntly, always is append only
         let append_only = true;
         cursor.write_u8(if append_only { 1 } else { 0 })?;
-        cursor.write_i32::<LittleEndian>(if self.record_count > 0 {
-            self.record_count - 1
+        cursor.write_i32::<LittleEndian>(if record_count > 0 {
+            record_count - 1
         } else {
             0
         })?;
 
         cursor.write_i64::<LittleEndian>(self.writer_id)?;
         cursor.write_i32::<LittleEndian>(self.batch_sequence)?;
-        cursor.write_i32::<LittleEndian>(self.record_count)?;
+        cursor.write_i32::<LittleEndian>(record_count)?;
         Ok(())
-    }
-
-    fn create_builder(data_type: &arrow_schema::DataType) -> Box<dyn ArrayBuilder> {
-        match data_type {
-            arrow_schema::DataType::Int8 => Box::new(Int8Builder::new()),
-            arrow_schema::DataType::Int16 => Box::new(Int16Builder::new()),
-            arrow_schema::DataType::Int32 => Box::new(Int32Builder::new()),
-            arrow_schema::DataType::Int64 => Box::new(Int64Builder::new()),
-            arrow_schema::DataType::UInt8 => Box::new(UInt8Builder::new()),
-            arrow_schema::DataType::UInt16 => Box::new(UInt16Builder::new()),
-            arrow_schema::DataType::UInt32 => Box::new(UInt32Builder::new()),
-            arrow_schema::DataType::UInt64 => Box::new(UInt64Builder::new()),
-            arrow_schema::DataType::Float32 => Box::new(Float32Builder::new()),
-            arrow_schema::DataType::Float64 => Box::new(Float64Builder::new()),
-            arrow_schema::DataType::Boolean => Box::new(BooleanBuilder::new()),
-            arrow_schema::DataType::Utf8 => Box::new(StringBuilder::new()),
-            arrow_schema::DataType::Binary => Box::new(BinaryBuilder::new()),
-            dt => panic!("Unsupported data type: {dt:?}"),
-        }
     }
 }
 

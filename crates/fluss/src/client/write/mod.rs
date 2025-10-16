@@ -23,6 +23,7 @@ use crate::error::Error;
 use crate::metadata::TablePath;
 use crate::row::GenericRow;
 pub use accumulator::*;
+use arrow::array::RecordBatch;
 use std::sync::Arc;
 
 pub(crate) mod broadcast;
@@ -34,13 +35,28 @@ mod writer_client;
 pub use writer_client::WriterClient;
 
 pub struct WriteRecord<'a> {
-    pub row: GenericRow<'a>,
+    pub row: Record<'a>,
     pub table_path: Arc<TablePath>,
+}
+
+pub enum Record<'a> {
+    Row(GenericRow<'a>),
+    RecordBatch(Arc<RecordBatch>),
 }
 
 impl<'a> WriteRecord<'a> {
     pub fn new(table_path: Arc<TablePath>, row: GenericRow<'a>) -> Self {
-        Self { row, table_path }
+        Self {
+            row: Record::Row(row),
+            table_path,
+        }
+    }
+
+    pub fn new_record_batch(table_path: Arc<TablePath>, row: RecordBatch) -> Self {
+        Self {
+            row: Record::RecordBatch(Arc::new(row)),
+            table_path,
+        }
     }
 }
 

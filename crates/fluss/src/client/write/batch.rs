@@ -18,11 +18,10 @@
 use crate::BucketId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{ResultHandle, WriteRecord};
-use crate::metadata::{DataType, TablePath};
-use std::cmp::max;
-
 use crate::error::Result;
+use crate::metadata::{DataType, TablePath};
 use crate::record::MemoryLogRecordsArrowBuilder;
+use std::cmp::max;
 
 #[allow(dead_code)]
 pub struct InnerWriteBatch {
@@ -140,12 +139,16 @@ impl ArrowLogWriteBatch {
         row_type: &DataType,
         bucket_id: BucketId,
         create_ms: i64,
+        to_append_record_batch: bool,
     ) -> Self {
         let base = InnerWriteBatch::new(batch_id, table_path, create_ms, bucket_id);
-
         Self {
             write_batch: base,
-            arrow_builder: MemoryLogRecordsArrowBuilder::new(schema_id, row_type),
+            arrow_builder: MemoryLogRecordsArrowBuilder::new(
+                schema_id,
+                row_type,
+                to_append_record_batch,
+            ),
         }
     }
 
@@ -157,8 +160,13 @@ impl ArrowLogWriteBatch {
         if self.arrow_builder.is_closed() || self.arrow_builder.is_full() {
             Ok(None)
         } else {
-            self.arrow_builder.append(&write_record.row)?;
-            Ok(Some(ResultHandle::new(self.write_batch.results.receiver())))
+            // append successfully
+            if self.arrow_builder.append(write_record)? {
+                Ok(Some(ResultHandle::new(self.write_batch.results.receiver())))
+            } else {
+                // append fail
+                Ok(None)
+            }
         }
     }
 

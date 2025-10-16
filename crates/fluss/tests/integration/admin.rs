@@ -38,6 +38,7 @@ mod admin_test {
         TablePath,
     };
     use std::sync::Arc;
+    use std::thread;
 
     fn before_all() {
         // Create a new tokio runtime in a separate thread
