@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::client::{WriteRecord, WriterClient};
+use crate::error::Result;
 use crate::metadata::{TableInfo, TablePath};
 use crate::row::GenericRow;
+use arrow::array::RecordBatch;
 use std::sync::Arc;
-
-use crate::error::Result;
 
 #[allow(dead_code)]
 pub struct TableAppend {
@@ -58,6 +58,13 @@ pub struct AppendWriter {
 impl AppendWriter {
     pub async fn append(&self, row: GenericRow<'_>) -> Result<()> {
         let record = WriteRecord::new(self.table_path.clone(), row);
+        let result_handle = self.writer_client.send(&record).await?;
+        let result = result_handle.wait().await?;
+        result_handle.result(result)
+    }
+
+    pub async fn append_arrow_batch(&self, batch: RecordBatch) -> Result<()> {
+        let record = WriteRecord::new_record_batch(self.table_path.clone(), batch);
         let result_handle = self.writer_client.send(&record).await?;
         let result = result_handle.wait().await?;
         result_handle.result(result)
