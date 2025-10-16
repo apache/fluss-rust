@@ -157,6 +157,7 @@ mod admin_test {
             .column("age", DataTypes::int())
             .with_comment("User's age (optional)")
             .column("email", DataTypes::string())
+            .primary_key(vec!["id".to_string()])
             .build()
             .expect("Failed to build table schema");
 
@@ -208,6 +209,22 @@ mod admin_test {
         // verify schema columns
         let actual_schema = table_info.get_schema();
         assert_eq!(actual_schema, table_descriptor.schema(), "Schema mismatch");
+
+        // verify primary key
+        assert_eq!(
+            table_info.get_primary_keys(),
+            &vec!["id".to_string()],
+            "Primary key columns mismatch"
+        );
+        assert_eq!(
+            table_info
+                .get_schema()
+                .primary_key()
+                .unwrap()
+                .constraint_name(),
+            "PK_id",
+            "Primary key constraint name mismatch"
+        );
 
         // verify distribution and properties
         assert_eq!(table_info.get_num_buckets(), 3, "Bucket count mismatch");
