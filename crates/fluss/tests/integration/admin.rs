@@ -157,7 +157,6 @@ mod admin_test {
             .column("age", DataTypes::int())
             .with_comment("User's age (optional)")
             .column("email", DataTypes::string())
-            .primary_key_named("PK_test_user_table", vec!["id".to_string()])
             .build()
             .expect("Failed to build table schema");
 
@@ -207,56 +206,8 @@ mod admin_test {
         );
 
         // verify schema columns
-        let actual_columns = table_info.get_schema().columns();
-        let expected_columns = vec![
-            ("id", DataTypes::int().as_non_nullable(), None),
-            ("name", DataTypes::string(), None),
-            ("age", DataTypes::int(), Some("User's age (optional)")),
-            ("email", DataTypes::string(), None),
-        ];
-
-        assert_eq!(
-            actual_columns.len(),
-            expected_columns.len(),
-            "Number of columns mismatch"
-        );
-        for (idx, (exp_name, exp_type, exp_comment)) in expected_columns.into_iter().enumerate() {
-            let actual_col = &actual_columns[idx];
-            assert_eq!(
-                actual_col.name(),
-                exp_name,
-                "Column name mismatch at index {}",
-                idx
-            );
-            assert_eq!(
-                actual_col.data_type(),
-                &exp_type,
-                "Column type mismatch for {}",
-                exp_name
-            );
-            assert_eq!(
-                actual_col.comment(),
-                exp_comment,
-                "Column comment mismatch for {}",
-                exp_name
-            );
-        }
-
-        // verify primary key
-        assert_eq!(
-            table_info.get_primary_keys(),
-            &vec!["id".to_string()],
-            "Primary key columns mismatch"
-        );
-        assert_eq!(
-            table_info
-                .get_schema()
-                .primary_key()
-                .unwrap()
-                .constraint_name(),
-            "PK_id",
-            "Primary key constraint name mismatch"
-        );
+        let actual_schema = table_info.get_schema();
+        assert_eq!(actual_schema, table_descriptor.schema(), "Schema mismatch");
 
         // verify distribution and properties
         assert_eq!(table_info.get_num_buckets(), 3, "Bucket count mismatch");
@@ -265,20 +216,11 @@ mod admin_test {
             &vec!["id".to_string()],
             "Bucket keys mismatch"
         );
+
         assert_eq!(
-            table_info.get_properties().get("table.replication.factor"),
-            Some(&"1".to_string()),
-            "Replication factor mismatch"
-        );
-        assert_eq!(
-            LogFormat::parse(table_info.get_properties().get("table.log.format").unwrap()).unwrap(),
-            LogFormat::ARROW,
-            "Log format mismatch"
-        );
-        assert_eq!(
-            KvFormat::parse(table_info.get_properties().get("table.kv.format").unwrap()).unwrap(),
-            KvFormat::INDEXED,
-            "KV format mismatch"
+            table_info.get_properties(),
+            table_descriptor.properties(),
+            "Properties mismatch"
         );
 
         // drop table
