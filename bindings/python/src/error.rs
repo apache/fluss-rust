@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
 /// Fluss errors
@@ -27,6 +28,11 @@ pub struct FlussError {
 
 #[pymethods]
 impl FlussError {
+    #[new]
+    fn new(message: String) -> Self {
+        Self { message }
+    }
+
     fn __str__(&self) -> String {
         format!("FlussError: {}", self.message)
     }

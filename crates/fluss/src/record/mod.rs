@@ -84,6 +84,7 @@ impl fmt::Display for ChangeType {
     }
 }
 
+#[derive(Clone)]
 pub struct ScanRecord {
     pub row: ColumnarRow,
     offset: i64,
@@ -157,6 +158,10 @@ impl ScanRecords {
 
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
+    }
+
+    pub fn records_by_buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>> {
+        &self.records
     }
 }
 

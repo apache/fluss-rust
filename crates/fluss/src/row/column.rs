@@ -22,6 +22,7 @@ use arrow::array::{
 };
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct ColumnarRow {
     record_batch: Arc<RecordBatch>,
     row_id: usize,
@@ -44,6 +45,14 @@ impl ColumnarRow {
 
     pub fn set_row_id(&mut self, row_id: usize) {
         self.row_id = row_id
+    }
+
+    pub fn get_row_id(&self) -> usize {
+        self.row_id
+    }
+
+    pub fn get_record_batch(&self) -> &RecordBatch {
+        &self.record_batch
     }
 }
 

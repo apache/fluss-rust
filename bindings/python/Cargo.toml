@@ -26,8 +26,6 @@ rust-version = "1.85"
 name = "fluss"
 crate-type = ["cdylib"]
 
-[workspace]
-
 [dependencies]
 pyo3 = { version = "0.24", features = ["extension-module"] }
 fluss = { path = "../../crates/fluss" }
@@ -36,3 +34,4 @@ arrow = { workspace = true }
 arrow-pyarrow = "55.1.0"
 pyo3-async-runtimes = { version = "0.24.0", features = ["tokio-runtime"] }
 chrono = { workspace = true }
+once_cell = "1.21.3"
