@@ -342,7 +342,10 @@ impl LogScanner {
 
                 match batch_result {
                     Ok(scan_records) => {
-                        let mut filtered_records: HashMap<fcore::metadata::TableBucket, Vec<fcore::record::ScanRecord>> = HashMap::new();
+                        let mut filtered_records: HashMap<
+                            fcore::metadata::TableBucket,
+                            Vec<fcore::record::ScanRecord>,
+                        > = HashMap::new();
                         for (bucket, records) in scan_records.records_by_buckets().iter() {
                             let bucket_id = bucket.bucket_id();
                             if completed_buckets.contains(&bucket_id) {
@@ -359,8 +362,10 @@ impl LogScanner {
                         }
 
                         if !filtered_records.is_empty() {
-                            let filtered_scan_records = fcore::record::ScanRecords::new(filtered_records);
-                            let arrow_batch = Utils::convert_scan_records_to_arrow(filtered_scan_records);
+                            let filtered_scan_records =
+                                fcore::record::ScanRecords::new(filtered_records);
+                            let arrow_batch =
+                                Utils::convert_scan_records_to_arrow(filtered_scan_records);
                             all_batches.extend(arrow_batch);
                         }
 
