@@ -141,10 +141,11 @@ mod admin_test {
             .comment("Database for test_create_table")
             .build();
 
-        admin.drop_database(test_db_name, true, true);
+        assert_eq!(admin.database_exists(test_db_name).await.unwrap(), false);
         admin
             .create_database(test_db_name, false, Some(&db_descriptor))
-            .await;
+            .await
+            .expect("Failed to create test database");
 
         let test_table_name = "test_user_table";
         let table_path = TablePath::new(test_db_name.to_string(), test_table_name.to_string());
