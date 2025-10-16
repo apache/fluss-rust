@@ -431,7 +431,7 @@ pub struct LakeSnapshot {
 
 /// Represents a table bucket with table ID, partition ID, and bucket ID
 #[pyclass]
-#[derive(Clone)]
+#[derive(Eq, Hash, PartialEq, Clone)]
 pub struct TableBucket {
     table_id: i64,
     partition_id: Option<i64>,

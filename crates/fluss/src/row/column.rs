@@ -22,6 +22,7 @@ use arrow::array::{
 };
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct ColumnarRow {
     record_batch: Arc<RecordBatch>,
     row_id: usize,

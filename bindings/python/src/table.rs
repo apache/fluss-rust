@@ -18,7 +18,7 @@
 use crate::TOKIO_RUNTIME;
 use crate::*;
 use pyo3_async_runtimes::tokio::future_into_py;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 const EARLIEST_OFFSET: i64 = -2;
@@ -333,6 +333,7 @@ impl LogScanner {
             .map_err(|e| FlussError::new_err(e.to_string()))?;
 
         let mut current_offsets: HashMap<i32, i64> = HashMap::new();
+        let mut completed_buckets: HashSet<i32> = HashSet::new();
 
         if !target_offsets.is_empty() {
             loop {
@@ -341,14 +342,27 @@ impl LogScanner {
 
                 match batch_result {
                     Ok(scan_records) => {
+                        let mut filtered_records: HashMap<fcore::metadata::TableBucket, Vec<fcore::record::ScanRecord>> = HashMap::new();
                         for (bucket, records) in scan_records.records_by_buckets().iter() {
+                            let bucket_id = bucket.bucket_id();
+                            if completed_buckets.contains(&bucket_id) {
+                                continue;
+                            }
                             if let Some(last_record) = records.last() {
-                                current_offsets.insert(bucket.bucket_id(), last_record.offset());
+                                let offset = last_record.offset();
+                                current_offsets.insert(bucket_id, offset);
+                                filtered_records.insert(bucket.clone(), records.clone());
+                                if offset >= target_offsets[&bucket_id] - 1 {
+                                    completed_buckets.insert(bucket_id);
+                                }
                             }
                         }
 
-                        let arrow_batch = Utils::convert_scan_records_to_arrow(scan_records);
-                        all_batches.extend(arrow_batch);
+                        if !filtered_records.is_empty() {
+                            let filtered_scan_records = fcore::record::ScanRecords::new(filtered_records);
+                            let arrow_batch = Utils::convert_scan_records_to_arrow(filtered_scan_records);
+                            all_batches.extend(arrow_batch);
+                        }
 
                         if Self::check_if_done(&target_offsets, &current_offsets) {
                             break;
