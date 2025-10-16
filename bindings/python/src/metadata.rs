@@ -130,7 +130,7 @@ impl Schema {
 
         let fluss_schema = builder
             .build()
-            .map_err(|e| FlussError::new_err(format!("Failed to build schema: {}", e)))?;
+            .map_err(|e| FlussError::new_err(format!("Failed to build schema: {e}")))?;
 
         Ok(Self {
             __schema: fluss_schema,
@@ -283,7 +283,7 @@ impl TableDescriptor {
 
         let core_descriptor = builder
             .build()
-            .map_err(|e| FlussError::new_err(format!("Failed to build TableDescriptor: {}", e)))?;
+            .map_err(|e| FlussError::new_err(format!("Failed to build TableDescriptor: {e}")))?;
 
         Ok(Self {
             __tbl_desc: core_descriptor,

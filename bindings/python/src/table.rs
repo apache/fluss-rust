@@ -18,7 +18,7 @@
 use crate::TOKIO_RUNTIME;
 use crate::*;
 use pyo3_async_runtimes::tokio::future_into_py;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const EARLIEST_OFFSET: i64 = -2;
@@ -266,8 +266,7 @@ impl AppendWriter {
         // If we can't convert, return an error
         let type_name = value.bind(py).get_type().name()?;
         Err(FlussError::new_err(format!(
-            "Cannot convert Python value to Datum: {:?}",
-            type_name
+            "Cannot convert Python value to Datum: {type_name:?}"
         )))
     }
 }
@@ -346,7 +345,7 @@ impl LogScanner {
                             fcore::metadata::TableBucket,
                             Vec<fcore::record::ScanRecord>,
                         > = HashMap::new();
-                        for (bucket, records) in scan_records.records_by_buckets().iter() {
+                        for (bucket, records) in scan_records.records_by_buckets() {
                             let bucket_id = bucket.bucket_id();
                             if completed_buckets.contains(&bucket_id) {
                                 continue;
@@ -369,7 +368,9 @@ impl LogScanner {
                             all_batches.extend(arrow_batch);
                         }
 
-                        if Self::check_if_done(&target_offsets, &current_offsets) {
+                        // completed bucket is equal to all target buckets,
+                        // we can break scan records
+                        if completed_buckets.len() == target_offsets.len() {
                             break;
                         }
                     }
@@ -407,17 +408,5 @@ impl LogScanner {
             start_timestamp: None,
             end_timestamp: None,
         }
-    }
-
-    fn check_if_done(
-        target_offsets: &HashMap<i32, i64>,
-        current_offsets: &HashMap<i32, i64>,
-    ) -> bool {
-        target_offsets.iter().all(|(bucket_id, &target_offset)| {
-            matches!(
-                current_offsets.get(bucket_id).copied(),
-                Some(current_offset) if current_offset >= target_offset - 1
-            )
-        })
     }
 }

@@ -76,8 +76,8 @@ impl ListOffsetsRequest {
         partition_id: Option<i64>,
         bucket_ids: Vec<i32>,
         offset_spec: OffsetSpec,
-    ) -> FlussResult<Self> {
-        Ok(ListOffsetsRequest {
+    ) -> Self {
+        ListOffsetsRequest {
             inner_request: proto::ListOffsetsRequest {
                 follower_server_id: CLIENT_FOLLOWER_SERVER_ID,
                 offset_type: offset_spec.offset_type(),
@@ -86,7 +86,7 @@ impl ListOffsetsRequest {
                 bucket_id: bucket_ids,
                 start_timestamp: offset_spec.start_timestamp(),
             },
-        })
+        }
     }
 }
 

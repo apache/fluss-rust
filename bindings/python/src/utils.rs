@@ -31,7 +31,7 @@ impl Utils {
 
             let schema: ArrowSchema = arrow_pyarrow::FromPyArrow::from_pyarrow_bound(schema_bound)
                 .map_err(|e| {
-                    FlussError::new_err(format!("Failed to convert PyArrow schema: {}", e))
+                    FlussError::new_err(format!("Failed to convert PyArrow schema: {e}"))
                 })?;
             Ok(Arc::new(schema))
         })
@@ -67,8 +67,7 @@ impl Utils {
             }
             _ => {
                 return Err(FlussError::new_err(format!(
-                    "Unsupported Arrow data type: {:?}",
-                    arrow_type
+                    "Unsupported Arrow data type: {arrow_type:?}"
                 )));
             }
         };
@@ -144,13 +143,13 @@ impl Utils {
     /// Parse log format string to LogFormat enum
     pub fn parse_log_format(format_str: &str) -> PyResult<fcore::metadata::LogFormat> {
         fcore::metadata::LogFormat::parse(format_str)
-            .map_err(|e| FlussError::new_err(format!("Invalid log format '{}': {}", format_str, e)))
+            .map_err(|e| FlussError::new_err(format!("Invalid log format '{format_str}': {e}")))
     }
 
     /// Parse kv format string to KvFormat enum
     pub fn parse_kv_format(format_str: &str) -> PyResult<fcore::metadata::KvFormat> {
         fcore::metadata::KvFormat::parse(format_str)
-            .map_err(|e| FlussError::new_err(format!("Invalid kv format '{}': {}", format_str, e)))
+            .map_err(|e| FlussError::new_err(format!("Invalid kv format '{format_str}': {e}")))
     }
 
     /// Convert ScanRecords to Arrow RecordBatch
@@ -179,7 +178,7 @@ impl Utils {
             .iter()
             .map(|batch| {
                 batch.as_ref().to_pyarrow(py).map_err(|e| {
-                    FlussError::new_err(format!("Failed to convert RecordBatch to PyObject: {}", e))
+                    FlussError::new_err(format!("Failed to convert RecordBatch to PyObject: {e}"))
                 })
             })
             .collect();

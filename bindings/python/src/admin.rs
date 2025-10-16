@@ -65,7 +65,7 @@ impl FlussAdmin {
             let core_table_info = admin
                 .get_table(&core_table_path)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to get table: {}", e)))?;
+                .map_err(|e| FlussError::new_err(format!("Failed to get table: {e}")))?;
 
             Python::with_gil(|py| {
                 let table_info = TableInfo::from_core(core_table_info);
@@ -87,7 +87,7 @@ impl FlussAdmin {
             let core_lake_snapshot = admin
                 .get_latest_lake_snapshot(&core_table_path)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to get lake snapshot: {}", e)))?;
+                .map_err(|e| FlussError::new_err(format!("Failed to get lake snapshot: {e}")))?;
 
             Python::with_gil(|py| {
                 let lake_snapshot = LakeSnapshot::from_core(core_lake_snapshot);

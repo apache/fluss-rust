@@ -61,7 +61,7 @@ impl Config {
                         }
                     }
                     _ => {
-                        return Err(FlussError::new_err(format!("Unknown property: {}", key)));
+                        return Err(FlussError::new_err(format!("Unknown property: {key}")));
                     }
                 }
             }
