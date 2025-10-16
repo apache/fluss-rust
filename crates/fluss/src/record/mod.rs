@@ -84,6 +84,7 @@ impl fmt::Display for ChangeType {
     }
 }
 
+#[derive(Clone)]
 pub struct ScanRecord {
     pub row: ColumnarRow,
     offset: i64,

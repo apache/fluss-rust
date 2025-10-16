@@ -150,7 +150,7 @@ impl FlussAdmin {
         database_name: &str,
         ignore_if_not_exists: bool,
         cascade: bool,
-    ) -> Result<()> {
+    ) {
         let _response = self
             .admin_gateway
             .request(DropDatabaseRequest::new(
@@ -158,8 +158,7 @@ impl FlussAdmin {
                 ignore_if_not_exists,
                 cascade,
             ))
-            .await?;
-        Ok(())
+            .await;
     }
 
     /// List all databases

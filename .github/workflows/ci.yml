@@ -88,7 +88,11 @@ jobs:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
       - name: Integration Test
-        run: cargo test --features integration_tests --all-targets --workspace
+        # only run IT in linux since no docker in macos by default
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            cargo test --features integration_tests --all-targets --workspace
+          fi
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
