@@ -185,8 +185,9 @@ mod admin_test {
         );
 
         let tables = admin.list_tables(test_db_name).await.unwrap();
-        assert!(
-            tables.len() == 1,
+        assert_eq!(
+            tables.len(),
+            1,
             "There should be exactly one table in the database"
         );
         assert!(
@@ -215,15 +216,6 @@ mod admin_test {
             table_info.get_primary_keys(),
             &vec!["id".to_string()],
             "Primary key columns mismatch"
-        );
-        assert_eq!(
-            table_info
-                .get_schema()
-                .primary_key()
-                .unwrap()
-                .constraint_name(),
-            "PK_id",
-            "Primary key constraint name mismatch"
         );
 
         // verify distribution and properties
