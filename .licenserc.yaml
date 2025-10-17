@@ -26,5 +26,5 @@ header:
     - 'LICENSE'
     - 'NOTICE'
     - 'DISCLAIMER'
-    - 'bindings/python/python/fluss_python/py.typed'
+    - 'bindings/python/fluss/py.typed'
   comment: on-failure
