@@ -146,10 +146,8 @@ async def main():
         log_scanner = await table.new_log_scanner()
         print(f"Created log scanner: {log_scanner}")
 
-        # Subscribe to scan from earliest to current timestamp
-        # current timestamp in microseconds
-        cur_timestamp = time.time_ns() // 1_000
-        # start_timestamp=None (earliest), end_timestamp=current
+        # Subscribe to scan from earliest to latest
+        # start_timestamp=None (earliest), end_timestamp=None (latest)
         log_scanner.subscribe(None, None)
 
         print("Scanning results using to_arrow():")
