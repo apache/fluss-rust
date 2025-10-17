@@ -108,7 +108,7 @@ uv run python example/example.py
 ### Build API docs:
 
 ```bash
-uv run pdoc fluss_python
+uv run pdoc fluss
 ```
 
 ### Release
@@ -124,10 +124,10 @@ uv run maturin publish
 ## Project Structure
 ```
 bindings/python/
-├── Cargo.toml              # Rust dependency configuration
-├── pyproject.toml          # Python project configuration
-├── README.md              # This file
-├── src/                   # Rust source code
+├── Cargo.toml            # Rust dependency configuration
+├── pyproject.toml        # Python project configuration
+├── README.md             # This file
+├── src/                  # Rust source code
 │   ├── lib.rs            # Main entry module
 │   ├── config.rs         # Configuration related
 │   ├── connection.rs     # Connection management
@@ -135,11 +135,10 @@ bindings/python/
 │   ├── table.rs          # Table operations
 │   ├── types.rs          # Data types
 │   └── error.rs          # Error handling
-├── python/               # Python package source
-│   └── fluss_python/
-│       ├── __init__.py   # Python package entry
-│       ├── __init__.pyi  # Stub file
-│       └── py.typed      # Type declarations
+├── fluss/                # Python package source
+│   ├── __init__.py       # Python package entry
+│   ├── __init__.pyi      # Stub file
+│   └── py.typed          # Type declarations
 └── example/              # Example code
     └── example.py
 ```
