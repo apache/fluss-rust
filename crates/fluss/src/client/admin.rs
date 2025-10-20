@@ -25,13 +25,16 @@ use crate::rpc::message::{
     DropTableRequest, GetDatabaseInfoRequest, GetLatestLakeSnapshotRequest, GetTableRequest,
     ListDatabasesRequest, ListTablesRequest, TableExistsRequest,
 };
+use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
+use crate::BucketId;
 use crate::error::Result;
 use crate::proto::GetTableInfoResponse;
+use std::collections::HashMap;
+use std::slice::from_ref;
+use std::sync::Arc;
+use tokio::task::JoinHandle;
 
 pub struct FlussAdmin {
     admin_gateway: ServerConnection,
@@ -215,5 +218,100 @@ impl FlussAdmin {
             response.snapshot_id,
             table_buckets_offset,
         ))
+    }
+
+    /// List offset for the specified buckets. This operation enables to find the beginning offset,
+    /// end offset as well as the offset matching a timestamp in buckets.
+    pub async fn list_offsets(
+        &self,
+        table_path: &TablePath,
+        buckets_id: &[BucketId],
+        offset_spec: OffsetSpec,
+    ) -> Result<HashMap<i32, i64>> {
+        self.metadata
+            .check_and_update_table_metadata(from_ref(table_path))
+            .await?;
+
+        let cluster = self.metadata.get_cluster();
+        let table_id = cluster.get_table(table_path).table_id;
+
+        // Prepare requests
+        let requests_by_server =
+            self.prepare_list_offsets_requests(table_id, None, buckets_id, offset_spec)?;
+
+        // Send Requests
+        let response_futures = self.send_list_offsets_request(requests_by_server).await?;
+
+        let mut results = HashMap::new();
+
+        for response_future in response_futures {
+            let offsets = response_future.await.map_err(
+                // todo: consider use suitable error
+                |e| crate::error::Error::WriteError(format!("Fail to get result: {e}")),
+            )?;
+            results.extend(offsets?);
+        }
+        Ok(results)
+    }
+
+    fn prepare_list_offsets_requests(
+        &self,
+        table_id: i64,
+        partition_id: Option<i64>,
+        buckets: &[BucketId],
+        offset_spec: OffsetSpec,
+    ) -> Result<HashMap<i32, ListOffsetsRequest>> {
+        let cluster = self.metadata.get_cluster();
+        let mut node_for_bucket_list: HashMap<i32, Vec<i32>> = HashMap::new();
+
+        for bucket_id in buckets {
+            let table_bucket = TableBucket::new(table_id, *bucket_id);
+            let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
+                // todo: consider use another suitable error
+                crate::error::Error::InvalidTableError(format!(
+                    "No leader found for table bucket: table_id={table_id}, bucket_id={bucket_id}"
+                ))
+            })?;
+
+            node_for_bucket_list
+                .entry(leader.id())
+                .or_default()
+                .push(*bucket_id);
+        }
+
+        let mut list_offsets_requests = HashMap::new();
+        for (leader_id, bucket_ids) in node_for_bucket_list {
+            let request =
+                ListOffsetsRequest::new(table_id, partition_id, bucket_ids, offset_spec.clone());
+            list_offsets_requests.insert(leader_id, request);
+        }
+        Ok(list_offsets_requests)
+    }
+
+    async fn send_list_offsets_request(
+        &self,
+        request_map: HashMap<i32, ListOffsetsRequest>,
+    ) -> Result<Vec<JoinHandle<Result<HashMap<i32, i64>>>>> {
+        let mut tasks = Vec::new();
+
+        for (leader_id, request) in request_map {
+            let rpc_client = self.rpc_client.clone();
+            let metadata = self.metadata.clone();
+
+            let task = tokio::spawn(async move {
+                let cluster = metadata.get_cluster();
+                let tablet_server = cluster.get_tablet_server(leader_id).ok_or_else(|| {
+                    // todo: consider use more suitable error
+                    crate::error::Error::InvalidTableError(format!(
+                        "Tablet server {leader_id} not found"
+                    ))
+                })?;
+                let connection = rpc_client.get_connection(tablet_server).await?;
+                let list_offsets_response = connection.request(request).await?;
+                list_offsets_response.offsets()
+            });
+            tasks.push(task);
+        }
+        Ok(tasks)
     }
 }

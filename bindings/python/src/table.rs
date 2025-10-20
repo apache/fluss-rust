@@ -17,11 +17,10 @@
 
 use crate::TOKIO_RUNTIME;
 use crate::*;
+use fluss::client::EARLIEST_OFFSET;
+use fluss::rpc::message::OffsetSpec;
 use pyo3_async_runtimes::tokio::future_into_py;
-use std::collections::HashSet;
 use std::sync::Arc;
-
-const EARLIEST_OFFSET: i64 = -2;
 
 /// Represents a Fluss table for data operations
 #[pyclass]
@@ -70,8 +69,12 @@ impl FlussTable {
 
             let rust_scanner = table_scan.create_log_scanner();
 
-            let py_scanner = LogScanner::from_core(rust_scanner, table_info.clone());
+            let admin = conn
+                .get_admin()
+                .await
+                .map_err(|e| FlussError::new_err(e.to_string()))?;
 
+            let py_scanner = LogScanner::from_core(rust_scanner, admin, table_info.clone());
             Python::with_gil(|py| Py::new(py, py_scanner))
         })
     }
@@ -275,6 +278,7 @@ impl AppendWriter {
 #[pyclass]
 pub struct LogScanner {
     inner: fcore::client::LogScanner,
+    admin: fcore::client::FlussAdmin,
     table_info: fcore::metadata::TableInfo,
     #[allow(dead_code)]
     start_timestamp: Option<i64>,
@@ -327,50 +331,50 @@ impl LogScanner {
         let bucket_ids: Vec<i32> = (0..num_buckets).collect();
 
         // todo: after supporting list_offsets with timestamp, we can use start_timestamp and end_timestamp here
-        let target_offsets: HashMap<i32, i64> = TOKIO_RUNTIME
-            .block_on(async { self.inner.list_offsets_latest(bucket_ids).await })
+        let mut stopping_offsets: HashMap<i32, i64> = TOKIO_RUNTIME
+            .block_on(async {
+                self.admin
+                    .list_offsets(
+                        &self.table_info.table_path,
+                        bucket_ids.as_slice(),
+                        OffsetSpec::Latest,
+                    )
+                    .await
+            })
             .map_err(|e| FlussError::new_err(e.to_string()))?;
 
-        let mut current_offsets: HashMap<i32, i64> = HashMap::new();
-        let mut completed_buckets: HashSet<i32> = HashSet::new();
-
-        if !target_offsets.is_empty() {
+        if !stopping_offsets.is_empty() {
             loop {
                 let batch_result = TOKIO_RUNTIME
                     .block_on(async { self.inner.poll(Duration::from_millis(500)).await });
 
                 match batch_result {
                     Ok(scan_records) => {
-                        let mut filtered_records: HashMap<
-                            fcore::metadata::TableBucket,
-                            Vec<fcore::record::ScanRecord>,
-                        > = HashMap::new();
-                        for (bucket, records) in scan_records.records_by_buckets() {
-                            let bucket_id = bucket.bucket_id();
-                            if completed_buckets.contains(&bucket_id) {
+                        let mut result_records: Vec<fcore::record::ScanRecord> = vec![];
+                        for (bucket, records) in scan_records.into_records_by_buckets() {
+                            let stopping_offset = stopping_offsets.get(&bucket.bucket_id());
+
+                            if stopping_offset.is_none() {
+                                // not to include this bucket, skip records for this bucket
+                                // since we already reach end offset for this bucket
                                 continue;
                             }
                             if let Some(last_record) = records.last() {
                                 let offset = last_record.offset();
-                                current_offsets.insert(bucket_id, offset);
-                                filtered_records.insert(bucket.clone(), records.clone());
-                                if offset >= target_offsets[&bucket_id] - 1 {
-                                    completed_buckets.insert(bucket_id);
+                                result_records.extend(records);
+                                if offset >= stopping_offset.unwrap() - 1 {
+                                    stopping_offsets.remove(&bucket.bucket_id());
                                 }
                             }
                         }
 
-                        if !filtered_records.is_empty() {
-                            let filtered_scan_records =
-                                fcore::record::ScanRecords::new(filtered_records);
-                            let arrow_batch =
-                                Utils::convert_scan_records_to_arrow(filtered_scan_records);
+                        if !result_records.is_empty() {
+                            let arrow_batch = Utils::convert_scan_records_to_arrow(result_records);
                             all_batches.extend(arrow_batch);
                         }
 
-                        // completed bucket is equal to all target buckets,
-                        // we can break scan records
-                        if completed_buckets.len() == target_offsets.len() {
+                        // we have reach end offsets of all bucket
+                        if stopping_offsets.is_empty() {
                             break;
                         }
                     }
@@ -399,11 +403,13 @@ impl LogScanner {
 impl LogScanner {
     /// Create LogScanner from core LogScanner
     pub fn from_core(
-        inner: fcore::client::LogScanner,
+        inner_scanner: fcore::client::LogScanner,
+        admin: fcore::client::FlussAdmin,
         table_info: fcore::metadata::TableInfo,
     ) -> Self {
         Self {
-            inner,
+            inner: inner_scanner,
+            admin,
             table_info,
             start_timestamp: None,
             end_timestamp: None,

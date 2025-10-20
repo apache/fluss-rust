@@ -26,6 +26,4 @@ pub use server_connection::*;
 mod convert;
 mod transport;
 
-pub use message::*;
-
 pub use convert::*;

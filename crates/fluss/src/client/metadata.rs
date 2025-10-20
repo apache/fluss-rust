@@ -17,7 +17,8 @@
 
 use crate::cluster::{Cluster, ServerNode, ServerType};
 use crate::metadata::{TableBucket, TablePath};
-use crate::rpc::{RpcClient, ServerConnection, UpdateMetadataRequest};
+use crate::rpc::message::UpdateMetadataRequest;
+use crate::rpc::{RpcClient, ServerConnection};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::net::SocketAddr;
