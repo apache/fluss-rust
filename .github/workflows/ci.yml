@@ -91,7 +91,7 @@ jobs:
         # only run IT in linux since no docker in macos by default
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
-            cargo test --features integration_tests --all-targets --workspace
+            RUST_TEST_THREADS=1 cargo test --features integration_tests --all-targets --workspace  -- --nocapture
           fi
         env:
           RUST_LOG: DEBUG

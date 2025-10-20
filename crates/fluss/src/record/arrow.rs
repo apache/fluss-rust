@@ -114,12 +114,12 @@ pub trait ArrowRecordBatchInnerBuilder: Send + Sync {
 }
 
 #[derive(Default)]
-pub struct DefaultArrowRecordBatchBuilder {
+pub struct PrebuiltRecordBatchBuilder {
     arrow_record_batch: Option<Arc<RecordBatch>>,
     records_count: i32,
 }
 
-impl ArrowRecordBatchInnerBuilder for DefaultArrowRecordBatchBuilder {
+impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
     fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>> {
         Ok(self.arrow_record_batch.as_ref().unwrap().clone())
     }
@@ -130,6 +130,10 @@ impl ArrowRecordBatchInnerBuilder for DefaultArrowRecordBatchBuilder {
     }
 
     fn append_batch(&mut self, record_batch: Arc<RecordBatch>) -> Result<bool> {
+        if self.arrow_record_batch.is_some() {
+            return Ok(false);
+        }
+        self.records_count = record_batch.num_rows() as i32;
         self.arrow_record_batch = Some(record_batch);
         Ok(true)
     }
@@ -148,13 +152,13 @@ impl ArrowRecordBatchInnerBuilder for DefaultArrowRecordBatchBuilder {
     }
 }
 
-pub struct RecordAppendArrowRecordBatchBuilder {
+pub struct RowAppendRecordBatchBuilder {
     table_schema: SchemaRef,
     arrow_column_builders: Mutex<Vec<Box<dyn ArrayBuilder>>>,
     records_count: i32,
 }
 
-impl RecordAppendArrowRecordBatchBuilder {
+impl RowAppendRecordBatchBuilder {
     pub fn new(row_type: &DataType) -> Self {
         let schema_ref = to_arrow_schema(row_type);
         let builders = Mutex::new(
@@ -191,7 +195,7 @@ impl RecordAppendArrowRecordBatchBuilder {
     }
 }
 
-impl ArrowRecordBatchInnerBuilder for RecordAppendArrowRecordBatchBuilder {
+impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
     fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>> {
         let arrays = self
             .arrow_column_builders
@@ -236,9 +240,9 @@ impl MemoryLogRecordsArrowBuilder {
     pub fn new(schema_id: i32, row_type: &DataType, to_append_record_batch: bool) -> Self {
         let arrow_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder> = {
             if to_append_record_batch {
-                Box::new(DefaultArrowRecordBatchBuilder::default())
+                Box::new(PrebuiltRecordBatchBuilder::default())
             } else {
-                Box::new(RecordAppendArrowRecordBatchBuilder::new(row_type))
+                Box::new(RowAppendRecordBatchBuilder::new(row_type))
             }
         };
         MemoryLogRecordsArrowBuilder {

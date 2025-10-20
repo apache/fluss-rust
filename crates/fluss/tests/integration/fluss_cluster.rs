@@ -28,13 +28,14 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 const FLUSS_VERSION: &str = "0.7.0";
 
 pub struct FlussTestingClusterBuilder {
-    number_of_tablet_servers: usize,
+    number_of_tablet_servers: i32,
     network: &'static str,
     cluster_conf: HashMap<String, String>,
+    testing_name: String,
 }
 
 impl FlussTestingClusterBuilder {
-    pub fn new() -> Self {
+    pub fn new(testing_name: impl Into<String>) -> Self {
         // reduce testing resources
         let mut cluster_conf = HashMap::new();
         cluster_conf.insert(
@@ -50,14 +51,27 @@ impl FlussTestingClusterBuilder {
             number_of_tablet_servers: 1,
             cluster_conf,
             network: "fluss-cluster-network",
+            testing_name: testing_name.into(),
         }
+    }
+
+    fn tablet_server_container_name(&self, server_id: i32) -> String {
+        format!("tablet-server-{}-{}", self.testing_name, server_id)
+    }
+
+    fn coordinator_server_container_name(&self) -> String {
+        format!("coordinator-server-{}", self.testing_name)
+    }
+
+    fn zookeeper_container_name(&self) -> String {
+        format!("zookeeper-{}", self.testing_name)
     }
 
     pub async fn build(&mut self) -> FlussTestingCluster {
         let zookeeper = Arc::new(
             GenericImage::new("zookeeper", "3.9.2")
                 .with_network(self.network)
-                .with_container_name("zookeeper")
+                .with_container_name(self.zookeeper_container_name())
                 .start()
                 .await
                 .unwrap(),
@@ -83,15 +97,25 @@ impl FlussTestingClusterBuilder {
 
     async fn start_coordinator_server(&mut self) -> ContainerAsync<GenericImage> {
         let mut coordinator_confs = HashMap::new();
-        coordinator_confs.insert("zookeeper.address", "zookeeper:2181");
+        coordinator_confs.insert(
+            "zookeeper.address",
+            format!("{}:2181", self.zookeeper_container_name()),
+        );
         coordinator_confs.insert(
             "bind.listeners",
-            "INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123",
+            format!(
+                "INTERNAL://{}:0, CLIENT://{}:9123",
+                self.coordinator_server_container_name(),
+                self.coordinator_server_container_name()
+            ),
         );
-        coordinator_confs.insert("advertised.listeners", "CLIENT://localhost:9123");
-        coordinator_confs.insert("internal.listener.name", "INTERNAL");
+        coordinator_confs.insert(
+            "advertised.listeners",
+            "CLIENT://localhost:9123".to_string(),
+        );
+        coordinator_confs.insert("internal.listener.name", "INTERNAL".to_string());
         GenericImage::new("fluss/fluss", FLUSS_VERSION)
-            .with_container_name("coordinator-server")
+            .with_container_name(self.coordinator_server_container_name())
             .with_mapped_port(9123, ContainerPort::Tcp(9123))
             .with_network(self.network)
             .with_cmd(vec!["coordinatorServer"])
@@ -104,26 +128,30 @@ impl FlussTestingClusterBuilder {
             .unwrap()
     }
 
-    async fn start_tablet_server(&self, server_id: usize) -> ContainerAsync<GenericImage> {
+    async fn start_tablet_server(&self, server_id: i32) -> ContainerAsync<GenericImage> {
         let mut tablet_server_confs = HashMap::new();
         let bind_listeners = format!(
-            "INTERNAL://tablet-server-{}:0, CLIENT://tablet-server-{}:9123",
-            server_id, server_id
+            "INTERNAL://{}:0, CLIENT://{}:9123",
+            self.tablet_server_container_name(server_id),
+            self.tablet_server_container_name(server_id),
         );
         let expose_host_port = 9124 + server_id;
         let advertised_listeners = format!("CLIENT://localhost:{}", expose_host_port);
         let tablet_server_id = format!("{}", server_id);
-        tablet_server_confs.insert("zookeeper.address", "zookeeper:2181");
-        tablet_server_confs.insert("bind.listeners", bind_listeners.as_str());
-        tablet_server_confs.insert("advertised.listeners", advertised_listeners.as_str());
-        tablet_server_confs.insert("internal.listener.name", "INTERNAL");
-        tablet_server_confs.insert("tablet-server.id", tablet_server_id.as_str());
+        tablet_server_confs.insert(
+            "zookeeper.address",
+            format!("{}:2181", self.zookeeper_container_name()),
+        );
+        tablet_server_confs.insert("bind.listeners", bind_listeners);
+        tablet_server_confs.insert("advertised.listeners", advertised_listeners);
+        tablet_server_confs.insert("internal.listener.name", "INTERNAL".to_string());
+        tablet_server_confs.insert("tablet-server.id", tablet_server_id);
 
         GenericImage::new("fluss/fluss", FLUSS_VERSION)
             .with_cmd(vec!["tabletServer"])
             .with_mapped_port(expose_host_port as u16, ContainerPort::Tcp(9123))
             .with_network(self.network)
-            .with_container_name(format!("tablet-server-{}", server_id))
+            .with_container_name(self.tablet_server_container_name(server_id))
             .with_env_var(
                 "FLUSS_PROPERTIES",
                 self.to_fluss_properties_with(tablet_server_confs),
@@ -133,7 +161,7 @@ impl FlussTestingClusterBuilder {
             .unwrap()
     }
 
-    fn to_fluss_properties_with(&self, extra_properties: HashMap<&str, &str>) -> String {
+    fn to_fluss_properties_with(&self, extra_properties: HashMap<&str, String>) -> String {
         let mut fluss_properties = Vec::new();
         for (k, v) in self.cluster_conf.iter() {
             fluss_properties.push(format!("{}: {}", k, v));
@@ -150,7 +178,7 @@ impl FlussTestingClusterBuilder {
 pub struct FlussTestingCluster {
     zookeeper: Arc<ContainerAsync<GenericImage>>,
     coordinator_server: Arc<ContainerAsync<GenericImage>>,
-    tablet_servers: HashMap<usize, Arc<ContainerAsync<GenericImage>>>,
+    tablet_servers: HashMap<i32, Arc<ContainerAsync<GenericImage>>>,
     bootstrap_servers: String,
 }
 

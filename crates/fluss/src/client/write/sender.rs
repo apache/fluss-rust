@@ -122,7 +122,6 @@ impl Sender {
         collated: &HashMap<i32, Vec<Arc<ReadyWriteBatch>>>,
     ) -> Result<()> {
         for (leader_id, batches) in collated {
-            println!("send request batch");
             self.send_write_request(*leader_id, self.ack, batches)
                 .await?;
         }
