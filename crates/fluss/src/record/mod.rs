@@ -163,6 +163,10 @@ impl ScanRecords {
     pub fn records_by_buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>> {
         &self.records
     }
+
+    pub fn into_records_by_buckets(self) -> HashMap<TableBucket, Vec<ScanRecord>> {
+        self.records
+    }
 }
 
 impl IntoIterator for ScanRecords {

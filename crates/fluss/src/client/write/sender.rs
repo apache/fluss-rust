@@ -21,7 +21,7 @@ use crate::error::Error::WriteError;
 use crate::error::Result;
 use crate::metadata::TableBucket;
 use crate::proto::ProduceLogResponse;
-use crate::rpc::ProduceLogRequest;
+use crate::rpc::message::ProduceLogRequest;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;

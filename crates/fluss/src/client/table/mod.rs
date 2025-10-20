@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 use crate::error::Result;
 
+pub const EARLIEST_OFFSET: i64 = -2;
+
 mod append;
 
 mod scanner;

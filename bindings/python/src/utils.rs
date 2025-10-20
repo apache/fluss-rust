@@ -152,9 +152,9 @@ impl Utils {
             .map_err(|e| FlussError::new_err(format!("Invalid kv format '{format_str}': {e}")))
     }
 
-    /// Convert ScanRecords to Arrow RecordBatch
+    /// Convert Vec<ScanRecord> to Arrow RecordBatch
     pub fn convert_scan_records_to_arrow(
-        _scan_records: fcore::record::ScanRecords,
+        _scan_records: Vec<fcore::record::ScanRecord>,
     ) -> Vec<Arc<arrow::record_batch::RecordBatch>> {
         let mut result = Vec::new();
         for record in _scan_records {
