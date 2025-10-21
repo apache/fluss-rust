@@ -53,7 +53,7 @@ mod admin_test {
         })
         .join()
         .expect("Failed to create cluster");
-        // wait for 10 seconds to avoid the error like
+        // wait for 20 seconds to avoid the error like
         // CoordinatorEventProcessor is not initialized yet
         thread::sleep(std::time::Duration::from_secs(20));
     }
