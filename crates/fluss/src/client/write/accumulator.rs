@@ -17,7 +17,7 @@
 
 use crate::client::write::batch::WriteBatch::ArrowLog;
 use crate::client::write::batch::{ArrowLogWriteBatch, WriteBatch};
-use crate::client::{ResultHandle, WriteRecord};
+use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::config::Config;
 use crate::error::Result;
@@ -105,6 +105,7 @@ impl RecordAccumulator {
             row_type,
             bucket_id,
             current_time_ms(),
+            matches!(record.row, Record::RecordBatch(_)),
         ));
 
         let batch_id = batch.batch_id();
@@ -159,7 +160,6 @@ impl RecordAccumulator {
                 true, false, true,
             ));
         }
-
         self.append_new_batch(cluster, record, bucket_id, &mut dq_guard)
     }
 

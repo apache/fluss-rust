@@ -38,20 +38,24 @@ mod admin_test {
         TablePath,
     };
     use std::sync::Arc;
+    use std::thread;
 
     fn before_all() {
         // Create a new tokio runtime in a separate thread
         let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             rt.block_on(async {
-                let cluster = FlussTestingClusterBuilder::new().build().await;
+                let cluster = FlussTestingClusterBuilder::new("test-admin").build().await;
                 let mut guard = cluster_guard.write();
                 *guard = Some(cluster);
             });
         })
         .join()
         .expect("Failed to create cluster");
+        // wait for 20 seconds to avoid the error like
+        // CoordinatorEventProcessor is not initialized yet
+        thread::sleep(std::time::Duration::from_secs(20));
     }
 
     fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
