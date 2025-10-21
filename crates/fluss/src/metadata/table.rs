@@ -703,6 +703,69 @@ impl TableInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoPartitionStrategy {
+    auto_partition_enabled: bool,
+    auto_partition_key: Option<String>,
+    auto_partition_time_unit: Option<String>,
+    auto_partition_num_precreate: i32,
+    auto_partition_num_retention: i32,
+    auto_partition_timezone: String,
+}
+
+impl AutoPartitionStrategy {
+    pub fn from(properties: &HashMap<String, String>) -> Self {
+        Self {
+            auto_partition_enabled: properties
+                .get("table.auto.partition.enabled")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(false),
+            auto_partition_key: properties
+                .get("table.auto.partition.key")
+                .map(|s| s.to_string()),
+            auto_partition_time_unit: properties
+                .get("table.auto.partition.time.unit")
+                .map(|s| s.to_string()),
+            auto_partition_num_precreate: properties
+                .get("table.auto.partition.num.precreate")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            auto_partition_num_retention: properties
+                .get("table.auto.partition.num.retention")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            auto_partition_timezone: properties
+                .get("table.auto.partition.timezone")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "UTC".to_string()),
+        }
+    }
+
+    pub fn is_auto_partition_enabled(&self) -> bool {
+        self.auto_partition_enabled
+    }
+
+    pub fn key(&self) -> Option<&str> {
+        self.auto_partition_key.as_deref()
+    }
+
+    pub fn time_unit(&self) -> Option<&str> {
+        self.auto_partition_time_unit.as_deref()
+    }
+
+    pub fn num_precreate(&self) -> i32 {
+        self.auto_partition_num_precreate
+    }
+
+    pub fn num_retention(&self) -> i32 {
+        self.auto_partition_num_retention
+    }
+
+    pub fn timezone(&self) -> &str {
+        &self.auto_partition_timezone
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableConfig {
     pub properties: HashMap<String, String>,
 }
@@ -710,6 +773,10 @@ pub struct TableConfig {
 impl TableConfig {
     pub fn from_properties(properties: HashMap<String, String>) -> Self {
         TableConfig { properties }
+    }
+
+    pub fn get_auto_partition_strategy(&self) -> AutoPartitionStrategy {
+        AutoPartitionStrategy::from(&self.properties)
     }
 }
 
@@ -848,7 +915,11 @@ impl TableInfo {
     }
 
     pub fn is_auto_partitioned(&self) -> bool {
-        self.is_partitioned() && todo!()
+        self.is_partitioned()
+            && self
+                .table_config
+                .get_auto_partition_strategy()
+                .is_auto_partition_enabled()
     }
 
     pub fn get_partition_keys(&self) -> &[String] {
