@@ -88,6 +88,13 @@ impl<'a> From<i32> for Datum<'a> {
     }
 }
 
+impl<'a> From<i64> for Datum<'a> {
+    #[inline]
+    fn from(i: i64) -> Datum<'a> {
+        Datum::Int64(i)
+    }
+}
+
 impl<'a> From<&'a str> for Datum<'a> {
     #[inline]
     fn from(s: &'a str) -> Datum<'a> {
@@ -122,6 +129,18 @@ impl TryFrom<&Datum<'_>> for i32 {
     fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
         match from {
             Datum::Int32(i) => Ok(*i),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for i64 {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Int64(i) => Ok(*i),
             _ => Err(()),
         }
     }
