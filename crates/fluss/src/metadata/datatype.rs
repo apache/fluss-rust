@@ -93,6 +93,32 @@ impl DataType {
     }
 }
 
+impl Display for DataType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataType::Boolean(v) => write!(f, "{}", v),
+            DataType::TinyInt(v) => write!(f, "{}", v),
+            DataType::SmallInt(v) => write!(f, "{}", v),
+            DataType::Int(v) => write!(f, "{}", v),
+            DataType::BigInt(v) => write!(f, "{}", v),
+            DataType::Float(v) => write!(f, "{}", v),
+            DataType::Double(v) => write!(f, "{}", v),
+            DataType::Char(v) => write!(f, "{}", v),
+            DataType::String(v) => write!(f, "{}", v),
+            DataType::Decimal(v) => write!(f, "{}", v),
+            DataType::Date(v) => write!(f, "{}", v),
+            DataType::Time(v) => write!(f, "{}", v),
+            DataType::Timestamp(v) => write!(f, "{}", v),
+            DataType::TimestampLTz(v) => write!(f, "{}", v),
+            DataType::Bytes(v) => write!(f, "{}", v),
+            DataType::Binary(v) => write!(f, "{}", v),
+            DataType::Array(v) => write!(f, "{}", v),
+            DataType::Map(v) => write!(f, "{}", v),
+            DataType::Row(v) => write!(f, "{}", v),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BooleanType {
     nullable: bool,
@@ -115,6 +141,16 @@ impl BooleanType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+}
+
+impl Display for BooleanType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BOOLEAN")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -143,6 +179,16 @@ impl TinyIntType {
     }
 }
 
+impl Display for TinyIntType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TINYINT")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SmallIntType {
     nullable: bool,
@@ -165,6 +211,16 @@ impl SmallIntType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+}
+
+impl Display for SmallIntType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SMALLINT")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -193,6 +249,16 @@ impl IntType {
     }
 }
 
+impl Display for IntType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "INT")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BigIntType {
     nullable: bool,
@@ -215,6 +281,16 @@ impl BigIntType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+}
+
+impl Display for BigIntType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BIGINT")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -243,6 +319,16 @@ impl FloatType {
     }
 }
 
+impl Display for FloatType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FLOAT")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DoubleType {
     nullable: bool,
@@ -265,6 +351,16 @@ impl DoubleType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+}
+
+impl Display for DoubleType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DOUBLE")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -327,6 +423,16 @@ impl StringType {
     }
 }
 
+impl Display for StringType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "STRING")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DecimalType {
     nullable: bool,
@@ -370,6 +476,16 @@ impl DecimalType {
     }
 }
 
+impl Display for DecimalType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DECIMAL({}, {})", self.precision, self.scale)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DateType {
     nullable: bool,
@@ -392,6 +508,16 @@ impl DateType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+}
+
+impl Display for DateType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DATE")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -434,6 +560,16 @@ impl TimeType {
     }
 }
 
+impl Display for TimeType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TIME({})", self.precision)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TimestampType {
     nullable: bool,
@@ -470,6 +606,16 @@ impl TimestampType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.precision)
+    }
+}
+
+impl Display for TimestampType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TIMESTAMP({})", self.precision)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -512,6 +658,16 @@ impl TimestampLTzType {
     }
 }
 
+impl Display for TimestampLTzType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TIMESTAMP_LTZ({})", self.precision)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BytesType {
     nullable: bool,
@@ -534,6 +690,16 @@ impl BytesType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+}
+
+impl Display for BytesType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BYTES")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -567,6 +733,16 @@ impl BinaryType {
     }
 }
 
+impl Display for BinaryType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BINARY({})", self.length)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ArrayType {
     nullable: bool,
@@ -594,6 +770,16 @@ impl ArrayType {
 
     pub fn get_element_type(&self) -> &DataType {
         &self.element_type
+    }
+}
+
+impl Display for ArrayType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ARRAY<{}>", self.element_type)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -634,6 +820,16 @@ impl MapType {
     }
 }
 
+impl Display for MapType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MAP<{}, {}>", self.key_type, self.value_type)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub struct RowType {
     nullable: bool,
@@ -655,6 +851,23 @@ impl RowType {
 
     pub fn fields(&self) -> &Vec<DataField> {
         &self.fields
+    }
+}
+
+impl Display for RowType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ROW<")?;
+        for (i, field) in self.fields.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", field)?;
+        }
+        write!(f, ">")?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        Ok(())
     }
 }
 
@@ -823,4 +1036,263 @@ impl DataField {
     }
 }
 
-// todo: implement display for datatype
+impl Display for DataField {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.name, self.data_type)
+    }
+}
+
+#[test]
+fn test_boolean_display() {
+    assert_eq!(BooleanType::new().to_string(), "BOOLEAN");
+    assert_eq!(
+        BooleanType::with_nullable(false).to_string(),
+        "BOOLEAN NOT NULL"
+    );
+}
+
+#[test]
+fn test_tinyint_display() {
+    assert_eq!(TinyIntType::new().to_string(), "TINYINT");
+    assert_eq!(
+        TinyIntType::with_nullable(false).to_string(),
+        "TINYINT NOT NULL"
+    );
+}
+
+#[test]
+fn test_smallint_display() {
+    assert_eq!(SmallIntType::new().to_string(), "SMALLINT");
+    assert_eq!(
+        SmallIntType::with_nullable(false).to_string(),
+        "SMALLINT NOT NULL"
+    );
+}
+
+#[test]
+fn test_int_display() {
+    assert_eq!(IntType::new().to_string(), "INT");
+    assert_eq!(IntType::with_nullable(false).to_string(), "INT NOT NULL");
+}
+
+#[test]
+fn test_bigint_display() {
+    assert_eq!(BigIntType::new().to_string(), "BIGINT");
+    assert_eq!(
+        BigIntType::with_nullable(false).to_string(),
+        "BIGINT NOT NULL"
+    );
+}
+
+#[test]
+fn test_float_display() {
+    assert_eq!(FloatType::new().to_string(), "FLOAT");
+    assert_eq!(
+        FloatType::with_nullable(false).to_string(),
+        "FLOAT NOT NULL"
+    );
+}
+
+#[test]
+fn test_double_display() {
+    assert_eq!(DoubleType::new().to_string(), "DOUBLE");
+    assert_eq!(
+        DoubleType::with_nullable(false).to_string(),
+        "DOUBLE NOT NULL"
+    );
+}
+
+#[test]
+fn test_string_display() {
+    assert_eq!(StringType::new().to_string(), "STRING");
+    assert_eq!(
+        StringType::with_nullable(false).to_string(),
+        "STRING NOT NULL"
+    );
+}
+
+#[test]
+fn test_date_display() {
+    assert_eq!(DateType::new().to_string(), "DATE");
+    assert_eq!(DateType::with_nullable(false).to_string(), "DATE NOT NULL");
+}
+
+#[test]
+fn test_bytes_display() {
+    assert_eq!(BytesType::new().to_string(), "BYTES");
+    assert_eq!(
+        BytesType::with_nullable(false).to_string(),
+        "BYTES NOT NULL"
+    );
+}
+
+#[test]
+fn test_char_display() {
+    assert_eq!(CharType::new(10).to_string(), "CHAR(10)");
+    assert_eq!(
+        CharType::with_nullable(20, false).to_string(),
+        "CHAR(20) NOT NULL"
+    );
+}
+
+#[test]
+fn test_decimal_display() {
+    assert_eq!(DecimalType::new(10, 2).to_string(), "DECIMAL(10, 2)");
+    assert_eq!(
+        DecimalType::with_nullable(false, 38, 10).to_string(),
+        "DECIMAL(38, 10) NOT NULL"
+    );
+}
+
+#[test]
+fn test_time_display() {
+    assert_eq!(TimeType::new(0).to_string(), "TIME(0)");
+    assert_eq!(TimeType::new(3).to_string(), "TIME(3)");
+    assert_eq!(
+        TimeType::with_nullable(false, 9).to_string(),
+        "TIME(9) NOT NULL"
+    );
+}
+
+#[test]
+fn test_timestamp_display() {
+    assert_eq!(TimestampType::new(6).to_string(), "TIMESTAMP(6)");
+    assert_eq!(TimestampType::new(0).to_string(), "TIMESTAMP(0)");
+    assert_eq!(
+        TimestampType::with_nullable(false, 9).to_string(),
+        "TIMESTAMP(9) NOT NULL"
+    );
+}
+
+#[test]
+fn test_timestamp_ltz_display() {
+    assert_eq!(TimestampLTzType::new(6).to_string(), "TIMESTAMP_LTZ(6)");
+    assert_eq!(TimestampLTzType::new(3).to_string(), "TIMESTAMP_LTZ(3)");
+    assert_eq!(
+        TimestampLTzType::with_nullable(false, 9).to_string(),
+        "TIMESTAMP_LTZ(9) NOT NULL"
+    );
+}
+
+#[test]
+fn test_binary_display() {
+    assert_eq!(BinaryType::new(100).to_string(), "BINARY(100)");
+    assert_eq!(
+        BinaryType::with_nullable(false, 256).to_string(),
+        "BINARY(256) NOT NULL"
+    );
+}
+
+#[test]
+fn test_array_display() {
+    let array_type = ArrayType::new(DataTypes::int());
+    assert_eq!(array_type.to_string(), "ARRAY<INT>");
+
+    let array_type_non_null = ArrayType::with_nullable(false, DataTypes::string());
+    assert_eq!(array_type_non_null.to_string(), "ARRAY<STRING> NOT NULL");
+
+    let nested_array = ArrayType::new(DataTypes::array(DataTypes::int()));
+    assert_eq!(nested_array.to_string(), "ARRAY<ARRAY<INT>>");
+}
+
+#[test]
+fn test_map_display() {
+    let map_type = MapType::new(DataTypes::string(), DataTypes::int());
+    assert_eq!(map_type.to_string(), "MAP<STRING, INT>");
+
+    let map_type_non_null =
+        MapType::with_nullable(false, DataTypes::int(), DataTypes::string());
+    assert_eq!(map_type_non_null.to_string(), "MAP<INT, STRING> NOT NULL");
+
+    let nested_map = MapType::new(
+        DataTypes::string(),
+        DataTypes::map(DataTypes::int(), DataTypes::boolean()),
+    );
+    assert_eq!(nested_map.to_string(), "MAP<STRING, MAP<INT, BOOLEAN>>");
+}
+
+#[test]
+fn test_row_display() {
+    let fields = vec![
+        DataTypes::field("id".to_string(), DataTypes::int()),
+        DataTypes::field("name".to_string(), DataTypes::string()),
+    ];
+    let row_type = RowType::new(fields);
+    assert_eq!(row_type.to_string(), "ROW<id INT, name STRING>");
+
+    let fields_non_null = vec![DataTypes::field("age".to_string(), DataTypes::bigint())];
+    let row_type_non_null = RowType::with_nullable(false, fields_non_null);
+    assert_eq!(row_type_non_null.to_string(), "ROW<age BIGINT> NOT NULL");
+}
+
+#[test]
+fn test_datatype_display() {
+    assert_eq!(DataTypes::boolean().to_string(), "BOOLEAN");
+    assert_eq!(DataTypes::int().to_string(), "INT");
+    assert_eq!(DataTypes::string().to_string(), "STRING");
+    assert_eq!(DataTypes::char(50).to_string(), "CHAR(50)");
+    assert_eq!(DataTypes::decimal(10, 2).to_string(), "DECIMAL(10, 2)");
+    assert_eq!(DataTypes::time_with_precision(3).to_string(), "TIME(3)");
+    assert_eq!(
+        DataTypes::timestamp_with_precision(6).to_string(),
+        "TIMESTAMP(6)"
+    );
+    assert_eq!(
+        DataTypes::timestamp_ltz_with_precision(9).to_string(),
+        "TIMESTAMP_LTZ(9)"
+    );
+    assert_eq!(DataTypes::array(DataTypes::int()).to_string(), "ARRAY<INT>");
+    assert_eq!(
+        DataTypes::map(DataTypes::string(), DataTypes::int()).to_string(),
+        "MAP<STRING, INT>"
+    );
+}
+
+#[test]
+fn test_datafield_display() {
+    let field = DataTypes::field("user_id".to_string(), DataTypes::bigint());
+    assert_eq!(field.to_string(), "user_id BIGINT");
+
+    let field2 = DataTypes::field("email".to_string(), DataTypes::string());
+    assert_eq!(field2.to_string(), "email STRING");
+
+    let field3 = DataTypes::field("score".to_string(), DataTypes::decimal(10, 2));
+    assert_eq!(field3.to_string(), "score DECIMAL(10, 2)");
+}
+
+#[test]
+fn test_complex_nested_display() {
+    let row_type = DataTypes::row(vec![
+        DataTypes::field("id".to_string(), DataTypes::int()),
+        DataTypes::field("tags".to_string(), DataTypes::array(DataTypes::string())),
+        DataTypes::field(
+            "metadata".to_string(),
+            DataTypes::map(DataTypes::string(), DataTypes::string()),
+        ),
+    ]);
+    assert_eq!(
+        row_type.to_string(),
+        "ROW<id INT, tags ARRAY<STRING>, metadata MAP<STRING, STRING>>"
+    );
+}
+
+#[test]
+fn test_non_nullable_datatype() {
+    let nullable_int = DataTypes::int();
+    assert_eq!(nullable_int.to_string(), "INT");
+
+    let non_nullable_int = nullable_int.as_non_nullable();
+    assert_eq!(non_nullable_int.to_string(), "INT NOT NULL");
+}
+
+#[test]
+fn test_deeply_nested_types() {
+    let nested = DataTypes::array(DataTypes::map(
+        DataTypes::string(),
+        DataTypes::row(vec![
+            DataTypes::field("x".to_string(), DataTypes::int()),
+            DataTypes::field("y".to_string(), DataTypes::int()),
+        ]),
+    ));
+    assert_eq!(nested.to_string(), "ARRAY<MAP<STRING, ROW<x INT, y INT>>>");
+}
