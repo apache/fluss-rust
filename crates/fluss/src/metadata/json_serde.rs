@@ -17,7 +17,7 @@
 
 use crate::error::Error::{InvalidTableError, JsonSerdeError};
 use crate::error::Result;
-use crate::metadata::datatype::{DataType, DataTypes};
+use crate::metadata::datatype::{DataType, DataTypes, TimeType, TimestampType, TimestampLTzType};
 use crate::metadata::table::{Column, Schema, TableDescriptor};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -115,13 +115,13 @@ impl JsonSerde for DataType {
             }
 
             DataType::Time(_type) => {
-                todo!()
+                obj.insert(Self::FIELD_NAME_PRECISION.to_string(), json!(_type.precision()));
             }
             DataType::Timestamp(_type) => {
-                todo!()
+                obj.insert(Self::FIELD_NAME_PRECISION.to_string(), json!(_type.precision()));
             }
             DataType::TimestampLTz(_type) => {
-                todo!()
+                obj.insert(Self::FIELD_NAME_PRECISION.to_string(), json!(_type.precision()));
             }
             DataType::Array(_type) => todo!(),
             DataType::Map(_type) => todo!(),
@@ -154,9 +154,30 @@ impl JsonSerde for DataType {
             "STRING" => DataTypes::string(),
             "DECIMAL" => todo!(),
             "DATE" => DataTypes::date(),
-            "TIME_WITHOUT_TIME_ZONE" => todo!(), // Precision set separately
-            "TIMESTAMP_WITHOUT_TIME_ZONE" => todo!(), // Precision set separately
-            "TIMESTAMP_WITH_LOCAL_TIME_ZONE" => todo!(), // Precision set separately
+            "TIME_WITHOUT_TIME_ZONE" => {
+                let precision = node
+                    .get(Self::FIELD_NAME_PRECISION)
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32)
+                    .unwrap_or(TimeType::DEFAULT_PRECISION);
+                DataTypes::time_with_precision(precision)
+            }
+            "TIMESTAMP_WITHOUT_TIME_ZONE" => {
+                let precision = node
+                    .get(Self::FIELD_NAME_PRECISION)
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32)
+                    .unwrap_or(TimestampType::DEFAULT_PRECISION);
+                DataTypes::timestamp_with_precision(precision)
+            }
+            "TIMESTAMP_WITH_LOCAL_TIME_ZONE" => {
+                let precision = node
+                    .get(Self::FIELD_NAME_PRECISION)
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32)
+                    .unwrap_or(TimestampLTzType::DEFAULT_PRECISION);
+                DataTypes::timestamp_ltz_with_precision(precision)
+            }
             "BYTES" => DataTypes::bytes(),
             "BINARY" => todo!(),
             "ARRAY" => todo!(),

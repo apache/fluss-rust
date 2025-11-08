@@ -30,7 +30,7 @@ use arrow::{
     ipc::{reader::StreamReader, writer::StreamWriter},
 };
 use arrow_schema::SchemaRef;
-use arrow_schema::{DataType as ArrowDataType, Field};
+use arrow_schema::{DataType as ArrowDataType, Field, TimeUnit};
 use byteorder::WriteBytesExt;
 use byteorder::{ByteOrder, LittleEndian};
 use crc32c::crc32c;
@@ -190,6 +190,9 @@ impl RowAppendRecordBatchBuilder {
             arrow_schema::DataType::Boolean => Box::new(BooleanBuilder::new()),
             arrow_schema::DataType::Utf8 => Box::new(StringBuilder::new()),
             arrow_schema::DataType::Binary => Box::new(BinaryBuilder::new()),
+            arrow_schema::DataType::Time32(_) => Box::new(Int32Builder::new()),
+            arrow_schema::DataType::Time64(_) => Box::new(Int64Builder::new()),
+            arrow_schema::DataType::Timestamp(_, _) => Box::new(Int64Builder::new()),
             dt => panic!("Unsupported data type: {dt:?}"),
         }
     }
@@ -543,9 +546,39 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
         DataType::String(_) => ArrowDataType::Utf8,
         DataType::Decimal(_) => todo!(),
         DataType::Date(_) => ArrowDataType::Date32,
-        DataType::Time(_) => todo!(),
-        DataType::Timestamp(_) => todo!(),
-        DataType::TimestampLTz(_) => todo!(),
+        DataType::Time(time_type) => {
+            let precision = time_type.precision();
+            match precision {
+                0 => ArrowDataType::Time32(TimeUnit::Second),
+                1..=3 => ArrowDataType::Time32(TimeUnit::Millisecond),
+                4..=6 => ArrowDataType::Time64(TimeUnit::Microsecond),
+                7..=9 => ArrowDataType::Time64(TimeUnit::Nanosecond),
+                _ => ArrowDataType::Time32(TimeUnit::Second), // fallback
+            }
+        }
+        DataType::Timestamp(timestamp_type) => {
+            let precision = timestamp_type.precision();
+            let time_unit = match precision {
+                0 => TimeUnit::Second,
+                1..=3 => TimeUnit::Millisecond,
+                4..=6 => TimeUnit::Microsecond,
+                7..=9 => TimeUnit::Nanosecond,
+                _ => TimeUnit::Microsecond, // default is 6, so microseconds
+            };
+            ArrowDataType::Timestamp(time_unit, None)
+        }
+        DataType::TimestampLTz(timestamp_ltz_type) => {
+            let precision = timestamp_ltz_type.precision();
+            let time_unit = match precision {
+                0 => TimeUnit::Second,
+                1..=3 => TimeUnit::Millisecond,
+                4..=6 => TimeUnit::Microsecond,
+                7..=9 => TimeUnit::Nanosecond,
+                _ => TimeUnit::Microsecond, // default is 6, so microseconds
+            };
+            // Use UTC as the timezone for local timezone timestamps
+            ArrowDataType::Timestamp(time_unit, Some(std::sync::Arc::from("UTC")))
+        }
         DataType::Bytes(_) => todo!(),
         DataType::Binary(_) => todo!(),
         DataType::Array(_data_type) => todo!(),
