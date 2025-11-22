@@ -489,18 +489,12 @@ impl<'a> LogRecordBatch<'a> {
             None => return LogRecordIterator::empty(),
         };
 
-        let schema_to_use = if read_context.is_projection_pushdown() {
-            read_context.arrow_schema.clone()
+        let (schema_to_use, projection) = if read_context.is_projection_pushdown() {
+            (read_context.arrow_schema.clone(), None)
         } else if let Some(projected_fields) = read_context.projected_fields() {
-            let projected_schema = arrow_schema::Schema::new(
-                projected_fields
-                    .iter()
-                    .map(|&idx| read_context.arrow_schema.field(idx).clone())
-                    .collect::<Vec<_>>(),
-            );
-            Arc::new(projected_schema)
+            (read_context.arrow_schema.clone(), Some(projected_fields))
         } else {
-            read_context.arrow_schema.clone()
+            (read_context.arrow_schema.clone(), None)
         };
 
         let record_batch = match read_record_batch(
@@ -508,7 +502,7 @@ impl<'a> LogRecordBatch<'a> {
             batch_metadata,
             schema_to_use,
             &std::collections::HashMap::new(),
-            None,
+            projection,
             &version,
         ) {
             Ok(batch) => batch,
