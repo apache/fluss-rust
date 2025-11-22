@@ -530,50 +530,39 @@ impl<'a> LogRecordBatch<'a> {
 
     /// Parse an Arrow IPC message from a byte slice.
     ///
-    /// Similar to `arrow-ipc::reader::parse_message` (reader.rs:743-753), but also extracts
-    /// the body buffer. The implementation follows the same pattern: skip continuation marker
-    /// and metadata size, then parse the metadata message.
+    /// Server returns RecordBatch message (without Schema message) in the encapsulated message format.
+    /// Format: [continuation: 4 bytes (0xFFFFFFFF)][metadata_size: 4 bytes][RecordBatch metadata][body]
+    ///
+    /// This format is documented at:
+    /// https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format
     ///
     /// Returns the RecordBatch metadata, body buffer, and metadata version.
     fn parse_ipc_message(
         data: &'a [u8],
     ) -> Option<(arrow::ipc::RecordBatch<'a>, Buffer, arrow::ipc::MetadataVersion)> {
-        const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
+        const CONTINUATION_MARKER: u32 = 0xFFFFFFFF;
         
-        let metadata_buf = if data.len() >= 4 && data[..4] == CONTINUATION_MARKER {
-            if data.len() < 8 {
-                return None;
-            }
-            &data[8..]
-        } else {
-            if data.len() < 4 {
-                return None;
-            }
-            &data[4..]
-        };
+        if data.len() < 8 {
+            return None;
+        }
         
-        let metadata_size = u32::from_le_bytes([
-            metadata_buf[0],
-            metadata_buf[1],
-            metadata_buf[2],
-            metadata_buf[3],
-        ]) as usize;
+        let continuation = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let metadata_size = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
         
-        if metadata_buf.len() < 4 + metadata_size {
+        if continuation != CONTINUATION_MARKER {
+            return None;
+        }
+        
+        if data.len() < 8 + metadata_size {
             return None;
         }
 
-        let metadata_bytes = &metadata_buf[4..4 + metadata_size];
+        let metadata_bytes = &data[8..8 + metadata_size];
         let message = root_as_message(metadata_bytes).ok()?;
         let batch_metadata = message.header_as_record_batch()?;
 
-        let body_start = 4 + metadata_size;
-        let body_length = message.bodyLength() as usize;
-        if metadata_buf.len() < body_start + body_length {
-            return None;
-        }
-
-        let body_data = &metadata_buf[body_start..body_start + body_length];
+        let body_start = 8 + metadata_size;
+        let body_data = &data[body_start..];
         let body_buffer = Buffer::from(body_data);
 
         Some((batch_metadata, body_buffer, message.version()))

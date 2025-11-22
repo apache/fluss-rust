@@ -46,7 +46,7 @@ pub async fn main() -> Result<()> {
         .property("table.log.arrow.compression.type", "NONE")
         .build()?;
 
-    let table_path = TablePath::new("fluss".to_owned(), "projection_test_no_compression_rust".to_owned());
+    let table_path = TablePath::new("fluss".to_owned(), "projection_test".to_owned());
 
     let admin = conn.get_admin().await?;
 
@@ -101,8 +101,7 @@ pub async fn main() -> Result<()> {
     }
     println!();
 
-    println!("=== Test 2: Project by column indices (id, name, age) - NO COMPRESSION ===");
-    println!("This test verifies projection without compression to isolate compression-related issues.");
+    println!("=== Test 2: Project by column indices (id, name, age) ===");
     let log_scanner = table.new_scan()
         .project(&[0, 1, 2])?
         .create_log_scanner();
@@ -123,11 +122,6 @@ pub async fn main() -> Result<()> {
             row.get_int(2)
         );
     }
-    println!();
-
-    println!("✓ Rust client projection test (NO COMPRESSION) PASSED");
-    println!("  This indicates projection works correctly without compression.");
-    println!("  If compression version fails, the issue is in compression handling.");
     println!();
 
     println!("All tests completed successfully!");
