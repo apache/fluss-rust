@@ -20,6 +20,7 @@ use crate::error::Result;
 use crate::metadata::DataType;
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
+use tracing::error;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
     Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder, UInt8Builder,
@@ -27,7 +28,12 @@ use arrow::array::{
 };
 use arrow::{
     array::RecordBatch,
-    ipc::{reader::StreamReader, writer::StreamWriter},
+    buffer::Buffer,
+    ipc::{
+        reader::{read_record_batch, StreamReader},
+        writer::StreamWriter,
+        root_as_message,
+    },
 };
 use arrow_schema::SchemaRef;
 use arrow_schema::{DataType as ArrowDataType, Field};
@@ -473,30 +479,40 @@ impl<'a> LogRecordBatch<'a> {
     }
 
     pub fn records(&self, read_context: ReadContext) -> LogRecordIterator {
-        let count = self.record_count();
-        if count == 0 {
+        if self.record_count() == 0 {
             return LogRecordIterator::empty();
         }
 
-        // get arrow_metadata
-        let arrow_metadata_bytes = read_context.to_arrow_metadata().unwrap();
-        // arrow_batch_data
         let data = &self.data[RECORDS_OFFSET..];
+        let (batch_metadata, body_buffer, version) = match Self::parse_ipc_message(data) {
+            Some(result) => result,
+            None => return LogRecordIterator::empty(),
+        };
 
-        // need to combine arrow_metadata_bytes + arrow_batch_data
-        let cursor = Cursor::new([&arrow_metadata_bytes, data].concat());
-        let mut stream_reader = StreamReader::try_new(cursor, None).unwrap();
+        let (schema_to_use, projection) = if read_context.is_projection_pushdown() {
+            (read_context.arrow_schema.clone(), None)
+        } else if let Some(projected_fields) = read_context.projected_fields() {
+            (read_context.arrow_schema.clone(), Some(projected_fields))
+        } else {
+            (read_context.arrow_schema.clone(), None)
+        };
 
-        let mut record_batch = None;
-        if let Some(bath) = stream_reader.next() {
-            record_batch = Some(bath.unwrap());
-        }
+        let record_batch = match read_record_batch(
+            &body_buffer,
+            batch_metadata,
+            schema_to_use,
+            &std::collections::HashMap::new(),
+            projection,
+            &version,
+        ) {
+            Ok(batch) => batch,
+            Err(e) => {
+                error!(error = %e, "Failed to read RecordBatch");
+                return LogRecordIterator::empty();
+            }
+        };
 
-        if record_batch.is_none() {
-            return LogRecordIterator::empty();
-        }
-
-        let arrow_reader = ArrowReader::new(Arc::new(record_batch.unwrap()));
+        let arrow_reader = ArrowReader::new(Arc::new(record_batch));
         LogRecordIterator::Arrow(ArrowLogRecordIterator {
             reader: arrow_reader,
             base_offset: self.base_log_offset(),
@@ -504,6 +520,46 @@ impl<'a> LogRecordBatch<'a> {
             row_id: 0,
             change_type: ChangeType::AppendOnly,
         })
+    }
+
+    /// Parse an Arrow IPC message from a byte slice.
+    ///
+    /// Server returns RecordBatch message (without Schema message) in the encapsulated message format.
+    /// Format: [continuation: 4 bytes (0xFFFFFFFF)][metadata_size: 4 bytes][RecordBatch metadata][body]
+    ///
+    /// This format is documented at:
+    /// https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format
+    ///
+    /// Returns the RecordBatch metadata, body buffer, and metadata version.
+    fn parse_ipc_message(
+        data: &'a [u8],
+    ) -> Option<(arrow::ipc::RecordBatch<'a>, Buffer, arrow::ipc::MetadataVersion)> {
+        const CONTINUATION_MARKER: u32 = 0xFFFFFFFF;
+        
+        if data.len() < 8 {
+            return None;
+        }
+        
+        let continuation = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let metadata_size = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+        
+        if continuation != CONTINUATION_MARKER {
+            return None;
+        }
+        
+        if data.len() < 8 + metadata_size {
+            return None;
+        }
+
+        let metadata_bytes = &data[8..8 + metadata_size];
+        let message = root_as_message(metadata_bytes).ok()?;
+        let batch_metadata = message.header_as_record_batch()?;
+
+        let body_start = 8 + metadata_size;
+        let body_data = &data[body_start..];
+        let body_buffer = Buffer::from(body_data);
+
+        Some((batch_metadata, body_buffer, message.version()))
     }
 }
 
@@ -554,19 +610,61 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
     }
 }
 
+#[derive(Clone)]
 pub struct ReadContext {
     arrow_schema: SchemaRef,
+    projected_fields: Option<Vec<usize>>,
+    projection_pushdown: bool,
 }
 
 impl ReadContext {
     pub fn new(arrow_schema: SchemaRef) -> ReadContext {
-        ReadContext { arrow_schema }
+        ReadContext {
+            arrow_schema,
+            projected_fields: None,
+            projection_pushdown: false,
+        }
+    }
+
+    pub fn with_projection(arrow_schema: SchemaRef, projected_fields: Option<Vec<usize>>) -> ReadContext {
+        ReadContext {
+            arrow_schema,
+            projected_fields,
+            projection_pushdown: false,
+        }
+    }
+
+    pub fn with_projection_pushdown(arrow_schema: SchemaRef, projected_fields: Option<Vec<usize>>) -> ReadContext {
+        ReadContext {
+            arrow_schema,
+            projected_fields,
+            projection_pushdown: true,
+        }
+    }
+
+    pub fn is_projection_pushdown(&self) -> bool {
+        self.projection_pushdown
     }
 
     pub fn to_arrow_metadata(&self) -> Result<Vec<u8>> {
         let mut arrow_schema_bytes = vec![];
-        let _writer = StreamWriter::try_new(&mut arrow_schema_bytes, &self.arrow_schema)?;
+        let schema_to_use = if let Some(projected_fields) = &self.projected_fields {
+            let projected_schema = arrow_schema::Schema::new(
+                projected_fields
+                    .iter()
+                    .map(|&idx| self.arrow_schema.field(idx).clone())
+                    .collect::<Vec<_>>(),
+            );
+            Arc::new(projected_schema)
+        } else {
+            self.arrow_schema.clone()
+        };
+        let _writer = StreamWriter::try_new(&mut arrow_schema_bytes, &schema_to_use)?;
         Ok(arrow_schema_bytes)
+    }
+
+    pub fn projected_fields(&self) -> Option<&[usize]> {
+        self.projected_fields.as_deref()
     }
 }
 
