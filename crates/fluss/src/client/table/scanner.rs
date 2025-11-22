@@ -53,7 +53,6 @@ impl<'a> TableScan<'a> {
     }
 
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
-        eprintln!("DEBUG TableScan::project - column_indices: {:?}", column_indices);
         let field_count = self.table_info.row_type().fields().len();
         for &idx in column_indices {
             if idx >= field_count {
@@ -61,7 +60,6 @@ impl<'a> TableScan<'a> {
             }
         }
         self.projected_fields = Some(column_indices.to_vec());
-        eprintln!("DEBUG TableScan::project - after setting: {:?}", self.projected_fields);
         Ok(self)
     }
     
@@ -82,7 +80,6 @@ impl<'a> TableScan<'a> {
     }
 
     pub fn create_log_scanner(self) -> LogScanner {
-        eprintln!("DEBUG TableScan::create_log_scanner - projected_fields: {:?}", self.projected_fields);
         LogScanner::new(
             &self.table_info,
             self.metadata.clone(),
@@ -107,7 +104,6 @@ impl LogScanner {
         connections: Arc<RpcClient>,
         projected_fields: Option<Vec<usize>>,
     ) -> Self {
-        eprintln!("DEBUG LogScanner::new - projected_fields: {:?}", projected_fields);
         let log_scanner_status = Arc::new(LogScannerStatus::new());
         Self {
             table_path: table_info.table_path.clone(),
@@ -161,7 +157,6 @@ impl LogFetcher {
         log_scanner_status: Arc<LogScannerStatus>,
         projected_fields: Option<Vec<usize>>,
     ) -> Self {
-        eprintln!("DEBUG LogFetcher::new - projected_fields: {:?}", projected_fields);
         LogFetcher {
             table_path: table_info.table_path.clone(),
             conns: conns.clone(),
@@ -173,7 +168,6 @@ impl LogFetcher {
     }
 
     async fn send_fetches_and_collect(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
-        eprintln!("DEBUG send_fetches_and_collect - self.projected_fields: {:?}", self.projected_fields);
         let fetch_request = self.prepare_fetch_log_requests().await;
         let mut result: HashMap<TableBucket, Vec<ScanRecord>> = HashMap::new();
         for (leader, fetch_request) in fetch_request {
@@ -192,7 +186,6 @@ impl LogFetcher {
                 let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
                 
                 let full_arrow_schema = to_arrow_schema(self.table_info.get_row_type());
-                eprintln!("DEBUG Creating ReadContext with projected_fields: {:?}", self.projected_fields);
                 let read_context = ReadContext::with_projection(
                     full_arrow_schema,
                     self.projected_fields.clone(),
@@ -204,8 +197,6 @@ impl LogFetcher {
                     let table_bucket = TableBucket::new(table_id, bucket);
                     if fetch_log_for_bucket.records.is_some() {
                         let data = fetch_log_for_bucket.records.unwrap();
-                        eprintln!("DEBUG: Server returned data size: {} bytes, projected_fields: {:?}", data.len(), self.projected_fields);
-                        eprintln!("DEBUG: First 64 bytes of server data: {:?}", &data[..data.len().min(64)]);
                         for log_record in &mut LogRecordsBatchs::new(&data) {
                             let last_offset = log_record.last_log_offset();
                             fetch_records
