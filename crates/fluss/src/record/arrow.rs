@@ -489,7 +489,9 @@ impl<'a> LogRecordBatch<'a> {
             None => return LogRecordIterator::empty(),
         };
 
-        let schema_to_use = if let Some(projected_fields) = read_context.projected_fields() {
+        let schema_to_use = if read_context.is_projection_pushdown() {
+            read_context.arrow_schema.clone()
+        } else if let Some(projected_fields) = read_context.projected_fields() {
             let projected_schema = arrow_schema::Schema::new(
                 projected_fields
                     .iter()
@@ -629,6 +631,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
 pub struct ReadContext {
     arrow_schema: SchemaRef,
     projected_fields: Option<Vec<usize>>,
+    projection_pushdown: bool,
 }
 
 impl ReadContext {
@@ -636,6 +639,7 @@ impl ReadContext {
         ReadContext {
             arrow_schema,
             projected_fields: None,
+            projection_pushdown: false,
         }
     }
 
@@ -643,7 +647,20 @@ impl ReadContext {
         ReadContext {
             arrow_schema,
             projected_fields,
+            projection_pushdown: false,
         }
+    }
+
+    pub fn with_projection_pushdown(arrow_schema: SchemaRef, projected_fields: Option<Vec<usize>>) -> ReadContext {
+        ReadContext {
+            arrow_schema,
+            projected_fields,
+            projection_pushdown: true,
+        }
+    }
+
+    pub fn is_projection_pushdown(&self) -> bool {
+        self.projection_pushdown
     }
 
     pub fn to_arrow_metadata(&self) -> Result<Vec<u8>> {

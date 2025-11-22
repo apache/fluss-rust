@@ -80,7 +80,10 @@ pub async fn main() -> Result<()> {
 
     println!("=== Test 1: Full scan (no projection) ===");
     let log_scanner = table.new_scan().create_log_scanner();
-    log_scanner.subscribe(0, 0).await?;
+    let num_buckets = table.table_info().get_num_buckets();
+    for bucket_id in 0..num_buckets {
+        log_scanner.subscribe(bucket_id, 0).await?;
+    }
     
     let scan_records = log_scanner.poll(Duration::from_secs(5)).await?;
     println!("Fetched {} records", scan_records.count());
@@ -103,7 +106,10 @@ pub async fn main() -> Result<()> {
     let log_scanner = table.new_scan()
         .project(&[0, 1, 2])?
         .create_log_scanner();
-    log_scanner.subscribe(0, 0).await?;
+    let num_buckets = table.table_info().get_num_buckets();
+    for bucket_id in 0..num_buckets {
+        log_scanner.subscribe(bucket_id, 0).await?;
+    }
     
     let scan_records = log_scanner.poll(Duration::from_secs(5)).await?;
     println!("Fetched {} records with projection", scan_records.count());
