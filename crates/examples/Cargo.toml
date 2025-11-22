@@ -37,3 +37,7 @@ path = "src/example_table.rs"
 [[example]]
 name = "projection-example"
 path = "src/projection_example.rs"
+
+[[example]]
+name = "projection-example-no-compression"
+path = "src/projection_example_no_compression.rs"

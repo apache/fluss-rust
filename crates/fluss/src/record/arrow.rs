@@ -27,7 +27,12 @@ use arrow::array::{
 };
 use arrow::{
     array::RecordBatch,
-    ipc::{reader::StreamReader, writer::StreamWriter},
+    buffer::Buffer,
+    ipc::{
+        reader::{read_record_batch, StreamReader},
+        writer::StreamWriter,
+        root_as_message, MessageHeader,
+    },
 };
 use arrow_schema::SchemaRef;
 use arrow_schema::{DataType as ArrowDataType, Field};
@@ -478,25 +483,183 @@ impl<'a> LogRecordBatch<'a> {
             return LogRecordIterator::empty();
         }
 
-        // get arrow_metadata
-        let arrow_metadata_bytes = read_context.to_arrow_metadata().unwrap();
-        // arrow_batch_data
+        // Reference: Java client uses deserializeRecordBatch which reads RecordBatch message directly
+        // with a pre-configured VectorSchemaRoot (schema). In Rust, we use read_record_batch
+        // which is the equivalent API - it reads RecordBatch message directly with a pre-configured schema.
+        
+        // Server returns RecordBatch message (without Schema message)
+        // Format: [continuation: 4 bytes][metadata_size: 4 bytes][RecordBatch metadata][body]
         let data = &self.data[RECORDS_OFFSET..];
-
-        // need to combine arrow_metadata_bytes + arrow_batch_data
-        let cursor = Cursor::new([&arrow_metadata_bytes, data].concat());
-        let mut stream_reader = StreamReader::try_new(cursor, None).unwrap();
-
-        let mut record_batch = None;
-        if let Some(bath) = stream_reader.next() {
-            record_batch = Some(bath.unwrap());
-        }
-
-        if record_batch.is_none() {
+        
+        if data.len() < 8 {
+            eprintln!("Data too short: {} bytes", data.len());
             return LogRecordIterator::empty();
         }
+        
+        // Parse continuation marker and metadata size
+        let continuation = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let metadata_size = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+        
+        if continuation != 0xFFFFFFFF {
+            eprintln!("Invalid continuation marker: 0x{:08X}", continuation);
+            return LogRecordIterator::empty();
+        }
+        
+        if data.len() < 8 + metadata_size {
+            eprintln!("Data too short for metadata: {} < {}", data.len(), 8 + metadata_size);
+            return LogRecordIterator::empty();
+        }
+        
+        // Parse RecordBatch metadata
+        let metadata_bytes = &data[8..8 + metadata_size];
+        let message = match root_as_message(metadata_bytes) {
+            Ok(msg) => msg,
+            Err(e) => {
+                eprintln!("Failed to parse RecordBatch metadata: {:?}", e);
+                return LogRecordIterator::empty();
+            }
+        };
+        
+        // Verify it's a RecordBatch message
+        if message.header_type() != MessageHeader::RecordBatch {
+            eprintln!("Expected RecordBatch message, got: {:?}", message.header_type());
+            return LogRecordIterator::empty();
+        }
+        
+        let batch_metadata = match message.header_as_record_batch() {
+            Some(batch) => batch,
+            None => {
+                eprintln!("Failed to get RecordBatch from message");
+                return LogRecordIterator::empty();
+            }
+        };
+        
+        // Extract body data
+        let body_start = 8 + metadata_size;
+        let body_data = &data[body_start..];
+        let body_buffer = Buffer::from(body_data);
+        
+        // Debug: Check buffer information from metadata and compare with actual data
+        if let Some(buffers) = batch_metadata.buffers() {
+            eprintln!("DEBUG: ========== Buffer Analysis ==========");
+            eprintln!("DEBUG: RecordBatch has {} buffers, body size: {} bytes", buffers.len(), body_data.len());
+            
+            let has_compression = batch_metadata.compression().is_some();
+            if has_compression {
+                if let Some(compression) = batch_metadata.compression() {
+                    eprintln!("DEBUG: RecordBatch uses compression: {:?}", compression.codec());
+                }
+            } else {
+                eprintln!("DEBUG: RecordBatch has no compression");
+            }
+            
+            // Collect all buffers to a vector for easier access
+            let buffers_vec: Vec<_> = buffers.iter().collect();
+            
+            for (i, buf) in buffers_vec.iter().enumerate() {
+                let offset = buf.offset() as usize;
+                let length = buf.length() as usize;
+                
+                // Calculate actual buffer size (from current offset to next buffer offset or end of body)
+                let actual_size = if i + 1 < buffers_vec.len() {
+                    let next_offset = buffers_vec[i + 1].offset() as usize;
+                    next_offset - offset
+                } else {
+                    body_data.len() - offset
+                };
+                
+                eprintln!("DEBUG: --- Buffer {} ---", i);
+                eprintln!("DEBUG:   Metadata: offset={}, length={}", offset, length);
+                eprintln!("DEBUG:   Actual size (calculated): {} bytes", actual_size);
+                
+                if offset + length > body_data.len() {
+                    eprintln!("DEBUG:   ERROR - Buffer extends beyond body data! (offset + length = {} > {})", 
+                              offset + length, body_data.len());
+                }
+                
+                if actual_size != length {
+                    eprintln!("DEBUG:   WARNING - Metadata length ({}) != Actual size ({})", length, actual_size);
+                }
+                
+                // Check if we can read the buffer data
+                if offset < body_data.len() {
+                    let available = body_data.len() - offset;
+                    let read_len = length.min(available).min(32);
+                    eprintln!("DEBUG:   Available data: {} bytes (requested: {} bytes)", available, length);
+                    
+                    if read_len > 0 {
+                        eprintln!("DEBUG:   First {} bytes: {:?}", read_len, &body_data[offset..offset + read_len]);
+                    }
+                    
+                    // For compressed buffers, check if we can read the uncompressed length header
+                    if has_compression {
+                        if length > 0 && length < 8 {
+                            eprintln!("DEBUG:   ERROR - Compressed buffer length ({}) < 8 bytes (uncompressed length header required)", length);
+                        } else if length >= 8 {
+                            // Try to read uncompressed length
+                            if available >= 8 {
+                                let uncompressed_len_bytes = &body_data[offset..offset + 8];
+                                let uncompressed_len = i64::from_le_bytes([
+                                    uncompressed_len_bytes[0],
+                                    uncompressed_len_bytes[1],
+                                    uncompressed_len_bytes[2],
+                                    uncompressed_len_bytes[3],
+                                    uncompressed_len_bytes[4],
+                                    uncompressed_len_bytes[5],
+                                    uncompressed_len_bytes[6],
+                                    uncompressed_len_bytes[7],
+                                ]);
+                                eprintln!("DEBUG:   Uncompressed length (from header): {} bytes", uncompressed_len);
+                                
+                                if uncompressed_len == -1 {
+                                    eprintln!("DEBUG:   Note: Buffer is not compressed (uncompressed length = -1)");
+                                } else if uncompressed_len == 0 {
+                                    eprintln!("DEBUG:   Note: Buffer is empty (uncompressed length = 0)");
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!("DEBUG:   ERROR - Buffer offset ({}) >= body data size ({})", offset, body_data.len());
+                }
+            }
+            eprintln!("DEBUG: =====================================");
+        }
+        
+        // Determine the schema to use (projected or full)
+        let schema_to_use = if let Some(projected_fields) = read_context.projected_fields() {
+            // Server has already projected the data, so use projected schema
+            let projected_schema = arrow_schema::Schema::new(
+                projected_fields
+                    .iter()
+                    .map(|&idx| read_context.arrow_schema.field(idx).clone())
+                    .collect::<Vec<_>>(),
+            );
+            Arc::new(projected_schema)
+        } else {
+            read_context.arrow_schema.clone()
+        };
+        
+        // Read RecordBatch using read_record_batch (equivalent to Java's deserializeRecordBatch)
+        // This automatically handles compression (ipc_compression feature enabled)
+        let record_batch = match read_record_batch(
+            &body_buffer,
+            batch_metadata,
+            schema_to_use,
+            &std::collections::HashMap::new(), // dictionaries (empty for now)
+            None, // projection (already handled by server, so None here)
+            &message.version(),
+        ) {
+            Ok(batch) => batch,
+            Err(e) => {
+                eprintln!("Failed to read RecordBatch: {}", e);
+                eprintln!("Error details: {:?}", e);
+                return LogRecordIterator::empty();
+            }
+        };
 
-        let arrow_reader = ArrowReader::new(Arc::new(record_batch.unwrap()));
+        let record_batch = Arc::new(record_batch);
+        let arrow_reader = ArrowReader::new(record_batch);
         LogRecordIterator::Arrow(ArrowLogRecordIterator {
             reader: arrow_reader,
             base_offset: self.base_log_offset(),
@@ -554,19 +717,46 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
     }
 }
 
+#[derive(Clone)]
 pub struct ReadContext {
     arrow_schema: SchemaRef,
+    projected_fields: Option<Vec<usize>>,
 }
 
 impl ReadContext {
     pub fn new(arrow_schema: SchemaRef) -> ReadContext {
-        ReadContext { arrow_schema }
+        ReadContext {
+            arrow_schema,
+            projected_fields: None,
+        }
+    }
+
+    pub fn with_projection(arrow_schema: SchemaRef, projected_fields: Option<Vec<usize>>) -> ReadContext {
+        ReadContext {
+            arrow_schema,
+            projected_fields,
+        }
     }
 
     pub fn to_arrow_metadata(&self) -> Result<Vec<u8>> {
         let mut arrow_schema_bytes = vec![];
-        let _writer = StreamWriter::try_new(&mut arrow_schema_bytes, &self.arrow_schema)?;
+        let schema_to_use = if let Some(projected_fields) = &self.projected_fields {
+            let projected_schema = arrow_schema::Schema::new(
+                projected_fields
+                    .iter()
+                    .map(|&idx| self.arrow_schema.field(idx).clone())
+                    .collect::<Vec<_>>(),
+            );
+            Arc::new(projected_schema)
+        } else {
+            self.arrow_schema.clone()
+        };
+        let _writer = StreamWriter::try_new(&mut arrow_schema_bytes, &schema_to_use)?;
         Ok(arrow_schema_bytes)
+    }
+
+    pub fn projected_fields(&self) -> Option<&[usize]> {
+        self.projected_fields.as_deref()
     }
 }
 
