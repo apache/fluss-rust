@@ -27,8 +27,13 @@ version = { workspace = true }
 fluss = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true}
+env_logger = "0.11"
 
 
 [[example]]
 name = "example-table"
 path = "src/example_table.rs"
+
+[[example]]
+name = "projection-example"
+path = "src/projection_example.rs"
