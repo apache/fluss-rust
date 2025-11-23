@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::{Record, WriteRecord};
-use crate::error::Result;
+use crate::error::{Result};
 use crate::metadata::DataType;
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
@@ -489,13 +489,12 @@ impl<'a> LogRecordBatch<'a> {
             None => return LogRecordIterator::empty(),
         };
 
-        let (schema_to_use, projection) = if read_context.is_projection_pushdown() {
-            (read_context.arrow_schema.clone(), None)
-        } else if let Some(projected_fields) = read_context.projected_fields() {
-            (read_context.arrow_schema.clone(), Some(projected_fields))
+        let projection = if read_context.is_projection_pushdown() {
+            None
         } else {
-            (read_context.arrow_schema.clone(), None)
+            read_context.projected_fields()
         };
+        let schema_to_use = read_context.arrow_schema.clone();
 
         let record_batch = match read_record_batch(
             &body_buffer,

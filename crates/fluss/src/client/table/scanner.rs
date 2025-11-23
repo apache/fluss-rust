@@ -186,32 +186,23 @@ impl LogFetcher {
                 let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
                 
                 let full_arrow_schema = to_arrow_schema(self.table_info.get_row_type());
-                let read_context = if let Some(projected_fields) = &self.projected_fields {
-                    let (projection_enabled, _) = if !projected_fields.is_empty() {
-                        (true, projected_fields.clone())
-                    } else {
-                        (false, vec![])
-                    };
-                    
-                    if projection_enabled {
-                        let projected_schema = arrow_schema::Schema::new(
-                            projected_fields
-                                .iter()
-                                .map(|&idx| full_arrow_schema.field(idx).clone())
-                                .collect::<Vec<_>>(),
-                        );
-                        ReadContext::with_projection_pushdown(
-                            Arc::new(projected_schema),
-                            Some(projected_fields.clone()),
-                        )
-                    } else {
-                        ReadContext::with_projection(
-                            full_arrow_schema,
-                            self.projected_fields.clone(),
-                        )
-                    }
+                let read_context = if self.is_projection_enabled() {
+                    let projected_fields = self.projected_fields.as_ref().unwrap();
+                    let projected_schema = arrow_schema::Schema::new(
+                        projected_fields
+                            .iter()
+                            .map(|&idx| full_arrow_schema.field(idx).clone())
+                            .collect::<Vec<_>>(),
+                    );
+                    ReadContext::with_projection_pushdown(
+                        Arc::new(projected_schema),
+                        Some(projected_fields.clone()),
+                    )
                 } else {
-                    ReadContext::new(full_arrow_schema)
+                    ReadContext::with_projection(
+                        full_arrow_schema,
+                        self.projected_fields.clone(),
+                    )
                 };
                 
                 for fetch_log_for_bucket in fetch_log_for_buckets {
@@ -304,6 +295,13 @@ impl LogFetcher {
                 })
                 .collect()
         }
+    }
+
+    fn is_projection_enabled(&self) -> bool {
+        self.projected_fields
+            .as_ref()
+            .map(|fields| !fields.is_empty())
+            .unwrap_or(false)
     }
 
     fn fetchable_buckets(&self) -> Vec<TableBucket> {
