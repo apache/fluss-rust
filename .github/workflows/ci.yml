@@ -54,10 +54,7 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-        python:
-          - 3.11
-          - 3.12
-          - 3.13
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -70,7 +67,7 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          else
+          elif [ "$RUNNER_OS" == "macOS" ]; then
             brew install protobuf
           fi
 
@@ -106,7 +103,7 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          else
+          elif [ "$RUNNER_OS" == "macOS" ]; then
             brew install protobuf
           fi
 
