@@ -292,7 +292,7 @@ impl JsonSerde for DataField {
             .to_string();
 
         let field_type_node = node
-        .get(Self::FIELD_TYPE)
+            .get(Self::FIELD_TYPE)
         .ok_or_else(|| JsonSerdeError(format!("Missing required field: {}", Self::FIELD_TYPE)))?;
 
         let data_type = DataType::deserialize_json(field_type_node)?;
