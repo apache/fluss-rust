@@ -286,10 +286,10 @@ impl JsonSerde for DataField {
 
     fn deserialize_json(node: &Value) -> Result<DataField> {
         let name = node
-        .get(Self::NAME)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| JsonSerdeError(format!("Missing required field: {}", Self::NAME)))?
-        .to_string();
+            .get(Self::NAME)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonSerdeError(format!("Missing required field: {}", Self::NAME)))?
+            .to_string();
 
         let field_type_node = node
         .get(Self::FIELD_TYPE)
