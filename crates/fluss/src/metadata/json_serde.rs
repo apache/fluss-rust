@@ -108,9 +108,6 @@ impl JsonSerde for DataType {
             DataType::Binary(_type) => {
                 obj.insert(Self::FIELD_NAME_LENGTH.to_string(), json!(_type.length()));
             }
-            DataType::Char(_type) => {
-                obj.insert(Self::FIELD_NAME_LENGTH.to_string(), json!(_type.length()));
-            }
             DataType::Decimal(_type) => {
                 obj.insert(Self::FIELD_NAME_PRECISION.to_string(), json!(_type.precision()));
                 obj.insert(Self::FIELD_NAME_SCALE.to_string(), json!(_type.scale()));
