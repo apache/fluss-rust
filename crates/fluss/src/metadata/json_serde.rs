@@ -438,7 +438,7 @@ impl TableDescriptor {
 
     fn deserialize_properties(node: &Value) -> Result<HashMap<String, String>> {
         let obj = node
-        .as_object()
+            .as_object()
         .ok_or_else(|| JsonSerdeError("Properties must be an object".to_string()))?;
 
         let mut properties = HashMap::with_capacity(obj.len());
