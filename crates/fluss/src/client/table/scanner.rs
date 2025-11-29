@@ -17,7 +17,7 @@
 
 use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
@@ -39,6 +39,7 @@ pub struct TableScan<'a> {
     conn: &'a FlussConnection,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
+    projected_fields: Option<Vec<usize>>,
 }
 
 impl<'a> TableScan<'a> {
@@ -47,14 +48,43 @@ impl<'a> TableScan<'a> {
             conn,
             table_info,
             metadata,
+            projected_fields: None,
         }
     }
 
-    pub fn create_log_scanner(&self) -> LogScanner {
+    pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
+        let field_count = self.table_info.row_type().fields().len();
+        for &idx in column_indices {
+            if idx >= field_count {
+                return Err(Error::IllegalArgument(format!("Column index {} out of range (max: {})", idx, field_count - 1)));
+            }
+        }
+        self.projected_fields = Some(column_indices.to_vec());
+        Ok(self)
+    }
+    
+    pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
+        let row_type = self.table_info.row_type();
+        let mut indices = Vec::new();
+        
+        for name in column_names {
+            let idx = row_type.fields()
+                .iter()
+                .position(|f| f.name() == *name)
+                .ok_or_else(|| Error::IllegalArgument(format!("Column '{}' not found", name)))?;
+            indices.push(idx);
+        }
+        
+        self.projected_fields = Some(indices);
+        Ok(self)
+    }
+
+    pub fn create_log_scanner(self) -> LogScanner {
         LogScanner::new(
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
+            self.projected_fields,
         )
     }
 }
@@ -72,6 +102,7 @@ impl LogScanner {
         table_info: &TableInfo,
         metadata: Arc<Metadata>,
         connections: Arc<RpcClient>,
+        projected_fields: Option<Vec<usize>>,
     ) -> Self {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
         Self {
@@ -84,6 +115,7 @@ impl LogScanner {
                 connections.clone(),
                 metadata.clone(),
                 log_scanner_status.clone(),
+                projected_fields,
             ),
         }
     }
@@ -114,6 +146,7 @@ struct LogFetcher {
     table_info: TableInfo,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
+    projected_fields: Option<Vec<usize>>,
 }
 
 impl LogFetcher {
@@ -122,6 +155,7 @@ impl LogFetcher {
         conns: Arc<RpcClient>,
         metadata: Arc<Metadata>,
         log_scanner_status: Arc<LogScannerStatus>,
+        projected_fields: Option<Vec<usize>>,
     ) -> Self {
         LogFetcher {
             table_path: table_info.table_path.clone(),
@@ -129,6 +163,7 @@ impl LogFetcher {
             table_info: table_info.clone(),
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
+            projected_fields,
         }
     }
 
@@ -149,7 +184,27 @@ impl LogFetcher {
             for pb_fetch_log_resp in fetch_response.tables_resp {
                 let table_id = pb_fetch_log_resp.table_id;
                 let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
-                let arrow_schema = to_arrow_schema(self.table_info.get_row_type());
+                
+                let full_arrow_schema = to_arrow_schema(self.table_info.get_row_type());
+                let read_context = if self.is_projection_enabled() {
+                    let projected_fields = self.projected_fields.as_ref().unwrap();
+                    let projected_schema = arrow_schema::Schema::new(
+                        projected_fields
+                            .iter()
+                            .map(|&idx| full_arrow_schema.field(idx).clone())
+                            .collect::<Vec<_>>(),
+                    );
+                    ReadContext::with_projection_pushdown(
+                        Arc::new(projected_schema),
+                        Some(projected_fields.clone()),
+                    )
+                } else {
+                    ReadContext::with_projection(
+                        full_arrow_schema,
+                        self.projected_fields.clone(),
+                    )
+                };
+                
                 for fetch_log_for_bucket in fetch_log_for_buckets {
                     let mut fetch_records = vec![];
                     let bucket: i32 = fetch_log_for_bucket.bucket_id;
@@ -159,7 +214,7 @@ impl LogFetcher {
                         for log_record in &mut LogRecordsBatchs::new(&data) {
                             let last_offset = log_record.last_log_offset();
                             fetch_records
-                                .extend(log_record.records(ReadContext::new(arrow_schema.clone())));
+                                .extend(log_record.records(read_context.clone()));
                             self.log_scanner_status
                                 .update_offset(&table_bucket, last_offset + 1);
                         }
@@ -209,13 +264,23 @@ impl LogFetcher {
         if ready_for_fetch_count == 0 {
             HashMap::new()
         } else {
+            let (projection_enabled, projected_fields) = if let Some(fields) = &self.projected_fields {
+                if fields.is_empty() {
+                    (false, vec![])
+                } else {
+                    (true, fields.iter().map(|&i| i as i32).collect())
+                }
+            } else {
+                (false, vec![])
+            };
+
             fetch_log_req_for_buckets
                 .into_iter()
                 .map(|(leader_id, feq_for_buckets)| {
                     let req_for_table = PbFetchLogReqForTable {
                         table_id: table_id.unwrap(),
-                        projection_pushdown_enabled: false,
-                        projected_fields: vec![],
+                        projection_pushdown_enabled: projection_enabled,
+                        projected_fields: projected_fields.clone(),
                         buckets_req: feq_for_buckets,
                     };
 
@@ -230,6 +295,13 @@ impl LogFetcher {
                 })
                 .collect()
         }
+    }
+
+    fn is_projection_enabled(&self) -> bool {
+        self.projected_fields
+            .as_ref()
+            .map(|fields| !fields.is_empty())
+            .unwrap_or(false)
     }
 
     fn fetchable_buckets(&self) -> Vec<TableBucket> {
