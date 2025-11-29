@@ -1200,8 +1200,7 @@ fn test_map_display() {
     let map_type = MapType::new(DataTypes::string(), DataTypes::int());
     assert_eq!(map_type.to_string(), "MAP<STRING, INT>");
 
-    let map_type_non_null =
-        MapType::with_nullable(false, DataTypes::int(), DataTypes::string());
+    let map_type_non_null = MapType::with_nullable(false, DataTypes::int(), DataTypes::string());
     assert_eq!(map_type_non_null.to_string(), "MAP<INT, STRING> NOT NULL");
 
     let nested_map = MapType::new(
