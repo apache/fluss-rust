@@ -188,15 +188,19 @@ impl LogFetcher {
                 let full_arrow_schema = to_arrow_schema(self.table_info.get_row_type());
                 let read_context = if self.is_projection_enabled() {
                     let projected_fields = self.projected_fields.as_ref().unwrap();
+                    // Server returns columns in sorted order, build schema accordingly
+                    let mut sorted_fields = projected_fields.clone();
+                    sorted_fields.sort();
                     let projected_schema = arrow_schema::Schema::new(
-                        projected_fields
+                        sorted_fields
                             .iter()
                             .map(|&idx| full_arrow_schema.field(idx).clone())
                             .collect::<Vec<_>>(),
                     );
                     ReadContext::with_projection_pushdown(
                         Arc::new(projected_schema),
-                        Some(projected_fields.clone()),
+                        projected_fields.clone(),
+                        sorted_fields,
                     )
                 } else {
                     ReadContext::with_projection(
@@ -268,7 +272,10 @@ impl LogFetcher {
                 if fields.is_empty() {
                     (false, vec![])
                 } else {
-                    (true, fields.iter().map(|&i| i as i32).collect())
+                    // Server requires projected_fields to be in ascending order
+                    let mut sorted_fields = fields.clone();
+                    sorted_fields.sort();
+                    (true, sorted_fields.iter().map(|&i| i as i32).collect())
                 }
             } else {
                 (false, vec![])

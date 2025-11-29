@@ -489,7 +489,14 @@ impl<'a> LogRecordBatch<'a> {
             None => return LogRecordIterator::empty(),
         };
 
+        let reordering_indexes_opt = if read_context.is_projection_pushdown() {
+            read_context.reordering_indexes()
+        } else {
+            None
+        };
         let projection = if read_context.is_projection_pushdown() {
+            // When projection pushdown is enabled, server already returns projected columns
+            // in sorted order. We read all columns then reorder them.
             None
         } else {
             read_context.projected_fields()
@@ -509,6 +516,23 @@ impl<'a> LogRecordBatch<'a> {
                 error!(error = %e, "Failed to read RecordBatch");
                 return LogRecordIterator::empty();
             }
+        };
+
+        // Reorder columns if needed (when projection pushdown with non-sorted order)
+        let record_batch = if let Some(reordering_indexes) = &reordering_indexes_opt {
+            let reordered_columns: Vec<_> = reordering_indexes
+                .iter()
+                .map(|&idx| record_batch.column(idx).clone())
+                .collect();
+            let reordered_fields: Vec<_> = reordering_indexes
+                .iter()
+                .map(|&idx| record_batch.schema().field(idx).clone())
+                .collect();
+            let reordered_schema = Arc::new(arrow_schema::Schema::new(reordered_fields));
+            RecordBatch::try_new(reordered_schema, reordered_columns)
+                .expect("Failed to create reordered RecordBatch")
+        } else {
+            record_batch
         };
 
         let arrow_reader = ArrowReader::new(Arc::new(record_batch));
@@ -614,6 +638,7 @@ pub struct ReadContext {
     arrow_schema: SchemaRef,
     projected_fields: Option<Vec<usize>>,
     projection_pushdown: bool,
+    projection_in_order: Option<Vec<usize>>,
 }
 
 impl ReadContext {
@@ -622,6 +647,7 @@ impl ReadContext {
             arrow_schema,
             projected_fields: None,
             projection_pushdown: false,
+            projection_in_order: None,
         }
     }
 
@@ -630,14 +656,20 @@ impl ReadContext {
             arrow_schema,
             projected_fields,
             projection_pushdown: false,
+            projection_in_order: None,
         }
     }
 
-    pub fn with_projection_pushdown(arrow_schema: SchemaRef, projected_fields: Option<Vec<usize>>) -> ReadContext {
+    pub fn with_projection_pushdown(
+        arrow_schema: SchemaRef,
+        projected_fields: Vec<usize>,
+        projection_in_order: Vec<usize>,
+    ) -> ReadContext {
         ReadContext {
             arrow_schema,
-            projected_fields,
+            projected_fields: Some(projected_fields),
             projection_pushdown: true,
+            projection_in_order: Some(projection_in_order),
         }
     }
 
@@ -664,6 +696,37 @@ impl ReadContext {
 
     pub fn projected_fields(&self) -> Option<&[usize]> {
         self.projected_fields.as_deref()
+    }
+
+    pub fn reordering_indexes(&self) -> Option<Vec<usize>> {
+        if !self.projection_pushdown {
+            return None;
+        }
+        
+        let projected_fields = match &self.projected_fields {
+            Some(fields) => fields,
+            None => return None,
+        };
+
+        let projection_in_order = match &self.projection_in_order {
+            Some(order) => order,
+            None => return None,
+        };
+
+        if projected_fields.is_empty() {
+            return None;
+        }
+
+        // Calculate reordering indexes to transform from sorted order to user-requested order
+        let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
+        for &original_idx in projected_fields {
+            let pos = projection_in_order
+                .binary_search(&original_idx)
+                .expect("projection index should exist in sorted list");
+            reordering_indexes.push(pos);
+        }
+        
+        Some(reordering_indexes)
     }
 }
 
