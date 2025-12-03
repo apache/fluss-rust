@@ -83,42 +83,4 @@ pub async fn main() -> Result<()> {
             );
         }
     }
-
-    // Example: Projection scan (commented out as it's after the infinite loop)
-    // Uncomment and place before the loop to test projection:
-    //
-    // println!("=== Projection scan: only c2 column ===");
-    // let log_scanner_projected = table
-    //     .new_scan()
-    //     .project(&[1])?
-    //     .create_log_scanner();
-    // log_scanner_projected.subscribe(0, 0).await?;
-    //
-    // let scan_records_projected = log_scanner_projected
-    //     .poll(Duration::from_secs(10))
-    //     .await?;
-    // for record in scan_records_projected {
-    //     let row = record.row();
-    //     println!("{{c2={}}}@{}", row.get_string(0), record.offset());
-    // }
-    //
-    // println!("=== Projection scan: reordered columns (c2, c1) ===");
-    // let log_scanner_reordered = table
-    //     .new_scan()
-    //     .project(&[1, 0])?
-    //     .create_log_scanner();
-    // log_scanner_reordered.subscribe(0, 0).await?;
-    //
-    // let scan_records_reordered = log_scanner_reordered
-    //     .poll(Duration::from_secs(10))
-    //     .await?;
-    // for record in scan_records_reordered {
-    //     let row = record.row();
-    //     println!(
-    //         "{{{}, {}}}@{}",
-    //         row.get_string(0),
-    //         row.get_int(1),
-    //         record.offset()
-    //     );
-    // }
 }
