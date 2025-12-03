@@ -53,6 +53,9 @@ impl<'a> TableScan<'a> {
     }
 
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
+        if column_indices.is_empty() {
+            return Err(Error::IllegalArgument("Column indices cannot be empty".to_string()));
+        }
         let field_count = self.table_info.row_type().fields().len();
         for &idx in column_indices {
             if idx >= field_count {
@@ -64,6 +67,9 @@ impl<'a> TableScan<'a> {
     }
     
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
+        if column_names.is_empty() {
+            return Err(Error::IllegalArgument("Column names cannot be empty".to_string()));
+        }
         let row_type = self.table_info.row_type();
         let mut indices = Vec::new();
         
@@ -269,14 +275,9 @@ impl LogFetcher {
             HashMap::new()
         } else {
             let (projection_enabled, projected_fields) = if let Some(fields) = &self.projected_fields {
-                if fields.is_empty() {
-                    (false, vec![])
-                } else {
-                    // Server requires projected_fields to be in ascending order
-                    let mut sorted_fields = fields.clone();
-                    sorted_fields.sort();
-                    (true, sorted_fields.iter().map(|&i| i as i32).collect())
-                }
+                let mut sorted_fields = fields.clone();
+                sorted_fields.sort();
+                (true, sorted_fields.iter().map(|&i| i as i32).collect())
             } else {
                 (false, vec![])
             };
@@ -305,10 +306,7 @@ impl LogFetcher {
     }
 
     fn is_projection_enabled(&self) -> bool {
-        self.projected_fields
-            .as_ref()
-            .map(|fields| !fields.is_empty())
-            .unwrap_or(false)
+        self.projected_fields.is_some()
     }
 
     fn fetchable_buckets(&self) -> Vec<TableBucket> {
