@@ -22,8 +22,8 @@ use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::RpcClient;
-use arrow_schema::SchemaRef;
 use crate::util::FairBucketStatusMap;
+use arrow_schema::SchemaRef;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::slice::from_ref;
@@ -68,18 +68,24 @@ impl<'a> TableScan<'a> {
     /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
         if column_indices.is_empty() {
-            return Err(Error::IllegalArgument("Column indices cannot be empty".to_string()));
+            return Err(Error::IllegalArgument(
+                "Column indices cannot be empty".to_string(),
+            ));
         }
         let field_count = self.table_info.row_type().fields().len();
         for &idx in column_indices {
             if idx >= field_count {
-                return Err(Error::IllegalArgument(format!("Column index {} out of range (max: {})", idx, field_count - 1)));
+                return Err(Error::IllegalArgument(format!(
+                    "Column index {} out of range (max: {})",
+                    idx,
+                    field_count - 1
+                )));
             }
         }
         self.projected_fields = Some(column_indices.to_vec());
         Ok(self)
     }
-    
+
     /// Projects the scan to only include specified columns by their names.
     ///
     /// # Arguments
@@ -94,19 +100,22 @@ impl<'a> TableScan<'a> {
     /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
         if column_names.is_empty() {
-            return Err(Error::IllegalArgument("Column names cannot be empty".to_string()));
+            return Err(Error::IllegalArgument(
+                "Column names cannot be empty".to_string(),
+            ));
         }
         let row_type = self.table_info.row_type();
         let mut indices = Vec::new();
-        
+
         for name in column_names {
-            let idx = row_type.fields()
+            let idx = row_type
+                .fields()
                 .iter()
                 .position(|f| f.name() == *name)
                 .ok_or_else(|| Error::IllegalArgument(format!("Column '{}' not found", name)))?;
             indices.push(idx);
         }
-        
+
         self.projected_fields = Some(indices);
         Ok(self)
     }
@@ -251,8 +260,7 @@ impl LogFetcher {
                         let data = fetch_log_for_bucket.records.unwrap();
                         for log_record in &mut LogRecordsBatchs::new(&data) {
                             let last_offset = log_record.last_log_offset();
-                            fetch_records
-                                .extend(log_record.records(&self.read_context)?);
+                            fetch_records.extend(log_record.records(&self.read_context)?);
                             self.log_scanner_status
                                 .update_offset(&table_bucket, last_offset + 1);
                         }
@@ -302,10 +310,11 @@ impl LogFetcher {
         if ready_for_fetch_count == 0 {
             HashMap::new()
         } else {
-            let (projection_enabled, projected_fields) = match self.read_context.projection_in_order() {
-                None => (false, vec![]),
-                Some(fields) => (true, fields.iter().map(|&i| i as i32).collect()),
-            };
+            let (projection_enabled, projected_fields) =
+                match self.read_context.projection_in_order() {
+                    None => (false, vec![]),
+                    Some(fields) => (true, fields.iter().map(|&i| i as i32).collect()),
+                };
 
             fetch_log_req_for_buckets
                 .into_iter()

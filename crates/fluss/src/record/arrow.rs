@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::{Record, WriteRecord};
-use crate::error::{Result};
+use crate::error::Result;
 use crate::metadata::DataType;
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
@@ -29,9 +29,9 @@ use arrow::{
     array::RecordBatch,
     buffer::Buffer,
     ipc::{
-        reader::{read_record_batch, StreamReader},
-        writer::StreamWriter,
+        reader::{StreamReader, read_record_batch},
         root_as_message,
+        writer::StreamWriter,
     },
 };
 use arrow_schema::SchemaRef;
@@ -542,20 +542,24 @@ impl<'a> LogRecordBatch<'a> {
     /// Returns the RecordBatch metadata, body buffer, and metadata version.
     fn parse_ipc_message(
         data: &'a [u8],
-    ) -> Option<(arrow::ipc::RecordBatch<'a>, Buffer, arrow::ipc::MetadataVersion)> {
+    ) -> Option<(
+        arrow::ipc::RecordBatch<'a>,
+        Buffer,
+        arrow::ipc::MetadataVersion,
+    )> {
         const CONTINUATION_MARKER: u32 = 0xFFFFFFFF;
-        
+
         if data.len() < 8 {
             return None;
         }
-        
+
         let continuation = LittleEndian::read_u32(&data[0..4]);
         let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
-        
+
         if continuation != CONTINUATION_MARKER {
             return None;
         }
-        
+
         if data.len() < 8 + metadata_size {
             return None;
         }
@@ -637,7 +641,10 @@ impl ReadContext {
         }
     }
 
-    pub fn with_projection(arrow_schema: SchemaRef, projected_fields: Option<Vec<usize>>) -> ReadContext {
+    pub fn with_projection(
+        arrow_schema: SchemaRef,
+        projected_fields: Option<Vec<usize>>,
+    ) -> ReadContext {
         ReadContext {
             arrow_schema,
             projected_fields,
@@ -663,7 +670,6 @@ impl ReadContext {
         self.projection_pushdown
     }
 
-
     pub fn projected_fields(&self) -> Option<&[usize]> {
         self.projected_fields.as_deref()
     }
@@ -676,7 +682,7 @@ impl ReadContext {
         if !self.projection_pushdown {
             return None;
         }
-        
+
         let projected_fields = match &self.projected_fields {
             Some(fields) => fields,
             None => return None,
@@ -699,7 +705,7 @@ impl ReadContext {
                 .expect("projection index should exist in sorted list");
             reordering_indexes.push(pos);
         }
-        
+
         Some(reordering_indexes)
     }
 }
