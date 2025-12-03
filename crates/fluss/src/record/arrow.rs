@@ -641,18 +641,6 @@ impl ReadContext {
         }
     }
 
-    pub fn with_projection(
-        arrow_schema: SchemaRef,
-        projected_fields: Option<Vec<usize>>,
-    ) -> ReadContext {
-        ReadContext {
-            arrow_schema,
-            projected_fields,
-            projection_pushdown: false,
-            projection_in_order: None,
-        }
-    }
-
     pub fn with_projection_pushdown(
         arrow_schema: SchemaRef,
         projected_fields: Vec<usize>,
@@ -668,10 +656,6 @@ impl ReadContext {
 
     pub fn is_projection_pushdown(&self) -> bool {
         self.projection_pushdown
-    }
-
-    pub fn projected_fields(&self) -> Option<&[usize]> {
-        self.projected_fields.as_deref()
     }
 
     pub fn projection_in_order(&self) -> Option<&[usize]> {

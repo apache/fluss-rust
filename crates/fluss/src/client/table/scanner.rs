@@ -199,7 +199,7 @@ impl LogFetcher {
         projected_fields: Option<Vec<usize>>,
     ) -> Self {
         let full_arrow_schema = to_arrow_schema(table_info.get_row_type());
-        let read_context = Self::create_read_context(full_arrow_schema, &projected_fields);
+        let read_context = Self::create_read_context(full_arrow_schema, projected_fields);
         LogFetcher {
             table_path: table_info.table_path.clone(),
             conns,
@@ -212,13 +212,13 @@ impl LogFetcher {
 
     fn create_read_context(
         full_arrow_schema: SchemaRef,
-        projected_fields: &Option<Vec<usize>>,
+        projected_fields: Option<Vec<usize>>,
     ) -> ReadContext {
         match projected_fields {
             None => ReadContext::new(full_arrow_schema),
             Some(fields) => {
                 let mut sorted_fields = fields.clone();
-                sorted_fields.sort();
+                sorted_fields.sort_unstable();
                 let projected_schema = arrow_schema::Schema::new(
                     sorted_fields
                         .iter()
@@ -227,7 +227,7 @@ impl LogFetcher {
                 );
                 ReadContext::with_projection_pushdown(
                     Arc::new(projected_schema),
-                    fields.clone(),
+                    fields,
                     sorted_fields,
                 )
             }
