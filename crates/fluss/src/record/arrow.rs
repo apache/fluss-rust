@@ -494,7 +494,6 @@ impl<'a> LogRecordBatch<'a> {
             None
         };
 
-        let projection = read_context.projected_fields();
         let schema_to_use = read_context.arrow_schema.clone();
 
         let record_batch = read_record_batch(
@@ -502,7 +501,7 @@ impl<'a> LogRecordBatch<'a> {
             batch_metadata,
             schema_to_use,
             &std::collections::HashMap::new(),
-            projection,
+            None,
             &version,
         )?;
 
@@ -667,6 +666,10 @@ impl ReadContext {
 
     pub fn projected_fields(&self) -> Option<&[usize]> {
         self.projected_fields.as_deref()
+    }
+
+    pub fn projection_in_order(&self) -> Option<&[usize]> {
+        self.projection_in_order.as_deref()
     }
 
     pub fn reordering_indexes(&self) -> Option<Vec<usize>> {

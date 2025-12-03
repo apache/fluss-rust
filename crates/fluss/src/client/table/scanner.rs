@@ -178,7 +178,6 @@ struct LogFetcher {
     table_info: TableInfo,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
-    projected_fields: Option<Vec<usize>>,
     read_context: ReadContext,
 }
 
@@ -198,7 +197,6 @@ impl LogFetcher {
             table_info,
             metadata,
             log_scanner_status,
-            projected_fields,
             read_context,
         }
     }
@@ -304,13 +302,9 @@ impl LogFetcher {
         if ready_for_fetch_count == 0 {
             HashMap::new()
         } else {
-            let (projection_enabled, projected_fields) = match self.read_context.projected_fields() {
-                None => {
-                    (false, vec![])
-                }
-                Some(fields) => {
-                    (true, fields.iter().map(|&i| i as i32).collect())
-                }
+            let (projection_enabled, projected_fields) = match self.read_context.projection_in_order() {
+                None => (false, vec![]),
+                Some(fields) => (true, fields.iter().map(|&i| i as i32).collect()),
             };
 
             fetch_log_req_for_buckets
