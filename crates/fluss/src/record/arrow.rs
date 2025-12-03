@@ -20,7 +20,6 @@ use crate::error::{Result};
 use crate::metadata::DataType;
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
-use tracing::error;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder,
     Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder, UInt8Builder,
@@ -478,15 +477,15 @@ impl<'a> LogRecordBatch<'a> {
         LittleEndian::read_i32(&self.data[offset..offset + RECORDS_COUNT_LENGTH])
     }
 
-    pub fn records(&self, read_context: ReadContext) -> LogRecordIterator {
+    pub fn records(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
         if self.record_count() == 0 {
-            return LogRecordIterator::empty();
+            return Ok(LogRecordIterator::empty());
         }
 
         let data = &self.data[RECORDS_OFFSET..];
         let (batch_metadata, body_buffer, version) = match Self::parse_ipc_message(data) {
             Some(result) => result,
-            None => return LogRecordIterator::empty(),
+            None => return Ok(LogRecordIterator::empty()),
         };
 
         let reordering_indexes_opt = if read_context.is_projection_pushdown() {
@@ -494,29 +493,18 @@ impl<'a> LogRecordBatch<'a> {
         } else {
             None
         };
-        let projection = if read_context.is_projection_pushdown() {
-            // When projection pushdown is enabled, server already returns projected columns
-            // in sorted order. We read all columns then reorder them.
-            None
-        } else {
-            read_context.projected_fields()
-        };
+
+        let projection = read_context.projected_fields();
         let schema_to_use = read_context.arrow_schema.clone();
 
-        let record_batch = match read_record_batch(
+        let record_batch = read_record_batch(
             &body_buffer,
             batch_metadata,
             schema_to_use,
             &std::collections::HashMap::new(),
             projection,
             &version,
-        ) {
-            Ok(batch) => batch,
-            Err(e) => {
-                error!(error = %e, "Failed to read RecordBatch");
-                return LogRecordIterator::empty();
-            }
-        };
+        )?;
 
         // Reorder columns if needed (when projection pushdown with non-sorted order)
         let record_batch = if let Some(reordering_indexes) = &reordering_indexes_opt {
@@ -529,20 +517,19 @@ impl<'a> LogRecordBatch<'a> {
                 .map(|&idx| record_batch.schema().field(idx).clone())
                 .collect();
             let reordered_schema = Arc::new(arrow_schema::Schema::new(reordered_fields));
-            RecordBatch::try_new(reordered_schema, reordered_columns)
-                .expect("Failed to create reordered RecordBatch")
+            RecordBatch::try_new(reordered_schema, reordered_columns)?
         } else {
             record_batch
         };
 
         let arrow_reader = ArrowReader::new(Arc::new(record_batch));
-        LogRecordIterator::Arrow(ArrowLogRecordIterator {
+        Ok(LogRecordIterator::Arrow(ArrowLogRecordIterator {
             reader: arrow_reader,
             base_offset: self.base_log_offset(),
             timestamp: self.commit_timestamp(),
             row_id: 0,
             change_type: ChangeType::AppendOnly,
-        })
+        }))
     }
 
     /// Parse an Arrow IPC message from a byte slice.
@@ -563,8 +550,8 @@ impl<'a> LogRecordBatch<'a> {
             return None;
         }
         
-        let continuation = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        let metadata_size = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+        let continuation = LittleEndian::read_u32(&data[0..4]);
+        let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
         
         if continuation != CONTINUATION_MARKER {
             return None;
@@ -677,22 +664,6 @@ impl ReadContext {
         self.projection_pushdown
     }
 
-    pub fn to_arrow_metadata(&self) -> Result<Vec<u8>> {
-        let mut arrow_schema_bytes = vec![];
-        let schema_to_use = if let Some(projected_fields) = &self.projected_fields {
-            let projected_schema = arrow_schema::Schema::new(
-                projected_fields
-                    .iter()
-                    .map(|&idx| self.arrow_schema.field(idx).clone())
-                    .collect::<Vec<_>>(),
-            );
-            Arc::new(projected_schema)
-        } else {
-            self.arrow_schema.clone()
-        };
-        let _writer = StreamWriter::try_new(&mut arrow_schema_bytes, &schema_to_use)?;
-        Ok(arrow_schema_bytes)
-    }
 
     pub fn projected_fields(&self) -> Option<&[usize]> {
         self.projected_fields.as_deref()

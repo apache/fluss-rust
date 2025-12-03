@@ -22,6 +22,7 @@ use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::RpcClient;
+use arrow_schema::SchemaRef;
 use crate::util::FairBucketStatusMap;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -39,6 +40,7 @@ pub struct TableScan<'a> {
     conn: &'a FlussConnection,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
+    /// Column indices to project. None means all columns, Some(vec) means only the specified columns (non-empty).
     projected_fields: Option<Vec<usize>>,
 }
 
@@ -52,6 +54,18 @@ impl<'a> TableScan<'a> {
         }
     }
 
+    /// Projects the scan to only include specified columns by their indices.
+    ///
+    /// # Arguments
+    /// * `column_indices` - Zero-based indices of columns to include in the scan
+    ///
+    /// # Errors
+    /// Returns an error if `column_indices` is empty or if any column index is out of range.
+    ///
+    /// # Example
+    /// ```
+    /// let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner();
+    /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
         if column_indices.is_empty() {
             return Err(Error::IllegalArgument("Column indices cannot be empty".to_string()));
@@ -66,6 +80,18 @@ impl<'a> TableScan<'a> {
         Ok(self)
     }
     
+    /// Projects the scan to only include specified columns by their names.
+    ///
+    /// # Arguments
+    /// * `column_names` - Names of columns to include in the scan
+    ///
+    /// # Errors
+    /// Returns an error if `column_names` is empty or if any column name is not found in the table schema.
+    ///
+    /// # Example
+    /// ```
+    /// let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner();
+    /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
         if column_names.is_empty() {
             return Err(Error::IllegalArgument("Column names cannot be empty".to_string()));
@@ -153,6 +179,7 @@ struct LogFetcher {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     projected_fields: Option<Vec<usize>>,
+    read_context: ReadContext,
 }
 
 impl LogFetcher {
@@ -163,13 +190,40 @@ impl LogFetcher {
         log_scanner_status: Arc<LogScannerStatus>,
         projected_fields: Option<Vec<usize>>,
     ) -> Self {
+        let full_arrow_schema = to_arrow_schema(table_info.get_row_type());
+        let read_context = Self::create_read_context(full_arrow_schema, &projected_fields);
         LogFetcher {
             table_path: table_info.table_path.clone(),
-            conns: conns.clone(),
-            table_info: table_info.clone(),
-            metadata: metadata.clone(),
-            log_scanner_status: log_scanner_status.clone(),
+            conns,
+            table_info,
+            metadata,
+            log_scanner_status,
             projected_fields,
+            read_context,
+        }
+    }
+
+    fn create_read_context(
+        full_arrow_schema: SchemaRef,
+        projected_fields: &Option<Vec<usize>>,
+    ) -> ReadContext {
+        match projected_fields {
+            None => ReadContext::new(full_arrow_schema),
+            Some(fields) => {
+                let mut sorted_fields = fields.clone();
+                sorted_fields.sort();
+                let projected_schema = arrow_schema::Schema::new(
+                    sorted_fields
+                        .iter()
+                        .map(|&idx| full_arrow_schema.field(idx).clone())
+                        .collect::<Vec<_>>(),
+                );
+                ReadContext::with_projection_pushdown(
+                    Arc::new(projected_schema),
+                    fields.clone(),
+                    sorted_fields,
+                )
+            }
         }
     }
 
@@ -190,31 +244,7 @@ impl LogFetcher {
             for pb_fetch_log_resp in fetch_response.tables_resp {
                 let table_id = pb_fetch_log_resp.table_id;
                 let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
-                
-                let full_arrow_schema = to_arrow_schema(self.table_info.get_row_type());
-                let read_context = if self.is_projection_enabled() {
-                    let projected_fields = self.projected_fields.as_ref().unwrap();
-                    // Server returns columns in sorted order, build schema accordingly
-                    let mut sorted_fields = projected_fields.clone();
-                    sorted_fields.sort();
-                    let projected_schema = arrow_schema::Schema::new(
-                        sorted_fields
-                            .iter()
-                            .map(|&idx| full_arrow_schema.field(idx).clone())
-                            .collect::<Vec<_>>(),
-                    );
-                    ReadContext::with_projection_pushdown(
-                        Arc::new(projected_schema),
-                        projected_fields.clone(),
-                        sorted_fields,
-                    )
-                } else {
-                    ReadContext::with_projection(
-                        full_arrow_schema,
-                        self.projected_fields.clone(),
-                    )
-                };
-                
+
                 for fetch_log_for_bucket in fetch_log_for_buckets {
                     let mut fetch_records = vec![];
                     let bucket: i32 = fetch_log_for_bucket.bucket_id;
@@ -224,7 +254,7 @@ impl LogFetcher {
                         for log_record in &mut LogRecordsBatchs::new(&data) {
                             let last_offset = log_record.last_log_offset();
                             fetch_records
-                                .extend(log_record.records(read_context.clone()));
+                                .extend(log_record.records(&self.read_context)?);
                             self.log_scanner_status
                                 .update_offset(&table_bucket, last_offset + 1);
                         }
@@ -274,12 +304,13 @@ impl LogFetcher {
         if ready_for_fetch_count == 0 {
             HashMap::new()
         } else {
-            let (projection_enabled, projected_fields) = if let Some(fields) = &self.projected_fields {
-                let mut sorted_fields = fields.clone();
-                sorted_fields.sort();
-                (true, sorted_fields.iter().map(|&i| i as i32).collect())
-            } else {
-                (false, vec![])
+            let (projection_enabled, projected_fields) = match self.read_context.projected_fields() {
+                None => {
+                    (false, vec![])
+                }
+                Some(fields) => {
+                    (true, fields.iter().map(|&i| i as i32).collect())
+                }
             };
 
             fetch_log_req_for_buckets
@@ -303,10 +334,6 @@ impl LogFetcher {
                 })
                 .collect()
         }
-    }
-
-    fn is_projection_enabled(&self) -> bool {
-        self.projected_fields.is_some()
     }
 
     fn fetchable_buckets(&self) -> Vec<TableBucket> {
