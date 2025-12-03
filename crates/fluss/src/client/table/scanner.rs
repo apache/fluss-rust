@@ -112,7 +112,7 @@ impl<'a> TableScan<'a> {
                 .fields()
                 .iter()
                 .position(|f| f.name() == *name)
-                .ok_or_else(|| Error::IllegalArgument(format!("Column '{}' not found", name)))?;
+                .ok_or_else(|| Error::IllegalArgument(format!("Column '{name}' not found")))?;
             indices.push(idx);
         }
 
@@ -216,21 +216,7 @@ impl LogFetcher {
     ) -> ReadContext {
         match projected_fields {
             None => ReadContext::new(full_arrow_schema),
-            Some(fields) => {
-                let mut sorted_fields = fields.clone();
-                sorted_fields.sort_unstable();
-                let projected_schema = arrow_schema::Schema::new(
-                    sorted_fields
-                        .iter()
-                        .map(|&idx| full_arrow_schema.field(idx).clone())
-                        .collect::<Vec<_>>(),
-                );
-                ReadContext::with_projection_pushdown(
-                    Arc::new(projected_schema),
-                    fields,
-                    sorted_fields,
-                )
-            }
+            Some(fields) => ReadContext::with_projection_pushdown(full_arrow_schema, fields),
         }
     }
 
@@ -310,11 +296,10 @@ impl LogFetcher {
         if ready_for_fetch_count == 0 {
             HashMap::new()
         } else {
-            let (projection_enabled, projected_fields) =
-                match self.read_context.projection_in_order() {
-                    None => (false, vec![]),
-                    Some(fields) => (true, fields.iter().map(|&i| i as i32).collect()),
-                };
+            let (projection_enabled, projected_fields) = match self.read_context.project_fields() {
+                None => (false, vec![]),
+                Some(fields) => (true, fields.iter().map(|&i| i as i32).collect()),
+            };
 
             fetch_log_req_for_buckets
                 .into_iter()

@@ -483,97 +483,76 @@ impl<'a> LogRecordBatch<'a> {
         }
 
         let data = &self.data[RECORDS_OFFSET..];
-        let (batch_metadata, body_buffer, version) = match Self::parse_ipc_message(data) {
-            Some(result) => result,
-            None => return Ok(LogRecordIterator::empty()),
+
+        let record_batch = read_context.record_batch(data)?;
+        let log_record_iterator = match record_batch {
+            None => LogRecordIterator::empty(),
+            Some(record_batch) => {
+                let arrow_reader = ArrowReader::new(Arc::new(record_batch));
+                LogRecordIterator::Arrow(ArrowLogRecordIterator {
+                    reader: arrow_reader,
+                    base_offset: self.base_log_offset(),
+                    timestamp: self.commit_timestamp(),
+                    row_id: 0,
+                    change_type: ChangeType::AppendOnly,
+                })
+            }
         };
+        Ok(log_record_iterator)
+    }
+}
 
-        let reordering_indexes_opt = if read_context.is_projection_pushdown() {
-            read_context.reordering_indexes()
-        } else {
-            None
-        };
+/// Parse an Arrow IPC message from a byte slice.
+///
+/// Server returns RecordBatch message (without Schema message) in the encapsulated message format.
+/// Format: [continuation: 4 bytes (0xFFFFFFFF)][metadata_size: 4 bytes][RecordBatch metadata][body]
+///
+/// This format is documented at:
+/// https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format
+///
+/// # Arguments
+/// * `data` - The byte slice containing the IPC message.
+///
+/// # Returns
+/// Returns `Some((batch_metadata, body_buffer, version))` on success:
+/// - `batch_metadata`: The RecordBatch metadata from the IPC message.
+/// - `body_buffer`: The buffer containing the record batch body data.
+/// - `version`: The Arrow IPC metadata version.
+///
+/// Returns `None` if the data is malformed or too short.
+fn parse_ipc_message(
+    data: &[u8],
+) -> Option<(
+    arrow::ipc::RecordBatch<'_>,
+    Buffer,
+    arrow::ipc::MetadataVersion,
+)> {
+    const CONTINUATION_MARKER: u32 = 0xFFFFFFFF;
 
-        let schema_to_use = read_context.arrow_schema.clone();
-
-        let record_batch = read_record_batch(
-            &body_buffer,
-            batch_metadata,
-            schema_to_use,
-            &std::collections::HashMap::new(),
-            None,
-            &version,
-        )?;
-
-        // Reorder columns if needed (when projection pushdown with non-sorted order)
-        let record_batch = if let Some(reordering_indexes) = &reordering_indexes_opt {
-            let reordered_columns: Vec<_> = reordering_indexes
-                .iter()
-                .map(|&idx| record_batch.column(idx).clone())
-                .collect();
-            let reordered_fields: Vec<_> = reordering_indexes
-                .iter()
-                .map(|&idx| record_batch.schema().field(idx).clone())
-                .collect();
-            let reordered_schema = Arc::new(arrow_schema::Schema::new(reordered_fields));
-            RecordBatch::try_new(reordered_schema, reordered_columns)?
-        } else {
-            record_batch
-        };
-
-        let arrow_reader = ArrowReader::new(Arc::new(record_batch));
-        Ok(LogRecordIterator::Arrow(ArrowLogRecordIterator {
-            reader: arrow_reader,
-            base_offset: self.base_log_offset(),
-            timestamp: self.commit_timestamp(),
-            row_id: 0,
-            change_type: ChangeType::AppendOnly,
-        }))
+    if data.len() < 8 {
+        return None;
     }
 
-    /// Parse an Arrow IPC message from a byte slice.
-    ///
-    /// Server returns RecordBatch message (without Schema message) in the encapsulated message format.
-    /// Format: [continuation: 4 bytes (0xFFFFFFFF)][metadata_size: 4 bytes][RecordBatch metadata][body]
-    ///
-    /// This format is documented at:
-    /// https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format
-    ///
-    /// Returns the RecordBatch metadata, body buffer, and metadata version.
-    fn parse_ipc_message(
-        data: &'a [u8],
-    ) -> Option<(
-        arrow::ipc::RecordBatch<'a>,
-        Buffer,
-        arrow::ipc::MetadataVersion,
-    )> {
-        const CONTINUATION_MARKER: u32 = 0xFFFFFFFF;
+    let continuation = LittleEndian::read_u32(&data[0..4]);
+    let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
 
-        if data.len() < 8 {
-            return None;
-        }
-
-        let continuation = LittleEndian::read_u32(&data[0..4]);
-        let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
-
-        if continuation != CONTINUATION_MARKER {
-            return None;
-        }
-
-        if data.len() < 8 + metadata_size {
-            return None;
-        }
-
-        let metadata_bytes = &data[8..8 + metadata_size];
-        let message = root_as_message(metadata_bytes).ok()?;
-        let batch_metadata = message.header_as_record_batch()?;
-
-        let body_start = 8 + metadata_size;
-        let body_data = &data[body_start..];
-        let body_buffer = Buffer::from(body_data);
-
-        Some((batch_metadata, body_buffer, message.version()))
+    if continuation != CONTINUATION_MARKER {
+        return None;
     }
+
+    if data.len() < 8 + metadata_size {
+        return None;
+    }
+
+    let metadata_bytes = &data[8..8 + metadata_size];
+    let message = root_as_message(metadata_bytes).ok()?;
+    let batch_metadata = message.header_as_record_batch()?;
+
+    let body_start = 8 + metadata_size;
+    let body_data = &data[body_start..];
+    let body_buffer = Buffer::from(body_data);
+
+    Some((batch_metadata, body_buffer, message.version()))
 }
 
 pub fn to_arrow_schema(fluss_schema: &DataType) -> SchemaRef {
@@ -625,72 +604,129 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
 
 #[derive(Clone)]
 pub struct ReadContext {
-    arrow_schema: SchemaRef,
-    projected_fields: Option<Vec<usize>>,
-    projection_pushdown: bool,
-    projection_in_order: Option<Vec<usize>>,
+    target_schema: SchemaRef,
+
+    projection: Option<Projection>,
+}
+
+#[derive(Clone)]
+struct Projection {
+    ordered_schema: SchemaRef,
+    projected_fields: Vec<usize>,
+
+    reordering_indexes: Vec<usize>,
+    reordering_needed: bool,
 }
 
 impl ReadContext {
     pub fn new(arrow_schema: SchemaRef) -> ReadContext {
         ReadContext {
-            arrow_schema,
-            projected_fields: None,
-            projection_pushdown: false,
-            projection_in_order: None,
+            target_schema: arrow_schema,
+            projection: None,
         }
     }
 
     pub fn with_projection_pushdown(
         arrow_schema: SchemaRef,
         projected_fields: Vec<usize>,
-        projection_in_order: Vec<usize>,
     ) -> ReadContext {
+        let target_schema = Self::project_schema(arrow_schema.clone(), projected_fields.as_slice());
+        let mut sorted_fields = projected_fields.clone();
+        sorted_fields.sort_unstable();
+
+        let project = {
+            if !sorted_fields.eq(&projected_fields) {
+                // reordering is required
+                // Calculate reordering indexes to transform from sorted order to user-requested order
+                let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
+                for &original_idx in &projected_fields {
+                    let pos = sorted_fields
+                        .binary_search(&original_idx)
+                        .expect("projection index should exist in sorted list");
+                    reordering_indexes.push(pos);
+                }
+                Projection {
+                    ordered_schema: Self::project_schema(
+                        arrow_schema.clone(),
+                        sorted_fields.as_slice(),
+                    ),
+                    projected_fields,
+                    reordering_indexes,
+                    reordering_needed: true,
+                }
+            } else {
+                Projection {
+                    ordered_schema: Self::project_schema(arrow_schema, projected_fields.as_slice()),
+                    projected_fields,
+                    reordering_indexes: vec![],
+                    reordering_needed: false,
+                }
+            }
+        };
+
         ReadContext {
-            arrow_schema,
-            projected_fields: Some(projected_fields),
-            projection_pushdown: true,
-            projection_in_order: Some(projection_in_order),
+            target_schema,
+            projection: Some(project),
         }
     }
 
-    pub fn is_projection_pushdown(&self) -> bool {
-        self.projection_pushdown
+    pub fn project_schema(schema: SchemaRef, projected_fields: &[usize]) -> SchemaRef {
+        // todo: handle the exception
+        SchemaRef::new(
+            schema
+                .project(projected_fields)
+                .expect("can't project schema"),
+        )
     }
 
-    pub fn projection_in_order(&self) -> Option<&[usize]> {
-        self.projection_in_order.as_deref()
+    pub fn project_fields(&self) -> Option<&[usize]> {
+        self.projection
+            .as_ref()
+            .map(|p| p.projected_fields.as_slice())
     }
 
-    pub fn reordering_indexes(&self) -> Option<Vec<usize>> {
-        if !self.projection_pushdown {
-            return None;
-        }
-
-        let projected_fields = match &self.projected_fields {
-            Some(fields) => fields,
-            None => return None,
+    pub fn record_batch(&self, data: &[u8]) -> Result<Option<RecordBatch>> {
+        let (batch_metadata, body_buffer, version) = match parse_ipc_message(data) {
+            Some(result) => result,
+            None => return Ok(None),
         };
 
-        let projection_in_order = match &self.projection_in_order {
-            Some(order) => order,
-            None => return None,
+        // the record batch from server must be ordered by field pos,
+        // according to project to decide what arrow schema to use
+        // to parse the record batch
+        let resolve_schema = match self.projection {
+            Some(ref projection) => {
+                // projection, should use ordered schema by project field pos
+                projection.ordered_schema.clone()
+            }
+            None => {
+                // no projection, use target output schema
+                self.target_schema.clone()
+            }
         };
 
-        if projected_fields.is_empty() {
-            return None;
-        }
+        let record_batch = read_record_batch(
+            &body_buffer,
+            batch_metadata,
+            resolve_schema,
+            &std::collections::HashMap::new(),
+            None,
+            &version,
+        )?;
 
-        // Calculate reordering indexes to transform from sorted order to user-requested order
-        let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
-        for &original_idx in projected_fields {
-            let pos = projection_in_order
-                .binary_search(&original_idx)
-                .expect("projection index should exist in sorted list");
-            reordering_indexes.push(pos);
-        }
-
-        Some(reordering_indexes)
+        let record_batch = match &self.projection {
+            Some(projection) if projection.reordering_needed => {
+                // Reorder columns if needed (when projection pushdown with non-sorted order)
+                let reordered_columns: Vec<_> = projection
+                    .reordering_indexes
+                    .iter()
+                    .map(|&idx| record_batch.column(idx).clone())
+                    .collect();
+                RecordBatch::try_new(self.target_schema.clone(), reordered_columns)?
+            }
+            _ => record_batch,
+        };
+        Ok(Some(record_batch))
     }
 }
 
