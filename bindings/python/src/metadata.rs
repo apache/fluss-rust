@@ -106,7 +106,7 @@ impl Schema {
     #[new]
     #[pyo3(signature = (schema, primary_keys=None))]
     pub fn new(
-        schema: PyObject, // PyArrow schema
+        schema: Py<PyAny>, // PyArrow schema
         primary_keys: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let arrow_schema = crate::utils::Utils::pyarrow_to_arrow_schema(&schema)?;
@@ -553,7 +553,7 @@ impl LakeSnapshot {
 
     /// Get table bucket offsets as a Python dictionary with TableBucket keys
     #[getter]
-    pub fn table_buckets_offset(&self, py: Python) -> PyResult<PyObject> {
+    pub fn table_buckets_offset(&self, py: Python) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         for (bucket, offset) in &self.table_buckets_offset {
             let py_bucket = TableBucket::from_core(bucket.clone());
@@ -569,7 +569,7 @@ impl LakeSnapshot {
     }
 
     /// Get all table buckets
-    pub fn get_table_buckets(&self, py: Python) -> PyResult<Vec<PyObject>> {
+    pub fn get_table_buckets(&self, py: Python) -> PyResult<Vec<Py<PyAny>>> {
         let mut buckets = Vec::new();
         for bucket in self.table_buckets_offset.keys() {
             let py_bucket = TableBucket::from_core(bucket.clone());

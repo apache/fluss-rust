@@ -36,7 +36,7 @@ mod table_test {
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
     use crate::integration::utils::create_table;
     use arrow::array::record_batch;
-    use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::row::InternalRow;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
@@ -197,6 +197,53 @@ mod table_test {
                 row.get_int(1),
                 expected_c1,
                 "Projected c1 (second column) mismatch at index {}",
+                i
+            );
+        }
+
+        // Create scanner to verify appended records
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_scan = table.new_scan();
+        let log_scanner = table_scan.create_log_scanner();
+
+        // Subscribe to bucket 0 starting from offset 0
+        log_scanner
+            .subscribe(0, 0)
+            .await
+            .expect("Failed to subscribe to bucket");
+
+        // Poll for records
+        let scan_records = log_scanner
+            .poll(tokio::time::Duration::from_secs(5))
+            .await
+            .expect("Failed to poll records");
+
+        // Verify the scanned records
+        let table_bucket = TableBucket::new(table.table_info().table_id, 0);
+        let records = scan_records.records(&table_bucket);
+
+        assert_eq!(records.len(), 6, "Expected 6 records");
+
+        // Verify record contents match what was appended
+        let expected_c1_values = vec![1, 2, 3, 4, 5, 6];
+        let expected_c2_values = vec!["a1", "a2", "a3", "a4", "a5", "a6"];
+
+        for (i, record) in records.iter().enumerate() {
+            let row = record.row();
+            assert_eq!(
+                row.get_int(0),
+                expected_c1_values[i],
+                "c1 value mismatch at row {}",
+                i
+            );
+            assert_eq!(
+                row.get_string(1),
+                expected_c2_values[i],
+                "c2 value mismatch at row {}",
                 i
             );
         }

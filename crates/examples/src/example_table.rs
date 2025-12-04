@@ -36,11 +36,12 @@ pub async fn main() -> Result<()> {
             Schema::builder()
                 .column("c1", DataTypes::int())
                 .column("c2", DataTypes::string())
+                .column("c3", DataTypes::bigint())
                 .build()?,
         )
         .build()?;
 
-    let table_path = TablePath::new("fluss".to_owned(), "rust_test".to_owned());
+    let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
 
     let admin = conn.get_admin().await?;
 
@@ -56,6 +57,7 @@ pub async fn main() -> Result<()> {
     let mut row = GenericRow::new();
     row.set_field(0, 22222);
     row.set_field(1, "t2t");
+    row.set_field(2, 123_456_789_123i64);
 
     let table = conn.get_table(&table_path).await?;
     let append_writer = table.new_append()?.create_writer();
@@ -63,6 +65,7 @@ pub async fn main() -> Result<()> {
     row = GenericRow::new();
     row.set_field(0, 233333);
     row.set_field(1, "tt44");
+    row.set_field(2, 987_654_321_987i64);
     let f2 = append_writer.append(row);
     try_join!(f1, f2, append_writer.flush())?;
 
@@ -76,9 +79,10 @@ pub async fn main() -> Result<()> {
         for record in scan_records {
             let row = record.row();
             println!(
-                "{{{}, {}}}@{}",
+                "{{{}, {}, {}}}@{}",
                 row.get_int(0),
                 row.get_string(1),
+                row.get_long(2),
                 record.offset()
             );
         }

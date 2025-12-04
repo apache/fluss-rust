@@ -102,7 +102,7 @@ impl<'a> InternalRow for GenericRow<'a> {
     }
 
     fn get_long(&self, _pos: usize) -> i64 {
-        todo!()
+        self.values.get(_pos).unwrap().try_into().unwrap()
     }
 
     fn get_float(&self, _pos: usize) -> f32 {
