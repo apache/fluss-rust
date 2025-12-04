@@ -296,14 +296,11 @@ impl LogFetcher {
         if ready_for_fetch_count == 0 {
             HashMap::new()
         } else {
-            let (projection_enabled, projected_fields) = match self.read_context.project_fields() {
-                None => (false, vec![]),
-                Some(fields) => {
-                    let mut sorted: Vec<i32> = fields.iter().map(|&i| i as i32).collect();
-                    sorted.sort_unstable();
-                    (true, sorted)
-                }
-            };
+            let (projection_enabled, projected_fields) =
+                match self.read_context.project_fields_in_order() {
+                    None => (false, vec![]),
+                    Some(fields) => (true, fields.iter().map(|&i| i as i32).collect()),
+                };
 
             fetch_log_req_for_buckets
                 .into_iter()

@@ -613,6 +613,7 @@ pub struct ReadContext {
 struct Projection {
     ordered_schema: SchemaRef,
     projected_fields: Vec<usize>,
+    ordered_fields: Vec<usize>,
 
     reordering_indexes: Vec<usize>,
     reordering_needed: bool,
@@ -651,12 +652,14 @@ impl ReadContext {
                         sorted_fields.as_slice(),
                     ),
                     projected_fields,
+                    ordered_fields: sorted_fields,
                     reordering_indexes,
                     reordering_needed: true,
                 }
             } else {
                 Projection {
                     ordered_schema: Self::project_schema(arrow_schema, projected_fields.as_slice()),
+                    ordered_fields: projected_fields.clone(),
                     projected_fields,
                     reordering_indexes: vec![],
                     reordering_needed: false,
@@ -683,6 +686,12 @@ impl ReadContext {
         self.projection
             .as_ref()
             .map(|p| p.projected_fields.as_slice())
+    }
+
+    pub fn project_fields_in_order(&self) -> Option<&[usize]> {
+        self.projection
+            .as_ref()
+            .map(|p| p.ordered_fields.as_slice())
     }
 
     pub fn record_batch(&self, data: &[u8]) -> Result<Option<RecordBatch>> {
