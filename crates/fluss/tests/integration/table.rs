@@ -42,10 +42,6 @@ mod table_test {
     use std::sync::atomic::AtomicUsize;
     use std::thread;
     fn before_all() {
-        let use_local = std::env::var("FLUSS_USE_LOCAL")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse::<bool>()
-            .unwrap_or(false);
         
         // Create a new tokio runtime in a separate thread
         let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
@@ -60,14 +56,9 @@ mod table_test {
         .join()
         .expect("Failed to create cluster");
         
-        if !use_local {
-            // wait for 20 seconds to avoid the error like
-            // CoordinatorEventProcessor is not initialized yet
-            thread::sleep(std::time::Duration::from_secs(20));
-        } else {
-            // For local cluster, just wait a short time for connection
-            thread::sleep(std::time::Duration::from_secs(2));
-        }
+        // wait for 20 seconds to avoid the error like
+        // CoordinatorEventProcessor is not initialized yet
+        thread::sleep(std::time::Duration::from_secs(20));
     }
 
     fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
