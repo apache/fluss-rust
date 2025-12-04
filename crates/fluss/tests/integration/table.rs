@@ -37,10 +37,16 @@ mod table_test {
     use crate::integration::utils::create_table;
     use arrow::array::record_batch;
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    use fluss::row::InternalRow;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::thread;
     fn before_all() {
+        let use_local = std::env::var("FLUSS_USE_LOCAL")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse::<bool>()
+            .unwrap_or(false);
+        
         // Create a new tokio runtime in a separate thread
         let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
         std::thread::spawn(move || {
@@ -53,9 +59,15 @@ mod table_test {
         })
         .join()
         .expect("Failed to create cluster");
-        // wait for 20 seconds to avoid the error like
-        // CoordinatorEventProcessor is not initialized yet
-        thread::sleep(std::time::Duration::from_secs(20));
+        
+        if !use_local {
+            // wait for 20 seconds to avoid the error like
+            // CoordinatorEventProcessor is not initialized yet
+            thread::sleep(std::time::Duration::from_secs(20));
+        } else {
+            // For local cluster, just wait a short time for connection
+            thread::sleep(std::time::Duration::from_secs(2));
+        }
     }
 
     fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
@@ -83,14 +95,14 @@ mod table_test {
     }
 
     #[tokio::test]
-    async fn append_record_batch() {
+    async fn append_record_batch_and_scan() {
         let cluster = get_fluss_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
         let table_path =
-            TablePath::new("fluss".to_string(), "test_append_record_batch".to_string());
+            TablePath::new("fluss".to_string(), "test_append_record_batch_and_scan".to_string());
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -100,15 +112,18 @@ mod table_test {
                     .build()
                     .expect("Failed to build schema"),
             )
+            .property("table.log.arrow.compression.type", "NONE")
             .build()
             .expect("Failed to build table");
 
         create_table(&admin, &table_path, &table_descriptor).await;
 
-        let append_writer = connection
+        let table = connection
             .get_table(&table_path)
             .await
-            .expect("Failed to get table")
+            .expect("Failed to get table");
+
+        let append_writer = table
             .new_append()
             .expect("Failed to create append")
             .create_writer();
@@ -127,6 +142,72 @@ mod table_test {
             .await
             .expect("Failed to append batch");
 
-        // todo: add scan code to verify the records appended in #30
+        append_writer.flush().await.expect("Failed to flush");
+
+        let num_buckets = table.table_info().get_num_buckets();
+        let log_scanner = table.new_scan().create_log_scanner();
+        for bucket_id in 0..num_buckets {
+            log_scanner.subscribe(bucket_id, 0).await.expect("Failed to subscribe");
+        }
+
+        let scan_records = log_scanner
+            .poll(std::time::Duration::from_secs(5))
+            .await
+            .expect("Failed to poll");
+
+        let mut records: Vec<_> = scan_records.into_iter().collect();
+        records.sort_by_key(|r| r.offset());
+
+        assert_eq!(records.len(), 6, "Should have 6 records");
+        for (i, record) in records.iter().enumerate() {
+            let row = record.row();
+            let expected_c1 = (i + 1) as i32;
+            let expected_c2 = format!("a{}", i + 1);
+            assert_eq!(row.get_int(0), expected_c1, "c1 mismatch at index {}", i);
+            assert_eq!(row.get_string(1), expected_c2, "c2 mismatch at index {}", i);
+        }
+
+        let log_scanner_projected = table
+            .new_scan()
+            .project(&[1, 0])
+            .expect("Failed to project")
+            .create_log_scanner();
+        for bucket_id in 0..num_buckets {
+            log_scanner_projected
+                .subscribe(bucket_id, 0)
+                .await
+                .expect("Failed to subscribe");
+        }
+
+        let scan_records_projected = log_scanner_projected
+            .poll(std::time::Duration::from_secs(5))
+            .await
+            .expect("Failed to poll");
+
+        let mut records_projected: Vec<_> = scan_records_projected.into_iter().collect();
+        records_projected.sort_by_key(|r| r.offset());
+
+        assert_eq!(
+            records_projected.len(),
+            6,
+            "Should have 6 records with projection"
+        );
+        for (i, record) in records_projected.iter().enumerate() {
+            let row = record.row();
+            let expected_c2 = format!("a{}", i + 1);
+            let expected_c1 = (i + 1) as i32;
+            assert_eq!(
+                row.get_string(0),
+                expected_c2,
+                "Projected c2 (first column) mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                row.get_int(1),
+                expected_c1,
+                "Projected c1 (second column) mismatch at index {}",
+                i
+            );
+        }
     }
 }
