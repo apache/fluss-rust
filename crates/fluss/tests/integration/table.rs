@@ -42,7 +42,6 @@ mod table_test {
     use std::sync::atomic::AtomicUsize;
     use std::thread;
     fn before_all() {
-        
         // Create a new tokio runtime in a separate thread
         let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
         std::thread::spawn(move || {
@@ -55,7 +54,7 @@ mod table_test {
         })
         .join()
         .expect("Failed to create cluster");
-        
+
         // wait for 20 seconds to avoid the error like
         // CoordinatorEventProcessor is not initialized yet
         thread::sleep(std::time::Duration::from_secs(20));
@@ -92,8 +91,10 @@ mod table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path =
-            TablePath::new("fluss".to_string(), "test_append_record_batch_and_scan".to_string());
+        let table_path = TablePath::new(
+            "fluss".to_string(),
+            "test_append_record_batch_and_scan".to_string(),
+        );
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -138,7 +139,10 @@ mod table_test {
         let num_buckets = table.table_info().get_num_buckets();
         let log_scanner = table.new_scan().create_log_scanner();
         for bucket_id in 0..num_buckets {
-            log_scanner.subscribe(bucket_id, 0).await.expect("Failed to subscribe");
+            log_scanner
+                .subscribe(bucket_id, 0)
+                .await
+                .expect("Failed to subscribe");
         }
 
         let scan_records = log_scanner
