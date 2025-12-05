@@ -27,11 +27,13 @@ name = "fluss"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.26.0", features = ["extension-module"] }
 fluss = { path = "../../crates/fluss" }
 tokio = { workspace = true }
 arrow = { workspace = true }
-arrow-pyarrow = "55.1.0"
-pyo3-async-runtimes = { version = "0.24.0", features = ["tokio-runtime"] }
+arrow-pyarrow = "57.0.0"
+arrow-schema = "57.0.0"
+arrow-array = "57.0.0"
+pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
 chrono = { workspace = true }
 once_cell = "1.21.3"

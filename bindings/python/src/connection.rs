@@ -41,7 +41,7 @@ impl FlussConnection {
                 inner: Arc::new(connection),
             };
 
-            Python::with_gil(|py| Py::new(py, py_connection))
+            Python::attach(|py| Py::new(py, py_connection))
         })
     }
 
@@ -57,7 +57,7 @@ impl FlussConnection {
 
             let py_admin = FlussAdmin::from_core(admin);
 
-            Python::with_gil(|py| Py::new(py, py_admin))
+            Python::attach(|py| Py::new(py, py_admin))
         })
     }
 
@@ -84,7 +84,7 @@ impl FlussConnection {
                 core_table.has_primary_key(),
             );
 
-            Python::with_gil(|py| Py::new(py, py_table))
+            Python::attach(|py| Py::new(py, py_table))
         })
     }
 
@@ -102,9 +102,9 @@ impl FlussConnection {
     #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
     fn __exit__(
         &mut self,
-        _exc_type: Option<PyObject>,
-        _exc_value: Option<PyObject>,
-        _traceback: Option<PyObject>,
+        _exc_type: Option<Bound<'_, PyAny>>,
+        _exc_value: Option<Bound<'_, PyAny>>,
+        _traceback: Option<Bound<'_, PyAny>>,
     ) -> PyResult<bool> {
         self.close()?;
         Ok(false)

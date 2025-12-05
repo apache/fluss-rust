@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::*;
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef};
-use arrow_pyarrow::ToPyArrow;
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
+use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
 /// Utilities for schema conversion between PyArrow, Arrow, and Fluss
@@ -25,11 +25,10 @@ pub struct Utils;
 
 impl Utils {
     /// Convert PyArrow schema to Rust Arrow schema
-    pub fn pyarrow_to_arrow_schema(py_schema: &PyObject) -> PyResult<SchemaRef> {
-        Python::with_gil(|py| {
+    pub fn pyarrow_to_arrow_schema(py_schema: &Py<PyAny>) -> PyResult<SchemaRef> {
+        Python::attach(|py| {
             let schema_bound = py_schema.bind(py);
-
-            let schema: ArrowSchema = arrow_pyarrow::FromPyArrow::from_pyarrow_bound(schema_bound)
+            let schema: arrow_schema::Schema = FromPyArrow::from_pyarrow_bound(schema_bound)
                 .map_err(|e| {
                     FlussError::new_err(format!("Failed to convert PyArrow schema: {e}"))
                 })?;
@@ -172,14 +171,21 @@ impl Utils {
     pub fn combine_batches_to_table(
         py: Python,
         batches: Vec<Arc<arrow::record_batch::RecordBatch>>,
-    ) -> PyResult<PyObject> {
-        // Convert Rust Arrow RecordBatch to PyObject
-        let py_batches: Result<Vec<PyObject>, _> = batches
+    ) -> PyResult<Py<PyAny>> {
+        use arrow_array::RecordBatch as ArrowArrayRecordBatch;
+
+        let py_batches: Result<Vec<Py<PyAny>>, _> = batches
             .iter()
             .map(|batch| {
-                batch.as_ref().to_pyarrow(py).map_err(|e| {
-                    FlussError::new_err(format!("Failed to convert RecordBatch to PyObject: {e}"))
-                })
+                ArrowArrayRecordBatch::try_new(batch.schema().clone(), batch.columns().to_vec())
+                    .map_err(|e| FlussError::new_err(format!("Failed to convert RecordBatch: {e}")))
+                    .and_then(|b| {
+                        ToPyArrow::to_pyarrow(&b, py)
+                            .map(|x| x.into())
+                            .map_err(|e| {
+                                FlussError::new_err(format!("Failed to convert to PyObject: {e}"))
+                            })
+                    })
             })
             .collect();
 

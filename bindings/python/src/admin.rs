@@ -48,7 +48,7 @@ impl FlussAdmin {
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
 
-            Python::with_gil(|py| Ok(py.None()))
+            Python::attach(|py| Ok(py.None()))
         })
     }
 
@@ -67,7 +67,7 @@ impl FlussAdmin {
                 .await
                 .map_err(|e| FlussError::new_err(format!("Failed to get table: {e}")))?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let table_info = TableInfo::from_core(core_table_info);
                 Py::new(py, table_info)
             })
@@ -89,7 +89,7 @@ impl FlussAdmin {
                 .await
                 .map_err(|e| FlussError::new_err(format!("Failed to get lake snapshot: {e}")))?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let lake_snapshot = LakeSnapshot::from_core(core_lake_snapshot);
                 Py::new(py, lake_snapshot)
             })

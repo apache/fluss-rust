@@ -54,17 +54,34 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
       - name: Install protoc
         run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
+          if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          elif [ "$RUNNER_OS" == "macOS" ]; then
+          elif [ "$RUNNER_OS" = "macOS" ]; then
             brew install protobuf
           fi
+
+      - name: Rust Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: build-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Build
-        run: cargo build
+        run: cargo build --workspace --all-targets
 
   test:
     runs-on: ${{ matrix.os }}
@@ -73,26 +90,42 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
       - name: Install protoc
         run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
+          if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          elif [ "$RUNNER_OS" == "macOS" ]; then
+          elif [ "$RUNNER_OS" = "macOS" ]; then
             brew install protobuf
           fi
+
+      - name: Rust Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Unit Test
         run: cargo test --all-targets --workspace
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
-      - name: Integration Test
-        # only run IT in linux since no docker in macos by default
+
+      - name: Integration Test (Linux only)
+        if: runner.os == 'Linux'
         run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            RUST_TEST_THREADS=1 cargo test --features integration_tests --all-targets --workspace  -- --nocapture
-          fi
+          RUST_TEST_THREADS=1 cargo test --features integration_tests --all-targets --workspace -- --nocapture
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

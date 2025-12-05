@@ -51,7 +51,7 @@ impl FlussTable {
 
             let py_writer = AppendWriter::from_core(rust_writer);
 
-            Python::with_gil(|py| Py::new(py, py_writer))
+            Python::attach(|py| Py::new(py, py_writer))
         })
     }
 
@@ -75,7 +75,7 @@ impl FlussTable {
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
 
             let py_scanner = LogScanner::from_core(rust_scanner, admin, table_info.clone());
-            Python::with_gil(|py| Py::new(py, py_scanner))
+            Python::attach(|py| Py::new(py, py_scanner))
         })
     }
 
@@ -131,10 +131,10 @@ pub struct AppendWriter {
 #[pymethods]
 impl AppendWriter {
     /// Write Arrow table data
-    pub fn write_arrow(&mut self, py: Python, table: PyObject) -> PyResult<()> {
+    pub fn write_arrow(&mut self, py: Python, table: Py<PyAny>) -> PyResult<()> {
         // Convert Arrow Table to batches and write each batch
         let batches = table.call_method0(py, "to_batches")?;
-        let batch_list: Vec<PyObject> = batches.extract(py)?;
+        let batch_list: Vec<Py<PyAny>> = batches.extract(py)?;
 
         for batch in batch_list {
             self.write_arrow_batch(py, batch)?;
@@ -143,7 +143,7 @@ impl AppendWriter {
     }
 
     /// Write Arrow batch data
-    pub fn write_arrow_batch(&mut self, py: Python, batch: PyObject) -> PyResult<()> {
+    pub fn write_arrow_batch(&mut self, py: Python, batch: Py<PyAny>) -> PyResult<()> {
         // Extract number of rows and columns from the Arrow batch
         let num_rows: usize = batch.getattr(py, "num_rows")?.extract(py)?;
         let num_columns: usize = batch.getattr(py, "num_columns")?.extract(py)?;
@@ -175,7 +175,7 @@ impl AppendWriter {
     }
 
     /// Write Pandas DataFrame data
-    pub fn write_pandas(&mut self, py: Python, df: PyObject) -> PyResult<()> {
+    pub fn write_pandas(&mut self, py: Python, df: Py<PyAny>) -> PyResult<()> {
         // Import pyarrow module
         let pyarrow = py.import("pyarrow")?;
 
@@ -213,7 +213,7 @@ impl AppendWriter {
     fn convert_python_value_to_datum(
         &self,
         py: Python,
-        value: PyObject,
+        value: Py<PyAny>,
     ) -> PyResult<fcore::row::Datum<'static>> {
         use fcore::row::{Blob, Datum, F32, F64};
 
@@ -321,7 +321,7 @@ impl LogScanner {
     }
 
     /// Convert all data to Arrow Table
-    fn to_arrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
         use std::collections::HashMap;
         use std::time::Duration;
 
@@ -387,7 +387,7 @@ impl LogScanner {
     }
 
     /// Convert all data to Pandas DataFrame
-    fn to_pandas(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pandas(&self, py: Python) -> PyResult<Py<PyAny>> {
         let arrow_table = self.to_arrow(py)?;
 
         // Convert Arrow Table to Pandas DataFrame using pyarrow
