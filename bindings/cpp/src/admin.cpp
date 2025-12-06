@@ -20,8 +20,17 @@
 #include "fluss.hpp"
 #include "lib.rs.h"
 #include "ffi_converter.hpp"
+#include "rust/cxx.h"
 
 namespace fluss {
+
+static Result MakeResultFromFfi(const ffi::FfiResult& ffi_result) {
+    return Result{ffi_result.error_code, std::string(ffi_result.error_message)};
+}
+
+static Result MakeError(int32_t code, std::string msg) {
+    return Result{code, std::move(msg)};
+}
 
 // Admin implementation
 Admin::Admin() noexcept = default;
@@ -52,53 +61,50 @@ Admin& Admin::operator=(Admin&& other) noexcept {
 
 bool Admin::Available() const { return admin_ != nullptr; }
 
-ErrorCode Admin::CreateTable(const TablePath& table_path,
-                             const TableDescriptor& descriptor,
-                             bool ignore_if_exists) {
+Result Admin::CreateTable(const TablePath& table_path,
+                          const TableDescriptor& descriptor,
+                          bool ignore_if_exists) {
     if (!Available()) {
-        return ErrorCode::AdminNotAvailable;
+        return MakeError(1, "Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
     auto ffi_desc = utils::to_ffi_table_descriptor(descriptor);
 
     auto ffi_result = admin_->create_table(ffi_path, ffi_desc, ignore_if_exists);
-    if (ffi_result.success) {
-        return ErrorCode::Ok;
-    }
-    return ErrorCode::OperationFailed;
+    return MakeResultFromFfi(ffi_result);
 }
 
-ErrorCode Admin::GetTable(const TablePath& table_path, TableInfo& out) {
+Result Admin::GetTable(const TablePath& table_path, TableInfo& out) {
     if (!Available()) {
-        return ErrorCode::AdminNotAvailable;
+        return MakeError(1, "Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
     auto ffi_result = admin_->get_table_info(ffi_path);
 
-    if (!ffi_result.result.success) {
-        return ErrorCode::OperationFailed;
+    auto result = MakeResultFromFfi(ffi_result.result);
+    if (result.Ok()) {
+        out = utils::from_ffi_table_info(ffi_result.table_info);
     }
 
-    out = utils::from_ffi_table_info(ffi_result.table_info);
-    return ErrorCode::Ok;
+    return result;
 }
 
-ErrorCode Admin::GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out) {
+Result Admin::GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out) {
     if (!Available()) {
-        return ErrorCode::AdminNotAvailable;
+        return MakeError(1, "Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
     auto ffi_result = admin_->get_latest_lake_snapshot(ffi_path);
 
-    if (!ffi_result.result.success) {
-        return ErrorCode::OperationFailed;
+    auto result = MakeResultFromFfi(ffi_result.result);
+    if (result.Ok()) {
+        out = utils::from_ffi_lake_snapshot(ffi_result.lake_snapshot);
     }
 
-    out = utils::from_ffi_lake_snapshot(ffi_result.lake_snapshot);
-    return ErrorCode::Ok;
+    return result;
 }
 
 }  // namespace fluss

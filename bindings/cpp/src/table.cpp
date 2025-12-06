@@ -24,6 +24,14 @@
 
 namespace fluss {
 
+static Result MapFfiResult(const ffi::FfiResult& ffi_result) {
+    return Result{ffi_result.error_code, std::string(ffi_result.error_message)};
+}
+
+static Result MakeError(int32_t code, std::string msg) {
+    return Result{code, std::move(msg)};
+}
+
 // Table implementation
 Table::Table() noexcept = default;
 
@@ -53,29 +61,33 @@ Table& Table::operator=(Table&& other) noexcept {
 
 bool Table::Available() const { return table_ != nullptr; }
 
-ErrorCode Table::NewAppendWriter(AppendWriter& out) {
+Result Table::NewAppendWriter(AppendWriter& out) {
     if (!Available()) {
-        return ErrorCode::TableNotAvailable;
+        return MakeError(1, "Table not available");
     }
 
     try {
         out.writer_ = table_->new_append_writer();
-        return ErrorCode::Ok;
+        return Result{0, {}};
     } catch (const rust::Error& e) {
-        return ErrorCode::OperationFailed;
+        return MakeError(1, e.what());
+    } catch (const std::exception& e) {
+        return MakeError(1, e.what());
     }
 }
 
-ErrorCode Table::NewLogScanner(LogScanner& out) {
+Result Table::NewLogScanner(LogScanner& out) {
     if (!Available()) {
-        return ErrorCode::TableNotAvailable;
+        return MakeError(1, "Table not available");
     }
 
     try {
         out.scanner_ = table_->new_log_scanner();
-        return ErrorCode::Ok;
+        return Result{0, {}};
     } catch (const rust::Error& e) {
-        return ErrorCode::OperationFailed;
+        return MakeError(1, e.what());
+    } catch (const std::exception& e) {
+        return MakeError(1, e.what());
     }
 }
 
@@ -131,29 +143,23 @@ AppendWriter& AppendWriter::operator=(AppendWriter&& other) noexcept {
 
 bool AppendWriter::Available() const { return writer_ != nullptr; }
 
-ErrorCode AppendWriter::Append(const GenericRow& row) {
+Result AppendWriter::Append(const GenericRow& row) {
     if (!Available()) {
-        return ErrorCode::AppendWriterNotAvailable;
+        return MakeError(1, "AppendWriter not available");
     }
 
     auto ffi_row = utils::to_ffi_generic_row(row);
     auto ffi_result = writer_->append(ffi_row);
-    if (ffi_result.success) {
-        return ErrorCode::Ok;
-    }
-    return ErrorCode::OperationFailed;
+    return MapFfiResult(ffi_result);
 }
 
-ErrorCode AppendWriter::Flush() {
+Result AppendWriter::Flush() {
     if (!Available()) {
-        return ErrorCode::AppendWriterNotAvailable;
+        return MakeError(1, "AppendWriter not available");
     }
 
     auto ffi_result = writer_->flush();
-    if (ffi_result.success) {
-        return ErrorCode::Ok;
-    }
-    return ErrorCode::OperationFailed;
+    return MapFfiResult(ffi_result);
 }
 
 // LogScanner implementation
@@ -185,30 +191,28 @@ LogScanner& LogScanner::operator=(LogScanner&& other) noexcept {
 
 bool LogScanner::Available() const { return scanner_ != nullptr; }
 
-ErrorCode LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
+Result LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
     if (!Available()) {
-        return ErrorCode::LogScannerNotAvailable;
+        return MakeError(1, "LogScanner not available");
     }
 
     auto ffi_result = scanner_->subscribe(bucket_id, start_offset);
-    if (ffi_result.success) {
-        return ErrorCode::Ok;
-    }
-    return ErrorCode::OperationFailed;
+    return MapFfiResult(ffi_result);
 }
 
-ErrorCode LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
+Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
-        return ErrorCode::LogScannerNotAvailable;
+        return MakeError(1, "LogScanner not available");
     }
 
     auto ffi_result = scanner_->poll(timeout_ms);
-    if (!ffi_result.result.success) {
-        return ErrorCode::OperationFailed;
+    auto result = MapFfiResult(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
     }
 
     out = utils::from_ffi_scan_records(ffi_result.scan_records);
-    return ErrorCode::Ok;
+    return Result{0, {}};
 }
 
 }  // namespace fluss

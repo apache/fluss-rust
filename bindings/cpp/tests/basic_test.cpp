@@ -97,26 +97,14 @@ TEST(FlussTest, DatumFactory) {
     EXPECT_EQ(str_datum.string_val, "test");
 }
 
-TEST(FlussTest, ErrorCodeToString) {
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::Ok), "Ok");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::InvalidParameter), "InvalidParameter");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::ConnectionFailed), "ConnectionFailed");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::ConnectionNotAvailable), "ConnectionNotAvailable");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::AdminNotAvailable), "AdminNotAvailable");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::TableNotAvailable), "TableNotAvailable");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::AppendWriterNotAvailable), "AppendWriterNotAvailable");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::LogScannerNotAvailable), "LogScannerNotAvailable");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::OperationFailed), "OperationFailed");
-    EXPECT_EQ(fluss::ToString(fluss::ErrorCode::Unknown), "Unknown");
-}
-
 TEST(FlussTest, ConnectionNotAvailable) {
     fluss::Connection conn;
     EXPECT_FALSE(conn.Available());
 
     fluss::Admin admin;
-    auto error_code = conn.GetAdmin(admin);
-    EXPECT_EQ(error_code, fluss::ErrorCode::ConnectionNotAvailable);
+    auto result = conn.GetAdmin(admin);
+    EXPECT_FALSE(result.Ok());
+    EXPECT_NE(result.error_code, 0);
 }
 
 TEST(FlussTest, AdminNotAvailable) {
@@ -125,8 +113,9 @@ TEST(FlussTest, AdminNotAvailable) {
 
     fluss::TablePath path("fluss", "test");
     fluss::TableInfo info;
-    auto error_code = admin.GetTable(path, info);
-    EXPECT_EQ(error_code, fluss::ErrorCode::AdminNotAvailable);
+    auto result = admin.GetTable(path, info);
+    EXPECT_FALSE(result.Ok());
+    EXPECT_NE(result.error_code, 0);
 }
 
 TEST(FlussTest, TableNotAvailable) {
@@ -134,6 +123,7 @@ TEST(FlussTest, TableNotAvailable) {
     EXPECT_FALSE(table.Available());
 
     fluss::AppendWriter writer;
-    auto error_code = table.NewAppendWriter(writer);
-    EXPECT_EQ(error_code, fluss::ErrorCode::TableNotAvailable);
+    auto result = table.NewAppendWriter(writer);
+    EXPECT_FALSE(result.Ok());
+    EXPECT_NE(result.error_code, 0);
 }

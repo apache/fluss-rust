@@ -24,7 +24,6 @@
 
 namespace fluss {
 
-// Connection implementation
 Connection::Connection() noexcept = default;
 
 Connection::~Connection() noexcept { Destroy(); }
@@ -49,41 +48,51 @@ Connection& Connection::operator=(Connection&& other) noexcept {
     return *this;
 }
 
-ErrorCode Connection::Connect(const std::string& bootstrap_server, Connection& out) {
+static Result MakeError(int32_t code, std::string msg) {
+    return Result{code, msg};
+}
+
+Result Connection::Connect(const std::string& bootstrap_server, Connection& out) {
     try {
         out.conn_ = ffi::new_connection(bootstrap_server);
-        return ErrorCode::Ok;
+        return Result{0, {}};
     } catch (const rust::Error& e) {
-        return ErrorCode::ConnectionFailed;
+        return MakeError(1, e.what());
+    } catch (const std::exception& e) {
+        return MakeError(1, e.what());
     }
 }
 
 bool Connection::Available() const { return conn_ != nullptr; }
 
-ErrorCode Connection::GetAdmin(Admin& out) {
+Result Connection::GetAdmin(Admin& out) {
     if (!Available()) {
-        return ErrorCode::ConnectionNotAvailable;
+        return MakeError(1, "Connection not available");
     }
 
     try {
         out.admin_ = conn_->get_admin();
-        return ErrorCode::Ok;
+        return Result{0, {}};
     } catch (const rust::Error& e) {
-        return ErrorCode::OperationFailed;
+        return MakeError(1, e.what());
+    } catch (const std::exception& e) {
+        return MakeError(1, e.what());
     }
 }
 
-ErrorCode Connection::GetTable(const TablePath& table_path, Table& out) {
+Result Connection::GetTable(const TablePath& table_path, Table& out) {
     if (!Available()) {
-        return ErrorCode::ConnectionNotAvailable;
+        return MakeError(1, "Connection not available");
     }
 
     try {
         auto ffi_path = utils::to_ffi_table_path(table_path);
         out.table_ = conn_->get_table(ffi_path);
-        return ErrorCode::Ok;
+        return Result{0, {}};
     } catch (const rust::Error& e) {
-        return ErrorCode::OperationFailed;
+        return MakeError(1, e.what());
+    } catch (const std::exception& e) {
+        return MakeError(1, e.what());
     }
 }
 

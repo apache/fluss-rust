@@ -63,45 +63,12 @@ enum class DatumType {
     Bytes = 7,
 };
 
-enum class ErrorCode {
-    Ok = 0,
-    InvalidParameter = -1,
-    ConnectionFailed = 1,
-    ConnectionNotAvailable = 2,
-    AdminNotAvailable = 3,
-    TableNotAvailable = 4,
-    AppendWriterNotAvailable = 5,
-    LogScannerNotAvailable = 6,
-    OperationFailed = 7,
-    Unknown = 99,
-};
+struct Result {
+    int32_t error_code{0};
+    std::string error_message;
 
-inline std::string ToString(ErrorCode code) {
-    switch (code) {
-        case ErrorCode::Ok:
-            return "Ok";
-        case ErrorCode::InvalidParameter:
-            return "InvalidParameter";
-        case ErrorCode::ConnectionFailed:
-            return "ConnectionFailed";
-        case ErrorCode::ConnectionNotAvailable:
-            return "ConnectionNotAvailable";
-        case ErrorCode::AdminNotAvailable:
-            return "AdminNotAvailable";
-        case ErrorCode::TableNotAvailable:
-            return "TableNotAvailable";
-        case ErrorCode::AppendWriterNotAvailable:
-            return "AppendWriterNotAvailable";
-        case ErrorCode::LogScannerNotAvailable:
-            return "LogScannerNotAvailable";
-        case ErrorCode::OperationFailed:
-            return "OperationFailed";
-        case ErrorCode::Unknown:
-            return "Unknown";
-        default:
-            return "Unknown(" + std::to_string(static_cast<int32_t>(code)) + ")";
-    }
-}
+    bool Ok() const { return error_code == 0; }
+};
 
 struct TablePath {
     std::string database_name;
@@ -372,12 +339,12 @@ public:
     Connection(Connection&& other) noexcept;
     Connection& operator=(Connection&& other) noexcept;
 
-    static ErrorCode Connect(const std::string& bootstrap_server, Connection& out);
+    static Result Connect(const std::string& bootstrap_server, Connection& out);
 
     bool Available() const;
 
-    ErrorCode GetAdmin(Admin& out);
-    ErrorCode GetTable(const TablePath& table_path, Table& out);
+    Result GetAdmin(Admin& out);
+    Result GetTable(const TablePath& table_path, Table& out);
 
 private:
     void Destroy() noexcept;
@@ -396,13 +363,13 @@ public:
 
     bool Available() const;
 
-    ErrorCode CreateTable(const TablePath& table_path,
-                          const TableDescriptor& descriptor,
-                          bool ignore_if_exists = false);
+    Result CreateTable(const TablePath& table_path,
+                       const TableDescriptor& descriptor,
+                       bool ignore_if_exists = false);
 
-    ErrorCode GetTable(const TablePath& table_path, TableInfo& out);
+    Result GetTable(const TablePath& table_path, TableInfo& out);
 
-    ErrorCode GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
+    Result GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
 
 private:
     friend class Connection;
@@ -424,8 +391,8 @@ public:
 
     bool Available() const;
 
-    ErrorCode NewAppendWriter(AppendWriter& out);
-    ErrorCode NewLogScanner(LogScanner& out);
+    Result NewAppendWriter(AppendWriter& out);
+    Result NewLogScanner(LogScanner& out);
 
     TableInfo GetTableInfo() const;
     TablePath GetTablePath() const;
@@ -451,8 +418,8 @@ public:
 
     bool Available() const;
 
-    ErrorCode Append(const GenericRow& row);
-    ErrorCode Flush();
+    Result Append(const GenericRow& row);
+    Result Flush();
 
 private:
     friend class Table;
@@ -474,8 +441,8 @@ public:
 
     bool Available() const;
 
-    ErrorCode Subscribe(int32_t bucket_id, int64_t start_offset);
-    ErrorCode Poll(int64_t timeout_ms, ScanRecords& out);
+    Result Subscribe(int32_t bucket_id, int64_t start_offset);
+    Result Poll(int64_t timeout_ms, ScanRecords& out);
 
 private:
     friend class Table;

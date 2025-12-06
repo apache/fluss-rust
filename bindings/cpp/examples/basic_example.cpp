@@ -20,9 +20,10 @@
 #include <iostream>
 #include <vector>
 
-static void check(const char* step, fluss::ErrorCode code) {
-    if (code != fluss::ErrorCode::Ok) {
-        std::cerr << step << " failed: " << fluss::ToString(code) << std::endl;
+static void check(const char* step, const fluss::Result& r) {
+    if (!r.Ok()) {
+        std::cerr << step << " failed: code=" << r.error_code
+                  << " msg=" << r.error_message << std::endl;
         std::exit(1);
     }
 }
@@ -106,4 +107,3 @@ int main() {
 
     return 0;
 }
-
