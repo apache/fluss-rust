@@ -165,6 +165,7 @@ mod ffi {
         unsafe fn delete_table(table: *mut Table);
         fn new_append_writer(self: &Table) -> Result<*mut AppendWriter>;
         fn new_log_scanner(self: &Table) -> Result<*mut LogScanner>;
+        fn new_log_scanner_with_projection(self: &Table, column_indices: Vec<usize>) -> Result<*mut LogScanner>;
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
@@ -384,6 +385,8 @@ unsafe fn delete_table(table: *mut Table) {
 
 impl Table {
     fn new_append_writer(&self) -> Result<*mut AppendWriter, String> {
+        let _enter = RUNTIME.enter();
+        
         let fluss_table =
             fcore::client::FlussTable::new(&self.connection, self.metadata.clone(), self.table_info.clone());
 
@@ -404,6 +407,20 @@ impl Table {
             fcore::client::FlussTable::new(&self.connection, self.metadata.clone(), self.table_info.clone());
 
         let scanner = fluss_table.new_scan().create_log_scanner();
+        let scanner = Box::into_raw(Box::new(LogScanner { inner: scanner }));
+        Ok(scanner)
+    }
+
+    fn new_log_scanner_with_projection(&self, column_indices: Vec<usize>) -> Result<*mut LogScanner, String> {
+        let fluss_table =
+            fcore::client::FlussTable::new(&self.connection, self.metadata.clone(), self.table_info.clone());
+
+        let scan = fluss_table.new_scan();
+        let scan = match scan.project(&column_indices) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to project columns: {}", e)),
+        };
+        let scanner = scan.create_log_scanner();
         let scanner = Box::into_raw(Box::new(LogScanner { inner: scanner }));
         Ok(scanner)
     }

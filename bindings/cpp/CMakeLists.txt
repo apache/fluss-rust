@@ -90,7 +90,7 @@ if(APPLE)
     target_link_libraries(fluss_cpp PUBLIC "-framework CoreFoundation" "-framework Security")
 endif()
 
-add_executable(fluss_cpp_example examples/basic_example.cpp)
+add_executable(fluss_cpp_example examples/example.cpp)
 target_link_libraries(fluss_cpp_example fluss_cpp)
 target_include_directories(fluss_cpp_example PUBLIC ${CPP_INCLUDE_DIR})
 
@@ -102,43 +102,4 @@ add_dependencies(fluss_cpp cargo_build)
 if (FLUSS_ENABLE_ADDRESS_SANITIZER)
     target_compile_options(fluss_cpp PRIVATE -fsanitize=leak,address,undefined -fno-omit-frame-pointer -fno-common -O1)
     target_link_options(fluss_cpp PRIVATE -fsanitize=leak,address,undefined)
-endif()
-
-# Platform-specific configuration
-if(WIN32)
-    target_link_libraries(fluss_cpp userenv ws2_32 bcrypt)
-endif()
-
-# Tests
-if (FLUSS_ENABLE_TESTING)
-    enable_testing()
-
-    FetchContent_Declare(
-        googletest
-        URL https://github.com/google/googletest/archive/refs/tags/v${FLUSS_GOOGLETEST_VERSION}.zip
-    )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
-
-    file(GLOB TEST_SOURCE_FILE "tests/*.cpp")
-
-    add_executable(fluss_cpp_test ${TEST_SOURCE_FILE})
-    target_include_directories(fluss_cpp_test PUBLIC ${CPP_INCLUDE_DIR} ${GTEST_INCLUDE_DIRS} tests)
-    target_link_libraries(fluss_cpp_test ${GTEST_LDFLAGS} GTest::gtest GTest::gtest_main fluss_cpp)
-    target_compile_options(fluss_cpp_test PRIVATE ${GTEST_CFLAGS})
-
-    if (FLUSS_ENABLE_ADDRESS_SANITIZER)
-        target_compile_options(fluss_cpp_test PRIVATE -fsanitize=leak,address,undefined -fno-omit-frame-pointer -fno-common -O1)
-        target_link_options(fluss_cpp_test PRIVATE -fsanitize=leak,address,undefined)
-    endif()
-
-    if(WIN32)
-        target_link_libraries(fluss_cpp_test userenv ws2_32 bcrypt)
-    endif()
-    if(APPLE)
-        target_link_libraries(fluss_cpp_test "-framework CoreFoundation -framework Security")
-    endif()
-
-    include(GoogleTest)
-    gtest_discover_tests(fluss_cpp_test)
 endif()

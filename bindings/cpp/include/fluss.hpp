@@ -393,6 +393,7 @@ public:
 
     Result NewAppendWriter(AppendWriter& out);
     Result NewLogScanner(LogScanner& out);
+    Result NewLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out);
 
     TableInfo GetTableInfo() const;
     TablePath GetTablePath() const;

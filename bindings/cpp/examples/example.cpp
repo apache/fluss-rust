@@ -48,10 +48,11 @@ int main() {
     auto descriptor = fluss::TableDescriptor::NewBuilder()
                           .SetSchema(schema)
                           .SetBucketCount(1)
+                          .SetProperty("table.log.arrow.compression.type", "NONE")
                           .SetComment("cpp example table")
                           .Build();
 
-    fluss::TablePath table_path("fluss", "sample_table_cpp");
+    fluss::TablePath table_path("fluss", "sample_table_cpp_v1");
     // ignore_if_exists=true to allow re-run
     check("create_table", admin.CreateTable(table_path, descriptor, true));
 
@@ -102,7 +103,63 @@ int main() {
 
     std::cout << "Scanned records: " << records.records.size() << std::endl;
     for (const auto& rec : records.records) {
-        std::cout << "  offset=" << rec.offset << " ts=" << rec.timestamp << std::endl;
+        std::cout << " offset=" << rec.offset << " id=" << rec.row.fields[0].i32_val
+                  << " name=" << rec.row.fields[1].string_val
+                  << " score=" << rec.row.fields[2].f32_val << " age=" << rec.row.fields[3].i32_val
+                  << " ts=" << rec.timestamp << std::endl;
+    }
+    
+    // 7) Project only id (0) and name (1) columns
+    std::vector<size_t> projected_columns = {0, 1};
+    fluss::LogScanner projected_scanner;
+    check("new_log_scanner_with_projection", 
+          table.NewLogScannerWithProjection(projected_columns, projected_scanner));
+    
+    for (int b = 0; b < buckets; ++b) {
+        check("subscribe_projected", projected_scanner.Subscribe(b, 0));
+    }
+    
+    fluss::ScanRecords projected_records;
+    check("poll_projected", projected_scanner.Poll(5000, projected_records));
+    
+    std::cout << "Projected records: " << projected_records.records.size() << std::endl;
+    
+    bool projection_verified = true;
+    for (size_t i = 0; i < projected_records.records.size(); ++i) {
+        const auto& rec = projected_records.records[i];
+        const auto& row = rec.row;
+        
+        if (row.fields.size() != projected_columns.size()) {
+            std::cerr << "ERROR: Record " << i << " has " << row.fields.size() 
+                      << " fields, expected " << projected_columns.size() << std::endl;
+            projection_verified = false;
+            continue;
+        }
+        
+        // Verify field types match expected columns
+        // Column 0 (id) should be Int32, Column 1 (name) should be String
+        if (row.fields[0].type != fluss::DatumType::Int32) {
+            std::cerr << "ERROR: Record " << i << " field 0 type mismatch, expected Int32" << std::endl;
+            projection_verified = false;
+        }
+        if (row.fields[1].type != fluss::DatumType::String) {
+            std::cerr << "ERROR: Record " << i << " field 1 type mismatch, expected String" << std::endl;
+            projection_verified = false;
+        }
+        
+        // Print projected data
+        if (row.fields[0].type == fluss::DatumType::Int32 && 
+            row.fields[1].type == fluss::DatumType::String) {
+            std::cout << "  Record " << i << ": id=" << row.fields[0].i32_val 
+                      << ", name=" << row.fields[1].string_val << std::endl;
+        }
+    }
+    
+    if (projection_verified) {
+        std::cout << "Column pruning verification passed!" << std::endl;
+    } else {
+        std::cerr << "Column pruning verification failed!" << std::endl;
+        std::exit(1);
     }
 
     return 0;

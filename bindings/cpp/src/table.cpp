@@ -91,6 +91,25 @@ Result Table::NewLogScanner(LogScanner& out) {
     }
 }
 
+Result Table::NewLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out) {
+    if (!Available()) {
+        return MakeError(1, "Table not available");
+    }
+
+    try {
+        rust::Vec<size_t> rust_indices;
+        for (size_t idx : column_indices) {
+            rust_indices.push_back(idx);
+        }
+        out.scanner_ = table_->new_log_scanner_with_projection(std::move(rust_indices));
+        return Result{0, {}};
+    } catch (const rust::Error& e) {
+        return MakeError(1, e.what());
+    } catch (const std::exception& e) {
+        return MakeError(1, e.what());
+    }
+}
+
 TableInfo Table::GetTableInfo() const {
     if (!Available()) {
         return TableInfo{};
