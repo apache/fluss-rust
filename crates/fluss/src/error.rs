@@ -47,4 +47,16 @@ pub enum Error {
 
     #[error("Illegal argument error: {0}")]
     IllegalArgument(String),
+
+    #[error("IO not supported error: {0}")]
+    IoUnsupported(String),
+
+    #[error("IO operation failed on underlying storage: {0}")]
+    IoUnexpected(Box<opendal::Error>),
+}
+
+impl From<opendal::Error> for Error {
+    fn from(err: opendal::Error) -> Self {
+        Error::IoUnexpected(Box::new(err))
+    }
 }

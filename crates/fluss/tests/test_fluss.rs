@@ -25,4 +25,6 @@ mod integration {
     mod table;
 
     mod utils;
+
+    mod table_remote_scan;
 }

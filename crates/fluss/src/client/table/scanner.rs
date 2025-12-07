@@ -29,6 +29,11 @@ use std::collections::HashMap;
 use std::slice::from_ref;
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::TempDir;
+
+use crate::client::table::remote_log::{
+    RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
+};
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 #[allow(dead_code)]
@@ -120,7 +125,7 @@ impl<'a> TableScan<'a> {
         Ok(self)
     }
 
-    pub fn create_log_scanner(self) -> LogScanner {
+    pub fn create_log_scanner(self) -> Result<LogScanner> {
         LogScanner::new(
             &self.table_info,
             self.metadata.clone(),
@@ -144,9 +149,9 @@ impl LogScanner {
         metadata: Arc<Metadata>,
         connections: Arc<RpcClient>,
         projected_fields: Option<Vec<usize>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
-        Self {
+        Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
             metadata: metadata.clone(),
@@ -157,8 +162,8 @@ impl LogScanner {
                 metadata.clone(),
                 log_scanner_status.clone(),
                 projected_fields,
-            ),
-        }
+            )?,
+        })
     }
 
     pub async fn poll(&self, _timeout: Duration) -> Result<ScanRecords> {
@@ -188,6 +193,7 @@ struct LogFetcher {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     read_context: ReadContext,
+    remote_log_downloader: Arc<RemoteLogDownloader>,
 }
 
 impl LogFetcher {
@@ -197,17 +203,21 @@ impl LogFetcher {
         metadata: Arc<Metadata>,
         log_scanner_status: Arc<LogScannerStatus>,
         projected_fields: Option<Vec<usize>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let full_arrow_schema = to_arrow_schema(table_info.get_row_type());
-        let read_context = Self::create_read_context(full_arrow_schema, projected_fields);
-        LogFetcher {
+        let read_context = Self::create_read_context(full_arrow_schema, projected_fields.clone());
+
+        let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
+
+        Ok(LogFetcher {
             table_path: table_info.table_path.clone(),
             conns,
             table_info,
             metadata,
             log_scanner_status,
             read_context,
-        }
+            remote_log_downloader: Arc::new(RemoteLogDownloader::new(tmp_dir)?),
+        })
     }
 
     fn create_read_context(
@@ -239,10 +249,66 @@ impl LogFetcher {
                 let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
 
                 for fetch_log_for_bucket in fetch_log_for_buckets {
-                    let mut fetch_records = vec![];
                     let bucket: i32 = fetch_log_for_bucket.bucket_id;
                     let table_bucket = TableBucket::new(table_id, bucket);
-                    if fetch_log_for_bucket.records.is_some() {
+
+                    // Check if this is a remote log fetch
+                    if let Some(ref remote_log_fetch_info) =
+                        fetch_log_for_bucket.remote_log_fetch_info
+                    {
+                        let remote_fetch_info = RemoteLogFetchInfo::from_proto(
+                            remote_log_fetch_info,
+                            table_bucket.clone(),
+                        )?;
+
+                        if let Some(fetch_offset) =
+                            self.log_scanner_status.get_bucket_offset(&table_bucket)
+                        {
+                            let high_watermark = fetch_log_for_bucket.high_watermark.unwrap_or(-1);
+                            // Download and process remote log segments
+                            let mut pos_in_log_segment = remote_fetch_info.first_start_pos;
+                            let mut current_fetch_offset = fetch_offset;
+                            // todo: make segment download parallelly
+                            for (i, segment) in
+                                remote_fetch_info.remote_log_segments.iter().enumerate()
+                            {
+                                if i > 0 {
+                                    pos_in_log_segment = 0;
+                                    current_fetch_offset = segment.start_offset;
+                                }
+
+                                let download_future =
+                                    self.remote_log_downloader.request_remote_log(
+                                        &remote_fetch_info.remote_log_tablet_dir,
+                                        segment,
+                                    )?;
+                                let pending_fetch = RemotePendingFetch::new(
+                                    segment.clone(),
+                                    download_future,
+                                    pos_in_log_segment,
+                                    current_fetch_offset,
+                                    high_watermark,
+                                    self.read_context.clone(),
+                                );
+                                let remote_records =
+                                    pending_fetch.convert_to_completed_fetch().await?;
+                                // Update offset and merge results
+                                for (tb, records) in remote_records {
+                                    if let Some(last_record) = records.last() {
+                                        self.log_scanner_status
+                                            .update_offset(&tb, last_record.offset() + 1);
+                                    }
+                                    result.entry(tb).or_default().extend(records);
+                                }
+                            }
+                        } else {
+                            // if the offset is null, it means the bucket has been unsubscribed,
+                            // skip processing and continue to the next bucket.
+                            continue;
+                        }
+                    } else if fetch_log_for_bucket.records.is_some() {
+                        // Handle regular in-memory records
+                        let mut fetch_records = vec![];
                         let data = fetch_log_for_bucket.records.unwrap();
                         for log_record in &mut LogRecordsBatchs::new(&data) {
                             let last_offset = log_record.last_log_offset();
@@ -250,8 +316,8 @@ impl LogFetcher {
                             self.log_scanner_status
                                 .update_offset(&table_bucket, last_offset + 1);
                         }
+                        result.insert(table_bucket, fetch_records);
                     }
-                    result.insert(table_bucket, fetch_records);
                 }
             }
         }

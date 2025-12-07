@@ -26,6 +26,7 @@ mod cluster;
 pub mod config;
 pub mod error;
 
+pub mod io;
 mod util;
 
 pub type TableId = u64;

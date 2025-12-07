@@ -19,14 +19,22 @@ use crate::metadata::TableBucket;
 use linked_hash_map::LinkedHashMap;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 pub fn current_time_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64
+}
+
+pub async fn delete_file(file_path: PathBuf) {
+    tokio::fs::remove_file(&file_path)
+        .await
+        .unwrap_or_else(|e| warn!("Could not delete file: {:?}, error: {:?}", &file_path, e));
 }
 
 pub struct FairBucketStatusMap<S> {
