@@ -22,7 +22,6 @@ use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord};
 use crate::util::delete_file;
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::io;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -100,15 +99,14 @@ impl RemoteLogDownloadFuture {
 
     /// Get the downloaded file path
     pub async fn get_file_path(&mut self) -> Result<PathBuf> {
-        let receiver = self
-            .receiver
-            .take()
-            .ok_or_else(|| Error::Io(io::Error::other("Download future already consumed")))?;
+        let receiver = self.receiver.take().ok_or_else(|| Error::UnexpectedError {
+            message: "Downloaded file already consumed".to_string(),
+            source: None,
+        })?;
 
-        receiver.await.map_err(|e| {
-            Error::Io(io::Error::other(format!(
-                "Download future cancelled: {e:?}"
-            )))
+        receiver.await.map_err(|e| Error::UnexpectedError {
+            message: format!("Download future cancelled: {e:?}"),
+            source: None,
         })?
     }
 }

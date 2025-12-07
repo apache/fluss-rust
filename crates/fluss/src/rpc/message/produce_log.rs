@@ -17,9 +17,11 @@
 
 use crate::error::Result as FlussResult;
 use crate::proto::{PbProduceLogReqForBucket, ProduceLogResponse};
+use crate::rpc::frame::ReadError;
+
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
-use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 use crate::{impl_read_version_type, impl_write_version_type, proto};
 use std::sync::Arc;

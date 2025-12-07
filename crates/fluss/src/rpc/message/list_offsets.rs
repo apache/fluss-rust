@@ -20,9 +20,11 @@ use crate::{impl_read_version_type, impl_write_version_type, proto};
 use crate::error::Error;
 use crate::error::Result as FlussResult;
 use crate::proto::ListOffsetsResponse;
+use crate::rpc::frame::ReadError;
+
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
-use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 use std::collections::HashMap;
 
@@ -108,12 +110,15 @@ impl ListOffsetsResponse {
             .map(|resp| {
                 if resp.error_code.is_some() {
                     // todo: consider use another suitable error
-                    Err(Error::WriteError(format!(
-                        "Missing offset, error message: {}",
-                        resp.error_message
-                            .as_deref()
-                            .unwrap_or("unknown server exception")
-                    )))
+                    Err(Error::UnexpectedError {
+                        message: format!(
+                            "Missing offset, error message: {}",
+                            resp.error_message
+                                .as_deref()
+                                .unwrap_or("unknown server exception")
+                        ),
+                        source: None,
+                    })
                 } else {
                     // if no error msg, offset must exists
                     Ok((resp.bucket_id, resp.offset.unwrap()))

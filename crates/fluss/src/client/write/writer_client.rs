@@ -78,11 +78,12 @@ impl WriterClient {
 
     fn get_ack(config: &Config) -> Result<i16> {
         let acks = config.writer_acks.as_str();
-        if acks.eq("all") {
+        if acks.eq_ignore_ascii_case("all") {
             Ok(-1)
         } else {
-            acks.parse::<i16>()
-                .map_err(|e| Error::IllegalArgument(e.to_string()))
+            acks.parse::<i16>().map_err(|e| Error::IllegalArgument {
+                message: format!("invalid writer ack '{acks}': {e}"),
+            })
         }
     }
 
@@ -133,11 +134,17 @@ impl WriterClient {
         self.shutdown_tx
             .send(())
             .await
-            .map_err(|e| Error::WriteError(e.to_string()))?;
+            .map_err(|e| Error::UnexpectedError {
+                message: format!("Failed to close write client: {e:?}"),
+                source: None,
+            })?;
 
         self.sender_join_handle
             .await
-            .map_err(|e| Error::WriteError(e.to_string()))?;
+            .map_err(|e| Error::UnexpectedError {
+                message: format!("Failed to close write client: {e:?}"),
+                source: None,
+            })?;
         Ok(())
     }
 

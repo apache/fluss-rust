@@ -74,11 +74,17 @@ impl ResultHandle {
         self.receiver
             .receive()
             .await
-            .map_err(|e| Error::WriteError(e.to_string()))
+            .map_err(|e| Error::UnexpectedError {
+                message: format!("Fail to wait write result {e:?}"),
+                source: None,
+            })
     }
 
     pub fn result(&self, batch_result: BatchWriteResult) -> Result<(), Error> {
         // do nothing, just return empty result
-        batch_result.map_err(|e| Error::WriteError(e.to_string()))
+        batch_result.map_err(|e| Error::UnexpectedError {
+            message: format!("Fail to get write result {e:?}"),
+            source: None,
+        })
     }
 }

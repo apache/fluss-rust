@@ -22,12 +22,13 @@ use crate::proto::TableExistsResponse;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
-use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+
+use crate::rpc::frame::ReadError;
 
 use bytes::{Buf, BufMut};
 use prost::Message;
-
 #[derive(Debug)]
 pub struct TableExistsRequest {
     pub inner_request: proto::TableExistsRequest,

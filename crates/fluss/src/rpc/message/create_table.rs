@@ -23,7 +23,8 @@ use crate::proto::CreateTableResponse;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
-use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::frame::ReadError;
+use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 
 use bytes::{Buf, BufMut};

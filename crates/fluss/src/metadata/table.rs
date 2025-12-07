@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::error::Error::InvalidTableError;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::datatype::{DataField, DataType, RowType};
 use core::fmt;
 use serde::{Deserialize, Serialize};
@@ -220,9 +220,9 @@ impl SchemaBuilder {
     ) -> Result<Vec<Column>> {
         let names: Vec<_> = columns.iter().map(|c| &c.name).collect();
         if let Some(duplicates) = Self::find_duplicates(&names) {
-            return Err(InvalidTableError(format!(
-                "Duplicate column names found: {duplicates:?}"
-            )));
+            return Err(InvalidTableError {
+                message: format!("Duplicate column names found: {duplicates:?}"),
+            });
         }
 
         let Some(pk) = primary_key else {
@@ -232,9 +232,9 @@ impl SchemaBuilder {
         let pk_set: HashSet<_> = pk.column_names.iter().collect();
         let all_columns: HashSet<_> = columns.iter().map(|c| &c.name).collect();
         if !pk_set.is_subset(&all_columns) {
-            return Err(InvalidTableError(format!(
-                "Primary key columns {pk_set:?} not found in schema"
-            )));
+            return Err(InvalidTableError {
+                message: format!("Primary key columns {pk_set:?} not found in schema"),
+            });
         }
 
         Ok(columns
@@ -441,12 +441,12 @@ impl TableDescriptor {
     pub fn replication_factor(&self) -> Result<i32> {
         self.properties
             .get("table.replication.factor")
-            .ok_or(InvalidTableError(
-                "Replication factor is not set".to_string(),
-            ))?
+            .ok_or_else(|| InvalidTableError {
+                message: "Replication factor is not set".to_string(),
+            })?
             .parse()
-            .map_err(|_e| {
-                InvalidTableError("Replication factor can't be convert into int".to_string())
+            .map_err(|_e| InvalidTableError {
+                message: "Replication factor can't be convert into int".to_string(),
             })
     }
 
@@ -497,11 +497,13 @@ impl TableDescriptor {
         bucket_keys.retain(|k| !partition_keys.contains(k));
 
         if bucket_keys.is_empty() {
-            return Err(InvalidTableError(format!(
-                "Primary Key constraint {:?} should not be same with partition fields {:?}.",
-                schema.primary_key().unwrap().column_names(),
-                partition_keys
-            )));
+            return Err(Error::InvalidTableError {
+                message: format!(
+                    "Primary Key constraint {:?} should not be same with partition fields {:?}.",
+                    schema.primary_key().unwrap().column_names(),
+                    partition_keys
+                ),
+            });
         }
 
         Ok(bucket_keys)
@@ -518,10 +520,12 @@ impl TableDescriptor {
                 .iter()
                 .any(|k| partition_keys.contains(k))
             {
-                return Err(InvalidTableError(format!(
-                    "Bucket key {:?} shouldn't include any column in partition keys {:?}.",
-                    distribution.bucket_keys, partition_keys
-                )));
+                return Err(InvalidTableError {
+                    message: format!(
+                        "Bucket key {:?} shouldn't include any column in partition keys {:?}.",
+                        distribution.bucket_keys, partition_keys
+                    ),
+                });
             }
 
             return if let Some(pk) = schema.primary_key() {
@@ -540,13 +544,15 @@ impl TableDescriptor {
                         .iter()
                         .all(|k| pk_columns.contains(k))
                     {
-                        return Err(InvalidTableError(format!(
-                            "Bucket keys must be a subset of primary keys excluding partition keys for primary-key tables. \
-                            The primary keys are {:?}, the partition keys are {:?}, but the user-defined bucket keys are {:?}.",
-                            pk.column_names(),
-                            partition_keys,
-                            distribution.bucket_keys
-                        )));
+                        return Err(InvalidTableError {
+                            message: format!(
+                                "Bucket keys must be a subset of primary keys excluding partition keys for primary-key tables. \
+                                The primary keys are {:?}, the partition keys are {:?}, but the user-defined bucket keys are {:?}.",
+                                pk.column_names(),
+                                partition_keys,
+                                distribution.bucket_keys
+                            ),
+                        });
                     }
                     Ok(Some(distribution))
                 }
@@ -589,7 +595,9 @@ impl LogFormat {
         match s.to_uppercase().as_str() {
             "ARROW" => Ok(LogFormat::ARROW),
             "INDEXED" => Ok(LogFormat::INDEXED),
-            _ => Err(InvalidTableError(format!("Unknown log format: {s}"))),
+            _ => Err(InvalidTableError {
+                message: format!("Unknown log format: {s}"),
+            }),
         }
     }
 }
@@ -615,7 +623,9 @@ impl KvFormat {
         match s.to_uppercase().as_str() {
             "INDEXED" => Ok(KvFormat::INDEXED),
             "COMPACTED" => Ok(KvFormat::COMPACTED),
-            _ => Err(InvalidTableError(format!("Unknown kv format: {s}"))),
+            _ => Err(Error::InvalidTableError {
+                message: format!("Unknown kv format: {s}"),
+            }),
         }
     }
 }
@@ -958,6 +968,24 @@ impl TableBucket {
 
     pub fn partition_id(&self) -> Option<i64> {
         self.partition_id
+    }
+}
+
+impl Display for TableBucket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(partition_id) = self.partition_id {
+            write!(
+                f,
+                "TableBucket(table_id={}, partition_id={}, bucket={})",
+                self.table_id, partition_id, self.bucket
+            )
+        } else {
+            write!(
+                f,
+                "TableBucket(table_id={}, bucket={})",
+                self.table_id, self.bucket
+            )
+        }
     }
 }
 

@@ -17,7 +17,9 @@
 
 mod api_key;
 mod api_version;
-mod error;
+pub mod error;
+mod fluss_api_error;
+pub use fluss_api_error::{ApiError, FlussError};
 mod frame;
 pub mod message;
 pub use error::*;

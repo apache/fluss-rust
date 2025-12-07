@@ -17,7 +17,7 @@
 
 use crate::client::metadata::Metadata;
 use crate::client::{ReadyWriteBatch, RecordAccumulator};
-use crate::error::Error::WriteError;
+use crate::error::Error;
 use crate::error::Result;
 use crate::metadata::TableBucket;
 use crate::proto::ProduceLogResponse;
@@ -150,9 +150,12 @@ impl Sender {
 
         let cluster = self.metadata.get_cluster();
 
-        let destination_node = cluster
-            .get_tablet_server(destination)
-            .ok_or(WriteError(String::from("destination node not found")))?;
+        let destination_node =
+            cluster
+                .get_tablet_server(destination)
+                .ok_or(Error::LeaderNotAvailable {
+                    message: format!("destination node not found in metadata cache {destination}."),
+                })?;
         let connection = self.metadata.get_connection(destination_node).await?;
 
         for (table_id, write_batches) in write_batch_by_table {

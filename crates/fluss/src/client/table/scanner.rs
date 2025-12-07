@@ -74,18 +74,20 @@ impl<'a> TableScan<'a> {
     /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
         if column_indices.is_empty() {
-            return Err(Error::IllegalArgument(
-                "Column indices cannot be empty".to_string(),
-            ));
+            return Err(Error::IllegalArgument {
+                message: "Column indices cannot be empty".to_string(),
+            });
         }
         let field_count = self.table_info.row_type().fields().len();
         for &idx in column_indices {
             if idx >= field_count {
-                return Err(Error::IllegalArgument(format!(
-                    "Column index {} out of range (max: {})",
-                    idx,
-                    field_count - 1
-                )));
+                return Err(Error::IllegalArgument {
+                    message: format!(
+                        "Column index {} out of range (max: {})",
+                        idx,
+                        field_count - 1
+                    ),
+                });
             }
         }
         self.projected_fields = Some(column_indices.to_vec());
@@ -106,9 +108,9 @@ impl<'a> TableScan<'a> {
     /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
         if column_names.is_empty() {
-            return Err(Error::IllegalArgument(
-                "Column names cannot be empty".to_string(),
-            ));
+            return Err(Error::IllegalArgument {
+                message: "Column names cannot be empty".to_string(),
+            });
         }
         let row_type = self.table_info.row_type();
         let mut indices = Vec::new();
@@ -118,7 +120,9 @@ impl<'a> TableScan<'a> {
                 .fields()
                 .iter()
                 .position(|f| f.name() == *name)
-                .ok_or_else(|| Error::IllegalArgument(format!("Column '{name}' not found")))?;
+                .ok_or_else(|| Error::IllegalArgument {
+                    message: format!("Column '{name}' not found"),
+                })?;
             indices.push(idx);
         }
 
@@ -277,7 +281,7 @@ impl LogFetcher {
                             // Download and process remote log segments
                             let mut pos_in_log_segment = remote_fetch_info.first_start_pos;
                             let mut current_fetch_offset = fetch_offset;
-                            // todo: make segment download parallelly
+                            // todo: make segment download in parallel
                             for (i, segment) in
                                 remote_fetch_info.remote_log_segments.iter().enumerate()
                             {

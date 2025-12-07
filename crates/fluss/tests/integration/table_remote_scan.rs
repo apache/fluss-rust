@@ -38,8 +38,6 @@ mod table_remote_scan_test {
     use fluss::row::{GenericRow, InternalRow};
     use std::collections::HashMap;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
     use std::thread;
     use std::thread::sleep;
     use std::time::Duration;
@@ -89,11 +87,13 @@ mod table_remote_scan_test {
                     temp_dir.to_string_lossy().to_string(),
                 );
 
-                let cluster =
-                    FlussTestingClusterBuilder::new_with_cluster_conf("test_table", &cluster_conf)
-                        .with_remote_data_dir(temp_dir)
-                        .build()
-                        .await;
+                let cluster = FlussTestingClusterBuilder::new_with_cluster_conf(
+                    "test_table_remote",
+                    &cluster_conf,
+                )
+                .with_remote_data_dir(temp_dir)
+                .build()
+                .await;
                 let mut guard = cluster_guard.write();
                 *guard = Some(cluster);
             });

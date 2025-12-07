@@ -29,7 +29,7 @@ use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
 
 use crate::BucketId;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
 use std::collections::HashMap;
 use std::slice::from_ref;
@@ -245,10 +245,10 @@ impl FlussAdmin {
         let mut results = HashMap::new();
 
         for response_future in response_futures {
-            let offsets = response_future.await.map_err(
-                // todo: consider use suitable error
-                |e| crate::error::Error::WriteError(format!("Fail to get result: {e}")),
-            )?;
+            let offsets = response_future.await.map_err(|e| Error::UnexpectedError {
+                message: "Fail to get result for list offsets.".to_string(),
+                source: Some(Box::new(e)),
+            })?;
             results.extend(offsets?);
         }
         Ok(results)
@@ -267,10 +267,11 @@ impl FlussAdmin {
         for bucket_id in buckets {
             let table_bucket = TableBucket::new(table_id, *bucket_id);
             let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
-                // todo: consider use another suitable error
-                crate::error::Error::InvalidTableError(format!(
-                    "No leader found for table bucket: table_id={table_id}, bucket_id={bucket_id}"
-                ))
+                // todo: consider retry?
+                Error::UnexpectedError {
+                    message: format!("No leader found for table bucket: {table_bucket}."),
+                    source: None,
+                }
             })?;
 
             node_for_bucket_list
@@ -301,10 +302,11 @@ impl FlussAdmin {
             let task = tokio::spawn(async move {
                 let cluster = metadata.get_cluster();
                 let tablet_server = cluster.get_tablet_server(leader_id).ok_or_else(|| {
-                    // todo: consider use more suitable error
-                    crate::error::Error::InvalidTableError(format!(
-                        "Tablet server {leader_id} not found"
-                    ))
+                    Error::LeaderNotAvailable {
+                        message: format!(
+                            "Tablet server {leader_id} is not found in metadata cache."
+                        ),
+                    }
                 })?;
                 let connection = rpc_client.get_connection(tablet_server).await?;
                 let list_offsets_response = connection.request(request).await?;

@@ -19,6 +19,11 @@ syntax = "proto2";
 
 package proto;
 
+message ErrorResponse {
+  required int32 error_code = 1;
+  optional string error_message = 2;
+}
+
 // metadata request and response, request send from client to each server.
 message MetadataRequest {
   repeated PbTablePath table_path = 1;
