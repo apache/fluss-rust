@@ -25,6 +25,18 @@
 namespace fluss {
 namespace utils {
 
+inline Result make_error(int32_t code, std::string msg) {
+    return Result{code, std::move(msg)};
+}
+
+inline Result make_ok() {
+    return Result{0, {}};
+}
+
+inline Result from_ffi_result(const ffi::FfiResult& ffi_result) {
+    return Result{ffi_result.error_code, std::string(ffi_result.error_message)};
+}
+
 inline ffi::FfiTablePath to_ffi_table_path(const TablePath& path) {
     ffi::FfiTablePath ffi_path;
     ffi_path.database_name = rust::String(path.database_name);

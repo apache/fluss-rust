@@ -37,7 +37,6 @@ mod ffi {
     }
 
     struct FfiResult {
-        success: bool,
         error_code: i32,
         error_message: String,
     }
@@ -208,20 +207,18 @@ pub struct LogScanner {
     inner: fcore::client::LogScanner,
 }
 
-fn make_result(success: bool, error_code: i32, error_message: String) -> ffi::FfiResult {
+fn ok_result() -> ffi::FfiResult {
     ffi::FfiResult {
-        success,
-        error_code,
-        error_message,
+        error_code: 0,
+        error_message: String::new(),
     }
 }
 
-fn ok_result() -> ffi::FfiResult {
-    make_result(true, 0, String::new())
-}
-
 fn err_result(code: i32, msg: String) -> ffi::FfiResult {
-    make_result(false, code, msg)
+    ffi::FfiResult {
+        error_code: code,
+        error_message: msg,
+    }
 }
 
 // Connection implementation
@@ -452,7 +449,9 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
 
 impl AppendWriter {
     fn append(&mut self, row: &ffi::FfiGenericRow) -> ffi::FfiResult {
-        let generic_row = types::ffi_row_to_core(row);
+        let mut owner = types::OwnedRowData::new();
+        owner.collect_strings(row);
+        let generic_row = types::ffi_row_to_core(row, &owner);
 
         let result = RUNTIME.block_on(async { self.inner.append(generic_row).await });
 

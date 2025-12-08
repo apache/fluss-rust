@@ -48,18 +48,14 @@ Connection& Connection::operator=(Connection&& other) noexcept {
     return *this;
 }
 
-static Result MakeError(int32_t code, std::string msg) {
-    return Result{code, msg};
-}
-
 Result Connection::Connect(const std::string& bootstrap_server, Connection& out) {
     try {
         out.conn_ = ffi::new_connection(bootstrap_server);
-        return Result{0, {}};
+        return utils::make_ok();
     } catch (const rust::Error& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     } catch (const std::exception& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     }
 }
 
@@ -67,32 +63,32 @@ bool Connection::Available() const { return conn_ != nullptr; }
 
 Result Connection::GetAdmin(Admin& out) {
     if (!Available()) {
-        return MakeError(1, "Connection not available");
+        return utils::make_error(1, "Connection not available");
     }
 
     try {
         out.admin_ = conn_->get_admin();
-        return Result{0, {}};
+        return utils::make_ok();
     } catch (const rust::Error& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     } catch (const std::exception& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     }
 }
 
 Result Connection::GetTable(const TablePath& table_path, Table& out) {
     if (!Available()) {
-        return MakeError(1, "Connection not available");
+        return utils::make_error(1, "Connection not available");
     }
 
     try {
         auto ffi_path = utils::to_ffi_table_path(table_path);
         out.table_ = conn_->get_table(ffi_path);
-        return Result{0, {}};
+        return utils::make_ok();
     } catch (const rust::Error& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     } catch (const std::exception& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     }
 }
 

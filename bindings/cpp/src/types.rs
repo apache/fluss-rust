@@ -202,10 +202,36 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
     }
 }
 
-pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'static> {
+pub struct OwnedRowData {
+    strings: Vec<String>,
+}
+
+impl OwnedRowData {
+    pub fn new() -> Self {
+        Self { strings: Vec::new() }
+    }
+
+    pub fn collect_strings(&mut self, row: &ffi::FfiGenericRow) {
+        for field in &row.fields {
+            if field.datum_type == DATUM_TYPE_STRING {
+                self.strings.push(field.string_val.to_string());
+            }
+        }
+    }
+
+    pub fn get_strings(&self) -> &[String] {
+        &self.strings
+    }
+}
+
+pub fn ffi_row_to_core<'a>(
+    row: &ffi::FfiGenericRow,
+    owner: &'a OwnedRowData,
+) -> fcore::row::GenericRow<'a> {
     use fcore::row::{Blob, Datum, F32, F64};
 
     let mut generic_row = fcore::row::GenericRow::new();
+    let mut string_idx = 0;
 
     for (idx, field) in row.fields.iter().enumerate() {
         let datum = match field.datum_type {
@@ -216,8 +242,9 @@ pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'stat
             DATUM_TYPE_FLOAT32 => Datum::Float32(F32::from(field.f32_val)),
             DATUM_TYPE_FLOAT64 => Datum::Float64(F64::from(field.f64_val)),
             DATUM_TYPE_STRING => {
-                let leaked: &'static str = Box::leak(field.string_val.clone().into_boxed_str());
-                Datum::String(leaked)
+                let str_ref = owner.get_strings()[string_idx].as_str();
+                string_idx += 1;
+                Datum::String(str_ref)
             }
             DATUM_TYPE_BYTES => Datum::Blob(Blob::from(field.bytes_val.clone())),
             _ => Datum::Null,

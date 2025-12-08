@@ -24,15 +24,6 @@
 
 namespace fluss {
 
-static Result MakeResultFromFfi(const ffi::FfiResult& ffi_result) {
-    return Result{ffi_result.error_code, std::string(ffi_result.error_message)};
-}
-
-static Result MakeError(int32_t code, std::string msg) {
-    return Result{code, std::move(msg)};
-}
-
-// Admin implementation
 Admin::Admin() noexcept = default;
 
 Admin::Admin(ffi::Admin* admin) noexcept : admin_(admin) {}
@@ -65,25 +56,25 @@ Result Admin::CreateTable(const TablePath& table_path,
                           const TableDescriptor& descriptor,
                           bool ignore_if_exists) {
     if (!Available()) {
-        return MakeError(1, "Admin not available");
+        return utils::make_error(1, "Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
     auto ffi_desc = utils::to_ffi_table_descriptor(descriptor);
 
     auto ffi_result = admin_->create_table(ffi_path, ffi_desc, ignore_if_exists);
-    return MakeResultFromFfi(ffi_result);
+    return utils::from_ffi_result(ffi_result);
 }
 
 Result Admin::GetTable(const TablePath& table_path, TableInfo& out) {
     if (!Available()) {
-        return MakeError(1, "Admin not available");
+        return utils::make_error(1, "Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
     auto ffi_result = admin_->get_table_info(ffi_path);
 
-    auto result = MakeResultFromFfi(ffi_result.result);
+    auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = utils::from_ffi_table_info(ffi_result.table_info);
     }
@@ -93,13 +84,13 @@ Result Admin::GetTable(const TablePath& table_path, TableInfo& out) {
 
 Result Admin::GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out) {
     if (!Available()) {
-        return MakeError(1, "Admin not available");
+        return utils::make_error(1, "Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
     auto ffi_result = admin_->get_latest_lake_snapshot(ffi_path);
 
-    auto result = MakeResultFromFfi(ffi_result.result);
+    auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = utils::from_ffi_lake_snapshot(ffi_result.lake_snapshot);
     }

@@ -24,15 +24,6 @@
 
 namespace fluss {
 
-static Result MapFfiResult(const ffi::FfiResult& ffi_result) {
-    return Result{ffi_result.error_code, std::string(ffi_result.error_message)};
-}
-
-static Result MakeError(int32_t code, std::string msg) {
-    return Result{code, std::move(msg)};
-}
-
-// Table implementation
 Table::Table() noexcept = default;
 
 Table::Table(ffi::Table* table) noexcept : table_(table) {}
@@ -63,37 +54,37 @@ bool Table::Available() const { return table_ != nullptr; }
 
 Result Table::NewAppendWriter(AppendWriter& out) {
     if (!Available()) {
-        return MakeError(1, "Table not available");
+        return utils::make_error(1, "Table not available");
     }
 
     try {
         out.writer_ = table_->new_append_writer();
-        return Result{0, {}};
+        return utils::make_ok();
     } catch (const rust::Error& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     } catch (const std::exception& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     }
 }
 
 Result Table::NewLogScanner(LogScanner& out) {
     if (!Available()) {
-        return MakeError(1, "Table not available");
+        return utils::make_error(1, "Table not available");
     }
 
     try {
         out.scanner_ = table_->new_log_scanner();
-        return Result{0, {}};
+        return utils::make_ok();
     } catch (const rust::Error& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     } catch (const std::exception& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     }
 }
 
 Result Table::NewLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out) {
     if (!Available()) {
-        return MakeError(1, "Table not available");
+        return utils::make_error(1, "Table not available");
     }
 
     try {
@@ -102,11 +93,11 @@ Result Table::NewLogScannerWithProjection(const std::vector<size_t>& column_indi
             rust_indices.push_back(idx);
         }
         out.scanner_ = table_->new_log_scanner_with_projection(std::move(rust_indices));
-        return Result{0, {}};
+        return utils::make_ok();
     } catch (const rust::Error& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     } catch (const std::exception& e) {
-        return MakeError(1, e.what());
+        return utils::make_error(1, e.what());
     }
 }
 
@@ -164,21 +155,21 @@ bool AppendWriter::Available() const { return writer_ != nullptr; }
 
 Result AppendWriter::Append(const GenericRow& row) {
     if (!Available()) {
-        return MakeError(1, "AppendWriter not available");
+        return utils::make_error(1, "AppendWriter not available");
     }
 
     auto ffi_row = utils::to_ffi_generic_row(row);
     auto ffi_result = writer_->append(ffi_row);
-    return MapFfiResult(ffi_result);
+    return utils::from_ffi_result(ffi_result);
 }
 
 Result AppendWriter::Flush() {
     if (!Available()) {
-        return MakeError(1, "AppendWriter not available");
+        return utils::make_error(1, "AppendWriter not available");
     }
 
     auto ffi_result = writer_->flush();
-    return MapFfiResult(ffi_result);
+    return utils::from_ffi_result(ffi_result);
 }
 
 // LogScanner implementation
@@ -212,26 +203,26 @@ bool LogScanner::Available() const { return scanner_ != nullptr; }
 
 Result LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
     if (!Available()) {
-        return MakeError(1, "LogScanner not available");
+        return utils::make_error(1, "LogScanner not available");
     }
 
     auto ffi_result = scanner_->subscribe(bucket_id, start_offset);
-    return MapFfiResult(ffi_result);
+    return utils::from_ffi_result(ffi_result);
 }
 
 Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
-        return MakeError(1, "LogScanner not available");
+        return utils::make_error(1, "LogScanner not available");
     }
 
     auto ffi_result = scanner_->poll(timeout_ms);
-    auto result = MapFfiResult(ffi_result.result);
+    auto result = utils::from_ffi_result(ffi_result.result);
     if (!result.Ok()) {
         return result;
     }
 
     out = utils::from_ffi_scan_records(ffi_result.scan_records);
-    return Result{0, {}};
+    return utils::make_ok();
 }
 
 }  // namespace fluss
