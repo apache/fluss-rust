@@ -85,16 +85,16 @@ impl<'a> InternalRow for GenericRow<'a> {
         false
     }
 
-    fn get_boolean(&self, _pos: usize) -> bool {
-        todo!()
+    fn get_boolean(&self, pos: usize) -> bool {
+        self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_byte(&self, _pos: usize) -> i8 {
-        todo!()
+    fn get_byte(&self, pos: usize) -> i8 {
+        self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_short(&self, _pos: usize) -> i16 {
-        todo!()
+    fn get_short(&self, pos: usize) -> i16 {
+        self.values.get(pos).unwrap().try_into().unwrap()
     }
 
     fn get_int(&self, pos: usize) -> i32 {
@@ -105,28 +105,44 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.get(_pos).unwrap().try_into().unwrap()
     }
 
-    fn get_float(&self, _pos: usize) -> f32 {
-        todo!()
+    fn get_float(&self, pos: usize) -> f32 {
+        self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_double(&self, _pos: usize) -> f64 {
-        todo!()
+    fn get_double(&self, pos: usize) -> f64 {
+        self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_char(&self, _pos: usize, _length: usize) -> String {
-        todo!()
+    fn get_char(&self, pos: usize, length: usize) -> String {
+        let value = self.get_string(pos);
+        if value.len() != length {
+            panic!(
+                "Length mismatch for fixed-size char: expected {}, got {}",
+                length,
+                value.len()
+            );
+        }
+        value.to_string()
     }
 
     fn get_string(&self, pos: usize) -> &str {
         self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_binary(&self, _pos: usize, _length: usize) -> Vec<u8> {
-        todo!()
+    fn get_binary(&self, pos: usize, length: usize) -> Vec<u8> {
+        let bytes = self.values.get(pos).unwrap().as_blob();
+        if bytes.len() != length {
+            panic!(
+                "Length mismatch for fixed-size binary: expected {}, got {}",
+                length,
+                bytes.len()
+            );
+        }
+        bytes.to_vec()
     }
 
-    fn get_bytes(&self, _pos: usize) -> Vec<u8> {
-        todo!()
+    fn get_bytes(&self, pos: usize) -> Vec<u8> {
+        self.values.get(pos).unwrap().as_blob().to_vec()
     }
 }
 

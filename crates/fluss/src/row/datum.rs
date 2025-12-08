@@ -44,6 +44,8 @@ pub enum Datum<'a> {
     #[display("{0}")]
     Bool(bool),
     #[display("{0}")]
+    Int8(i8),
+    #[display("{0}")]
     Int16(i16),
     #[display("{0}")]
     Int32(i32),
@@ -78,6 +80,13 @@ impl Datum<'_> {
             _ => panic!("not a string: {self:?}"),
         }
     }
+
+    pub fn as_blob(&self) -> &[u8] {
+        match self {
+            Self::Blob(blob) => blob.as_ref(),
+            _ => panic!("not a blob: {self:?}"),
+        }
+    }
 }
 
 // ----------- implement from
@@ -92,6 +101,20 @@ impl<'a> From<i64> for Datum<'a> {
     #[inline]
     fn from(i: i64) -> Datum<'a> {
         Datum::Int64(i)
+    }
+}
+
+impl<'a> From<i8> for Datum<'a> {
+    #[inline]
+    fn from(i: i8) -> Datum<'a> {
+        Datum::Int8(i)
+    }
+}
+
+impl<'a> From<i16> for Datum<'a> {
+    #[inline]
+    fn from(i: i16) -> Datum<'a> {
+        Datum::Int16(i)
     }
 }
 
@@ -134,6 +157,18 @@ impl TryFrom<&Datum<'_>> for i32 {
     }
 }
 
+impl TryFrom<&Datum<'_>> for i16 {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Int16(i) => Ok(*i),
+            _ => Err(()),
+        }
+    }
+}
+
 impl TryFrom<&Datum<'_>> for i64 {
     type Error = ();
 
@@ -141,6 +176,42 @@ impl TryFrom<&Datum<'_>> for i64 {
     fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
         match from {
             Datum::Int64(i) => Ok(*i),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for f32 {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Float32(f) => Ok(f.into_inner()),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for f64 {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Float64(f) => Ok(f.into_inner()),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for bool {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Bool(b) => Ok(*b),
             _ => Err(()),
         }
     }
@@ -155,6 +226,25 @@ impl<'a> TryFrom<&Datum<'a>> for &'a str {
             Datum::String(i) => Ok(*i),
             _ => Err(()),
         }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for i8 {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Int8(i) => Ok(*i),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> From<bool> for Datum<'a> {
+    #[inline]
+    fn from(b: bool) -> Datum<'a> {
+        Datum::Bool(b)
     }
 }
 
@@ -184,6 +274,7 @@ impl Datum<'_> {
 
         match self {
             Datum::Null => {
+                append_null_to_arrow!(Int8Builder);
                 append_null_to_arrow!(BooleanBuilder);
                 append_null_to_arrow!(Int16Builder);
                 append_null_to_arrow!(Int32Builder);
@@ -194,6 +285,7 @@ impl Datum<'_> {
                 append_null_to_arrow!(BinaryBuilder);
             }
             Datum::Bool(v) => append_value_to_arrow!(BooleanBuilder, *v),
+            Datum::Int8(v) => append_value_to_arrow!(Int8Builder, *v),
             Datum::Int16(v) => append_value_to_arrow!(Int16Builder, *v),
             Datum::Int32(v) => append_value_to_arrow!(Int32Builder, *v),
             Datum::Int64(v) => append_value_to_arrow!(Int64Builder, *v),
