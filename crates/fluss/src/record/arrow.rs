@@ -589,13 +589,30 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
         DataType::Double(_) => ArrowDataType::Float64,
         DataType::Char(_) => ArrowDataType::Utf8,
         DataType::String(_) => ArrowDataType::Utf8,
-        DataType::Decimal(_) => todo!(),
+        DataType::Decimal(_data_type) => {
+            ArrowDataType::Decimal128(_data_type.precision() as u8, _data_type.scale() as i8)
+        }
         DataType::Date(_) => ArrowDataType::Date32,
-        DataType::Time(_) => todo!(),
-        DataType::Timestamp(_) => todo!(),
-        DataType::TimestampLTz(_) => todo!(),
-        DataType::Bytes(_) => todo!(),
-        DataType::Binary(_) => todo!(),
+        DataType::Time(_data_type) => match _data_type.precision() {
+            0 => ArrowDataType::Time32(arrow_schema::TimeUnit::Second),
+            1 | 2 | 3 => ArrowDataType::Time32(arrow_schema::TimeUnit::Millisecond),
+            4 | 5 | 6 => ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond),
+            _ => ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond),
+        },
+        DataType::Timestamp(_data_type) => match _data_type.precision() {
+            0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
+            1 | 2 | 3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+            4 | 5 | 6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            _ => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+        },
+        DataType::TimestampLTz(_data_type) => match _data_type.precision() {
+            0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
+            1 | 2 | 3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+            4 | 5 | 6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            _ => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+        },
+        DataType::Bytes(_) => ArrowDataType::Binary,
+        DataType::Binary(_data_type) => ArrowDataType::FixedSizeBinary(_data_type.length() as i32),
         DataType::Array(_data_type) => todo!(),
         DataType::Map(_data_type) => todo!(),
         DataType::Row(_data_fields) => todo!(),
