@@ -129,16 +129,8 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_binary(&self, pos: usize, length: usize) -> Vec<u8> {
-        let bytes = self.values.get(pos).unwrap().as_blob();
-        if bytes.len() != length {
-            panic!(
-                "Length mismatch for fixed-size binary: expected {}, got {}",
-                length,
-                bytes.len()
-            );
-        }
-        bytes.to_vec()
+    fn get_binary(&self, pos: usize, _length: usize) -> Vec<u8> {
+        self.values.get(pos).unwrap().as_blob().to_vec()
     }
 
     fn get_bytes(&self, pos: usize) -> Vec<u8> {
