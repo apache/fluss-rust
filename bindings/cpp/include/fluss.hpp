@@ -195,17 +195,22 @@ struct TableInfo {
 };
 
 struct Datum {
-    DatumType type;
-    bool bool_val;
-    int32_t i32_val;
-    int64_t i64_val;
-    float f32_val;
-    double f64_val;
+    DatumType type{DatumType::Null};
+    bool bool_val{false};
+    int32_t i32_val{0};
+    int64_t i64_val{0};
+    float f32_val{0.0F};
+    double f64_val{0.0};
     std::string string_val;
     std::vector<uint8_t> bytes_val;
 
-    static Datum Null() { return Datum{DatumType::Null}; }
-    static Datum Bool(bool v) { return Datum{DatumType::Bool, v}; }
+    static Datum Null() { return Datum(); }
+    static Datum Bool(bool v) {
+        Datum d;
+        d.type = DatumType::Bool;
+        d.bool_val = v;
+        return d;
+    }
     static Datum Int32(int32_t v) {
         Datum d;
         d.type = DatumType::Int32;
