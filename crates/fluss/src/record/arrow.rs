@@ -593,34 +593,34 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
             decimal_type
                 .precision()
                 .try_into()
-                .expect("length exceeds u8::MAX"),
+                .expect("precision exceeds u8::MAX"),
             decimal_type
                 .scale()
                 .try_into()
-                .expect("length exceeds i8::MAX"),
+                .expect("scale exceeds i8::MAX"),
         ),
         DataType::Date(_) => ArrowDataType::Date32,
         DataType::Time(time_type) => match time_type.precision() {
             0 => ArrowDataType::Time32(arrow_schema::TimeUnit::Second),
-            1 | 2 | 3 => ArrowDataType::Time32(arrow_schema::TimeUnit::Millisecond),
-            4 | 5 | 6 => ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond),
-            7 | 8 | 9 => ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond),
+            1..=3 => ArrowDataType::Time32(arrow_schema::TimeUnit::Millisecond),
+            4..=6 => ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond),
+            7..=9 => ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond),
             // This arm should never be reached due to validation in TimeType.
             invalid => panic!("Invalid precision value for TimeType: {}", invalid),
         },
         DataType::Timestamp(timestamp_type) => match timestamp_type.precision() {
             0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
-            1 | 2 | 3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
-            4 | 5 | 6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
-            7 | 8 | 9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+            1..=3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+            4..=6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
             // This arm should never be reached due to validation in Timestamp.
             invalid => panic!("Invalid precision value for TimestampType: {}", invalid),
         },
         DataType::TimestampLTz(timestamp_ltz_type) => match timestamp_ltz_type.precision() {
             0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
-            1 | 2 | 3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
-            4 | 5 | 6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
-            7 | 8 | 9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+            1..=3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+            4..=6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+            7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
             // This arm should never be reached due to validation in TimestampLTz.
             invalid => panic!("Invalid precision value for TimestampLTzType: {}", invalid),
         },
@@ -644,7 +644,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
             ];
             ArrowDataType::Map(
                 Arc::new(arrow_schema::Field::new(
-                    "my_entries",
+                    "entries",
                     ArrowDataType::Struct(arrow_schema::Fields::from(entry_fields)),
                     true,
                 )),
@@ -970,7 +970,7 @@ mod tests {
             to_arrow_type(&DataTypes::map(DataTypes::string(), DataTypes::int())),
             ArrowDataType::Map(
                 Arc::new(Field::new(
-                    "my_entries",
+                    "entries",
                     ArrowDataType::Struct(arrow_schema::Fields::from(vec![
                         Field::new("key", ArrowDataType::Utf8, false),
                         Field::new("value", ArrowDataType::Int32, true),
@@ -979,6 +979,17 @@ mod tests {
                 )),
                 false,
             )
+        );
+
+        assert_eq!(
+            to_arrow_type(&DataTypes::row(vec![
+                DataTypes::field("f1".to_string(), DataTypes::int()),
+                DataTypes::field("f2".to_string(), DataTypes::string()),
+            ])),
+            ArrowDataType::Struct(arrow_schema::Fields::from(vec![
+                Field::new("f1", ArrowDataType::Int32, true),
+                Field::new("f2", ArrowDataType::Utf8, true),
+            ]))
         );
     }
 
@@ -991,12 +1002,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "Invalid precision value for TimestampType: 10")]
     fn test_timestamp_invalid_precision() {
-        to_arrow_type(&&DataTypes::timestamp_with_precision(10));
+        to_arrow_type(&DataTypes::timestamp_with_precision(10));
     }
 
     #[test]
     #[should_panic(expected = "Invalid precision value for TimestampLTzType: 10")]
     fn test_timestamp_ltz_invalid_precision() {
-        to_arrow_type(&&&DataTypes::timestamp_ltz_with_precision(10));
+        to_arrow_type(&DataTypes::timestamp_ltz_with_precision(10));
     }
 }
