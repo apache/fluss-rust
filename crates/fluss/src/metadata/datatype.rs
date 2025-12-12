@@ -96,25 +96,25 @@ impl DataType {
 impl Display for DataType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            DataType::Boolean(v) => write!(f, "{}", v),
-            DataType::TinyInt(v) => write!(f, "{}", v),
-            DataType::SmallInt(v) => write!(f, "{}", v),
-            DataType::Int(v) => write!(f, "{}", v),
-            DataType::BigInt(v) => write!(f, "{}", v),
-            DataType::Float(v) => write!(f, "{}", v),
-            DataType::Double(v) => write!(f, "{}", v),
-            DataType::Char(v) => write!(f, "{}", v),
-            DataType::String(v) => write!(f, "{}", v),
-            DataType::Decimal(v) => write!(f, "{}", v),
-            DataType::Date(v) => write!(f, "{}", v),
-            DataType::Time(v) => write!(f, "{}", v),
-            DataType::Timestamp(v) => write!(f, "{}", v),
-            DataType::TimestampLTz(v) => write!(f, "{}", v),
-            DataType::Bytes(v) => write!(f, "{}", v),
-            DataType::Binary(v) => write!(f, "{}", v),
-            DataType::Array(v) => write!(f, "{}", v),
-            DataType::Map(v) => write!(f, "{}", v),
-            DataType::Row(v) => write!(f, "{}", v),
+            DataType::Boolean(v) => write!(f, "{v}"),
+            DataType::TinyInt(v) => write!(f, "{v}"),
+            DataType::SmallInt(v) => write!(f, "{v}"),
+            DataType::Int(v) => write!(f, "{v}"),
+            DataType::BigInt(v) => write!(f, "{v}"),
+            DataType::Float(v) => write!(f, "{v}"),
+            DataType::Double(v) => write!(f, "{v}"),
+            DataType::Char(v) => write!(f, "{v}"),
+            DataType::String(v) => write!(f, "{v}"),
+            DataType::Decimal(v) => write!(f, "{v}"),
+            DataType::Date(v) => write!(f, "{v}"),
+            DataType::Time(v) => write!(f, "{v}"),
+            DataType::Timestamp(v) => write!(f, "{v}"),
+            DataType::TimestampLTz(v) => write!(f, "{v}"),
+            DataType::Bytes(v) => write!(f, "{v}"),
+            DataType::Binary(v) => write!(f, "{v}"),
+            DataType::Array(v) => write!(f, "{v}"),
+            DataType::Map(v) => write!(f, "{v}"),
+            DataType::Row(v) => write!(f, "{v}"),
         }
     }
 }
@@ -861,7 +861,7 @@ impl Display for RowType {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{}", field)?;
+            write!(f, "{field}")?;
         }
         write!(f, ">")?;
         if !self.nullable {
