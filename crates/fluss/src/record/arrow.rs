@@ -606,7 +606,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
             4..=6 => ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond),
             7..=9 => ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond),
             // This arm should never be reached due to validation in TimeType.
-            invalid => panic!("Invalid precision value for TimeType: {}", invalid),
+            invalid => panic!("Invalid precision value for TimeType: {invalid}"),
         },
         DataType::Timestamp(timestamp_type) => match timestamp_type.precision() {
             0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
@@ -614,7 +614,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
             4..=6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
             7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
             // This arm should never be reached due to validation in Timestamp.
-            invalid => panic!("Invalid precision value for TimestampType: {}", invalid),
+            invalid => panic!("Invalid precision value for TimestampType: {invalid}"),
         },
         DataType::TimestampLTz(timestamp_ltz_type) => match timestamp_ltz_type.precision() {
             0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
@@ -622,7 +622,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
             4..=6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
             7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
             // This arm should never be reached due to validation in TimestampLTz.
-            invalid => panic!("Invalid precision value for TimestampLTzType: {}", invalid),
+            invalid => panic!("Invalid precision value for TimestampLTzType: {invalid}"),
         },
         DataType::Bytes(_) => ArrowDataType::Binary,
         DataType::Binary(binary_type) => ArrowDataType::FixedSizeBinary(
@@ -632,9 +632,9 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
                 .expect("length exceeds i32::MAX"),
         ),
         DataType::Array(array_type) => ArrowDataType::List(
-            arrow_schema::Field::new_list_field(
+            Field::new_list_field(
                 to_arrow_type(array_type.get_element_type()),
-                array_type.is_nullable(),
+                fluss_type.is_nullable(),
             )
             .into(),
         ),
@@ -642,16 +642,16 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
             let key_type = to_arrow_type(map_type.key_type());
             let value_type = to_arrow_type(map_type.value_type());
             let entry_fields = vec![
-                arrow_schema::Field::new("key", key_type, map_type.key_type().is_nullable()),
-                arrow_schema::Field::new("value", value_type, map_type.value_type().is_nullable()),
+                Field::new("key", key_type, map_type.key_type().is_nullable()),
+                Field::new("value", value_type, map_type.value_type().is_nullable()),
             ];
             ArrowDataType::Map(
-                Arc::new(arrow_schema::Field::new(
+                Arc::new(Field::new(
                     "entries",
                     ArrowDataType::Struct(arrow_schema::Fields::from(entry_fields)),
-                    map_type.is_nullable(),
+                    fluss_type.is_nullable(),
                 )),
-                map_type.is_nullable(),
+                false,
             )
         }
         DataType::Row(row_type) => ArrowDataType::Struct(arrow_schema::Fields::from(
@@ -659,13 +659,13 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
                 .fields()
                 .iter()
                 .map(|f| {
-                    arrow_schema::Field::new(
+                    Field::new(
                         f.name(),
                         to_arrow_type(f.data_type()),
                         f.data_type().is_nullable(),
                     )
                 })
-                .collect::<Vec<arrow_schema::Field>>(),
+                .collect::<Vec<Field>>(),
         )),
     }
 }
