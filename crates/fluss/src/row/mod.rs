@@ -81,8 +81,11 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.len()
     }
 
-    fn is_null_at(&self, _pos: usize) -> bool {
-        false
+    fn is_null_at(&self, pos: usize) -> bool {
+        self.values
+            .get(pos)
+            .expect("position out of bounds")
+            .is_null()
     }
 
     fn get_boolean(&self, pos: usize) -> bool {
@@ -151,5 +154,20 @@ impl<'a> GenericRow<'a> {
 
     pub fn set_field(&mut self, pos: usize, value: impl Into<Datum<'a>>) {
         self.values.insert(pos, value.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_null_at_checks_datum_nullity() {
+        let mut row = GenericRow::new();
+        row.set_field(0, Datum::Null);
+        row.set_field(1, 42_i32);
+
+        assert!(row.is_null_at(0));
+        assert!(!row.is_null_at(1));
     }
 }
