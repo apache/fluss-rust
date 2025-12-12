@@ -750,6 +750,9 @@ pub struct ArrayType {
 }
 
 impl ArrayType {
+    pub fn is_nullable(&self) -> bool {
+        self.nullable
+    }
     pub fn new(element_type: DataType) -> Self {
         Self::with_nullable(true, element_type)
     }
@@ -791,6 +794,10 @@ pub struct MapType {
 }
 
 impl MapType {
+    pub fn is_nullable(&self) -> bool {
+        self.nullable
+    }
+
     pub fn new(key_type: DataType, value_type: DataType) -> Self {
         Self::with_nullable(true, key_type, value_type)
     }

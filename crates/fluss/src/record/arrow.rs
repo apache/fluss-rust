@@ -631,24 +631,27 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
                 .try_into()
                 .expect("length exceeds i32::MAX"),
         ),
-        DataType::Array(arrow_type) => ArrowDataType::List(
-            arrow_schema::Field::new_list_field(to_arrow_type(arrow_type.get_element_type()), true)
-                .into(),
+        DataType::Array(array_type) => ArrowDataType::List(
+            arrow_schema::Field::new_list_field(
+                to_arrow_type(array_type.get_element_type()),
+                array_type.is_nullable(),
+            )
+            .into(),
         ),
         DataType::Map(map_type) => {
             let key_type = to_arrow_type(map_type.key_type());
             let value_type = to_arrow_type(map_type.value_type());
             let entry_fields = vec![
-                arrow_schema::Field::new("key", key_type, false),
-                arrow_schema::Field::new("value", value_type, true),
+                arrow_schema::Field::new("key", key_type, map_type.key_type().is_nullable()),
+                arrow_schema::Field::new("value", value_type, map_type.value_type().is_nullable()),
             ];
             ArrowDataType::Map(
                 Arc::new(arrow_schema::Field::new(
                     "entries",
                     ArrowDataType::Struct(arrow_schema::Fields::from(entry_fields)),
-                    true,
+                    map_type.is_nullable(),
                 )),
-                false,
+                map_type.is_nullable(),
             )
         }
         DataType::Row(row_type) => ArrowDataType::Struct(arrow_schema::Fields::from(
@@ -972,12 +975,12 @@ mod tests {
                 Arc::new(Field::new(
                     "entries",
                     ArrowDataType::Struct(arrow_schema::Fields::from(vec![
-                        Field::new("key", ArrowDataType::Utf8, false),
+                        Field::new("key", ArrowDataType::Utf8, true),
                         Field::new("value", ArrowDataType::Int32, true),
                     ])),
                     true,
                 )),
-                false,
+                true,
             )
         );
 
