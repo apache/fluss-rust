@@ -16,15 +16,15 @@
 // under the License.
 
 use crate::ffi;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use arrow::array::{
     Date32Array, LargeBinaryArray, LargeStringArray, Time32MillisecondArray, Time32SecondArray,
     Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
-use fluss as fcore;
 use fcore::row::InternalRow;
+use fluss as fcore;
 
 pub const DATA_TYPE_BOOLEAN: i32 = 1;
 pub const DATA_TYPE_TINYINT: i32 = 2;
@@ -111,7 +111,10 @@ pub fn ffi_descriptor_to_core(
         .partitioned_by(descriptor.partition_keys.clone());
 
     if descriptor.bucket_count > 0 {
-        builder = builder.distributed_by(Some(descriptor.bucket_count), descriptor.bucket_keys.clone());
+        builder = builder.distributed_by(
+            Some(descriptor.bucket_count),
+            descriptor.bucket_keys.clone(),
+        );
     } else {
         builder = builder.distributed_by(None, descriptor.bucket_keys.clone());
     }
@@ -202,9 +205,7 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
     }
 }
 
-pub fn ffi_row_to_core(
-    row: &ffi::FfiGenericRow
-) -> fcore::row::GenericRow<'_> {
+pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'_> {
     use fcore::row::Datum;
 
     let mut generic_row = fcore::row::GenericRow::new();
@@ -230,7 +231,7 @@ pub fn ffi_row_to_core(
 
 pub fn core_scan_records_to_ffi(records: &fcore::record::ScanRecords) -> ffi::FfiScanRecords {
     let mut ffi_records = Vec::new();
-    
+
     // Iterate over all buckets and their records
     for bucket_records in records.records_by_buckets().values() {
         for record in bucket_records {
@@ -245,7 +246,9 @@ pub fn core_scan_records_to_ffi(records: &fcore::record::ScanRecords) -> ffi::Ff
         }
     }
 
-    ffi::FfiScanRecords { records: ffi_records }
+    ffi::FfiScanRecords {
+        records: ffi_records,
+    }
 }
 
 fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
@@ -420,7 +423,10 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                     datum.i32_val = array.value(row_id);
                     datum
                 }
-                _ => panic!("Will never come here. Unsupported Time32 unit for column {}", i),
+                _ => panic!(
+                    "Will never come here. Unsupported Time32 unit for column {}",
+                    i
+                ),
             },
             ArrowDataType::Time64(unit) => match unit {
                 TimeUnit::Microsecond => {
@@ -443,9 +449,15 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                     datum.i64_val = array.value(row_id);
                     datum
                 }
-                _ => panic!("Will never come here. Unsupported Time64 unit for column {}", i),
+                _ => panic!(
+                    "Will never come here. Unsupported Time64 unit for column {}",
+                    i
+                ),
             },
-            other => panic!("Will never come here. Unsupported Arrow data type for column {}: {:?}", i, other),
+            other => panic!(
+                "Will never come here. Unsupported Arrow data type for column {}: {:?}",
+                i, other
+            ),
         };
 
         fields.push(datum);
