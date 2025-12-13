@@ -228,8 +228,10 @@ fn err_result(code: i32, msg: String) -> ffi::FfiResult {
 
 // Connection implementation
 fn new_connection(bootstrap_server: &str) -> Result<*mut Connection, String> {
-    let mut config = fcore::config::Config::default();
-    config.bootstrap_server = Some(bootstrap_server.to_string());
+    let config = fluss::config::Config {
+        bootstrap_server: Some(bootstrap_server.to_string()),
+        ..Default::default()
+    };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config).await });
 
