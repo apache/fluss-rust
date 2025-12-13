@@ -28,7 +28,7 @@ Rust implementation of [Apache Fluss™](https://fluss.apache.org/).
 It bridges the gap between streaming data and the data Lakehouse by enabling low-latency, high-throughput data ingestion and processing while seamlessly integrating with popular compute engines.
 
 ## Why Fluss Rust Client
-It's an unofficial experimental Rust client for interacting with Fluss. This client provides foundational capabilities for table management and log streaming operations, enabling developers to explore Fluss within Rust ecosystems.
+It's an official Rust client for interacting with Fluss. This client provides foundational capabilities for table management and log streaming operations, enabling developers to explore Fluss within Rust ecosystems.
 
 ## Quick-Start
 
