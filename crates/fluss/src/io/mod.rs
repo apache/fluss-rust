@@ -27,8 +27,13 @@ pub use storage::*;
 mod storage_fs;
 #[cfg(feature = "storage-fs")]
 use storage_fs::*;
-#[cfg(feature = "storage-memory")]
-mod storage_memory;
 
 #[cfg(feature = "storage-memory")]
+mod storage_memory;
+#[cfg(feature = "storage-memory")]
 use storage_memory::*;
+
+#[cfg(feature = "storage-s3")]
+mod storage_s3;
+#[cfg(feature = "storage-s3")]
+use storage_s3::*;

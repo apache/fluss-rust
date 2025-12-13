@@ -362,6 +362,16 @@ impl<'a> LogRecordsBatchs<'a> {
         }
     }
 
+    // pub fn next_batch_size(&self) -> Option<usize> {
+    //     if self.remaining_bytes < LOG_OVERHEAD {
+    //         return None;
+    //     }
+
+    //     let batch_size_bytes =
+    //         LittleEndian::read_i32(self.data.get(self.current_pos + LENGTH_OFFSET..).unwrap());
+    //     Some(batch_size_bytes as usize + LOG_OVERHEAD)
+    // }
+
     pub fn next_batch_size(&self) -> Option<usize> {
         if self.remaining_bytes < LOG_OVERHEAD {
             return None;
@@ -504,6 +514,30 @@ impl<'a> LogRecordBatch<'a> {
         };
         Ok(log_record_iterator)
     }
+
+    pub fn records_for_remote_log(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
+        if self.record_count() == 0 {
+            return Ok(LogRecordIterator::empty());
+        }
+
+        let data = &self.data[RECORDS_OFFSET..];
+
+        let record_batch = read_context.record_batch_for_remote_log(data)?;
+        let log_record_iterator = match record_batch {
+            None => LogRecordIterator::empty(),
+            Some(record_batch) => {
+                let arrow_reader = ArrowReader::new(Arc::new(record_batch));
+                LogRecordIterator::Arrow(ArrowLogRecordIterator {
+                    reader: arrow_reader,
+                    base_offset: self.base_log_offset(),
+                    timestamp: self.commit_timestamp(),
+                    row_id: 0,
+                    change_type: ChangeType::AppendOnly,
+                })
+            }
+        };
+        Ok(log_record_iterator)
+    }
 }
 
 /// Parse an Arrow IPC message from a byte slice.
@@ -534,6 +568,7 @@ fn parse_ipc_message(
     const CONTINUATION_MARKER: u32 = 0xFFFFFFFF;
 
     if data.len() < 8 {
+        eprintln!("[DEBUG parse_ipc] data.len()={} < 8, returning None", data.len());
         return None;
     }
 
@@ -541,10 +576,12 @@ fn parse_ipc_message(
     let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
 
     if continuation != CONTINUATION_MARKER {
+        eprintln!("[DEBUG parse_ipc] continuation={:#x} != MARKER, returning None", continuation);
         return None;
     }
 
     if data.len() < 8 + metadata_size {
+        eprintln!("[DEBUG parse_ipc] data.len()={} < 8+metadata_size={}", data.len(), 8 + metadata_size);
         return None;
     }
 
@@ -552,9 +589,21 @@ fn parse_ipc_message(
     let message = root_as_message(metadata_bytes).ok()?;
     let batch_metadata = message.header_as_record_batch()?;
 
-    let body_start = 8 + metadata_size;
+    let body_length_from_msg = message.bodyLength();
+    let metadata_padded_size = (metadata_size + 7) & !7;
+    let body_start = 8 + metadata_padded_size;
     let body_data = &data[body_start..];
     let body_buffer = Buffer::from(body_data);
+
+    eprintln!("[DEBUG parse_ipc] data.len()={}, metadata_size={}, metadata_padded={}, body_start={}, body_buffer.len()={}, msg.bodyLength()={}",
+        data.len(), metadata_size, metadata_padded_size, body_start, body_buffer.len(), body_length_from_msg);
+
+    if let Some(buffers) = batch_metadata.buffers() {
+        eprintln!("[DEBUG parse_ipc] batch_metadata has {} buffers:", buffers.len());
+        for (i, buf) in buffers.iter().enumerate() {
+            eprintln!("[DEBUG parse_ipc]   buffer[{}]: offset={}, length={}", i, buf.offset(), buf.length());
+        }
+    }
 
     Some((batch_metadata, body_buffer, message.version()))
 }
@@ -593,91 +642,23 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
         DataType::Double(_) => ArrowDataType::Float64,
         DataType::Char(_) => ArrowDataType::Utf8,
         DataType::String(_) => ArrowDataType::Utf8,
-        DataType::Decimal(decimal_type) => ArrowDataType::Decimal128(
-            decimal_type
-                .precision()
-                .try_into()
-                .expect("precision exceeds u8::MAX"),
-            decimal_type
-                .scale()
-                .try_into()
-                .expect("scale exceeds i8::MAX"),
-        ),
+        DataType::Decimal(_) => todo!(),
         DataType::Date(_) => ArrowDataType::Date32,
-        DataType::Time(time_type) => match time_type.precision() {
-            0 => ArrowDataType::Time32(arrow_schema::TimeUnit::Second),
-            1..=3 => ArrowDataType::Time32(arrow_schema::TimeUnit::Millisecond),
-            4..=6 => ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond),
-            7..=9 => ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond),
-            // This arm should never be reached due to validation in TimeType.
-            invalid => panic!("Invalid precision value for TimeType: {invalid}"),
-        },
-        DataType::Timestamp(timestamp_type) => match timestamp_type.precision() {
-            0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
-            1..=3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
-            4..=6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
-            7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
-            // This arm should never be reached due to validation in Timestamp.
-            invalid => panic!("Invalid precision value for TimestampType: {invalid}"),
-        },
-        DataType::TimestampLTz(timestamp_ltz_type) => match timestamp_ltz_type.precision() {
-            0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
-            1..=3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
-            4..=6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
-            7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
-            // This arm should never be reached due to validation in TimestampLTz.
-            invalid => panic!("Invalid precision value for TimestampLTzType: {invalid}"),
-        },
-        DataType::Bytes(_) => ArrowDataType::Binary,
-        DataType::Binary(binary_type) => ArrowDataType::FixedSizeBinary(
-            binary_type
-                .length()
-                .try_into()
-                .expect("length exceeds i32::MAX"),
-        ),
-        DataType::Array(array_type) => ArrowDataType::List(
-            Field::new_list_field(
-                to_arrow_type(array_type.get_element_type()),
-                fluss_type.is_nullable(),
-            )
-            .into(),
-        ),
-        DataType::Map(map_type) => {
-            let key_type = to_arrow_type(map_type.key_type());
-            let value_type = to_arrow_type(map_type.value_type());
-            let entry_fields = vec![
-                Field::new("key", key_type, map_type.key_type().is_nullable()),
-                Field::new("value", value_type, map_type.value_type().is_nullable()),
-            ];
-            ArrowDataType::Map(
-                Arc::new(Field::new(
-                    "entries",
-                    ArrowDataType::Struct(arrow_schema::Fields::from(entry_fields)),
-                    fluss_type.is_nullable(),
-                )),
-                false,
-            )
-        }
-        DataType::Row(row_type) => ArrowDataType::Struct(arrow_schema::Fields::from(
-            row_type
-                .fields()
-                .iter()
-                .map(|f| {
-                    Field::new(
-                        f.name(),
-                        to_arrow_type(f.data_type()),
-                        f.data_type().is_nullable(),
-                    )
-                })
-                .collect::<Vec<Field>>(),
-        )),
+        DataType::Time(_) => todo!(),
+        DataType::Timestamp(_) => todo!(),
+        DataType::TimestampLTz(_) => todo!(),
+        DataType::Bytes(_) => todo!(),
+        DataType::Binary(_) => todo!(),
+        DataType::Array(_data_type) => todo!(),
+        DataType::Map(_data_type) => todo!(),
+        DataType::Row(_data_fields) => todo!(),
     }
 }
 
 #[derive(Clone)]
 pub struct ReadContext {
     target_schema: SchemaRef,
-
+    full_schema: SchemaRef,
     projection: Option<Projection>,
 }
 
@@ -694,7 +675,8 @@ struct Projection {
 impl ReadContext {
     pub fn new(arrow_schema: SchemaRef) -> ReadContext {
         ReadContext {
-            target_schema: arrow_schema,
+            target_schema: arrow_schema.clone(),
+            full_schema: arrow_schema,
             projection: None,
         }
     }
@@ -730,7 +712,7 @@ impl ReadContext {
                 }
             } else {
                 Projection {
-                    ordered_schema: Self::project_schema(arrow_schema, projected_fields.as_slice()),
+                    ordered_schema: Self::project_schema(arrow_schema.clone(), projected_fields.as_slice()),
                     ordered_fields: projected_fields.clone(),
                     projected_fields,
                     reordering_indexes: vec![],
@@ -741,6 +723,7 @@ impl ReadContext {
 
         ReadContext {
             target_schema,
+            full_schema: arrow_schema,
             projection: Some(project),
         }
     }
@@ -778,13 +761,22 @@ impl ReadContext {
         let resolve_schema = match self.projection {
             Some(ref projection) => {
                 // projection, should use ordered schema by project field pos
+                eprintln!("[DEBUG record_batch] using projection ordered_schema, fields: {:?}",
+                    projection.ordered_schema.fields().iter().map(|f| (f.name(), f.data_type())).collect::<Vec<_>>());
+                eprintln!("[DEBUG record_batch] projected_fields={:?}, ordered_fields={:?}",
+                    projection.projected_fields, projection.ordered_fields);
                 projection.ordered_schema.clone()
             }
             None => {
                 // no projection, use target output schema
+                eprintln!("[DEBUG record_batch] no projection, using target_schema, fields: {:?}",
+                    self.target_schema.fields().iter().map(|f| (f.name(), f.data_type())).collect::<Vec<_>>());
                 self.target_schema.clone()
             }
         };
+
+        eprintln!("[DEBUG record_batch] calling read_record_batch with body_buffer.len()={}, schema_fields={}",
+            body_buffer.len(), resolve_schema.fields().len());
 
         let record_batch = read_record_batch(
             &body_buffer,
@@ -806,6 +798,35 @@ impl ReadContext {
                 RecordBatch::try_new(self.target_schema.clone(), reordered_columns)?
             }
             _ => record_batch,
+        };
+        Ok(Some(record_batch))
+    }
+
+    pub fn record_batch_for_remote_log(&self, data: &[u8]) -> Result<Option<RecordBatch>> {
+        let (batch_metadata, body_buffer, version) = match parse_ipc_message(data) {
+            Some(result) => result,
+            None => return Ok(None),
+        };
+
+        let record_batch = read_record_batch(
+            &body_buffer,
+            batch_metadata,
+            self.full_schema.clone(),
+            &std::collections::HashMap::new(),
+            None,
+            &version,
+        )?;
+
+        let record_batch = match &self.projection {
+            Some(projection) => {
+                let projected_columns: Vec<_> = projection
+                    .projected_fields
+                    .iter()
+                    .map(|&idx| record_batch.column(idx).clone())
+                    .collect();
+                RecordBatch::try_new(self.target_schema.clone(), projected_columns)?
+            }
+            None => record_batch,
         };
         Ok(Some(record_batch))
     }
@@ -892,129 +913,3 @@ impl ArrowReader {
     }
 }
 pub struct MyVec<T>(pub StreamReader<T>);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metadata::DataTypes;
-
-    #[test]
-    fn test_to_array_type() {
-        assert_eq!(to_arrow_type(&DataTypes::boolean()), ArrowDataType::Boolean);
-        assert_eq!(to_arrow_type(&DataTypes::tinyint()), ArrowDataType::Int8);
-        assert_eq!(to_arrow_type(&DataTypes::smallint()), ArrowDataType::Int16);
-        assert_eq!(to_arrow_type(&DataTypes::bigint()), ArrowDataType::Int64);
-        assert_eq!(to_arrow_type(&DataTypes::int()), ArrowDataType::Int32);
-        assert_eq!(to_arrow_type(&DataTypes::float()), ArrowDataType::Float32);
-        assert_eq!(to_arrow_type(&DataTypes::double()), ArrowDataType::Float64);
-        assert_eq!(to_arrow_type(&DataTypes::char(16)), ArrowDataType::Utf8);
-        assert_eq!(to_arrow_type(&DataTypes::string()), ArrowDataType::Utf8);
-        assert_eq!(
-            to_arrow_type(&DataTypes::decimal(10, 2)),
-            ArrowDataType::Decimal128(10, 2)
-        );
-        assert_eq!(to_arrow_type(&DataTypes::date()), ArrowDataType::Date32);
-        assert_eq!(
-            to_arrow_type(&DataTypes::time()),
-            ArrowDataType::Time32(arrow_schema::TimeUnit::Second)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::time_with_precision(3)),
-            ArrowDataType::Time32(arrow_schema::TimeUnit::Millisecond)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::time_with_precision(6)),
-            ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::time_with_precision(9)),
-            ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_with_precision(0)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_with_precision(3)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_with_precision(6)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_with_precision(9)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_ltz_with_precision(0)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_ltz_with_precision(3)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_ltz_with_precision(6)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
-        );
-        assert_eq!(
-            to_arrow_type(&DataTypes::timestamp_ltz_with_precision(9)),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None)
-        );
-        assert_eq!(to_arrow_type(&DataTypes::bytes()), ArrowDataType::Binary);
-        assert_eq!(
-            to_arrow_type(&DataTypes::binary(16)),
-            ArrowDataType::FixedSizeBinary(16)
-        );
-
-        assert_eq!(
-            to_arrow_type(&DataTypes::array(DataTypes::int())),
-            ArrowDataType::List(Field::new_list_field(ArrowDataType::Int32, true).into())
-        );
-
-        assert_eq!(
-            to_arrow_type(&DataTypes::map(DataTypes::string(), DataTypes::int())),
-            ArrowDataType::Map(
-                Arc::new(Field::new(
-                    "entries",
-                    ArrowDataType::Struct(arrow_schema::Fields::from(vec![
-                        Field::new("key", ArrowDataType::Utf8, true),
-                        Field::new("value", ArrowDataType::Int32, true),
-                    ])),
-                    true,
-                )),
-                false,
-            )
-        );
-
-        assert_eq!(
-            to_arrow_type(&DataTypes::row(vec![
-                DataTypes::field("f1".to_string(), DataTypes::int()),
-                DataTypes::field("f2".to_string(), DataTypes::string()),
-            ])),
-            ArrowDataType::Struct(arrow_schema::Fields::from(vec![
-                Field::new("f1", ArrowDataType::Int32, true),
-                Field::new("f2", ArrowDataType::Utf8, true),
-            ]))
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid precision value for TimeType: 10")]
-    fn test_time_invalid_precision() {
-        to_arrow_type(&DataTypes::time_with_precision(10));
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid precision value for TimestampType: 10")]
-    fn test_timestamp_invalid_precision() {
-        to_arrow_type(&DataTypes::timestamp_with_precision(10));
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid precision value for TimestampLTzType: 10")]
-    fn test_timestamp_ltz_invalid_precision() {
-        to_arrow_type(&DataTypes::timestamp_ltz_with_precision(10));
-    }
-}

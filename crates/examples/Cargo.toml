@@ -26,7 +26,34 @@ version = { workspace = true }
 [dependencies]
 fluss = { workspace = true }
 tokio = { workspace = true }
-clap = { workspace = true}
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+opendal = { workspace = true }
 [[example]]
 name = "example-table"
 path = "src/example_table.rs"
+
+[[example]]
+name = "scan-log-table"
+path = "src/scan_log_table.rs"
+
+[[example]]
+name = "scan-from-earliest"
+path = "src/scan_from_earliest.rs"
+
+[[example]]
+name = "scan-from-ts"
+path = "src/scan_from_ts.rs"
+
+[[example]]
+name = "scan-local-only"
+path = "src/scan_local_only.rs"
+
+[[example]]
+name = "debug-credentials"
+path = "src/debug_credentials.rs"
+
+[[example]]
+name = "debug-s3-download"
+path = "src/debug_s3_download.rs"
