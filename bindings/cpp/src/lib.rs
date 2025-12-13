@@ -243,7 +243,7 @@ fn new_connection(bootstrap_server: &str) -> Result<*mut Connection, String> {
             }));
             Ok(conn)
         }
-        Err(e) => Err(format!("Failed to connect: {}", e)),
+        Err(e) => Err(format!("Failed to connect: {e}")),
     }
 }
 
@@ -264,7 +264,7 @@ impl Connection {
                 let admin = Box::into_raw(Box::new(Admin { inner: admin }));
                 Ok(admin)
             }
-            Err(e) => Err(format!("Failed to get admin: {}", e)),
+            Err(e) => Err(format!("Failed to get admin: {e}")),
         }
     }
 
@@ -287,7 +287,7 @@ impl Connection {
                 }));
                 Ok(table)
             }
-            Err(e) => Err(format!("Failed to get table: {}", e)),
+            Err(e) => Err(format!("Failed to get table: {e}")),
         }
     }
 }
@@ -398,7 +398,7 @@ impl Table {
 
         let table_append = match fluss_table.new_append() {
             Ok(a) => a,
-            Err(e) => return Err(format!("Failed to create append: {}", e)),
+            Err(e) => return Err(format!("Failed to create append: {e}")),
         };
 
         let writer = table_append.create_writer();
@@ -413,7 +413,10 @@ impl Table {
             self.table_info.clone(),
         );
 
-        let scanner = fluss_table.new_scan().create_log_scanner();
+        let scanner = match fluss_table.new_scan().create_log_scanner() {
+            Ok(a) => a,
+            Err(e) => return Err(format!("Failed to create log scanner: {e}")),
+        };
         let scanner = Box::into_raw(Box::new(LogScanner { inner: scanner }));
         Ok(scanner)
     }
@@ -431,9 +434,12 @@ impl Table {
         let scan = fluss_table.new_scan();
         let scan = match scan.project(&column_indices) {
             Ok(s) => s,
-            Err(e) => return Err(format!("Failed to project columns: {}", e)),
+            Err(e) => return Err(format!("Failed to project columns: {e}")),
         };
-        let scanner = scan.create_log_scanner();
+        let scanner = match scan.create_log_scanner() {
+            Ok(a) => a,
+            Err(e) => return Err(format!("Failed to create log scanner: {e}")),
+        };
         let scanner = Box::into_raw(Box::new(LogScanner { inner: scanner }));
         Ok(scanner)
     }

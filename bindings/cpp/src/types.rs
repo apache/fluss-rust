@@ -64,7 +64,7 @@ fn ffi_data_type_to_core(dt: i32) -> Result<fcore::metadata::DataType> {
         DATA_TYPE_TIME => Ok(fcore::metadata::DataTypes::time()),
         DATA_TYPE_TIMESTAMP => Ok(fcore::metadata::DataTypes::timestamp()),
         DATA_TYPE_TIMESTAMP_LTZ => Ok(fcore::metadata::DataTypes::timestamp_ltz()),
-        _ => Err(anyhow!("Unknown data type: {}", dt)),
+        _ => Err(anyhow!("Unknown data type: {dt}")),
     }
 }
 
@@ -423,10 +423,7 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                     datum.i32_val = array.value(row_id);
                     datum
                 }
-                _ => panic!(
-                    "Will never come here. Unsupported Time32 unit for column {}",
-                    i
-                ),
+                _ => panic!("Will never come here. Unsupported Time32 unit for column {i}"),
             },
             ArrowDataType::Time64(unit) => match unit {
                 TimeUnit::Microsecond => {
@@ -449,14 +446,10 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                     datum.i64_val = array.value(row_id);
                     datum
                 }
-                _ => panic!(
-                    "Will never come here. Unsupported Time64 unit for column {}",
-                    i
-                ),
+                _ => panic!("Will never come here. Unsupported Time64 unit for column {i}"),
             },
             other => panic!(
-                "Will never come here. Unsupported Arrow data type for column {}: {:?}",
-                i, other
+                "Will never come here. Unsupported Arrow data type for column {i}: {other:?}"
             ),
         };
 
