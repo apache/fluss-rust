@@ -449,9 +449,7 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
 
 impl AppendWriter {
     fn append(&mut self, row: &ffi::FfiGenericRow) -> ffi::FfiResult {
-        let mut owner = types::OwnedRowData::new();
-        owner.collect_strings(row);
-        let generic_row = types::ffi_row_to_core(row, &owner);
+        let generic_row = types::ffi_row_to_core(row);
 
         let result = RUNTIME.block_on(async { self.inner.append(generic_row).await });
 

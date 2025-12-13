@@ -202,36 +202,12 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
     }
 }
 
-pub struct OwnedRowData {
-    strings: Vec<String>,
-}
-
-impl OwnedRowData {
-    pub fn new() -> Self {
-        Self { strings: Vec::new() }
-    }
-
-    pub fn collect_strings(&mut self, row: &ffi::FfiGenericRow) {
-        for field in &row.fields {
-            if field.datum_type == DATUM_TYPE_STRING {
-                self.strings.push(field.string_val.to_string());
-            }
-        }
-    }
-
-    pub fn get_strings(&self) -> &[String] {
-        &self.strings
-    }
-}
-
-pub fn ffi_row_to_core<'a>(
-    row: &ffi::FfiGenericRow,
-    owner: &'a OwnedRowData,
-) -> fcore::row::GenericRow<'a> {
-    use fcore::row::{Blob, Datum, F32, F64};
+pub fn ffi_row_to_core(
+    row: &ffi::FfiGenericRow
+) -> fcore::row::GenericRow<'_> {
+    use fcore::row::Datum;
 
     let mut generic_row = fcore::row::GenericRow::new();
-    let mut string_idx = 0;
 
     for (idx, field) in row.fields.iter().enumerate() {
         let datum = match field.datum_type {
@@ -239,14 +215,11 @@ pub fn ffi_row_to_core<'a>(
             DATUM_TYPE_BOOL => Datum::Bool(field.bool_val),
             DATUM_TYPE_INT32 => Datum::Int32(field.i32_val),
             DATUM_TYPE_INT64 => Datum::Int64(field.i64_val),
-            DATUM_TYPE_FLOAT32 => Datum::Float32(F32::from(field.f32_val)),
-            DATUM_TYPE_FLOAT64 => Datum::Float64(F64::from(field.f64_val)),
-            DATUM_TYPE_STRING => {
-                let str_ref = owner.get_strings()[string_idx].as_str();
-                string_idx += 1;
-                Datum::String(str_ref)
-            }
-            DATUM_TYPE_BYTES => Datum::Blob(Blob::from(field.bytes_val.clone())),
+            DATUM_TYPE_FLOAT32 => Datum::Float32(field.f32_val.into()),
+            DATUM_TYPE_FLOAT64 => Datum::Float64(field.f64_val.into()),
+            DATUM_TYPE_STRING => Datum::String(field.string_val.as_str()),
+            // todo: avoid copy bytes for blob
+            DATUM_TYPE_BYTES => Datum::Blob(field.bytes_val.clone().into()),
             _ => Datum::Null,
         };
         generic_row.set_field(idx, datum);
@@ -339,6 +312,7 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
             }
             ArrowDataType::Utf8 => {
                 let mut datum = new_datum(DATUM_TYPE_STRING);
+                // todo: avoid copy string
                 datum.string_val = row.get_string(i).to_string();
                 datum
             }
@@ -354,6 +328,7 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
             }
             ArrowDataType::Binary => {
                 let mut datum = new_datum(DATUM_TYPE_BYTES);
+                // todo: avoid copy bytes for blob
                 datum.bytes_val = row.get_bytes(i);
                 datum
             }
@@ -445,7 +420,7 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                     datum.i32_val = array.value(row_id);
                     datum
                 }
-                _ => panic!("Unsupported Time32 unit for column {}", i),
+                _ => panic!("Will never come here. Unsupported Time32 unit for column {}", i),
             },
             ArrowDataType::Time64(unit) => match unit {
                 TimeUnit::Microsecond => {
@@ -468,9 +443,9 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                     datum.i64_val = array.value(row_id);
                     datum
                 }
-                _ => panic!("Unsupported Time64 unit for column {}", i),
+                _ => panic!("Will never come here. Unsupported Time64 unit for column {}", i),
             },
-            other => panic!("Unsupported Arrow data type for column {}: {:?}", i, other),
+            other => panic!("Will never come here. Unsupported Arrow data type for column {}: {:?}", i, other),
         };
 
         fields.push(datum);

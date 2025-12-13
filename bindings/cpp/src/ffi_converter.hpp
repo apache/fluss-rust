@@ -200,6 +200,7 @@ inline Datum from_ffi_datum(const ffi::FfiDatum& ffi_datum) {
     datum.i64_val = ffi_datum.i64_val;
     datum.f32_val = ffi_datum.f32_val;
     datum.f64_val = ffi_datum.f64_val;
+    // todo: avoid copy string
     datum.string_val = std::string(ffi_datum.string_val);
 
     for (auto b : ffi_datum.bytes_val) {

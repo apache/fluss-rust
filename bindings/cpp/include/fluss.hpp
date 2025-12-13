@@ -204,7 +204,7 @@ struct Datum {
     std::string string_val;
     std::vector<uint8_t> bytes_val;
 
-    static Datum Null() { return Datum(); }
+    static Datum Null() { return {}; }
     static Datum Bool(bool v) {
         Datum d;
         d.type = DatumType::Bool;
