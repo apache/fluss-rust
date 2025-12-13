@@ -15,24 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace.package]
-categories = ["command-line-utilities"]
-description = "The rust implementation of fluss"
-repository = "https://github.com/apache/fluss-rust"
-name = "fluss"
-edition = "2024"
+[package]
+name = "fluss-cpp"
 version = "0.1.0"
-license = "Apache-2.0"
-rust-version = "1.85"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
 
+[lib]
+crate-type = ["staticlib"]
 
-[workspace]
-resolver = "2"
-members = ["crates/fluss", "crates/examples", "bindings/python", "bindings/cpp"]
+[dependencies]
+anyhow = "1.0"
+arrow = { workspace = true }
+cxx = "1.0"
+fluss = { path = "../../crates/fluss" }
+tokio = { version = "1.27", features = ["rt-multi-thread", "macros"] }
 
-[workspace.dependencies]
-fluss = { version = "0.1.0", path = "./crates/fluss" }
-tokio = { version = "1.44.2", features = ["full"] }
-clap = { version = "4.5.37", features = ["derive"] }
-arrow = { version = "57.0.0", features = ["ipc_compression"] }
-chrono = { version = "0.4", features = ["clock", "std", "wasmbind"] }
+[build-dependencies]
+cxx-build = "1.0"

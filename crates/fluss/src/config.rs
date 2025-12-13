@@ -18,7 +18,7 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-#[derive(Parser, Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Parser, Debug, Clone, Deserialize, Serialize)]
 #[command(author, version, about, long_about = None)]
 pub struct Config {
     #[arg(long)]
@@ -36,4 +36,16 @@ pub struct Config {
 
     #[arg(long, default_value_t = 2 * 1024 * 1024)]
     pub writer_batch_size: i32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            bootstrap_server: None,
+            request_max_size: 10 * 1024 * 1024,
+            writer_acks: String::from("all"),
+            writer_retries: i32::MAX,
+            writer_batch_size: 2 * 1024 * 1024,
+        }
+    }
 }
