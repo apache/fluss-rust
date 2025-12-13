@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 
-use crate::integration::fluss_cluster::FlussTestingCluster;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
+use crate::integration::fluss_cluster::FlussTestingCluster;
 #[cfg(test)]
 use test_env_helpers::*;
 
@@ -39,12 +39,11 @@ mod table_test {
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::row::InternalRow;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
     use std::thread;
     fn before_all() {
         // Create a new tokio runtime in a separate thread
         let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             rt.block_on(async {
                 let cluster = FlussTestingClusterBuilder::new("test_table").build().await;
@@ -71,7 +70,7 @@ mod table_test {
     fn after_all() {
         // Create a new tokio runtime in a separate thread
         let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             rt.block_on(async {
                 let mut guard = cluster_guard.write();
@@ -137,7 +136,10 @@ mod table_test {
         append_writer.flush().await.expect("Failed to flush");
 
         let num_buckets = table.table_info().get_num_buckets();
-        let log_scanner = table.new_scan().create_log_scanner();
+        let log_scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
         for bucket_id in 0..num_buckets {
             log_scanner
                 .subscribe(bucket_id, 0)
@@ -166,7 +168,8 @@ mod table_test {
             .new_scan()
             .project(&[1, 0])
             .expect("Failed to project")
-            .create_log_scanner();
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
         for bucket_id in 0..num_buckets {
             log_scanner_projected
                 .subscribe(bucket_id, 0)
@@ -212,7 +215,9 @@ mod table_test {
             .expect("Failed to get table");
 
         let table_scan = table.new_scan();
-        let log_scanner = table_scan.create_log_scanner();
+        let log_scanner = table_scan
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
 
         // Subscribe to bucket 0 starting from offset 0
         log_scanner

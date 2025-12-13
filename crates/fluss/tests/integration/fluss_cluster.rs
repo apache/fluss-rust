@@ -32,12 +32,27 @@ pub struct FlussTestingClusterBuilder {
     network: &'static str,
     cluster_conf: HashMap<String, String>,
     testing_name: String,
+    remote_data_dir: Option<std::path::PathBuf>,
 }
 
 impl FlussTestingClusterBuilder {
     pub fn new(testing_name: impl Into<String>) -> Self {
+        Self::new_with_cluster_conf(testing_name.into(), &HashMap::default())
+    }
+
+    pub fn with_remote_data_dir(mut self, dir: std::path::PathBuf) -> Self {
+        // Ensure the directory exists before mounting
+        std::fs::create_dir_all(&dir).expect("Failed to create remote data directory");
+        self.remote_data_dir = Some(dir);
+        self
+    }
+
+    pub fn new_with_cluster_conf(
+        testing_name: impl Into<String>,
+        conf: &HashMap<String, String>,
+    ) -> Self {
         // reduce testing resources
-        let mut cluster_conf = HashMap::new();
+        let mut cluster_conf = conf.clone();
         cluster_conf.insert(
             "netty.server.num-network-threads".to_string(),
             "1".to_string(),
@@ -52,6 +67,7 @@ impl FlussTestingClusterBuilder {
             cluster_conf,
             network: "fluss-cluster-network",
             testing_name: testing_name.into(),
+            remote_data_dir: None,
         }
     }
 
@@ -92,6 +108,7 @@ impl FlussTestingClusterBuilder {
             coordinator_server,
             tablet_servers,
             bootstrap_servers: "127.0.0.1:9123".to_string(),
+            remote_data_dir: self.remote_data_dir.clone(),
         }
     }
 
@@ -147,7 +164,15 @@ impl FlussTestingClusterBuilder {
         tablet_server_confs.insert("internal.listener.name", "INTERNAL".to_string());
         tablet_server_confs.insert("tablet-server.id", tablet_server_id);
 
-        GenericImage::new("fluss/fluss", FLUSS_VERSION)
+        // Set remote.data.dir to use the same path as host when volume mount is provided
+        // This ensures the path is consistent between host and container
+        if let Some(remote_data_dir) = &self.remote_data_dir {
+            tablet_server_confs.insert(
+                "remote.data.dir",
+                remote_data_dir.to_string_lossy().to_string(),
+            );
+        }
+        let mut image = GenericImage::new("fluss/fluss", FLUSS_VERSION)
             .with_cmd(vec!["tabletServer"])
             .with_mapped_port(expose_host_port as u16, ContainerPort::Tcp(9123))
             .with_network(self.network)
@@ -155,10 +180,20 @@ impl FlussTestingClusterBuilder {
             .with_env_var(
                 "FLUSS_PROPERTIES",
                 self.to_fluss_properties_with(tablet_server_confs),
-            )
-            .start()
-            .await
-            .unwrap()
+            );
+
+        // Add volume mount if remote_data_dir is provided
+        if let Some(ref remote_data_dir) = self.remote_data_dir {
+            use testcontainers::core::Mount;
+            // Ensure directory exists before mounting (double check)
+            std::fs::create_dir_all(remote_data_dir)
+                .expect("Failed to create remote data directory for mount");
+            let host_path = remote_data_dir.to_string_lossy().to_string();
+            let container_path = remote_data_dir.to_string_lossy().to_string();
+            image = image.with_mount(Mount::bind_mount(host_path, container_path));
+        }
+
+        image.start().await.unwrap()
     }
 
     fn to_fluss_properties_with(&self, extra_properties: HashMap<&str, String>) -> String {
@@ -180,6 +215,7 @@ pub struct FlussTestingCluster {
     coordinator_server: Arc<ContainerAsync<GenericImage>>,
     tablet_servers: HashMap<i32, Arc<ContainerAsync<GenericImage>>>,
     bootstrap_servers: String,
+    remote_data_dir: Option<std::path::PathBuf>,
 }
 
 impl FlussTestingCluster {
@@ -189,6 +225,18 @@ impl FlussTestingCluster {
         }
         self.coordinator_server.stop().await.unwrap();
         self.zookeeper.stop().await.unwrap();
+        if let Some(remote_data_dir) = &self.remote_data_dir {
+            // Try to clean up the remote data directory, but don't fail if it can't be deleted.
+            // This can happen in CI environments or if Docker containers are still using the directory.
+            // The directory will be cleaned up by the CI system or OS eventually.
+            if let Err(e) = tokio::fs::remove_dir_all(remote_data_dir).await {
+                eprintln!(
+                    "Warning: Failed to delete remote data directory: {:?}, error: {:?}. \
+                     This is non-fatal and the directory may be cleaned up later.",
+                    remote_data_dir, e
+                );
+            }
+        }
     }
 
     pub async fn get_fluss_connection(&self) -> FlussConnection {

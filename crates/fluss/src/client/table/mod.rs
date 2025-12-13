@@ -26,6 +26,7 @@ pub const EARLIEST_OFFSET: i64 = -2;
 
 mod append;
 
+mod remote_log;
 mod scanner;
 mod writer;
 

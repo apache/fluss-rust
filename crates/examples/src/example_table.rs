@@ -70,7 +70,7 @@ pub async fn main() -> Result<()> {
     try_join!(f1, f2, append_writer.flush())?;
 
     // scan rows
-    let log_scanner = table.new_scan().create_log_scanner();
+    let log_scanner = table.new_scan().create_log_scanner()?;
     log_scanner.subscribe(0, 0).await?;
 
     loop {
