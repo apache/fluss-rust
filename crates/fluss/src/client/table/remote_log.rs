@@ -182,7 +182,7 @@ impl RemoteLogDownloader {
 
         // Stream data from remote to local file in chunks
         // opendal::Reader::read accepts a range, so we read in chunks
-        const CHUNK_SIZE: u64 = 64 * 1024; // 64KB chunks for efficient streaming
+        const CHUNK_SIZE: u64 = 8 * 1024 * 1024; // 8MB chunks for efficient reading
         let mut offset = 0u64;
 
         while offset < file_size {

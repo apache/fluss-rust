@@ -193,7 +193,7 @@ struct LogFetcher {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     read_context: ReadContext,
-    remote_log_downloader: Arc<RemoteLogDownloader>,
+    remote_log_downloader: RemoteLogDownloader,
 }
 
 impl LogFetcher {
@@ -216,7 +216,7 @@ impl LogFetcher {
             metadata,
             log_scanner_status,
             read_context,
-            remote_log_downloader: Arc::new(RemoteLogDownloader::new(tmp_dir)?),
+            remote_log_downloader: RemoteLogDownloader::new(tmp_dir)?,
         })
     }
 
