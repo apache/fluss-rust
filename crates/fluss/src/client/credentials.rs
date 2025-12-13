@@ -17,8 +17,8 @@
 
 use crate::client::metadata::Metadata;
 use crate::error::{Error, Result};
-use crate::rpc::message::GetSecurityTokenRequest;
 use crate::rpc::RpcClient;
+use crate::rpc::message::GetSecurityTokenRequest;
 use parking_lot::RwLock;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -60,7 +60,11 @@ impl CachedToken {
             if let Some((opendal_key, transform)) = convert_hadoop_key_to_opendal(key) {
                 let final_value = if transform {
                     // Invert boolean value (path_style_access -> enable_virtual_host_style)
-                    if value == "true" { "false".to_string() } else { "true".to_string() }
+                    if value == "true" {
+                        "false".to_string()
+                    } else {
+                        "true".to_string()
+                    }
                 } else {
                     value.clone()
                 };
@@ -76,17 +80,10 @@ impl CachedToken {
 /// needs_inversion is true for path_style_access -> enable_virtual_host_style conversion
 fn convert_hadoop_key_to_opendal(hadoop_key: &str) -> Option<(String, bool)> {
     match hadoop_key {
-        // Standard S3A keys
         "fs.s3a.endpoint" => Some(("endpoint".to_string(), false)),
         "fs.s3a.endpoint.region" => Some(("region".to_string(), false)),
-        // path.style.access = false means virtual_host_style = true (inverted)
         "fs.s3a.path.style.access" => Some(("enable_virtual_host_style".to_string(), true)),
         "fs.s3a.connection.ssl.enabled" => None,
-        // Red-S3 keys (Fluss custom format)
-        "fs.red-s3.endpoint" => Some(("endpoint".to_string(), false)),
-        "fs.red-s3.region" => Some(("region".to_string(), false)),
-        "fs.red-s3.path-style-access" => Some(("enable_virtual_host_style".to_string(), true)),
-        "fs.red-s3.connection.ssl.enabled" => None,
         _ => None,
     }
 }
@@ -162,10 +159,3 @@ impl Default for CredentialsCache {
         Self::new()
     }
 }
-
-
-
-
-
-
-

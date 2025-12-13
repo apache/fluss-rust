@@ -24,7 +24,6 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
@@ -117,14 +116,14 @@ impl RemoteLogDownloadFuture {
 /// Downloader for remote log segment files
 pub struct RemoteLogDownloader {
     local_log_dir: TempDir,
-    s3_props: Arc<RwLock<HashMap<String, String>>>,
+    s3_props: RwLock<HashMap<String, String>>,
 }
 
 impl RemoteLogDownloader {
     pub fn new(local_log_dir: TempDir) -> Result<Self> {
         Ok(Self {
             local_log_dir,
-            s3_props: Arc::new(RwLock::new(HashMap::new())),
+            s3_props: RwLock::new(HashMap::new()),
         })
     }
 
@@ -175,16 +174,6 @@ impl RemoteLogDownloader {
         local_path: &Path,
         s3_props: &HashMap<String, String>,
     ) -> Result<PathBuf> {
-        eprintln!("[DEBUG] download_file called: remote_path={}", remote_path);
-        eprintln!("[DEBUG] s3_props count: {}", s3_props.len());
-        for (k, v) in s3_props {
-            if k.contains("key") || k.contains("secret") {
-                eprintln!("[DEBUG]   {} = {}...", k, &v[..std::cmp::min(8, v.len())]);
-            } else {
-                eprintln!("[DEBUG]   {} = {}", k, v);
-            }
-        }
-        
         // Handle both URL (e.g., "s3://bucket/path") and local file paths
         // If the path doesn't contain "://", treat it as a local file path
         let remote_log_tablet_dir_url = if remote_log_tablet_dir.contains("://") {
@@ -212,28 +201,30 @@ impl RemoteLogDownloader {
         // Timeout for remote storage operations (30 seconds)
         const REMOTE_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-        eprintln!("[DEBUG] Calling stat on: {}", relative_path);
         // Get file metadata to know the size with timeout
         let stat_future = op.stat(relative_path);
         let meta = tokio::time::timeout(REMOTE_OP_TIMEOUT, stat_future)
             .await
-            .map_err(|_| Error::Io(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("Timeout getting file metadata from remote storage: {}", remote_path)
-            )))??;
+            .map_err(|_| {
+                Error::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "Timeout getting file metadata from remote storage: {}",
+                        remote_path
+                    ),
+                ))
+            })??;
         let file_size = meta.content_length();
-        eprintln!("[DEBUG] stat succeeded, file_size={}", file_size);
 
         // Create local file for writing
         let mut local_file = tokio::fs::File::create(local_path).await?;
 
         // Stream data from remote to local file in chunks
         // opendal::Reader::read accepts a range, so we read in chunks
-        const CHUNK_SIZE: u64 = 8 * 1024 * 1024; // 8MB chunks for efficient streaming
+        const CHUNK_SIZE: u64 = 8 * 1024 * 1024; // 8MB chunks for efficient reading
         let mut offset = 0u64;
         let mut chunk_count = 0u64;
-        let total_chunks = (file_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
-        eprintln!("[DEBUG] Starting download: {} bytes in {} chunks", file_size, total_chunks);
+        let total_chunks = file_size.div_ceil(CHUNK_SIZE);
 
         while offset < file_size {
             let end = std::cmp::min(offset + CHUNK_SIZE, file_size);
@@ -241,17 +232,25 @@ impl RemoteLogDownloader {
             chunk_count += 1;
 
             if chunk_count <= 3 || chunk_count % 10 == 0 {
-                eprintln!("[DEBUG] Reading chunk {}/{} (offset {})", chunk_count, total_chunks, offset);
+                eprintln!(
+                    "Remote log download: reading chunk {}/{} (offset {})",
+                    chunk_count, total_chunks, offset
+                );
             }
 
             // Read chunk from remote storage with timeout
             let read_future = op.read_with(relative_path).range(range.clone());
             let chunk = tokio::time::timeout(REMOTE_OP_TIMEOUT, read_future)
                 .await
-                .map_err(|_| Error::Io(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("Timeout reading chunk from remote storage: {} at offset {}", remote_path, offset)
-                )))??;
+                .map_err(|_| {
+                    Error::Io(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "Timeout reading chunk from remote storage: {} at offset {}",
+                            remote_path, offset
+                        ),
+                    ))
+                })??;
             let bytes = chunk.to_bytes();
 
             // Write chunk to local file

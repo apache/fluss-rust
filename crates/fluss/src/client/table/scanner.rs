@@ -194,8 +194,8 @@ struct LogFetcher {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     read_context: ReadContext,
-    remote_log_downloader: Arc<RemoteLogDownloader>,
-    credentials_cache: Arc<CredentialsCache>,
+    remote_log_downloader: RemoteLogDownloader,
+    credentials_cache: CredentialsCache,
 }
 
 impl LogFetcher {
@@ -218,8 +218,8 @@ impl LogFetcher {
             metadata,
             log_scanner_status,
             read_context,
-            remote_log_downloader: Arc::new(RemoteLogDownloader::new(tmp_dir)?),
-            credentials_cache: Arc::new(CredentialsCache::new()),
+            remote_log_downloader: RemoteLogDownloader::new(tmp_dir)?,
+            credentials_cache: CredentialsCache::new(),
         })
     }
 
@@ -235,21 +235,17 @@ impl LogFetcher {
 
     async fn send_fetches_and_collect(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
         let fetch_request = self.prepare_fetch_log_requests().await;
-        eprintln!("[DEBUG] prepare_fetch_log_requests returned {} requests", fetch_request.len());
         let mut result: HashMap<TableBucket, Vec<ScanRecord>> = HashMap::new();
         for (leader, fetch_request) in fetch_request {
-            eprintln!("[DEBUG] Sending fetch request to leader {}", leader);
             let cluster = self.metadata.get_cluster();
             let server_node = cluster
                 .get_tablet_server(leader)
                 .expect("todo: handle leader not exist.");
             let con = self.conns.get_connection(server_node).await?;
 
-            eprintln!("[DEBUG] Sending RPC request...");
             let fetch_response = con
                 .request(crate::rpc::message::FetchLogRequest::new(fetch_request))
                 .await?;
-            eprintln!("[DEBUG] Got RPC response with {} tables", fetch_response.tables_resp.len());
 
             for pb_fetch_log_resp in fetch_response.tables_resp {
                 let table_id = pb_fetch_log_resp.table_id;
@@ -263,12 +259,10 @@ impl LogFetcher {
                     if let Some(ref remote_log_fetch_info) =
                         fetch_log_for_bucket.remote_log_fetch_info
                     {
-                        eprintln!("[DEBUG] Bucket {} requires remote log fetch with {} segments", 
-                            bucket, remote_log_fetch_info.remote_log_segments.len());
-                        eprintln!("[DEBUG] Getting S3 credentials...");
-                        let s3_props =
-                            self.credentials_cache.get_or_refresh(&self.conns, &self.metadata).await?;
-                        eprintln!("[DEBUG] Got {} S3 props", s3_props.len());
+                        let s3_props = self
+                            .credentials_cache
+                            .get_or_refresh(&self.conns, &self.metadata)
+                            .await?;
                         self.remote_log_downloader.set_s3_props(s3_props);
                         let remote_fetch_info = RemoteLogFetchInfo::from_proto(
                             remote_log_fetch_info,
@@ -291,8 +285,6 @@ impl LogFetcher {
                                     current_fetch_offset = segment.start_offset;
                                 }
 
-                                eprintln!("[DEBUG] Downloading segment {} from {}", 
-                                    segment.segment_id, remote_fetch_info.remote_log_tablet_dir);
                                 let download_future =
                                     self.remote_log_downloader.request_remote_log(
                                         &remote_fetch_info.remote_log_tablet_dir,
@@ -306,11 +298,8 @@ impl LogFetcher {
                                     high_watermark,
                                     self.read_context.clone(),
                                 );
-                                eprintln!("[DEBUG] Waiting for download to complete...");
                                 let remote_records =
                                     pending_fetch.convert_to_completed_fetch().await?;
-                                eprintln!("[DEBUG] Download completed, got {} records", 
-                                    remote_records.values().map(|v| v.len()).sum::<usize>());
                                 // Update offset and merge results
                                 for (tb, records) in remote_records {
                                     if let Some(last_record) = records.last() {

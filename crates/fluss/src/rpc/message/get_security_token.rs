@@ -51,10 +51,3 @@ impl RequestBody for GetSecurityTokenRequest {
 
 impl_write_version_type!(GetSecurityTokenRequest);
 impl_read_version_type!(GetFileSystemSecurityTokenResponse);
-
-
-
-
-
-
-
