@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
+use tracing::debug;
 
 /// Represents a remote log segment that needs to be downloaded
 #[derive(Debug, Clone)]
@@ -202,18 +203,7 @@ impl RemoteLogDownloader {
         const REMOTE_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
         // Get file metadata to know the size with timeout
-        let stat_future = op.stat(relative_path);
-        let meta = tokio::time::timeout(REMOTE_OP_TIMEOUT, stat_future)
-            .await
-            .map_err(|_| {
-                Error::Io(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!(
-                        "Timeout getting file metadata from remote storage: {}",
-                        remote_path
-                    ),
-                ))
-            })??;
+        let meta = op.stat(relative_path).await?;
         let file_size = meta.content_length();
 
         // Create local file for writing
@@ -232,7 +222,7 @@ impl RemoteLogDownloader {
             chunk_count += 1;
 
             if chunk_count <= 3 || chunk_count % 10 == 0 {
-                eprintln!(
+                debug!(
                     "Remote log download: reading chunk {}/{} (offset {})",
                     chunk_count, total_chunks, offset
                 );
