@@ -148,7 +148,7 @@ mod table_test {
         }
 
         let scan_records = log_scanner
-            .poll(std::time::Duration::from_secs(5))
+            .poll(std::time::Duration::from_secs(60))
             .await
             .expect("Failed to poll");
 

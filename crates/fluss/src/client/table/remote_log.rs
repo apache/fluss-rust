@@ -14,16 +14,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::client::table::log_fetch_buffer::{CompletedFetch, DefaultCompletedFetch, PendingFetch};
 use crate::error::{Error, Result};
 use crate::io::{FileIO, Storage};
 use crate::metadata::TableBucket;
+use crate::proto::PbFetchLogRespForBucket;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
-use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord};
+use crate::record::ReadContext;
 use crate::util::delete_file;
-use parking_lot::RwLock;
-use std::collections::HashMap;
+use parking_lot::Mutex;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
@@ -86,15 +88,67 @@ impl RemoteLogFetchInfo {
     }
 }
 
+type CompletionCallback = Box<dyn Fn() + Send + Sync>;
+
 /// Future for a remote log download request
 pub struct RemoteLogDownloadFuture {
-    receiver: Option<oneshot::Receiver<Result<PathBuf>>>,
+    result: Arc<Mutex<Option<Result<PathBuf>>>>,
+    completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>>,
 }
 
 impl RemoteLogDownloadFuture {
     pub fn new(receiver: oneshot::Receiver<Result<PathBuf>>) -> Self {
+        let result = Arc::new(Mutex::new(None));
+        let result_clone = Arc::clone(&result);
+        let completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>> = Arc::new(Mutex::new(Vec::new()));
+        let callbacks_clone = Arc::clone(&completion_callbacks);
+
+        // Spawn a task to wait for the download and update result, then call callbacks
+        tokio::spawn(async move {
+            let download_result = match receiver.await {
+                Ok(Ok(path)) => Ok(path),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(Error::Io(io::Error::other(format!("Download future cancelled: {e:?}")))),
+            };
+            *result_clone.lock() = Some(download_result);
+
+            // Call all registered callbacks
+            // We need to take the callbacks to avoid holding the lock while calling them
+            // This also ensures that any callbacks registered after this point will be called immediately
+            let callbacks: Vec<CompletionCallback> = {
+                let mut callbacks_guard = callbacks_clone.lock();
+                std::mem::take(&mut *callbacks_guard)
+            };
+            for callback in callbacks {
+                callback();
+            }
+
+            // After calling callbacks, any new callbacks registered will see is_done() == true
+            // and will be called immediately in on_complete()
+        });
+
         Self {
-            receiver: Some(receiver),
+            result,
+            completion_callbacks,
+        }
+    }
+
+    /// Register a callback to be called when download completes (similar to Java's onComplete)
+    pub fn on_complete<F>(&self, callback: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        // Check if already completed - need to check while holding the lock to avoid race condition
+        let mut callbacks_guard = self.completion_callbacks.lock();
+        let is_done = self.is_done();
+
+        if is_done {
+            // If already completed, call immediately (drop lock first to avoid deadlock)
+            drop(callbacks_guard);
+            callback();
+        } else {
+            // Otherwise, register the callback
+            callbacks_guard.push(Box::new(callback));
         }
     }
 
@@ -135,7 +189,7 @@ impl RemoteLogDownloader {
         &self,
         remote_log_tablet_dir: &str,
         segment: &RemoteLogSegment,
-    ) -> Result<RemoteLogDownloadFuture> {
+    ) -> RemoteLogDownloadFuture {
         let (sender, receiver) = oneshot::channel();
         let local_file_name = segment.local_file_name();
         let local_file_path = self.local_log_dir.path().join(&local_file_name);
@@ -144,16 +198,11 @@ impl RemoteLogDownloader {
         let remote_fs_props = self.remote_fs_props.read().clone();
         // Spawn async download task
         tokio::spawn(async move {
-            let result = Self::download_file(
-                &remote_log_tablet_dir,
-                &remote_path,
-                &local_file_path,
-                &remote_fs_props,
-            )
-            .await;
+            let result =
+                Self::download_file(&remote_log_tablet_dir, &remote_path, &local_file_path).await;
             let _ = sender.send(result);
         });
-        Ok(RemoteLogDownloadFuture::new(receiver))
+        RemoteLogDownloadFuture::new(receiver)
     }
 
     /// Build the remote path for a log segment
@@ -256,14 +305,13 @@ impl RemoteLogDownloader {
     }
 }
 
+
 /// Pending fetch that waits for remote log file to be downloaded
 pub struct RemotePendingFetch {
     segment: RemoteLogSegment,
     download_future: RemoteLogDownloadFuture,
     pos_in_log_segment: i32,
-    #[allow(dead_code)]
     fetch_offset: i64,
-    #[allow(dead_code)]
     high_watermark: i64,
     read_context: ReadContext,
 }
@@ -286,13 +334,26 @@ impl RemotePendingFetch {
             read_context,
         }
     }
+}
 
-    /// Convert to completed fetch by reading the downloaded file
-    pub async fn convert_to_completed_fetch(
-        mut self,
-    ) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
-        let file_path = self.download_future.get_file_path().await?;
-        let file_data = tokio::fs::read(&file_path).await?;
+impl PendingFetch for RemotePendingFetch {
+    fn table_bucket(&self) -> &TableBucket {
+        &self.segment.table_bucket
+    }
+
+    fn is_completed(&self) -> bool {
+        self.download_future.is_done()
+    }
+
+    fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
+        // Get the file path (this should only be called when is_completed() returns true)
+        let file_path = self.download_future.get_file_path()?;
+
+        // Read the file data synchronously (we're in a sync context)
+        // Note: This is a limitation - we need to use blocking I/O here
+        let file_data = std::fs::read(&file_path).map_err(|e| {
+            Error::Io(io::Error::other(format!("Failed to read downloaded file: {e:?}")))
+        })?;
 
         // Slice the data if needed
         let data = if self.pos_in_log_segment > 0 {
@@ -301,17 +362,33 @@ impl RemotePendingFetch {
             &file_data
         };
 
-        // delete the downloaded local file to free disk
-        delete_file(file_path).await;
+        // Create a mock PbFetchLogRespForBucket for DefaultCompletedFetch
+        // We'll use the data we read from the file
+        let fetch_response = PbFetchLogRespForBucket {
+            bucket_id: self.segment.table_bucket.bucket_id(),
+            partition_id: None,
+            error_code: None,
+            error_message: None,
+            high_watermark: Some(self.high_watermark),
+            log_start_offset: None,
+            remote_log_fetch_info: None,
+            records: Some(data.to_vec()),
+        };
 
-        // Parse log records (remote log contains full data, need client-side projection)
-        let mut fetch_records = vec![];
-        for log_record in &mut LogRecordsBatchs::new(data) {
-            fetch_records.extend(log_record.records_for_remote_log(&self.read_context)?);
-        }
+        // Create DefaultCompletedFetch from the data
+        let completed_fetch = DefaultCompletedFetch::new(
+            self.segment.table_bucket,
+            &fetch_response,
+            self.read_context,
+            self.fetch_offset,
+        )?;
 
-        let mut result = HashMap::new();
-        result.insert(self.segment.table_bucket.clone(), fetch_records);
-        Ok(result)
+        // Delete the downloaded local file to free disk (async, but we'll do it in background)
+        let file_path_clone = file_path.clone();
+        tokio::spawn(async move {
+            let _ = delete_file(file_path_clone).await;
+        });
+
+        Ok(Box::new(completed_fetch))
     }
 }
