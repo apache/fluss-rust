@@ -22,7 +22,6 @@ use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::warn;
 
 pub fn current_time_ms() -> i64 {
     SystemTime::now()
@@ -34,7 +33,7 @@ pub fn current_time_ms() -> i64 {
 pub async fn delete_file(file_path: PathBuf) {
     tokio::fs::remove_file(&file_path)
         .await
-        .unwrap_or_else(|e| warn!("Could not delete file: {:?}, error: {:?}", &file_path, e));
+        .unwrap_or_else(|err| log::warn!("Could not delete file: {file_path:?}, error: {err:?}"));
 }
 
 pub struct FairBucketStatusMap<S> {

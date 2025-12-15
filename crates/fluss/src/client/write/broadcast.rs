@@ -19,7 +19,6 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Notify;
-use tracing::warn;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -111,7 +110,7 @@ where
     fn drop(&mut self) {
         let mut data = self.shared.data.write();
         if data.is_none() {
-            warn!("BroadcastOnce dropped without producing");
+            log::warn!("BroadcastOnce dropped without producing");
             *data = Some(Err(Error::Dropped));
             self.shared.notify.notify_waiters();
         }
