@@ -97,12 +97,10 @@ impl FileIOBuilder {
     }
 }
 
-#[async_trait::async_trait]
 pub trait FileRead: Send + Unpin + 'static {
-    async fn read(&self, range: Range<u64>) -> Result<Bytes>;
+    fn read(&self, range: Range<u64>) -> impl Future<Output = Result<Bytes>> + Send;
 }
 
-#[async_trait::async_trait]
 impl FileRead for opendal::Reader {
     async fn read(&self, range: Range<u64>) -> Result<Bytes> {
         Ok(opendal::Reader::read(self, range).await?.to_bytes())
