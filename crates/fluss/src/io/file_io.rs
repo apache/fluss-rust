@@ -22,7 +22,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use opendal::Operator;
 
 use url::Url;
@@ -132,7 +132,7 @@ impl InputFile {
             size: meta.content_length(),
             is_dir: meta.is_dir(),
             path: self.path.clone(),
-            last_modified: meta.last_modified(),
+            last_modified: meta.last_modified().map(Into::into),
         })
     }
 
@@ -154,5 +154,5 @@ pub struct FileStatus {
     pub size: u64,
     pub is_dir: bool,
     pub path: String,
-    pub last_modified: Option<DateTime<Utc>>,
+    pub last_modified: Option<Timestamp>,
 }

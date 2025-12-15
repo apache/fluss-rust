@@ -16,16 +16,17 @@
 // under the License.
 
 use crate::integration::fluss_cluster::FlussTestingCluster;
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 #[cfg(test)]
 use test_env_helpers::*;
 
 // Module-level shared cluster instance (only for this test file)
-static SHARED_FLUSS_CLUSTER: Lazy<Arc<RwLock<Option<FlussTestingCluster>>>> =
-    Lazy::new(|| Arc::new(RwLock::new(None)));
+static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(None)));
 
 #[cfg(test)]
 #[before_all]
