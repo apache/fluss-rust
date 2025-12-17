@@ -259,11 +259,12 @@ impl LogFetcher {
                     if let Some(ref remote_log_fetch_info) =
                         fetch_log_for_bucket.remote_log_fetch_info
                     {
-                        let s3_props = self
+                        let remote_fs_props = self
                             .credentials_cache
                             .get_or_refresh(&self.conns, &self.metadata)
                             .await?;
-                        self.remote_log_downloader.set_s3_props(s3_props);
+                        self.remote_log_downloader
+                            .set_remote_fs_props(remote_fs_props);
                         let remote_fetch_info = RemoteLogFetchInfo::from_proto(
                             remote_log_fetch_info,
                             table_bucket.clone(),

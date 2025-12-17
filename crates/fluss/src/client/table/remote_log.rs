@@ -117,19 +117,19 @@ impl RemoteLogDownloadFuture {
 /// Downloader for remote log segment files
 pub struct RemoteLogDownloader {
     local_log_dir: TempDir,
-    s3_props: RwLock<HashMap<String, String>>,
+    remote_fs_props: RwLock<HashMap<String, String>>,
 }
 
 impl RemoteLogDownloader {
     pub fn new(local_log_dir: TempDir) -> Result<Self> {
         Ok(Self {
             local_log_dir,
-            s3_props: RwLock::new(HashMap::new()),
+            remote_fs_props: RwLock::new(HashMap::new()),
         })
     }
 
-    pub fn set_s3_props(&self, props: HashMap<String, String>) {
-        *self.s3_props.write() = props;
+    pub fn set_remote_fs_props(&self, props: HashMap<String, String>) {
+        *self.remote_fs_props.write() = props;
     }
 
     /// Request to fetch a remote log segment to local. This method is non-blocking.
@@ -143,14 +143,14 @@ impl RemoteLogDownloader {
         let local_file_path = self.local_log_dir.path().join(&local_file_name);
         let remote_path = self.build_remote_path(remote_log_tablet_dir, segment);
         let remote_log_tablet_dir = remote_log_tablet_dir.to_string();
-        let s3_props = self.s3_props.read().clone();
+        let remote_fs_props = self.remote_fs_props.read().clone();
         // Spawn async download task
         tokio::spawn(async move {
             let result = Self::download_file(
                 &remote_log_tablet_dir,
                 &remote_path,
                 &local_file_path,
-                &s3_props,
+                &remote_fs_props,
             )
             .await;
             let _ = sender.send(result);
@@ -173,7 +173,7 @@ impl RemoteLogDownloader {
         remote_log_tablet_dir: &str,
         remote_path: &str,
         local_path: &Path,
-        s3_props: &HashMap<String, String>,
+        remote_fs_props: &HashMap<String, String>,
     ) -> Result<PathBuf> {
         // Handle both URL (e.g., "s3://bucket/path") and local file paths
         // If the path doesn't contain "://", treat it as a local file path
@@ -190,7 +190,11 @@ impl RemoteLogDownloader {
         let file_io_builder = if remote_log_tablet_dir.starts_with("s3://")
             || remote_log_tablet_dir.starts_with("s3a://")
         {
-            file_io_builder.with_props(s3_props.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            file_io_builder.with_props(
+                remote_fs_props
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str())),
+            )
         } else {
             file_io_builder
         };

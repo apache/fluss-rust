@@ -43,7 +43,7 @@ struct CachedToken {
 }
 
 impl CachedToken {
-    fn to_s3_props(&self) -> HashMap<String, String> {
+    fn to_remote_fs_props(&self) -> HashMap<String, String> {
         let mut props = HashMap::new();
 
         props.insert("access_key_id".to_string(), self.access_key_id.clone());
@@ -108,7 +108,7 @@ impl CredentialsCache {
             let guard = self.inner.read();
             if let Some(cached) = guard.as_ref() {
                 if cached.cached_at.elapsed() < CACHE_TTL {
-                    return Ok(cached.to_s3_props());
+                    return Ok(cached.to_remote_fs_props());
                 }
             }
         }
@@ -147,7 +147,7 @@ impl CredentialsCache {
             cached_at: Instant::now(),
         };
 
-        let props = cached.to_s3_props();
+        let props = cached.to_remote_fs_props();
         *self.inner.write() = Some(cached);
 
         Ok(props)
