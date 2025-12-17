@@ -27,8 +27,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
-use tracing::debug;
-
+use log::debug;
 /// Represents a remote log segment that needs to be downloaded
 #[derive(Debug, Clone)]
 pub struct RemoteLogSegment {
@@ -226,9 +225,11 @@ impl RemoteLogDownloader {
             chunk_count += 1;
 
             if chunk_count <= 3 || chunk_count % 10 == 0 {
-                debug!(
+                log::debug!(
                     "Remote log download: reading chunk {}/{} (offset {})",
-                    chunk_count, total_chunks, offset
+                    chunk_count,
+                    total_chunks,
+                    offset
                 );
             }
 
