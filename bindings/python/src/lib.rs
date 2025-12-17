@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::LazyLock;
+
 pub use ::fluss as fcore;
-use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
@@ -36,7 +37,7 @@ pub use metadata::*;
 pub use table::*;
 pub use utils::*;
 
-static TOKIO_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+static TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

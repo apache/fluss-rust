@@ -37,7 +37,6 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufStream, WriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::oneshot::{Sender, channel};
 use tokio::task::JoinHandle;
-use tracing::warn;
 
 pub type MessengerTransport = ServerConnectionInner<BufStream<Transport>>;
 
@@ -178,8 +177,10 @@ where
                         let header =
                             match ResponseHeader::read_versioned(&mut cursor, ApiVersion(0)) {
                                 Ok(header) => header,
-                                Err(e) => {
-                                    warn!(%e, "Cannot read message header, ignoring message");
+                                Err(err) => {
+                                    log::warn!(
+                                        "Cannot read message header, ignoring message: {err:?}"
+                                    );
                                     continue;
                                 }
                             };
@@ -189,8 +190,8 @@ where
                                 match map.remove(&header.request_id) {
                                     Some(active_request) => active_request,
                                     _ => {
-                                        warn!(
-                                            request_id = header.request_id,
+                                        log::warn!(
+                                            request_id:% = header.request_id;
                                             "Got response for unknown request",
                                         );
                                         continue;

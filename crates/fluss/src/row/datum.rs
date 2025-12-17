@@ -15,15 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use chrono::Datelike;
-
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int8Builder,
     Int16Builder, Int32Builder, Int64Builder, StringBuilder,
 };
-use chrono::NaiveDate;
+use jiff::ToSpan;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
 use ref_cast::RefCast;
@@ -34,8 +32,6 @@ use std::ops::Deref;
 
 #[allow(dead_code)]
 const THIRTY_YEARS_MICROSECONDS: i64 = 946_684_800_000_000;
-
-pub const UNIX_EPOCH_DAYS: i32 = 719_163;
 
 #[derive(Debug, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum Datum<'a> {
@@ -404,6 +400,8 @@ impl From<Vec<u8>> for Blob {
     }
 }
 
+const UNIX_EPOCH_DAY: jiff::civil::Date = jiff::civil::date(1970, 1, 1);
+
 impl Date {
     pub const fn new(inner: i32) -> Self {
         Date(inner)
@@ -414,16 +412,17 @@ impl Date {
         self.0
     }
 
-    pub fn year(&self) -> i32 {
-        let date = NaiveDate::from_num_days_from_ce_opt(self.0 + UNIX_EPOCH_DAYS).unwrap();
+    pub fn year(&self) -> i16 {
+        let date = UNIX_EPOCH_DAY + self.0.days();
         date.year()
     }
-    pub fn month(&self) -> i32 {
-        let date = NaiveDate::from_num_days_from_ce_opt(self.0 + UNIX_EPOCH_DAYS).unwrap();
-        date.month() as i32
+    pub fn month(&self) -> i8 {
+        let date = UNIX_EPOCH_DAY + self.0.days();
+        date.month()
     }
-    pub fn day(&self) -> i32 {
-        let date = NaiveDate::from_num_days_from_ce_opt(self.0 + UNIX_EPOCH_DAYS).unwrap();
-        date.day() as i32
+
+    pub fn day(&self) -> i8 {
+        let date = UNIX_EPOCH_DAY + self.0.days();
+        date.day()
     }
 }

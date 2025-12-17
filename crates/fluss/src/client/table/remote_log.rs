@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
-use log::debug;
+
 /// Represents a remote log segment that needs to be downloaded
 #[derive(Debug, Clone)]
 pub struct RemoteLogSegment {
