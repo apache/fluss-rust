@@ -534,18 +534,19 @@ fn parse_ipc_message(
     const CONTINUATION_MARKER: u32 = 0xFFFFFFFF;
 
     if data.len() < 8 {
-        return None;
+        panic!("Invalid data length: {}", data.len());
     }
 
     let continuation = LittleEndian::read_u32(&data[0..4]);
     let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
 
     if continuation != CONTINUATION_MARKER {
-        return None;
+        panic!("Invalid continuation marker: {}", continuation);
     }
 
     if data.len() < 8 + metadata_size {
-        return None;
+        panic!("Invalid data length. Remaining data length {} is shorter than specified size {}",
+            data.len() - 8, metadata_size);
     }
 
     let metadata_bytes = &data[8..8 + metadata_size];
@@ -577,7 +578,7 @@ pub fn to_arrow_schema(fluss_schema: &DataType) -> SchemaRef {
             SchemaRef::new(arrow_schema::Schema::new(fields))
         }
         _ => {
-            panic!("must be row data tyoe.")
+            panic!("Must be row data type.")
         }
     }
 }
@@ -1016,5 +1017,33 @@ mod tests {
     #[should_panic(expected = "Invalid precision value for TimestampLTzType: 10")]
     fn test_timestamp_ltz_invalid_precision() {
         to_arrow_type(&DataTypes::timestamp_ltz_with_precision(10));
+    }
+
+    #[test]
+    fn test_parse_ipc_message_empty() {
+        assert_eq!(
+            parse_ipc_message(&u64::to_le_bytes(0x00000000FFFFFFFF)),
+            None
+        );
+    }
+    #[test]
+    #[should_panic(expected = "Invalid data length: 0")]
+    fn test_parse_ipc_message_invalid_data_length() {
+        let invalid_data = &[];
+        parse_ipc_message(invalid_data);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid continuation marker: 1")]
+    fn test_parse_ipc_message_invalid_continuation_marker() {
+        let data_with_invalid_continuation = &u64::to_le_bytes(0x0000000000000001);
+        parse_ipc_message(data_with_invalid_continuation);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid data length. Remaining data length 0 is shorter than specified size 1")]
+    fn test_parse_ipc_message_data_length_shorter_than_metadata_size() {
+        let data_with_invalid_continuation = &u64::to_le_bytes(0x00000001FFFFFFFF);
+        parse_ipc_message(data_with_invalid_continuation);
     }
 }
