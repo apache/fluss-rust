@@ -523,7 +523,8 @@ impl<'a> LogRecordBatch<'a> {
 /// - `body_buffer`: The buffer containing the record batch body data.
 /// - `version`: The Arrow IPC metadata version.
 ///
-/// Returns `None` if the data is malformed or too short.
+/// # Panics
+/// Panics if the data is malformed e.g. too short or bad continuation marker.
 fn parse_ipc_message(
     data: &[u8],
 ) -> Option<(
