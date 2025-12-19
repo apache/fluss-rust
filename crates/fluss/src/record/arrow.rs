@@ -34,7 +34,7 @@ use arrow::{
         writer::StreamWriter,
     },
 };
-use arrow_schema::{SchemaRef};
+use arrow_schema::SchemaRef;
 use arrow_schema::{DataType as ArrowDataType, Field};
 use byteorder::WriteBytesExt;
 use byteorder::{ByteOrder, LittleEndian};
@@ -1017,37 +1017,25 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_ipc_message_empty_body() {
+    fn test_parse_ipc_message() {
         let empty_body: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000000]);
         let result = parse_ipc_message(empty_body);
         assert_eq!(result.unwrap_err().to_string(),
                    String::from("Arrow error: Parser error: Range [0, 4) is out of bounds.\n\n"));
-    }
 
-    #[test]
-    fn test_parse_ipc_message_invalid_data_length() {
         let invalid_data = &[];
         assert_eq!(parse_ipc_message(invalid_data).unwrap_err().to_string(),
                    String::from("Arrow error: Parser error: Invalid data length: 0"));
-    }
 
-    #[test]
-    fn test_parse_ipc_message_invalid_continuation_marker() {
         let data_with_invalid_continuation: &[u8] = &le_bytes(&[0x00000001, 0x00000000]);
         assert_eq!(parse_ipc_message(data_with_invalid_continuation).unwrap_err().to_string(),
                    String::from("Arrow error: Parser error: Invalid continuation marker: 1"));
-    }
 
-    #[test]
-    fn test_parse_ipc_message_data_length_shorter_than_metadata_size() {
         let data_with_invalid_length: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000001]);
         assert_eq!(parse_ipc_message(data_with_invalid_length).unwrap_err().to_string(),
                    String::from("Arrow error: Parser error: Invalid data length. \
                    Remaining data length 0 is shorter than specified size 1"));
-    }
 
-    #[test]
-    fn test_parse_ipc_message_not_a_record_batch() {
         let data_with_invalid_length = &le_bytes(&[0xFFFFFFFF, 0x00000004, 0x00000000]);
         assert_eq!(parse_ipc_message(data_with_invalid_length).unwrap_err().to_string(),
                    String::from("Arrow error: Parser error: Not a record batch"));
