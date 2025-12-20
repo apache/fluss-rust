@@ -19,10 +19,12 @@ use crate::proto;
 use crate::proto::PbTablePath;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
-use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 
 use crate::metadata::TablePath;
+use crate::rpc::frame::ReadError;
+
 use crate::{impl_read_version_type, impl_write_version_type};
 use bytes::{Buf, BufMut};
 use prost::Message;

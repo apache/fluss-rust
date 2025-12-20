@@ -17,6 +17,7 @@
 
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
+use prost::DecodeError;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -28,6 +29,9 @@ pub enum RpcError {
 
     #[error("Cannot read framed message: {0}")]
     ReadMessageError(#[from] crate::rpc::frame::ReadError),
+
+    #[error("Rpc Decode Error: {0}")]
+    RpcDecodeError(#[from] DecodeError),
 
     #[error("connection error")]
     ConnectionError(String),

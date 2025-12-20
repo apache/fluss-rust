@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::proto::ErrorResponse;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadVersionedType, WriteVersionedType};
 use bytes::{Buf, BufMut};
+use prost::Message;
 
 #[allow(dead_code)]
 const REQUEST_HEADER_LENGTH: i32 = 8;
@@ -53,9 +55,10 @@ where
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct ResponseHeader {
     pub request_id: i32,
+    pub error_response: Option<ErrorResponse>,
 }
 
 impl<R> ReadVersionedType<R> for ResponseHeader
@@ -64,10 +67,17 @@ where
 {
     fn read_versioned(reader: &mut R, _version: ApiVersion) -> Result<Self, ReadError> {
         let resp_type = reader.get_u8();
-        if resp_type != SUCCESS_RESPONSE {
-            todo!("handle unsuccess response type");
-        }
         let request_id = reader.get_i32();
-        Ok(ResponseHeader { request_id })
+        if resp_type != SUCCESS_RESPONSE {
+            let error_response = ErrorResponse::decode(reader)?;
+            return Ok(ResponseHeader {
+                request_id,
+                error_response: Some(error_response),
+            });
+        }
+        Ok(ResponseHeader {
+            request_id,
+            error_response: None,
+        })
     }
 }

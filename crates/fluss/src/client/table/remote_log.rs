@@ -100,15 +100,14 @@ impl RemoteLogDownloadFuture {
 
     /// Get the downloaded file path
     pub async fn get_file_path(&mut self) -> Result<PathBuf> {
-        let receiver = self
-            .receiver
-            .take()
-            .ok_or_else(|| Error::Io(io::Error::other("Download future already consumed")))?;
+        let receiver = self.receiver.take().ok_or_else(|| Error::UnexpectedError {
+            message: "Downloaded file already consumed".to_string(),
+            source: None,
+        })?;
 
-        receiver.await.map_err(|e| {
-            Error::Io(io::Error::other(format!(
-                "Download future cancelled: {e:?}"
-            )))
+        receiver.await.map_err(|e| Error::UnexpectedError {
+            message: format!("Download future cancelled: {e:?}"),
+            source: None,
         })?
     }
 }
@@ -234,13 +233,13 @@ impl RemoteLogDownloader {
             let read_future = op.read_with(relative_path).range(range.clone());
             let chunk = tokio::time::timeout(REMOTE_OP_TIMEOUT, read_future)
                 .await
-                .map_err(|_| {
-                    Error::Io(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!(
-                            "Timeout reading chunk from remote storage: {remote_path} at offset {offset}"
+                .map_err(|e| {
+                    Error::IoUnexpectedError {
+                        message: format!(
+                            "Timeout reading chunk from remote storage: {remote_path} at offset {offset}, exception: {e}."
                         ),
-                    ))
+                        source: io::ErrorKind::TimedOut.into(),
+                    }
                 })??;
             let bytes = chunk.to_bytes();
 

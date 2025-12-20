@@ -290,18 +290,22 @@ impl Datum<'_> {
             Datum::String(v) => append_value_to_arrow!(StringBuilder, *v),
             Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
             Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {
-                return Err(RowConvertError(format!(
-                    "Type {:?} is not yet supported for Arrow conversion",
-                    std::mem::discriminant(self)
-                )));
+                return Err(RowConvertError {
+                    message: format!(
+                        "Type {:?} is not yet supported for Arrow conversion",
+                        std::mem::discriminant(self)
+                    ),
+                });
             }
         }
 
-        Err(RowConvertError(format!(
-            "Cannot append {:?} to builder of type {}",
-            self,
-            std::any::type_name_of_val(builder)
-        )))
+        Err(RowConvertError {
+            message: format!(
+                "Cannot append {:?} to builder of type {}",
+                self,
+                std::any::type_name_of_val(builder)
+            ),
+        })
     }
 }
 
@@ -313,11 +317,13 @@ macro_rules! impl_to_arrow {
                     b.append_value(*self);
                     Ok(())
                 } else {
-                    Err(RowConvertError(format!(
-                        "Cannot cast {} to {} builder",
-                        stringify!($ty),
-                        stringify!($variant)
-                    )))
+                    Err(RowConvertError {
+                        message: format!(
+                            "Cannot cast {} to {} builder",
+                            stringify!($ty),
+                            stringify!($variant)
+                        ),
+                    })
                 }
             }
         }

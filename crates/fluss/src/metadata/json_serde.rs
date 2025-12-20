@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Error::{InvalidTableError, JsonSerdeError};
-use crate::error::Result;
+use crate::error::Error::JsonSerdeError;
+use crate::error::{Error, Result};
 use crate::metadata::datatype::{DataField, DataType, DataTypes};
 use crate::metadata::table::{Column, Schema, TableDescriptor};
 use serde_json::{Value, json};
@@ -166,11 +166,11 @@ impl JsonSerde for DataType {
         let type_root = node
             .get(Self::FIELD_NAME_TYPE_NAME)
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                JsonSerdeError(format!(
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!(
                     "Couldn't find field {} while deserializing datatype.",
                     Self::FIELD_NAME_TYPE_NAME
-                ))
+                ),
             })?;
 
         let mut data_type = match type_root {
@@ -185,11 +185,8 @@ impl JsonSerde for DataType {
                 let length = node
                     .get(Self::FIELD_NAME_LENGTH)
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| {
-                        JsonSerdeError(format!(
-                            "Missing required field: {}",
-                            Self::FIELD_NAME_LENGTH
-                        ))
+                    .ok_or_else(|| Error::JsonSerdeError {
+                        message: format!("Missing required field: {}", Self::FIELD_NAME_LENGTH),
                     })? as u32;
                 DataTypes::char(length)
             }
@@ -198,11 +195,8 @@ impl JsonSerde for DataType {
                 let precision = node
                     .get(Self::FIELD_NAME_PRECISION)
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| {
-                        JsonSerdeError(format!(
-                            "Missing required field: {}",
-                            Self::FIELD_NAME_PRECISION
-                        ))
+                    .ok_or_else(|| Error::JsonSerdeError {
+                        message: format!("Missing required field: {}", Self::FIELD_NAME_PRECISION),
                     })? as u32;
                 let scale = node
                     .get(Self::FIELD_NAME_SCALE)
@@ -243,43 +237,46 @@ impl JsonSerde for DataType {
             "ARRAY" => {
                 let element_type_node =
                     node.get(Self::FIELD_NAME_ELEMENT_TYPE).ok_or_else(|| {
-                        JsonSerdeError(format!(
-                            "Missing required field: {}",
-                            Self::FIELD_NAME_ELEMENT_TYPE
-                        ))
+                        Error::JsonSerdeError {
+                            message: format!(
+                                "Missing required field: {}",
+                                Self::FIELD_NAME_ELEMENT_TYPE
+                            ),
+                        }
                     })?;
                 let element_type = DataType::deserialize_json(element_type_node)?;
                 DataTypes::array(element_type)
             }
             "MAP" => {
-                let key_type_node = node.get(Self::FIELD_NAME_KEY_TYPE).ok_or_else(|| {
-                    JsonSerdeError(format!(
-                        "Missing required field: {}",
-                        Self::FIELD_NAME_KEY_TYPE
-                    ))
-                })?;
+                let key_type_node =
+                    node.get(Self::FIELD_NAME_KEY_TYPE)
+                        .ok_or_else(|| Error::JsonSerdeError {
+                            message: format!(
+                                "Missing required field: {}",
+                                Self::FIELD_NAME_KEY_TYPE
+                            ),
+                        })?;
                 let key_type = DataType::deserialize_json(key_type_node)?;
-                let value_type_node = node.get(Self::FIELD_NAME_VALUE_TYPE).ok_or_else(|| {
-                    JsonSerdeError(format!(
-                        "Missing required field: {}",
-                        Self::FIELD_NAME_VALUE_TYPE
-                    ))
-                })?;
+                let value_type_node =
+                    node.get(Self::FIELD_NAME_VALUE_TYPE)
+                        .ok_or_else(|| Error::JsonSerdeError {
+                            message: format!(
+                                "Missing required field: {}",
+                                Self::FIELD_NAME_VALUE_TYPE
+                            ),
+                        })?;
                 let value_type = DataType::deserialize_json(value_type_node)?;
                 DataTypes::map(key_type, value_type)
             }
             "ROW" => {
                 let fields_node = node
                     .get(Self::FIELD_NAME_FIELDS)
-                    .ok_or_else(|| {
-                        JsonSerdeError(format!(
-                            "Missing required field: {}",
-                            Self::FIELD_NAME_FIELDS
-                        ))
+                    .ok_or_else(|| Error::JsonSerdeError {
+                        message: format!("Missing required field: {}", Self::FIELD_NAME_FIELDS),
                     })?
                     .as_array()
-                    .ok_or_else(|| {
-                        JsonSerdeError(format!("{} must be an array", Self::FIELD_NAME_FIELDS))
+                    .ok_or_else(|| Error::JsonSerdeError {
+                        message: format!("{} must be an array", Self::FIELD_NAME_FIELDS),
                     })?;
                 let mut fields = Vec::with_capacity(fields_node.len());
                 for field_node in fields_node {
@@ -287,7 +284,11 @@ impl JsonSerde for DataType {
                 }
                 DataTypes::row(fields)
             }
-            _ => return Err(JsonSerdeError(format!("Unknown type root: {type_root}"))),
+            _ => {
+                return Err(Error::JsonSerdeError {
+                    message: format!("Unknown type root: {type_root}"),
+                });
+            }
         };
 
         if let Some(nullable) = node.get(Self::FIELD_NAME_NULLABLE) {
@@ -327,12 +328,16 @@ impl JsonSerde for DataField {
         let name = node
             .get(Self::NAME)
             .and_then(|v| v.as_str())
-            .ok_or_else(|| JsonSerdeError(format!("Missing required field: {}", Self::NAME)))?
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!("Missing required field: {}", Self::NAME),
+            })?
             .to_string();
 
-        let field_type_node = node.get(Self::FIELD_TYPE).ok_or_else(|| {
-            JsonSerdeError(format!("Missing required field: {}", Self::FIELD_TYPE))
-        })?;
+        let field_type_node = node
+            .get(Self::FIELD_TYPE)
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!("Missing required field: {}", Self::FIELD_TYPE),
+            })?;
 
         let data_type = DataType::deserialize_json(field_type_node)?;
 
@@ -373,12 +378,16 @@ impl JsonSerde for Column {
         let name = node
             .get(Self::NAME)
             .and_then(|v| v.as_str())
-            .ok_or_else(|| JsonSerdeError(format!("Missing required field: {}", Self::NAME)))?
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!("Missing required field: {}", Self::NAME),
+            })?
             .to_string();
 
-        let data_type_node = node.get(Self::DATA_TYPE).ok_or_else(|| {
-            JsonSerdeError(format!("Missing required field: {}", Self::DATA_TYPE))
-        })?;
+        let data_type_node = node
+            .get(Self::DATA_TYPE)
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!("Missing required field: {}", Self::DATA_TYPE),
+            })?;
 
         let data_type = DataType::deserialize_json(data_type_node)?;
 
@@ -429,11 +438,13 @@ impl JsonSerde for Schema {
     fn deserialize_json(node: &Value) -> Result<Schema> {
         let columns_node = node
             .get(Self::COLUMNS_NAME)
-            .ok_or_else(|| {
-                JsonSerdeError(format!("Missing required field: {}", Self::COLUMNS_NAME))
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!("Missing required field: {}", Self::COLUMNS_NAME),
             })?
             .as_array()
-            .ok_or_else(|| JsonSerdeError(format!("{} must be an array", Self::COLUMNS_NAME)))?;
+            .ok_or_else(|| Error::JsonSerdeError {
+                message: format!("{} must be an array", Self::COLUMNS_NAME),
+            })?;
 
         let mut columns = Vec::with_capacity(columns_node.len());
         for col_node in columns_node {
@@ -443,17 +454,17 @@ impl JsonSerde for Schema {
         let mut schema_builder = Schema::builder().with_columns(columns);
 
         if let Some(pk_node) = node.get(Self::PRIMARY_KEY_NAME) {
-            let pk_array = pk_node
-                .as_array()
-                .ok_or_else(|| InvalidTableError("Primary key must be an array".to_string()))?;
+            let pk_array = pk_node.as_array().ok_or_else(|| Error::InvalidTableError {
+                message: "Primary key must be an array".to_string(),
+            })?;
 
             let mut primary_keys = Vec::with_capacity(pk_array.len());
             for name_node in pk_array {
                 primary_keys.push(
                     name_node
                         .as_str()
-                        .ok_or_else(|| {
-                            InvalidTableError("Primary key element must be a string".to_string())
+                        .ok_or_else(|| Error::InvalidTableError {
+                            message: "Primary key element must be a string".to_string(),
                         })?
                         .to_string(),
                 );
@@ -478,9 +489,9 @@ impl TableDescriptor {
     const VERSION: u32 = 1;
 
     fn deserialize_properties(node: &Value) -> Result<HashMap<String, String>> {
-        let obj = node
-            .as_object()
-            .ok_or_else(|| JsonSerdeError("Properties must be an object".to_string()))?;
+        let obj = node.as_object().ok_or_else(|| Error::JsonSerdeError {
+            message: "Properties must be an object".to_string(),
+        })?;
 
         let mut properties = HashMap::with_capacity(obj.len());
         for (key, value) in obj {
@@ -488,7 +499,9 @@ impl TableDescriptor {
                 key.clone(),
                 value
                     .as_str()
-                    .ok_or_else(|| JsonSerdeError("Property value must be a string".to_string()))?
+                    .ok_or_else(|| Error::JsonSerdeError {
+                        message: "Property value must be a string".to_string(),
+                    })?
                     .to_owned(),
             );
         }
@@ -545,8 +558,8 @@ impl JsonSerde for TableDescriptor {
         let mut builder = TableDescriptor::builder();
 
         // Deserialize schema
-        let schema_node = node.get(Self::SCHEMA_NAME).ok_or_else(|| {
-            JsonSerdeError(format!("Missing required field: {}", Self::SCHEMA_NAME))
+        let schema_node = node.get(Self::SCHEMA_NAME).ok_or_else(|| JsonSerdeError {
+            message: format!("Missing required field: {}", Self::SCHEMA_NAME),
         })?;
         let schema = Schema::deserialize_json(schema_node)?;
         builder = builder.schema(schema);
@@ -555,22 +568,21 @@ impl JsonSerde for TableDescriptor {
         if let Some(comment_node) = node.get(Self::COMMENT_NAME) {
             let comment = comment_node
                 .as_str()
-                .ok_or_else(|| JsonSerdeError(format!("{} must be a string", Self::COMMENT_NAME)))?
+                .ok_or_else(|| JsonSerdeError {
+                    message: format!("{} must be a string", Self::COMMENT_NAME),
+                })?
                 .to_owned();
             builder = builder.comment(comment.as_str());
         }
 
         let partition_node = node
             .get(Self::PARTITION_KEY_NAME)
-            .ok_or_else(|| {
-                JsonSerdeError(format!(
-                    "Missing required field: {}",
-                    Self::PARTITION_KEY_NAME
-                ))
+            .ok_or_else(|| JsonSerdeError {
+                message: format!("Missing required field: {}", Self::PARTITION_KEY_NAME),
             })?
             .as_array()
-            .ok_or_else(|| {
-                JsonSerdeError(format!("{} must be an array", Self::PARTITION_KEY_NAME))
+            .ok_or_else(|| JsonSerdeError {
+                message: format!("{} must be an array", Self::PARTITION_KEY_NAME),
             })?;
 
         let mut partition_keys = Vec::with_capacity(partition_node.len());
@@ -578,11 +590,8 @@ impl JsonSerde for TableDescriptor {
             partition_keys.push(
                 key_node
                     .as_str()
-                    .ok_or_else(|| {
-                        JsonSerdeError(format!(
-                            "{} element must be a string",
-                            Self::PARTITION_KEY_NAME
-                        ))
+                    .ok_or_else(|| JsonSerdeError {
+                        message: format!("{} element must be a string", Self::PARTITION_KEY_NAME),
                     })?
                     .to_owned(),
             );
@@ -592,15 +601,17 @@ impl JsonSerde for TableDescriptor {
         let mut bucket_count = None;
         let mut bucket_keys = vec![];
         if let Some(bucket_key_node) = node.get(Self::BUCKET_KEY_NAME) {
-            let bucket_key_node = bucket_key_node.as_array().ok_or_else(|| {
-                JsonSerdeError(format!("{} must be an array", Self::BUCKET_KEY_NAME))
+            let bucket_key_node = bucket_key_node.as_array().ok_or_else(|| JsonSerdeError {
+                message: format!("{} must be an array", Self::BUCKET_KEY_NAME),
             })?;
 
             for key_node in bucket_key_node {
                 bucket_keys.push(
                     key_node
                         .as_str()
-                        .ok_or_else(|| JsonSerdeError("Bucket key must be a string".to_string()))?
+                        .ok_or_else(|| JsonSerdeError {
+                            message: "Bucket key must be a string".to_string(),
+                        })?
                         .to_owned(),
                 );
             }
@@ -617,18 +628,18 @@ impl JsonSerde for TableDescriptor {
         // Deserialize properties
         let properties =
             Self::deserialize_properties(node.get(Self::PROPERTIES_NAME).ok_or_else(|| {
-                JsonSerdeError(format!("Missing required field: {}", Self::PROPERTIES_NAME))
+                JsonSerdeError {
+                    message: format!("Missing required field: {}", Self::PROPERTIES_NAME),
+                }
             })?)?;
         builder = builder.properties(properties);
 
         // Deserialize custom properties
         let custom_properties = Self::deserialize_properties(
-            node.get(Self::CUSTOM_PROPERTIES_NAME).ok_or_else(|| {
-                JsonSerdeError(format!(
-                    "Missing required field: {}",
-                    Self::CUSTOM_PROPERTIES_NAME
-                ))
-            })?,
+            node.get(Self::CUSTOM_PROPERTIES_NAME)
+                .ok_or_else(|| JsonSerdeError {
+                    message: format!("Missing required field: {}", Self::CUSTOM_PROPERTIES_NAME),
+                })?,
         )?;
         builder = builder.custom_properties(custom_properties);
 

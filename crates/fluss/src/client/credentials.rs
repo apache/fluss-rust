@@ -134,9 +134,10 @@ impl CredentialsCache {
             return Ok(HashMap::new());
         }
 
-        let credentials: Credentials = serde_json::from_slice(&response.token).map_err(|e| {
-            Error::JsonSerdeError(format!("Error when parse token from server: {e}"))
-        })?;
+        let credentials: Credentials =
+            serde_json::from_slice(&response.token).map_err(|e| Error::JsonSerdeError {
+                message: format!("Error when parse token from server: {e}"),
+            })?;
 
         let mut addition_infos = HashMap::new();
         for kv in &response.addition_info {

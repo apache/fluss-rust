@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cluster::ServerNode;
+use crate::error::Error;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::error::RpcError;
 use crate::rpc::error::RpcError::ConnectionError;
@@ -230,7 +231,7 @@ where
         }
     }
 
-    pub async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, RpcError>
+    pub async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, Error>
     where
         R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
         R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
@@ -249,9 +250,12 @@ where
 
         let mut buf = Vec::new();
         // write header
-        header.write_versioned(&mut buf, header_version)?;
+        header
+            .write_versioned(&mut buf, header_version)
+            .map_err(RpcError::WriteMessageError)?;
         // write message body
-        msg.write_versioned(&mut buf, body_api_version)?;
+        msg.write_versioned(&mut buf, body_api_version)
+            .map_err(RpcError::WriteMessageError)?;
 
         let (tx, rx) = channel();
 
@@ -264,14 +268,21 @@ where
             ConnectionState::RequestMap(map) => {
                 map.insert(request_id, ActiveRequest { channel: tx });
             }
-            ConnectionState::Poison(e) => return Err(RpcError::Poisoned(Arc::clone(e))),
+            ConnectionState::Poison(e) => return Err(RpcError::Poisoned(Arc::clone(e)).into()),
         }
 
         self.send_message(buf).await?;
         _cleanup_on_cancel.message_sent();
         let mut response = rx.await.expect("Who closed this channel?!")?;
 
-        let body = R::ResponseBody::read_versioned(&mut response.data, body_api_version)?;
+        if let Some(error_response) = response.header.error_response {
+            return Err(Error::FlussAPIError {
+                api_error: crate::rpc::ApiError::from(error_response),
+            });
+        }
+
+        let body = R::ResponseBody::read_versioned(&mut response.data, body_api_version)
+            .map_err(RpcError::ReadMessageError)?;
 
         let read_bytes = response.data.position();
         let message_bytes = response.data.into_inner().len() as u64;
@@ -281,7 +292,8 @@ where
                 read: read_bytes,
                 api_key: R::API_KEY,
                 api_version: body_api_version,
-            });
+            }
+            .into());
         }
         Ok(body)
     }

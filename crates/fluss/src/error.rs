@@ -15,48 +15,137 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::rpc::RpcError;
+pub use crate::rpc::RpcError;
+pub use crate::rpc::{ApiError, FlussError};
+
 use arrow_schema::ArrowError;
+use snafu::Snafu;
 use std::{io, result};
-use thiserror::Error;
 
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Snafu)]
 pub enum Error {
-    #[error(transparent)]
-    Io(#[from] io::Error),
+    #[snafu(
+        whatever,
+        display("Fluss hitting unexpected error {}: {:?}", message, source)
+    )]
+    UnexpectedError {
+        message: String,
+        /// see https://github.com/shepmaster/snafu/issues/446
+        #[snafu(source(from(Box<dyn std::error::Error + Send + Sync + 'static>, Some)))]
+        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    },
 
-    #[error("Invalid table")]
-    InvalidTableError(String),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting unexpected io error {}: {:?}", message, source)
+    )]
+    IoUnexpectedError { message: String, source: io::Error },
 
-    #[error("Json serde error")]
-    JsonSerdeError(String),
+    #[snafu(
+        visibility(pub(crate)),
+        display(
+            "Fluss hitting remote storage unexpected error {}: {:?}",
+            message,
+            source
+        )
+    )]
+    RemoteStorageUnexpectedError {
+        message: String,
+        source: opendal::Error,
+    },
 
-    #[error("Rpc error")]
-    RpcError(#[from] RpcError),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting invalid table error {}.", message)
+    )]
+    InvalidTableError { message: String },
 
-    #[error("Row convert error")]
-    RowConvertError(String),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting json serde error {}.", message)
+    )]
+    JsonSerdeError { message: String },
 
-    #[error("Arrow error: {0}")]
-    ArrowError(#[from] ArrowError),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting unexpected rpc error {}: {:?}", message, source)
+    )]
+    RpcError { message: String, source: RpcError },
 
-    #[error("Write error: {0}")]
-    WriteError(String),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting row convert error {}.", message)
+    )]
+    RowConvertError { message: String },
 
-    #[error("Illegal argument error: {0}")]
-    IllegalArgument(String),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting Arrow error {}: {:?}.", message, source)
+    )]
+    ArrowError { message: String, source: ArrowError },
 
-    #[error("IO not supported error: {0}")]
-    IoUnsupported(String),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting illegal argument error {}.", message)
+    )]
+    IllegalArgument { message: String },
 
-    #[error("IO operation failed on underlying storage: {0}")]
-    IoUnexpected(Box<opendal::Error>),
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting IO not supported error {}.", message)
+    )]
+    IoUnsupported { message: String },
+
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting leader not available error {}.", message)
+    )]
+    LeaderNotAvailable { message: String },
+
+    #[snafu(visibility(pub(crate)), display("Fluss API Error: {}.", api_error))]
+    FlussAPIError { api_error: ApiError },
+}
+
+impl From<ArrowError> for Error {
+    fn from(value: ArrowError) -> Self {
+        Error::ArrowError {
+            message: format!("{value}"),
+            source: value,
+        }
+    }
+}
+
+impl From<RpcError> for Error {
+    fn from(value: RpcError) -> Self {
+        Error::RpcError {
+            message: format!("{value}"),
+            source: value,
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Error::IoUnexpectedError {
+            message: format!("{value}"),
+            source: value,
+        }
+    }
 }
 
 impl From<opendal::Error> for Error {
-    fn from(err: opendal::Error) -> Self {
-        Error::IoUnexpected(Box::new(err))
+    fn from(value: opendal::Error) -> Self {
+        Error::RemoteStorageUnexpectedError {
+            message: format!("{value}"),
+            source: value,
+        }
+    }
+}
+
+impl From<ApiError> for Error {
+    fn from(value: ApiError) -> Self {
+        Error::FlussAPIError { api_error: value }
     }
 }

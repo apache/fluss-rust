@@ -34,6 +34,7 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 mod admin_test {
     use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
+    use fluss::error::FlussError;
     use fluss::metadata::{
         DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat, Schema, TableDescriptor,
         TablePath,
@@ -250,5 +251,36 @@ mod admin_test {
 
         // database shouldn't exist now
         assert_eq!(admin.database_exists(test_db_name).await.unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn test_fluss_error_response() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection
+            .get_admin()
+            .await
+            .expect("Failed to get admin client");
+
+        let table_path = TablePath::new("fluss".to_string(), "not_exist".to_string());
+
+        let result = admin.get_table(&table_path).await;
+        assert!(result.is_err(), "Expected error but got Ok");
+
+        let error = result.unwrap_err();
+        match error {
+            fluss::error::Error::FlussAPIError { api_error } => {
+                assert_eq!(
+                    api_error.code,
+                    FlussError::TableNotExist.code(),
+                    "Expected error code 7 (TableNotExist)"
+                );
+                assert_eq!(
+                    api_error.message, "Table 'fluss.not_exist' does not exist.",
+                    "Expected specific error message"
+                );
+            }
+            other => panic!("Expected FlussAPIError, got {:?}", other),
+        }
     }
 }

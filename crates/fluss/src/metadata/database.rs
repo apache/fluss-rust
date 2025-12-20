@@ -148,8 +148,8 @@ impl JsonSerde for DatabaseDescriptor {
         if let Some(comment_node) = node.get(Self::COMMENT_NAME) {
             let comment = comment_node
                 .as_str()
-                .ok_or_else(|| {
-                    JsonSerdeError(format!("{} should be a string", Self::COMMENT_NAME))
+                .ok_or_else(|| JsonSerdeError {
+                    message: format!("{} should be a string", Self::COMMENT_NAME),
                 })?
                 .to_owned();
             builder = builder.comment(&comment);
@@ -157,8 +157,8 @@ impl JsonSerde for DatabaseDescriptor {
 
         // Deserialize custom properties directly
         let custom_properties = if let Some(props_node) = node.get(Self::CUSTOM_PROPERTIES_NAME) {
-            let obj = props_node.as_object().ok_or_else(|| {
-                JsonSerdeError("Custom properties should be an object".to_string())
+            let obj = props_node.as_object().ok_or_else(|| JsonSerdeError {
+                message: "Custom properties should be an object".to_string(),
             })?;
 
             let mut properties = HashMap::with_capacity(obj.len());
@@ -167,8 +167,8 @@ impl JsonSerde for DatabaseDescriptor {
                     key.clone(),
                     value
                         .as_str()
-                        .ok_or_else(|| {
-                            JsonSerdeError("Property value should be a string".to_string())
+                        .ok_or_else(|| JsonSerdeError {
+                            message: "Property value should be a string".to_string(),
                         })?
                         .to_owned(),
                 );
@@ -186,16 +186,18 @@ impl JsonSerde for DatabaseDescriptor {
 impl DatabaseDescriptor {
     /// Create DatabaseDescriptor from JSON bytes (equivalent to Java's fromJsonBytes)
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
-        let json_value: Value = serde_json::from_slice(bytes)
-            .map_err(|e| JsonSerdeError(format!("Failed to parse JSON: {e}")))?;
+        let json_value: Value = serde_json::from_slice(bytes).map_err(|e| JsonSerdeError {
+            message: format!("Failed to parse JSON: {e}"),
+        })?;
         Self::deserialize_json(&json_value)
     }
 
     /// Convert DatabaseDescriptor to JSON bytes
     pub fn to_json_bytes(&self) -> Result<Vec<u8>> {
         let json_value = self.serialize_json()?;
-        serde_json::to_vec(&json_value)
-            .map_err(|e| JsonSerdeError(format!("Failed to serialize to JSON: {e}")))
+        serde_json::to_vec(&json_value).map_err(|e| JsonSerdeError {
+            message: format!("Failed to serialize to JSON: {e}"),
+        })
     }
 }
 

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use prost::DecodeError;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -29,6 +30,9 @@ pub enum ReadError {
 
     #[error("Message too large, limit is {limit} bytes but got {actual} bytes")]
     MessageTooLarge { limit: usize, actual: usize },
+
+    #[error("Fail to decode error response: {0}")]
+    ProtoErrorResponseDecodeError(#[from] DecodeError),
 }
 
 pub trait AsyncMessageRead {

@@ -38,6 +38,7 @@ mod produce_log;
 mod table_exists;
 mod update_metadata;
 
+pub use crate::rpc::RpcError;
 pub use create_database::*;
 pub use create_table::*;
 pub use database_exists::*;
