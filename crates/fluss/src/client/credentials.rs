@@ -122,17 +122,21 @@ impl CredentialsCache {
         metadata: &Arc<Metadata>,
     ) -> Result<HashMap<String, String>> {
         let cluster = metadata.get_cluster();
-        let server_node = cluster
-            .get_coordinator_server()
-            .or_else(|| Some(cluster.get_one_available_server()))
-            .expect("no available server to fetch security token");
+        let server_node = cluster.get_one_available_server();
         let conn = rpc_client.get_connection(server_node).await?;
 
         let request = GetSecurityTokenRequest::new();
         let response = conn.request(request).await?;
 
-        let credentials: Credentials = serde_json::from_slice(&response.token)
-            .map_err(|e| Error::JsonSerdeError(e.to_string()))?;
+        // the token may be empty if the remote filesystem
+        // doesn't require token to access
+        if response.token.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let credentials: Credentials = serde_json::from_slice(&response.token).map_err(|e| {
+            Error::JsonSerdeError(format!("Error when parse token from server: {e}"))
+        })?;
 
         let mut addition_infos = HashMap::new();
         for kv in &response.addition_info {

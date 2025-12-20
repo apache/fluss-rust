@@ -226,10 +226,7 @@ impl RemoteLogDownloader {
 
             if chunk_count <= 3 || chunk_count % 10 == 0 {
                 log::debug!(
-                    "Remote log download: reading chunk {}/{} (offset {})",
-                    chunk_count,
-                    total_chunks,
-                    offset
+                    "Remote log download: reading chunk {chunk_count}/{total_chunks} (offset {offset})"
                 );
             }
 
@@ -241,8 +238,7 @@ impl RemoteLogDownloader {
                     Error::Io(io::Error::new(
                         io::ErrorKind::TimedOut,
                         format!(
-                            "Timeout reading chunk from remote storage: {} at offset {}",
-                            remote_path, offset
+                            "Timeout reading chunk from remote storage: {remote_path} at offset {offset}"
                         ),
                     ))
                 })??;
