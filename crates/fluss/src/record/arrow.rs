@@ -844,10 +844,7 @@ impl ReadContext {
     }
 
     pub fn record_batch_for_remote_log(&self, data: &[u8]) -> Result<Option<RecordBatch>> {
-        let (batch_metadata, body_buffer, version) = match parse_ipc_message(data) {
-            Some(result) => result,
-            None => return Ok(None),
-        };
+        let (batch_metadata, body_buffer, version) = parse_ipc_message(data)?;
 
         let record_batch = read_record_batch(
             &body_buffer,
@@ -1086,13 +1083,17 @@ mod tests {
         let result = parse_ipc_message(empty_body);
         assert_eq!(
             result.unwrap_err().to_string(),
-            String::from("Arrow error: Parser error: Range [0, 4) is out of bounds.\n\n")
+            String::from(
+                "Fluss hitting Arrow error Parser error: Range [0, 4) is out of bounds.\n\n: ParseError(\"Range [0, 4) is out of bounds.\\n\\n\")."
+            )
         );
 
         let invalid_data = &[];
         assert_eq!(
             parse_ipc_message(invalid_data).unwrap_err().to_string(),
-            String::from("Arrow error: Parser error: Invalid data length: 0")
+            String::from(
+                "Fluss hitting Arrow error Parser error: Invalid data length: 0: ParseError(\"Invalid data length: 0\")."
+            )
         );
 
         let data_with_invalid_continuation: &[u8] = &le_bytes(&[0x00000001, 0x00000000]);
@@ -1100,7 +1101,9 @@ mod tests {
             parse_ipc_message(data_with_invalid_continuation)
                 .unwrap_err()
                 .to_string(),
-            String::from("Arrow error: Parser error: Invalid continuation marker: 1")
+            String::from(
+                "Fluss hitting Arrow error Parser error: Invalid continuation marker: 1: ParseError(\"Invalid continuation marker: 1\")."
+            )
         );
 
         let data_with_invalid_length: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000001]);
@@ -1109,8 +1112,7 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             String::from(
-                "Arrow error: Parser error: Invalid data length. \
-                   Remaining data length 0 is shorter than specified size 1"
+                "Fluss hitting Arrow error Parser error: Invalid data length. Remaining data length 0 is shorter than specified size 1: ParseError(\"Invalid data length. Remaining data length 0 is shorter than specified size 1\")."
             )
         );
 
@@ -1119,7 +1121,9 @@ mod tests {
             parse_ipc_message(data_with_invalid_length)
                 .unwrap_err()
                 .to_string(),
-            String::from("Arrow error: Parser error: Not a record batch")
+            String::from(
+                "Fluss hitting Arrow error Parser error: Not a record batch: ParseError(\"Not a record batch\")."
+            )
         );
     }
 

@@ -45,7 +45,7 @@ impl Storage {
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 { props }),
             _ => Err(error::Error::IoUnsupported {
-                "Unsupported storage feature".to_string(),
+                message: format!("Unsupported storage feature {scheme_str}"),
             }),
         }
     }

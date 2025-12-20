@@ -22,6 +22,7 @@ use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord};
 use crate::util::delete_file;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -232,13 +233,13 @@ impl RemoteLogDownloader {
             let read_future = op.read_with(relative_path).range(range.clone());
             let chunk = tokio::time::timeout(REMOTE_OP_TIMEOUT, read_future)
                 .await
-                .map_err(|_| {
-                    Error::Io(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!(
-                            "Timeout reading chunk from remote storage: {remote_path} at offset {offset}"
+                .map_err(|e| {
+                    Error::IoUnexpectedError {
+                        message: format!(
+                            "Timeout reading chunk from remote storage: {remote_path} at offset {offset}, exception: {e}."
                         ),
-                    ))
+                        source: io::ErrorKind::TimedOut.into(),
+                    }
                 })??;
             let bytes = chunk.to_bytes();
 
