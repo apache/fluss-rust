@@ -17,12 +17,14 @@
 
 mod admin;
 mod connection;
+mod credentials;
 mod metadata;
 mod table;
 mod write;
 
 pub use admin::*;
 pub use connection::*;
+pub use credentials::*;
 pub use metadata::*;
 pub use table::*;
 pub use write::*;

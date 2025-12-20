@@ -504,6 +504,30 @@ impl<'a> LogRecordBatch<'a> {
         };
         Ok(log_record_iterator)
     }
+
+    pub fn records_for_remote_log(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
+        if self.record_count() == 0 {
+            return Ok(LogRecordIterator::empty());
+        }
+
+        let data = &self.data[RECORDS_OFFSET..];
+
+        let record_batch = read_context.record_batch_for_remote_log(data)?;
+        let log_record_iterator = match record_batch {
+            None => LogRecordIterator::empty(),
+            Some(record_batch) => {
+                let arrow_reader = ArrowReader::new(Arc::new(record_batch));
+                LogRecordIterator::Arrow(ArrowLogRecordIterator {
+                    reader: arrow_reader,
+                    base_offset: self.base_log_offset(),
+                    timestamp: self.commit_timestamp(),
+                    row_id: 0,
+                    change_type: ChangeType::AppendOnly,
+                })
+            }
+        };
+        Ok(log_record_iterator)
+    }
 }
 
 /// Parse an Arrow IPC message from a byte slice.
@@ -552,7 +576,8 @@ fn parse_ipc_message(
     let message = root_as_message(metadata_bytes).ok()?;
     let batch_metadata = message.header_as_record_batch()?;
 
-    let body_start = 8 + metadata_size;
+    let metadata_padded_size = (metadata_size + 7) & !7;
+    let body_start = 8 + metadata_padded_size;
     let body_data = &data[body_start..];
     let body_buffer = Buffer::from(body_data);
 
@@ -677,7 +702,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
 #[derive(Clone)]
 pub struct ReadContext {
     target_schema: SchemaRef,
-
+    full_schema: SchemaRef,
     projection: Option<Projection>,
 }
 
@@ -694,7 +719,8 @@ struct Projection {
 impl ReadContext {
     pub fn new(arrow_schema: SchemaRef) -> ReadContext {
         ReadContext {
-            target_schema: arrow_schema,
+            target_schema: arrow_schema.clone(),
+            full_schema: arrow_schema,
             projection: None,
         }
     }
@@ -730,7 +756,10 @@ impl ReadContext {
                 }
             } else {
                 Projection {
-                    ordered_schema: Self::project_schema(arrow_schema, projected_fields.as_slice()),
+                    ordered_schema: Self::project_schema(
+                        arrow_schema.clone(),
+                        projected_fields.as_slice(),
+                    ),
                     ordered_fields: projected_fields.clone(),
                     projected_fields,
                     reordering_indexes: vec![],
@@ -741,6 +770,7 @@ impl ReadContext {
 
         ReadContext {
             target_schema,
+            full_schema: arrow_schema,
             projection: Some(project),
         }
     }
@@ -806,6 +836,35 @@ impl ReadContext {
                 RecordBatch::try_new(self.target_schema.clone(), reordered_columns)?
             }
             _ => record_batch,
+        };
+        Ok(Some(record_batch))
+    }
+
+    pub fn record_batch_for_remote_log(&self, data: &[u8]) -> Result<Option<RecordBatch>> {
+        let (batch_metadata, body_buffer, version) = match parse_ipc_message(data) {
+            Some(result) => result,
+            None => return Ok(None),
+        };
+
+        let record_batch = read_record_batch(
+            &body_buffer,
+            batch_metadata,
+            self.full_schema.clone(),
+            &std::collections::HashMap::new(),
+            None,
+            &version,
+        )?;
+
+        let record_batch = match &self.projection {
+            Some(projection) => {
+                let projected_columns: Vec<_> = projection
+                    .projected_fields
+                    .iter()
+                    .map(|&idx| record_batch.column(idx).clone())
+                    .collect();
+                RecordBatch::try_new(self.target_schema.clone(), projected_columns)?
+            }
+            None => record_batch,
         };
         Ok(Some(record_batch))
     }

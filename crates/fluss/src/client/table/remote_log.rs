@@ -20,6 +20,7 @@ use crate::metadata::TableBucket;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
 use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord};
 use crate::util::delete_file;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -115,11 +116,19 @@ impl RemoteLogDownloadFuture {
 /// Downloader for remote log segment files
 pub struct RemoteLogDownloader {
     local_log_dir: TempDir,
+    remote_fs_props: RwLock<HashMap<String, String>>,
 }
 
 impl RemoteLogDownloader {
     pub fn new(local_log_dir: TempDir) -> Result<Self> {
-        Ok(Self { local_log_dir })
+        Ok(Self {
+            local_log_dir,
+            remote_fs_props: RwLock::new(HashMap::new()),
+        })
+    }
+
+    pub fn set_remote_fs_props(&self, props: HashMap<String, String>) {
+        *self.remote_fs_props.write() = props;
     }
 
     /// Request to fetch a remote log segment to local. This method is non-blocking.
@@ -133,10 +142,16 @@ impl RemoteLogDownloader {
         let local_file_path = self.local_log_dir.path().join(&local_file_name);
         let remote_path = self.build_remote_path(remote_log_tablet_dir, segment);
         let remote_log_tablet_dir = remote_log_tablet_dir.to_string();
+        let remote_fs_props = self.remote_fs_props.read().clone();
         // Spawn async download task
         tokio::spawn(async move {
-            let result =
-                Self::download_file(&remote_log_tablet_dir, &remote_path, &local_file_path).await;
+            let result = Self::download_file(
+                &remote_log_tablet_dir,
+                &remote_path,
+                &local_file_path,
+                &remote_fs_props,
+            )
+            .await;
             let _ = sender.send(result);
         });
         Ok(RemoteLogDownloadFuture::new(receiver))
@@ -157,6 +172,7 @@ impl RemoteLogDownloader {
         remote_log_tablet_dir: &str,
         remote_path: &str,
         local_path: &Path,
+        remote_fs_props: &HashMap<String, String>,
     ) -> Result<PathBuf> {
         // Handle both URL (e.g., "s3://bucket/path") and local file paths
         // If the path doesn't contain "://", treat it as a local file path
@@ -169,11 +185,27 @@ impl RemoteLogDownloader {
         // Create FileIO from the remote log tablet dir URL to get the storage
         let file_io_builder = FileIO::from_url(&remote_log_tablet_dir_url)?;
 
+        // For S3/S3A URLs, inject S3 credentials from props
+        let file_io_builder = if remote_log_tablet_dir.starts_with("s3://")
+            || remote_log_tablet_dir.starts_with("s3a://")
+        {
+            file_io_builder.with_props(
+                remote_fs_props
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str())),
+            )
+        } else {
+            file_io_builder
+        };
+
         // Build storage and create operator directly
         let storage = Storage::build(file_io_builder)?;
         let (op, relative_path) = storage.create(remote_path)?;
 
-        // Get file metadata to know the size
+        // Timeout for remote storage operations (30 seconds)
+        const REMOTE_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+        // Get file metadata to know the size with timeout
         let meta = op.stat(relative_path).await?;
         let file_size = meta.content_length();
 
@@ -184,13 +216,32 @@ impl RemoteLogDownloader {
         // opendal::Reader::read accepts a range, so we read in chunks
         const CHUNK_SIZE: u64 = 8 * 1024 * 1024; // 8MB chunks for efficient reading
         let mut offset = 0u64;
+        let mut chunk_count = 0u64;
+        let total_chunks = file_size.div_ceil(CHUNK_SIZE);
 
         while offset < file_size {
             let end = std::cmp::min(offset + CHUNK_SIZE, file_size);
             let range = offset..end;
+            chunk_count += 1;
 
-            // Read chunk from remote storage
-            let chunk = op.read_with(relative_path).range(range.clone()).await?;
+            if chunk_count <= 3 || chunk_count % 10 == 0 {
+                log::debug!(
+                    "Remote log download: reading chunk {chunk_count}/{total_chunks} (offset {offset})"
+                );
+            }
+
+            // Read chunk from remote storage with timeout
+            let read_future = op.read_with(relative_path).range(range.clone());
+            let chunk = tokio::time::timeout(REMOTE_OP_TIMEOUT, read_future)
+                .await
+                .map_err(|_| {
+                    Error::Io(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "Timeout reading chunk from remote storage: {remote_path} at offset {offset}"
+                        ),
+                    ))
+                })??;
             let bytes = chunk.to_bytes();
 
             // Write chunk to local file
@@ -254,10 +305,10 @@ impl RemotePendingFetch {
         // delete the downloaded local file to free disk
         delete_file(file_path).await;
 
-        // Parse log records
+        // Parse log records (remote log contains full data, need client-side projection)
         let mut fetch_records = vec![];
         for log_record in &mut LogRecordsBatchs::new(data) {
-            fetch_records.extend(log_record.records(&self.read_context)?);
+            fetch_records.extend(log_record.records_for_remote_log(&self.read_context)?);
         }
 
         let mut result = HashMap::new();

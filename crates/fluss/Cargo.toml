@@ -22,11 +22,12 @@ version = { workspace = true }
 name = "fluss"
 
 [features]
-default = ["storage-memory", "storage-fs"]
-storage-all = ["storage-memory", "storage-fs"]
+default = ["storage-memory", "storage-fs", "storage-s3"]
+storage-all = ["storage-memory", "storage-fs", "storage-s3"]
 
 storage-memory = ["opendal/services-memory"]
 storage-fs = ["opendal/services-fs"]
+storage-s3 = ["opendal/services-s3"]
 integration_tests = []
 
 [dependencies]
@@ -39,9 +40,9 @@ crc32c = "0.6.8"
 linked-hash-map = "0.5.6"
 prost = "0.14"
 rand = "0.9.1"
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.140"
-thiserror = "2"
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true }
+thiserror = "1.0"
 log = { version = "0.4", features = ["kv_std"] }
 tokio = { workspace = true }
 parking_lot = "0.12"

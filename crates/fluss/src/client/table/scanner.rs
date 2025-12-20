@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::connection::FlussConnection;
+use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
@@ -194,6 +195,7 @@ struct LogFetcher {
     log_scanner_status: Arc<LogScannerStatus>,
     read_context: ReadContext,
     remote_log_downloader: RemoteLogDownloader,
+    credentials_cache: CredentialsCache,
 }
 
 impl LogFetcher {
@@ -217,6 +219,7 @@ impl LogFetcher {
             log_scanner_status,
             read_context,
             remote_log_downloader: RemoteLogDownloader::new(tmp_dir)?,
+            credentials_cache: CredentialsCache::new(),
         })
     }
 
@@ -256,6 +259,12 @@ impl LogFetcher {
                     if let Some(ref remote_log_fetch_info) =
                         fetch_log_for_bucket.remote_log_fetch_info
                     {
+                        let remote_fs_props = self
+                            .credentials_cache
+                            .get_or_refresh(&self.conns, &self.metadata)
+                            .await?;
+                        self.remote_log_downloader
+                            .set_remote_fs_props(remote_fs_props);
                         let remote_fetch_info = RemoteLogFetchInfo::from_proto(
                             remote_log_fetch_info,
                             table_bucket.clone(),

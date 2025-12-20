@@ -298,3 +298,18 @@ message PbLakeSnapshotForBucket {
   required int32 bucket_id = 2;
   optional int64 log_offset = 3;
 }
+
+message PbKeyValue {
+  required string key = 1;
+  required string value = 2;
+}
+
+message GetFileSystemSecurityTokenRequest {
+}
+
+message GetFileSystemSecurityTokenResponse {
+  required string schema = 1;
+  required bytes token = 2;
+  optional int64 expiration_time = 3;
+  repeated PbKeyValue addition_info = 4;
+}
