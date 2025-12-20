@@ -34,6 +34,7 @@ use arrow::{
         writer::StreamWriter,
     },
 };
+use arrow_schema::ArrowError::ParseError;
 use arrow_schema::SchemaRef;
 use arrow_schema::{DataType as ArrowDataType, Field};
 use byteorder::WriteBytesExt;
@@ -44,7 +45,6 @@ use std::{
     io::{Cursor, Write},
     sync::Arc,
 };
-use arrow_schema::ArrowError::ParseError;
 
 /// const for record batch
 pub const BASE_OFFSET_LENGTH: usize = 8;
@@ -166,7 +166,7 @@ pub struct RowAppendRecordBatchBuilder {
 
 impl RowAppendRecordBatchBuilder {
     pub fn new(row_type: &DataType) -> Self {
-        let schema_ref = to_arrow_schema(row_type).unwrap();
+        let schema_ref = to_arrow_schema(row_type);
         let builders = Mutex::new(
             schema_ref
                 .fields()
@@ -524,7 +524,7 @@ impl<'a> LogRecordBatch<'a> {
 /// - `arrow_error`: Error details e.g. malformed, too short or bad continuation marker.
 fn parse_ipc_message(
     data: &[u8],
-) ->Result<(
+) -> Result<(
     arrow::ipc::RecordBatch<'_>,
     Buffer,
     arrow::ipc::MetadataVersion,
@@ -539,18 +539,23 @@ fn parse_ipc_message(
     let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
 
     if continuation != CONTINUATION_MARKER {
-        Err(ParseError(format!("Invalid continuation marker: {}", continuation)))?
+        Err(ParseError(format!(
+            "Invalid continuation marker: {continuation}"
+        )))?
     }
 
     if data.len() < 8 + metadata_size {
-        Err(ParseError(format!("Invalid data length. Remaining data length {} is shorter than specified size {}",
-                               data.len() - 8, metadata_size)))?
+        Err(ParseError(format!(
+            "Invalid data length. Remaining data length {} is shorter than specified size {}",
+            data.len() - 8,
+            metadata_size
+        )))?
     }
 
     let metadata_bytes = &data[8..8 + metadata_size];
-    let message = root_as_message(metadata_bytes)
-        .map_err(|err| { ParseError(err.to_string()) })?;
-    let batch_metadata = message.header_as_record_batch()
+    let message = root_as_message(metadata_bytes).map_err(|err| ParseError(err.to_string()))?;
+    let batch_metadata = message
+        .header_as_record_batch()
         .ok_or(ParseError(String::from("Not a record batch")))?;
 
     let body_start = 8 + metadata_size;
@@ -560,7 +565,7 @@ fn parse_ipc_message(
     Ok((batch_metadata, body_buffer, message.version()))
 }
 
-pub fn to_arrow_schema(fluss_schema: &DataType) -> Result<SchemaRef> {
+pub fn to_arrow_schema(fluss_schema: &DataType) -> SchemaRef {
     match &fluss_schema {
         DataType::Row(row_type) => {
             let fields: Vec<Field> = row_type
@@ -575,10 +580,10 @@ pub fn to_arrow_schema(fluss_schema: &DataType) -> Result<SchemaRef> {
                 })
                 .collect();
 
-            Ok(SchemaRef::new(arrow_schema::Schema::new(fields)))
+            SchemaRef::new(arrow_schema::Schema::new(fields))
         }
         _ => {
-            Err(ParseError(String::from("Must be row data type.")))?
+            panic!("must be row data type.")
         }
     }
 }
@@ -1020,25 +1025,43 @@ mod tests {
     fn test_parse_ipc_message() {
         let empty_body: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000000]);
         let result = parse_ipc_message(empty_body);
-        assert_eq!(result.unwrap_err().to_string(),
-                   String::from("Arrow error: Parser error: Range [0, 4) is out of bounds.\n\n"));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            String::from("Arrow error: Parser error: Range [0, 4) is out of bounds.\n\n")
+        );
 
         let invalid_data = &[];
-        assert_eq!(parse_ipc_message(invalid_data).unwrap_err().to_string(),
-                   String::from("Arrow error: Parser error: Invalid data length: 0"));
+        assert_eq!(
+            parse_ipc_message(invalid_data).unwrap_err().to_string(),
+            String::from("Arrow error: Parser error: Invalid data length: 0")
+        );
 
         let data_with_invalid_continuation: &[u8] = &le_bytes(&[0x00000001, 0x00000000]);
-        assert_eq!(parse_ipc_message(data_with_invalid_continuation).unwrap_err().to_string(),
-                   String::from("Arrow error: Parser error: Invalid continuation marker: 1"));
+        assert_eq!(
+            parse_ipc_message(data_with_invalid_continuation)
+                .unwrap_err()
+                .to_string(),
+            String::from("Arrow error: Parser error: Invalid continuation marker: 1")
+        );
 
         let data_with_invalid_length: &[u8] = &le_bytes(&[0xFFFFFFFF, 0x00000001]);
-        assert_eq!(parse_ipc_message(data_with_invalid_length).unwrap_err().to_string(),
-                   String::from("Arrow error: Parser error: Invalid data length. \
-                   Remaining data length 0 is shorter than specified size 1"));
+        assert_eq!(
+            parse_ipc_message(data_with_invalid_length)
+                .unwrap_err()
+                .to_string(),
+            String::from(
+                "Arrow error: Parser error: Invalid data length. \
+                   Remaining data length 0 is shorter than specified size 1"
+            )
+        );
 
         let data_with_invalid_length = &le_bytes(&[0xFFFFFFFF, 0x00000004, 0x00000000]);
-        assert_eq!(parse_ipc_message(data_with_invalid_length).unwrap_err().to_string(),
-                   String::from("Arrow error: Parser error: Not a record batch"));
+        assert_eq!(
+            parse_ipc_message(data_with_invalid_length)
+                .unwrap_err()
+                .to_string(),
+            String::from("Arrow error: Parser error: Not a record batch")
+        );
     }
 
     fn le_bytes(vals: &[u32]) -> Vec<u8> {

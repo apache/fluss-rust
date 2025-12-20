@@ -204,7 +204,7 @@ impl LogFetcher {
         log_scanner_status: Arc<LogScannerStatus>,
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let full_arrow_schema = to_arrow_schema(table_info.get_row_type())?;
+        let full_arrow_schema = to_arrow_schema(table_info.get_row_type());
         let read_context = Self::create_read_context(full_arrow_schema, projected_fields.clone());
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
