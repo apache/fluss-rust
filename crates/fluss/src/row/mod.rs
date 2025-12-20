@@ -66,10 +66,10 @@ pub trait InternalRow {
     // fn get_timestamp_ltz(&self, pos: usize, precision: usize) -> TimestampLtz;
 
     /// Returns the binary value at the given position with fixed length
-    fn get_binary(&self, pos: usize, length: usize) -> Vec<u8>;
+    fn get_binary(&self, pos: usize, length: usize) -> &[u8];
 
     /// Returns the binary value at the given position
-    fn get_bytes(&self, pos: usize) -> Vec<u8>;
+    fn get_bytes(&self, pos: usize) -> &[u8];
 }
 
 pub struct GenericRow<'a> {
@@ -132,12 +132,12 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_binary(&self, pos: usize, _length: usize) -> Vec<u8> {
-        self.values.get(pos).unwrap().as_blob().to_vec()
+    fn get_binary(&self, pos: usize, _length: usize) -> &[u8]{
+        self.values.get(pos).unwrap().as_blob()
     }
 
-    fn get_bytes(&self, pos: usize) -> Vec<u8> {
-        self.values.get(pos).unwrap().as_blob().to_vec()
+    fn get_bytes(&self, pos: usize) ->  &[u8] {
+        self.values.get(pos).unwrap().as_blob()
     }
 }
 
