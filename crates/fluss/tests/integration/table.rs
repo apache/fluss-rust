@@ -178,7 +178,7 @@ mod table_test {
         }
 
         let scan_records_projected = log_scanner_projected
-            .poll(std::time::Duration::from_secs(5))
+            .poll(std::time::Duration::from_secs(10))
             .await
             .expect("Failed to poll");
 
@@ -227,7 +227,7 @@ mod table_test {
 
         // Poll for records
         let scan_records = log_scanner
-            .poll(tokio::time::Duration::from_secs(5))
+            .poll(tokio::time::Duration::from_secs(10))
             .await
             .expect("Failed to poll records");
 

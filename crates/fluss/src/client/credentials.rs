@@ -90,20 +90,20 @@ fn convert_hadoop_key_to_opendal(hadoop_key: &str) -> Option<(String, bool)> {
 
 pub struct CredentialsCache {
     inner: RwLock<Option<CachedToken>>,
+    rpc_client: Arc<RpcClient>,
+    metadata: Arc<Metadata>,
 }
 
 impl CredentialsCache {
-    pub fn new() -> Self {
+    pub fn new(rpc_client: Arc<RpcClient>, metadata: Arc<Metadata>) -> Self {
         Self {
             inner: RwLock::new(None),
+            rpc_client,
+            metadata,
         }
     }
 
-    pub async fn get_or_refresh(
-        &self,
-        rpc_client: &Arc<RpcClient>,
-        metadata: &Arc<Metadata>,
-    ) -> Result<HashMap<String, String>> {
+    pub async fn get_or_refresh(&self) -> Result<HashMap<String, String>> {
         {
             let guard = self.inner.read();
             if let Some(cached) = guard.as_ref() {
@@ -113,17 +113,13 @@ impl CredentialsCache {
             }
         }
 
-        self.refresh_from_server(rpc_client, metadata).await
+        self.refresh_from_server().await
     }
 
-    async fn refresh_from_server(
-        &self,
-        rpc_client: &Arc<RpcClient>,
-        metadata: &Arc<Metadata>,
-    ) -> Result<HashMap<String, String>> {
-        let cluster = metadata.get_cluster();
+    async fn refresh_from_server(&self) -> Result<HashMap<String, String>> {
+        let cluster = self.metadata.get_cluster();
         let server_node = cluster.get_one_available_server();
-        let conn = rpc_client.get_connection(server_node).await?;
+        let conn = self.rpc_client.get_connection(server_node).await?;
 
         let request = GetSecurityTokenRequest::new();
         let response = conn.request(request).await?;
@@ -156,11 +152,5 @@ impl CredentialsCache {
         *self.inner.write() = Some(cached);
 
         Ok(props)
-    }
-}
-
-impl Default for CredentialsCache {
-    fn default() -> Self {
-        Self::new()
     }
 }

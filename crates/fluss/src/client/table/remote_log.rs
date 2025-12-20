@@ -18,11 +18,11 @@ use crate::client::table::log_fetch_buffer::{CompletedFetch, DefaultCompletedFet
 use crate::error::{Error, Result};
 use crate::io::{FileIO, Storage};
 use crate::metadata::TableBucket;
-use crate::proto::PbFetchLogRespForBucket;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
-use crate::record::ReadContext;
+use crate::record::{LogRecordsBatches, ReadContext};
 use crate::util::delete_file;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -72,19 +72,19 @@ pub struct RemoteLogFetchInfo {
 }
 
 impl RemoteLogFetchInfo {
-    pub fn from_proto(info: &PbRemoteLogFetchInfo, table_bucket: TableBucket) -> Result<Self> {
+    pub fn from_proto(info: &PbRemoteLogFetchInfo, table_bucket: TableBucket) -> Self {
         let segments = info
             .remote_log_segments
             .iter()
             .map(|s| RemoteLogSegment::from_proto(s, table_bucket.clone()))
             .collect();
 
-        Ok(Self {
+        Self {
             remote_log_tablet_dir: info.remote_log_tablet_dir.clone(),
             partition_name: info.partition_name.clone(),
             remote_log_segments: segments,
             first_start_pos: info.first_start_pos.unwrap_or(0),
-        })
+        }
     }
 }
 
@@ -94,13 +94,15 @@ type CompletionCallback = Box<dyn Fn() + Send + Sync>;
 pub struct RemoteLogDownloadFuture {
     result: Arc<Mutex<Option<Result<PathBuf>>>>,
     completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>>,
+    // todo: add recycleCallback
 }
 
 impl RemoteLogDownloadFuture {
     pub fn new(receiver: oneshot::Receiver<Result<PathBuf>>) -> Self {
         let result = Arc::new(Mutex::new(None));
         let result_clone = Arc::clone(&result);
-        let completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>> = Arc::new(Mutex::new(Vec::new()));
+        let completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>> =
+            Arc::new(Mutex::new(Vec::new()));
         let callbacks_clone = Arc::clone(&completion_callbacks);
 
         // Spawn a task to wait for the download and update result, then call callbacks
@@ -108,7 +110,10 @@ impl RemoteLogDownloadFuture {
             let download_result = match receiver.await {
                 Ok(Ok(path)) => Ok(path),
                 Ok(Err(e)) => Err(e),
-                Err(e) => Err(Error::Io(io::Error::other(format!("Download future cancelled: {e:?}")))),
+                Err(e) => Err(Error::UnexpectedError {
+                    message: format!("Download future cancelled: {e:?}"),
+                    source: None,
+                }),
             };
             *result_clone.lock() = Some(download_result);
 
@@ -152,17 +157,25 @@ impl RemoteLogDownloadFuture {
         }
     }
 
-    /// Get the downloaded file path
-    pub async fn get_file_path(&mut self) -> Result<PathBuf> {
-        let receiver = self.receiver.take().ok_or_else(|| Error::UnexpectedError {
-            message: "Downloaded file already consumed".to_string(),
-            source: None,
-        })?;
+    pub fn is_done(&self) -> bool {
+        self.result.lock().is_some()
+    }
 
-        receiver.await.map_err(|e| Error::UnexpectedError {
-            message: format!("Download future cancelled: {e:?}"),
-            source: None,
-        })?
+    /// Get the downloaded file path (synchronous, only works after is_done() returns true)
+    pub fn get_file_path(&self) -> Result<PathBuf> {
+        // todo: handle download fail
+        let guard = self.result.lock();
+        match guard.as_ref() {
+            Some(Ok(path)) => Ok(path.clone()),
+            Some(Err(e)) => Err(Error::IoUnexpectedError {
+                message: format!("Download failed: {e}"),
+                source: io::Error::other(format!("{e:?}")),
+            }),
+            None => Err(Error::IoUnexpectedError {
+                message: "Download not completed yet".to_string(),
+                source: io::Error::other("Download not completed yet"),
+            }),
+        }
     }
 }
 
@@ -198,8 +211,13 @@ impl RemoteLogDownloader {
         let remote_fs_props = self.remote_fs_props.read().clone();
         // Spawn async download task
         tokio::spawn(async move {
-            let result =
-                Self::download_file(&remote_log_tablet_dir, &remote_path, &local_file_path).await;
+            let result = Self::download_file(
+                &remote_log_tablet_dir,
+                &remote_path,
+                &local_file_path,
+                &remote_fs_props,
+            )
+            .await;
             let _ = sender.send(result);
         });
         RemoteLogDownloadFuture::new(receiver)
@@ -305,7 +323,6 @@ impl RemoteLogDownloader {
     }
 }
 
-
 /// Pending fetch that waits for remote log file to be downloaded
 pub struct RemotePendingFetch {
     segment: RemoteLogSegment,
@@ -348,39 +365,32 @@ impl PendingFetch for RemotePendingFetch {
     fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
         // Get the file path (this should only be called when is_completed() returns true)
         let file_path = self.download_future.get_file_path()?;
-
         // Read the file data synchronously (we're in a sync context)
         // Note: This is a limitation - we need to use blocking I/O here
-        let file_data = std::fs::read(&file_path).map_err(|e| {
-            Error::Io(io::Error::other(format!("Failed to read downloaded file: {e:?}")))
+        let mut file_data = std::fs::read(&file_path).map_err(|e| Error::IoUnexpectedError {
+            message: format!("Failed to read downloaded file: {file_path:?}."),
+            source: e,
         })?;
 
         // Slice the data if needed
         let data = if self.pos_in_log_segment > 0 {
-            &file_data[self.pos_in_log_segment as usize..]
+            file_data.split_off(self.pos_in_log_segment as usize)
         } else {
-            &file_data
+            file_data
         };
 
-        // Create a mock PbFetchLogRespForBucket for DefaultCompletedFetch
-        // We'll use the data we read from the file
-        let fetch_response = PbFetchLogRespForBucket {
-            bucket_id: self.segment.table_bucket.bucket_id(),
-            partition_id: None,
-            error_code: None,
-            error_message: None,
-            high_watermark: Some(self.high_watermark),
-            log_start_offset: None,
-            remote_log_fetch_info: None,
-            records: Some(data.to_vec()),
-        };
+        let size_in_bytes = data.len();
+
+        let log_record_batch = LogRecordsBatches::new(data);
 
         // Create DefaultCompletedFetch from the data
         let completed_fetch = DefaultCompletedFetch::new(
             self.segment.table_bucket,
-            &fetch_response,
+            log_record_batch,
+            size_in_bytes,
             self.read_context,
             self.fetch_offset,
+            self.high_watermark,
         )?;
 
         // Delete the downloaded local file to free disk (async, but we'll do it in background)

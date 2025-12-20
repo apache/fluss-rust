@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::metadata::TableBucket;
-use crate::proto::PbFetchLogRespForBucket;
-use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord};
+use crate::record::{
+    LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
+};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -30,14 +31,13 @@ use tokio::sync::Notify;
 pub trait CompletedFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>>;
-    fn next_fetch_offset(&self) -> i64;
     fn is_consumed(&self) -> bool;
     fn drain(&mut self);
     fn size_in_bytes(&self) -> usize;
     fn high_watermark(&self) -> i64;
     fn is_initialized(&self) -> bool;
     fn set_initialized(&mut self);
-    fn fetch_offset(&self) -> i64;
+    fn next_fetch_offset(&self) -> i64;
 }
 
 /// Represents a pending fetch that is waiting to be completed
@@ -66,34 +66,34 @@ impl LogFetchBuffer {
             woken_up: Arc::new(AtomicBool::new(false)),
         }
     }
-    
+
     /// Check if the buffer is empty
     pub fn is_empty(&self) -> bool {
         self.completed_fetches.lock().is_empty()
     }
-    
+
     /// Wait for the buffer to become non-empty, with timeout
     /// Returns true if data became available, false if timeout
     pub async fn await_not_empty(&self, timeout: Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
-        
+
         loop {
             // Check if buffer is not empty
             if !self.is_empty() {
                 return true;
             }
-            
+
             // Check if woken up
             if self.woken_up.swap(false, Ordering::Acquire) {
                 return true;
             }
-            
+
             // Check if timeout
             let now = std::time::Instant::now();
             if now >= deadline {
                 return false;
             }
-            
+
             // Wait for notification with remaining time
             let remaining = deadline - now;
             let notified = self.not_empty_notify.notified();
@@ -108,7 +108,8 @@ impl LogFetchBuffer {
             }
         }
     }
-    
+
+    #[allow(dead_code)]
     /// Wake up any waiting threads
     pub fn wakeup(&self) {
         self.woken_up.store(true, Ordering::Release);
@@ -121,7 +122,7 @@ impl LogFetchBuffer {
         self.pending_fetches
             .lock()
             .entry(table_bucket)
-            .or_insert_with(VecDeque::new)
+            .or_default()
             .push_back(pending_fetch);
     }
 
@@ -132,50 +133,49 @@ impl LogFetchBuffer {
             let mut has_completed = false;
             while let Some(front) = pendings.front() {
                 if front.is_completed() {
-                    if let Some(pending) = pendings.pop_front() {
-                        match pending.to_completed_fetch() {
-                            Ok(completed) => {
-                                self.completed_fetches.lock().push_back(completed);
-                                // Signal that buffer is not empty
-                                self.not_empty_notify.notify_waiters();
-                                has_completed = true;
-                            }
-                            Err(_) => {
-                                // Skip failed fetches
-                            }
+                    let pending = pendings.pop_front().unwrap();
+                    match pending.to_completed_fetch() {
+                        Ok(completed) => {
+                            self.completed_fetches.lock().push_back(completed);
+                            // Signal that buffer is not empty
+                            self.not_empty_notify.notify_waiters();
+                            has_completed = true;
+                        }
+                        Err(e) => {
+                            // todo: handle exception?
+                            log::error!("Error when completing: {e}");
                         }
                     }
                 } else {
                     break;
                 }
             }
-            if pendings.is_empty() {
-                pending_map.remove(table_bucket);
+
+            if has_completed {
+                self.not_empty_notify.notify_waiters();
+                if pendings.is_empty() {
+                    pending_map.remove(table_bucket);
+                }
             }
         }
     }
 
     /// Add a completed fetch to the buffer
     pub fn add(&self, completed_fetch: Box<dyn CompletedFetch>) {
-        let table_bucket = completed_fetch.table_bucket().clone();
+        let table_bucket = completed_fetch.table_bucket();
         let mut pending_map = self.pending_fetches.lock();
-        let should_notify = if let Some(pendings) = pending_map.get_mut(&table_bucket) {
+
+        if let Some(pendings) = pending_map.get_mut(table_bucket) {
             if pendings.is_empty() {
                 self.completed_fetches.lock().push_back(completed_fetch);
-                true
+                self.not_empty_notify.notify_waiters();
             } else {
-                // Convert to pending fetch wrapper
-                let completed_pending = CompletedPendingFetch::new(completed_fetch);
-                pendings.push_back(Box::new(completed_pending));
-                false
+                pendings.push_back(Box::new(CompletedPendingFetch::new(completed_fetch)));
             }
         } else {
+            // If there's no pending fetch for this table_bucket,
+            // directly add to completed_fetches
             self.completed_fetches.lock().push_back(completed_fetch);
-            true
-        };
-        
-        // Signal that buffer is not empty if we added to completed_fetches
-        if should_notify {
             self.not_empty_notify.notify_waiters();
         }
     }
@@ -198,6 +198,14 @@ impl LogFetchBuffer {
     /// Get the set of buckets that have buffered data
     pub fn buffered_buckets(&self) -> Vec<TableBucket> {
         let mut buckets = Vec::new();
+
+        let next_in_line_fetch = self.next_in_line_fetch.lock();
+        if let Some(complete_fetch) = next_in_line_fetch.as_ref() {
+            if !complete_fetch.is_consumed() {
+                buckets.push(complete_fetch.table_bucket().clone());
+            }
+        }
+
         let completed = self.completed_fetches.lock();
         for fetch in completed.iter() {
             buckets.push(fetch.table_bucket().clone());
@@ -211,58 +219,6 @@ impl LogFetchBuffer {
 impl Default for LogFetchBuffer {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Pending fetch that waits for fetch log response
-pub struct FetchPendingFetch {
-    table_bucket: TableBucket,
-    response: Arc<Mutex<Option<Result<PbFetchLogRespForBucket>>>>,
-    read_context: ReadContext,
-    fetch_offset: i64,
-}
-
-impl FetchPendingFetch {
-    pub fn new(
-        table_bucket: TableBucket,
-        read_context: ReadContext,
-        fetch_offset: i64,
-    ) -> (Self, Arc<Mutex<Option<Result<PbFetchLogRespForBucket>>>>) {
-        let response = Arc::new(Mutex::new(None));
-        let pending = Self {
-            table_bucket,
-            response: Arc::clone(&response),
-            read_context,
-            fetch_offset,
-        };
-        (pending, response)
-    }
-
-    pub fn set_response(&self, response: Result<PbFetchLogRespForBucket>) {
-        *self.response.lock() = Some(response);
-    }
-}
-
-impl PendingFetch for FetchPendingFetch {
-    fn table_bucket(&self) -> &TableBucket {
-        &self.table_bucket
-    }
-
-    fn is_completed(&self) -> bool {
-        self.response.lock().is_some()
-    }
-
-    fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
-        let response = self.response.lock().take().ok_or_else(|| {
-            Error::Io(std::io::Error::other("Fetch response not available"))
-        })??;
-        let completed = DefaultCompletedFetch::new(
-            self.table_bucket,
-            &response,
-            self.read_context,
-            self.fetch_offset,
-        )?;
-        Ok(Box::new(completed))
     }
 }
 
@@ -294,63 +250,64 @@ impl PendingFetch for CompletedPendingFetch {
 /// Default implementation of CompletedFetch for in-memory log records
 pub struct DefaultCompletedFetch {
     table_bucket: TableBucket,
-    data: Vec<u8>,
+    log_record_batch: LogRecordsBatches,
     read_context: ReadContext,
-    fetch_offset: i64, // The offset at which this fetch started
     next_fetch_offset: i64,
     high_watermark: i64,
     size_in_bytes: usize,
     consumed: bool,
     initialized: bool,
-    // Pre-parsed records for efficient access
-    records: Vec<ScanRecord>,
-    current_index: usize,
+    records_read: usize,
+    current_record_iterator: Option<LogRecordIterator>,
+    current_record_batch: Option<LogRecordBatch>,
 }
 
 impl DefaultCompletedFetch {
     pub fn new(
         table_bucket: TableBucket,
-        fetch_response: &PbFetchLogRespForBucket,
+        log_record_batch: LogRecordsBatches,
+        size_in_bytes: usize,
         read_context: ReadContext,
         fetch_offset: i64,
+        high_watermark: i64,
     ) -> Result<Self> {
-        let data = fetch_response.records.clone().unwrap_or_default();
-        let size_in_bytes = data.len();
-        let high_watermark = fetch_response.high_watermark.unwrap_or(-1);
-
-        // Parse all records upfront
-        let mut records = Vec::new();
-        for log_record in &mut LogRecordsBatchs::new(&data) {
-            let last_offset = log_record.last_log_offset();
-            let batch_records = log_record.records(&read_context)?;
-            for record in batch_records {
-                records.push(record);
-            }
-            // Update next_fetch_offset based on the last batch
-            let next_offset = last_offset + 1;
-            // We'll update this when we actually consume records
-        }
-
-        // Set next_fetch_offset based on the last record if available
-        let next_fetch_offset = if let Some(last_record) = records.last() {
-            last_record.offset() + 1
-        } else {
-            fetch_offset
-        };
-
         Ok(Self {
             table_bucket,
-            data,
+            log_record_batch,
             read_context,
-            fetch_offset,
-            next_fetch_offset,
+            next_fetch_offset: fetch_offset,
             high_watermark,
             size_in_bytes,
             consumed: false,
             initialized: false,
-            records,
-            current_index: 0,
+            records_read: 0,
+            current_record_iterator: None,
+            current_record_batch: None,
         })
+    }
+
+    /// Get the next fetched record, handling batch iteration and record skipping
+    fn next_fetched_record(&mut self) -> Result<Option<ScanRecord>> {
+        loop {
+            if let Some(record) = self
+                .current_record_iterator
+                .as_mut()
+                .and_then(Iterator::next)
+            {
+                if record.offset() >= self.next_fetch_offset {
+                    return Ok(Some(record));
+                }
+            } else if let Some(batch) = self.log_record_batch.next() {
+                self.current_record_iterator = Some(batch.records(&self.read_context)?);
+                self.current_record_batch = Some(batch);
+            } else {
+                if let Some(batch) = self.current_record_batch.take() {
+                    self.next_fetch_offset = batch.next_log_offset();
+                }
+                self.drain();
+                return Ok(None);
+            }
+        }
     }
 }
 
@@ -360,30 +317,24 @@ impl CompletedFetch for DefaultCompletedFetch {
     }
 
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>> {
+        // todo: handle corrupt_last_record
         if self.consumed {
             return Ok(Vec::new());
         }
 
-        let end_index = std::cmp::min(self.current_index + max_records, self.records.len());
-        let records = self.records[self.current_index..end_index].to_vec();
-        self.current_index = end_index;
+        let mut scan_records = Vec::new();
 
-        if self.current_index >= self.records.len() {
-            self.consumed = true;
-            // Update next_fetch_offset based on the last record
-            if let Some(last_record) = self.records.last() {
-                self.next_fetch_offset = last_record.offset() + 1;
+        for _ in 0..max_records {
+            if let Some(record) = self.next_fetched_record()? {
+                self.next_fetch_offset = record.offset() + 1;
+                self.records_read += 1;
+                scan_records.push(record);
+            } else {
+                break;
             }
-        } else if let Some(last_record) = records.last() {
-            // Update next_fetch_offset as we consume records
-            self.next_fetch_offset = last_record.offset() + 1;
         }
 
-        Ok(records)
-    }
-
-    fn next_fetch_offset(&self) -> i64 {
-        self.next_fetch_offset
+        Ok(scan_records)
     }
 
     fn is_consumed(&self) -> bool {
@@ -392,7 +343,6 @@ impl CompletedFetch for DefaultCompletedFetch {
 
     fn drain(&mut self) {
         self.consumed = true;
-        self.current_index = self.records.len();
     }
 
     fn size_in_bytes(&self) -> usize {
@@ -411,7 +361,7 @@ impl CompletedFetch for DefaultCompletedFetch {
         self.initialized = true;
     }
 
-    fn fetch_offset(&self) -> i64 {
-        self.fetch_offset
+    fn next_fetch_offset(&self) -> i64 {
+        self.next_fetch_offset
     }
 }
