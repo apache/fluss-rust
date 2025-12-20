@@ -39,7 +39,7 @@ pub enum Error {
     #[error("Row convert error")]
     RowConvertError(String),
 
-    #[error("arrow error")]
+    #[error("Arrow error: {0}")]
     ArrowError(#[from] ArrowError),
 
     #[error("Write error: {0}")]
