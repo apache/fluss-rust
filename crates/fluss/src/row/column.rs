@@ -165,7 +165,7 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id)
     }
 
-    fn get_bytes(&self, pos: usize) -> &[u8]{
+    fn get_bytes(&self, pos: usize) -> &[u8] {
         self.record_batch
             .column(pos)
             .as_any()

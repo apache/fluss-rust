@@ -132,11 +132,11 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_binary(&self, pos: usize, _length: usize) -> &[u8]{
+    fn get_binary(&self, pos: usize, _length: usize) -> &[u8] {
         self.values.get(pos).unwrap().as_blob()
     }
 
-    fn get_bytes(&self, pos: usize) ->  &[u8] {
+    fn get_bytes(&self, pos: usize) -> &[u8] {
         self.values.get(pos).unwrap().as_blob()
     }
 }
