@@ -63,6 +63,24 @@ enum class DatumType {
     Bytes = 7,
 };
 
+constexpr int64_t EARLIEST_OFFSET = -2;
+constexpr int64_t LATEST_OFFSET = -1;
+
+enum class OffsetSpec {
+    Earliest = 0,
+    Latest = 1,
+    Timestamp = 2,
+};
+
+struct OffsetQuery {
+    OffsetSpec spec;
+    int64_t timestamp{0};
+
+    static OffsetQuery Earliest() { return {OffsetSpec::Earliest, 0}; }
+    static OffsetQuery Latest() { return {OffsetSpec::Latest, 0}; }
+    static OffsetQuery FromTimestamp(int64_t ts) { return {OffsetSpec::Timestamp, ts}; }
+};
+
 struct Result {
     int32_t error_code{0};
     std::string error_message;
@@ -301,6 +319,7 @@ private:
 };
 
 struct ScanRecord {
+    int32_t bucket_id;
     int64_t offset;
     int64_t timestamp;
     GenericRow row;
@@ -320,6 +339,11 @@ struct ScanRecords {
 struct BucketOffset {
     int64_t table_id;
     int64_t partition_id;
+    int32_t bucket_id;
+    int64_t offset;
+};
+
+struct BucketSubscription {
     int32_t bucket_id;
     int64_t offset;
 };
@@ -372,9 +396,16 @@ public:
                        const TableDescriptor& descriptor,
                        bool ignore_if_exists = false);
 
+    Result DropTable(const TablePath& table_path, bool ignore_if_not_exists = false);
+
     Result GetTable(const TablePath& table_path, TableInfo& out);
 
     Result GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
+
+    Result ListOffsets(const TablePath& table_path,
+                       const std::vector<int32_t>& bucket_ids,
+                       const OffsetQuery& offset_query,
+                       std::unordered_map<int32_t, int64_t>& out);
 
 private:
     friend class Connection;
@@ -448,6 +479,7 @@ public:
     bool Available() const;
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
+    Result SubscribeBatch(const std::vector<BucketSubscription>& bucket_offsets);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
 
 private:

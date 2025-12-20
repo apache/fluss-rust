@@ -104,6 +104,7 @@ mod ffi {
     }
 
     struct FfiScanRecord {
+        bucket_id: i32,
         offset: i64,
         timestamp: i64,
         row: FfiGenericRow,
@@ -128,6 +129,26 @@ mod ffi {
         partition_id: i64,
         bucket_id: i32,
         offset: i64,
+    }
+
+    struct FfiOffsetQuery {
+        offset_type: i32,
+        timestamp: i64,
+    }
+
+    struct FfiBucketSubscription {
+        bucket_id: i32,
+        offset: i64,
+    }
+
+    struct FfiBucketOffsetPair {
+        bucket_id: i32,
+        offset: i64,
+    }
+
+    struct FfiListOffsetsResult {
+        result: FfiResult,
+        bucket_offsets: Vec<FfiBucketOffsetPair>,
     }
 
     struct FfiLakeSnapshotResult {
@@ -156,11 +177,22 @@ mod ffi {
             descriptor: &FfiTableDescriptor,
             ignore_if_exists: bool,
         ) -> FfiResult;
+        fn drop_table(
+            self: &Admin,
+            table_path: &FfiTablePath,
+            ignore_if_not_exists: bool,
+        ) -> FfiResult;
         fn get_table_info(self: &Admin, table_path: &FfiTablePath) -> FfiTableInfoResult;
         fn get_latest_lake_snapshot(
             self: &Admin,
             table_path: &FfiTablePath,
         ) -> FfiLakeSnapshotResult;
+        fn list_offsets(
+            self: &Admin,
+            table_path: &FfiTablePath,
+            bucket_ids: Vec<i32>,
+            offset_query: &FfiOffsetQuery,
+        ) -> FfiListOffsetsResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
@@ -182,6 +214,7 @@ mod ffi {
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
         fn subscribe(self: &LogScanner, bucket_id: i32, start_offset: i64) -> FfiResult;
+        fn subscribe_batch(self: &LogScanner, subscriptions: Vec<FfiBucketSubscription>) -> FfiResult;
         fn poll(self: &LogScanner, timeout_ms: i64) -> FfiScanRecordsResult;
     }
 }
@@ -330,6 +363,26 @@ impl Admin {
         }
     }
 
+    fn drop_table(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        ignore_if_not_exists: bool,
+    ) -> ffi::FfiResult {
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+
+        let result = RUNTIME.block_on(async {
+            self.inner.drop_table(&path, ignore_if_not_exists).await
+        });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_result(1, e.to_string()),
+        }
+    }
+
     fn get_table_info(&self, table_path: &ffi::FfiTablePath) -> ffi::FfiTableInfoResult {
         let path = fcore::metadata::TablePath::new(
             table_path.database_name.clone(),
@@ -372,6 +425,56 @@ impl Admin {
                     snapshot_id: -1,
                     bucket_offsets: vec![],
                 },
+            },
+        }
+    }
+
+    fn list_offsets(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        bucket_ids: Vec<i32>,
+        offset_query: &ffi::FfiOffsetQuery,
+    ) -> ffi::FfiListOffsetsResult {
+        use fcore::rpc::message::OffsetSpec;
+
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+
+        let offset_spec = match offset_query.offset_type {
+            0 => OffsetSpec::Earliest,
+            1 => OffsetSpec::Latest,
+            2 => OffsetSpec::Timestamp(offset_query.timestamp),
+            _ => {
+                return ffi::FfiListOffsetsResult {
+                    result: err_result(1, format!("Invalid offset_type: {}", offset_query.offset_type)),
+                    bucket_offsets: vec![],
+                };
+            }
+        };
+
+        let result = RUNTIME.block_on(async {
+            self.inner.list_offsets(&path, &bucket_ids, offset_spec).await
+        });
+
+        match result {
+            Ok(offsets) => {
+                let bucket_offsets: Vec<ffi::FfiBucketOffsetPair> = offsets
+                    .into_iter()
+                    .map(|(bucket_id, offset)| ffi::FfiBucketOffsetPair {
+                        bucket_id,
+                        offset,
+                    })
+                    .collect();
+                ffi::FfiListOffsetsResult {
+                    result: ok_result(),
+                    bucket_offsets,
+                }
+            }
+            Err(e) => ffi::FfiListOffsetsResult {
+                result: err_result(1, e.to_string()),
+                bucket_offsets: vec![],
             },
         }
     }
@@ -504,6 +607,23 @@ impl LogScanner {
     fn subscribe(&self, bucket_id: i32, start_offset: i64) -> ffi::FfiResult {
         let result =
             RUNTIME.block_on(async { self.inner.subscribe(bucket_id, start_offset).await });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_result(1, e.to_string()),
+        }
+    }
+
+    fn subscribe_batch(&self, subscriptions: Vec<ffi::FfiBucketSubscription>) -> ffi::FfiResult {
+        use std::collections::HashMap;
+        let mut bucket_offsets = HashMap::new();
+        for sub in subscriptions {
+            bucket_offsets.insert(sub.bucket_id, sub.offset);
+        }
+        
+        let result = RUNTIME.block_on(async { 
+            self.inner.subscribe_batch(bucket_offsets).await 
+        });
 
         match result {
             Ok(_) => ok_result(),

@@ -233,12 +233,14 @@ pub fn core_scan_records_to_ffi(records: &fcore::record::ScanRecords) -> ffi::Ff
     let mut ffi_records = Vec::new();
 
     // Iterate over all buckets and their records
-    for bucket_records in records.records_by_buckets().values() {
+    for (table_bucket, bucket_records) in records.records_by_buckets() {
+        let bucket_id = table_bucket.bucket_id();
         for record in bucket_records {
             let row = record.row();
             let fields = core_row_to_ffi_fields(row);
 
             ffi_records.push(ffi::FfiScanRecord {
+                bucket_id,
                 offset: record.offset(),
                 timestamp: record.timestamp(),
                 row: ffi::FfiGenericRow { fields },
