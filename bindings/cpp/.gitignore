@@ -5,3 +5,12 @@ cmake-build-*/
 *.a
 *.so
 *.dylib
+
+# Bazel build outputs
+bazel-build/
+bazel-bin
+bazel-out
+bazel-testlogs
+bazel-cpp
+bazel-*
+MODULE.bazel.lock

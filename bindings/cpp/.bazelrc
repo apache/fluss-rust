@@ -1,0 +1,15 @@
+# Bazel configuration for fluss-rust C++ bindings
+
+# Enable BzlMod
+common --enable_bzlmod
+
+# Debug configuration (matches BUILD.bazel settings)
+build:debug --compilation_mode=dbg
+build:debug --copt=-g3
+build:debug --copt=-ggdb
+build:debug --copt=-O0
+build:debug --copt=-fno-omit-frame-pointer
+build:debug --copt=-DDEBUG
+build:debug --strip=never
+build:debug --linkopt=-g
+
