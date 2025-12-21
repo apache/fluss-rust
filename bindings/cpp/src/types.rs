@@ -334,12 +334,12 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
             ArrowDataType::Binary => {
                 let mut datum = new_datum(DATUM_TYPE_BYTES);
                 // todo: avoid copy bytes for blob
-                datum.bytes_val = row.get_bytes(i);
+                datum.bytes_val = row.get_bytes(i).to_vec();
                 datum
             }
             ArrowDataType::FixedSizeBinary(len) => {
                 let mut datum = new_datum(DATUM_TYPE_BYTES);
-                datum.bytes_val = row.get_binary(i, *len as usize);
+                datum.bytes_val = row.get_binary(i, *len as usize).to_vec();
                 datum
             }
             ArrowDataType::LargeBinary => {

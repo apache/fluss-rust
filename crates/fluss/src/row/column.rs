@@ -126,7 +126,7 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id)
     }
 
-    fn get_char(&self, pos: usize, length: usize) -> String {
+    fn get_char(&self, pos: usize, _length: usize) -> &str {
         let array = self
             .record_batch
             .column(pos)
@@ -135,16 +135,8 @@ impl InternalRow for ColumnarRow {
             .expect("Expected fixed-size binary array for char type");
 
         let bytes = array.value(self.row_id);
-        if bytes.len() != length {
-            panic!(
-                "Length mismatch for fixed-size char: expected {}, got {}",
-                length,
-                bytes.len()
-            );
-        }
-
-        String::from_utf8(bytes.to_vec())
-            .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned())
+        // don't check length, following java client
+        std::str::from_utf8(bytes).expect("Invalid UTF-8 in char field")
     }
 
     fn get_string(&self, pos: usize) -> &str {
@@ -156,23 +148,21 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id)
     }
 
-    fn get_binary(&self, pos: usize, _length: usize) -> Vec<u8> {
+    fn get_binary(&self, pos: usize, _length: usize) -> &[u8] {
         self.record_batch
             .column(pos)
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
             .expect("Expected binary array.")
             .value(self.row_id)
-            .to_vec()
     }
 
-    fn get_bytes(&self, pos: usize) -> Vec<u8> {
+    fn get_bytes(&self, pos: usize) -> &[u8] {
         self.record_batch
             .column(pos)
             .as_any()
             .downcast_ref::<BinaryArray>()
             .expect("Expected bytes array.")
             .value(self.row_id)
-            .to_vec()
     }
 }

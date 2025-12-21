@@ -39,6 +39,7 @@ use arrow_schema::SchemaRef;
 use arrow_schema::{DataType as ArrowDataType, Field};
 use byteorder::WriteBytesExt;
 use byteorder::{ByteOrder, LittleEndian};
+use bytes::Bytes;
 use crc32c::crc32c;
 use parking_lot::Mutex;
 use std::{
@@ -347,17 +348,17 @@ pub trait ToArrow {
     fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()>;
 }
 
-pub struct LogRecordsBatchs<'a> {
-    data: &'a [u8],
+pub struct LogRecordsBatches {
+    data: Bytes,
     current_pos: usize,
     remaining_bytes: usize,
 }
 
-impl<'a> LogRecordsBatchs<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
+impl LogRecordsBatches {
+    pub fn new(data: Vec<u8>) -> Self {
         let remaining_bytes: usize = data.len();
         Self {
-            data,
+            data: Bytes::from(data),
             current_pos: 0,
             remaining_bytes,
         }
@@ -378,14 +379,17 @@ impl<'a> LogRecordsBatchs<'a> {
     }
 }
 
-impl<'a> Iterator for &'a mut LogRecordsBatchs<'a> {
-    type Item = LogRecordBatch<'a>;
+impl Iterator for LogRecordsBatches {
+    type Item = LogRecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_batch_size() {
             Some(batch_size) => {
-                let data_slice = &self.data[self.current_pos..self.current_pos + batch_size];
-                let record_batch = LogRecordBatch::new(data_slice);
+                let start = self.current_pos;
+                let end = start + batch_size;
+                // Since LogRecordsBatches owns the Vec<u8>, the slice is valid
+                // as long as the mutable reference exists, which is 'a
+                let record_batch = LogRecordBatch::new(self.data.slice(start..end));
                 self.current_pos += batch_size;
                 self.remaining_bytes -= batch_size;
                 Some(record_batch)
@@ -395,13 +399,13 @@ impl<'a> Iterator for &'a mut LogRecordsBatchs<'a> {
     }
 }
 
-pub struct LogRecordBatch<'a> {
-    data: &'a [u8],
+pub struct LogRecordBatch {
+    data: Bytes,
 }
 
 #[allow(dead_code)]
-impl<'a> LogRecordBatch<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
+impl LogRecordBatch {
+    pub fn new(data: Bytes) -> Self {
         LogRecordBatch { data }
     }
 
@@ -710,6 +714,7 @@ pub struct ReadContext {
     target_schema: SchemaRef,
     full_schema: SchemaRef,
     projection: Option<Projection>,
+    is_from_remote: bool,
 }
 
 #[derive(Clone)]
@@ -723,24 +728,39 @@ struct Projection {
 }
 
 impl ReadContext {
-    pub fn new(arrow_schema: SchemaRef) -> ReadContext {
+    pub fn new(arrow_schema: SchemaRef, is_from_remote: bool) -> ReadContext {
         ReadContext {
             target_schema: arrow_schema.clone(),
             full_schema: arrow_schema,
             projection: None,
+            is_from_remote,
         }
     }
 
     pub fn with_projection_pushdown(
         arrow_schema: SchemaRef,
         projected_fields: Vec<usize>,
+        is_from_remote: bool,
     ) -> ReadContext {
         let target_schema = Self::project_schema(arrow_schema.clone(), projected_fields.as_slice());
-        let mut sorted_fields = projected_fields.clone();
-        sorted_fields.sort_unstable();
+        // the logic is little bit of hard to understand, to refactor it to follow
+        // java side
+        let (need_do_reorder, sorted_fields) = {
+            // currently, for remote read, arrow log doesn't support projection pushdown,
+            // so, only need to do reordering when is not from remote
+            if !is_from_remote {
+                let mut sorted_fields = projected_fields.clone();
+                sorted_fields.sort_unstable();
+                (!sorted_fields.eq(&projected_fields), sorted_fields)
+            } else {
+                // sorted_fields won't be used when need_do_reorder is false,
+                // let's use an empty vec directly
+                (false, vec![])
+            }
+        };
 
         let project = {
-            if !sorted_fields.eq(&projected_fields) {
+            if need_do_reorder {
                 // reordering is required
                 // Calculate reordering indexes to transform from sorted order to user-requested order
                 let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
@@ -778,6 +798,7 @@ impl ReadContext {
             target_schema,
             full_schema: arrow_schema,
             projection: Some(project),
+            is_from_remote,
         }
     }
 
@@ -805,17 +826,24 @@ impl ReadContext {
     pub fn record_batch(&self, data: &[u8]) -> Result<RecordBatch> {
         let (batch_metadata, body_buffer, version) = parse_ipc_message(data)?;
 
-        // the record batch from server must be ordered by field pos,
-        // according to project to decide what arrow schema to use
-        // to parse the record batch
-        let resolve_schema = match self.projection {
-            Some(ref projection) => {
-                // projection, should use ordered schema by project field pos
-                projection.ordered_schema.clone()
-            }
-            None => {
-                // no projection, use target output schema
-                self.target_schema.clone()
+        let resolve_schema = {
+            // if from remote, no projection, need to use full schema
+            if self.is_from_remote {
+                self.full_schema.clone()
+            } else {
+                // the record batch from server must be ordered by field pos,
+                // according to project to decide what arrow schema to use
+                // to parse the record batch
+                match self.projection {
+                    Some(ref projection) => {
+                        // projection, should use ordered schema by project field pos
+                        projection.ordered_schema.clone()
+                    }
+                    None => {
+                        // no projection, use target output schema
+                        self.target_schema.clone()
+                    }
+                }
             }
         };
 
@@ -829,14 +857,27 @@ impl ReadContext {
         )?;
 
         let record_batch = match &self.projection {
-            Some(projection) if projection.reordering_needed => {
-                // Reorder columns if needed (when projection pushdown with non-sorted order)
-                let reordered_columns: Vec<_> = projection
-                    .reordering_indexes
-                    .iter()
-                    .map(|&idx| record_batch.column(idx).clone())
-                    .collect();
-                RecordBatch::try_new(self.target_schema.clone(), reordered_columns)?
+            Some(projection) => {
+                let reordered_columns = {
+                    // need to do reorder
+                    if self.is_from_remote {
+                        Some(&projection.projected_fields)
+                    } else if projection.reordering_needed {
+                        Some(&projection.reordering_indexes)
+                    } else {
+                        None
+                    }
+                };
+                match reordered_columns {
+                    Some(reordered_columns) => {
+                        let arrow_columns = reordered_columns
+                            .iter()
+                            .map(|&idx| record_batch.column(idx).clone())
+                            .collect();
+                        RecordBatch::try_new(self.target_schema.clone(), arrow_columns)?
+                    }
+                    _ => record_batch,
+                }
             }
             _ => record_batch,
         };
