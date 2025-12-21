@@ -18,6 +18,7 @@
 use crate::BucketId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{ResultHandle, WriteRecord};
+use crate::compression::ArrowCompressionInfo;
 use crate::error::Result;
 use crate::metadata::{DataType, TablePath};
 use crate::record::MemoryLogRecordsArrowBuilder;
@@ -132,10 +133,12 @@ pub struct ArrowLogWriteBatch {
 }
 
 impl ArrowLogWriteBatch {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_id: i64,
         table_path: TablePath,
         schema_id: i32,
+        arrow_compression_info: ArrowCompressionInfo,
         row_type: &DataType,
         bucket_id: BucketId,
         create_ms: i64,
@@ -148,6 +151,7 @@ impl ArrowLogWriteBatch {
                 schema_id,
                 row_type,
                 to_append_record_batch,
+                arrow_compression_info,
             ),
         }
     }
