@@ -189,6 +189,12 @@ impl LogScanner {
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
+        if bucket_offsets.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Bucket offsets are empty.".to_string(),
+                source: None,
+            });
+        }
 
         let mut scan_bucket_offsets = HashMap::new();
         for (bucket_id, offset) in bucket_offsets {
