@@ -51,7 +51,7 @@ pub trait InternalRow {
     fn get_double(&self, pos: usize) -> f64;
 
     /// Returns the string value at the given position with fixed length
-    fn get_char(&self, pos: usize, length: usize) -> String;
+    fn get_char(&self, pos: usize, length: usize) -> &str;
 
     /// Returns the string value at the given position
     fn get_string(&self, pos: usize) -> &str;
@@ -116,16 +116,9 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.get(pos).unwrap().try_into().unwrap()
     }
 
-    fn get_char(&self, pos: usize, length: usize) -> String {
-        let value = self.get_string(pos);
-        if value.len() != length {
-            panic!(
-                "Length mismatch for fixed-size char: expected {}, got {}",
-                length,
-                value.len()
-            );
-        }
-        value.to_string()
+    fn get_char(&self, pos: usize, _length: usize) -> &str {
+        // don't check length, following java client
+        self.get_string(pos)
     }
 
     fn get_string(&self, pos: usize) -> &str {
