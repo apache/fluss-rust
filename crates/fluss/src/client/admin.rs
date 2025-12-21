@@ -232,6 +232,13 @@ impl FlussAdmin {
             .check_and_update_table_metadata(from_ref(table_path))
             .await?;
 
+        if buckets_id.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Buckets are empty.".to_string(),
+                source: None,
+            });
+        }
+
         let cluster = self.metadata.get_cluster();
         let table_id = cluster.get_table(table_path).table_id;
 

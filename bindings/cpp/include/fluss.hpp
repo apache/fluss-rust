@@ -479,7 +479,7 @@ public:
     bool Available() const;
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
-    Result SubscribeBatch(const std::vector<BucketSubscription>& bucket_offsets);
+    Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
 
 private:
