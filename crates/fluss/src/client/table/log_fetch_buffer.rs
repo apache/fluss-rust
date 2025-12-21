@@ -128,35 +128,47 @@ impl LogFetchBuffer {
 
     /// Try to complete pending fetches in order, converting them to completed fetches
     pub fn try_complete(&self, table_bucket: &TableBucket) {
-        let mut pending_map = self.pending_fetches.lock();
-        if let Some(pendings) = pending_map.get_mut(table_bucket) {
-            let mut has_completed = false;
-            while let Some(front) = pendings.front() {
-                if front.is_completed() {
-                    let pending = pendings.pop_front().unwrap();
-                    match pending.to_completed_fetch() {
-                        Ok(completed) => {
-                            self.completed_fetches.lock().push_back(completed);
-                            // Signal that buffer is not empty
-                            self.not_empty_notify.notify_waiters();
-                            has_completed = true;
+        // Collect completed fetches while holding the pending_fetches lock,
+        // then push them to completed_fetches after releasing it to avoid
+        // holding both locks simultaneously.
+        let mut completed_to_push: Vec<Box<dyn CompletedFetch>> = Vec::new();
+        let mut has_completed = false;
+        {
+            let mut pending_map = self.pending_fetches.lock();
+            if let Some(pendings) = pending_map.get_mut(table_bucket) {
+                while let Some(front) = pendings.front() {
+                    if front.is_completed() {
+                        let pending = pendings.pop_front().unwrap();
+                        match pending.to_completed_fetch() {
+                            Ok(completed) => {
+                                completed_to_push.push(completed);
+                                has_completed = true;
+                            }
+                            Err(e) => {
+                                // todo: handle exception?
+                                log::error!("Error when completing: {e}");
+                            }
                         }
-                        Err(e) => {
-                            // todo: handle exception?
-                            log::error!("Error when completing: {e}");
-                        }
+                    } else {
+                        break;
                     }
-                } else {
-                    break;
                 }
-            }
-
-            if has_completed {
-                self.not_empty_notify.notify_waiters();
-                if pendings.is_empty() {
+                if has_completed && pendings.is_empty() {
                     pending_map.remove(table_bucket);
                 }
             }
+        }
+
+        if !completed_to_push.is_empty() {
+            let mut completed_queue = self.completed_fetches.lock();
+            for completed in completed_to_push {
+                completed_queue.push_back(completed);
+            }
+        }
+
+        if has_completed {
+            // Signal that buffer is not empty
+            self.not_empty_notify.notify_waiters();
         }
     }
 
@@ -165,19 +177,16 @@ impl LogFetchBuffer {
         let table_bucket = completed_fetch.table_bucket();
         let mut pending_map = self.pending_fetches.lock();
 
-        if let Some(pendings) = pending_map.get_mut(table_bucket) {
-            if pendings.is_empty() {
-                self.completed_fetches.lock().push_back(completed_fetch);
-                self.not_empty_notify.notify_waiters();
-            } else {
-                pendings.push_back(Box::new(CompletedPendingFetch::new(completed_fetch)));
-            }
-        } else {
-            // If there's no pending fetch for this table_bucket,
-            // directly add to completed_fetches
-            self.completed_fetches.lock().push_back(completed_fetch);
-            self.not_empty_notify.notify_waiters();
+        if let Some(pendings) = pending_map.get_mut(table_bucket)
+            && !pendings.is_empty()
+        {
+            pendings.push_back(Box::new(CompletedPendingFetch::new(completed_fetch)));
+            return;
         }
+        // If there's no pending fetch for this table_bucket,
+        // directly add to completed_fetches
+        self.completed_fetches.lock().push_back(completed_fetch);
+        self.not_empty_notify.notify_waiters();
     }
 
     /// Poll the next completed fetch

@@ -317,8 +317,14 @@ impl LogFetcher {
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
 
             // Spawn async task to handle the fetch request
+            // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
+            // This is acceptable because:
+            // 1. Tasks will naturally complete (network requests will return or timeout)
+            // 2. Tasks use Arc references, so resources are properly shared
+            // 3. When the program exits, tokio runtime will clean up all tasks
+            // 4. Tasks are short-lived (network I/O operations)
             tokio::spawn(async move {
-                // make sure it will always remote leader from pending nodes
+                // make sure it will always remove leader from pending nodes
                 let _guard = scopeguard::guard((), |_| {
                     nodes_with_pending.lock().remove(&leader);
                 });
@@ -527,7 +533,7 @@ impl LogFetcher {
                         self.log_fetch_buffer
                             .set_next_in_line_fetch(Some(completed_fetch));
                     }
-                    // Note: peek() already removed the fetch from buffer, so no need to call poll()
+                    // Note: poll() already removed the fetch from buffer, so no need to call poll()
                 } else {
                     // No more fetches available
                     break;
@@ -547,6 +553,13 @@ impl LogFetcher {
 
                         records_remaining = records_remaining.saturating_sub(records_count);
                     }
+
+                    // If the fetch is not fully consumed, put it back for the next round
+                    if !next_fetch.is_consumed() {
+                        self.log_fetch_buffer
+                            .set_next_in_line_fetch(Some(next_fetch));
+                    }
+                    // If consumed, next_fetch will be dropped here (which is correct)
                 }
             }
         }

@@ -92,13 +92,13 @@ type CompletionCallback = Box<dyn Fn() + Send + Sync>;
 
 /// Future for a remote log download request
 pub struct RemoteLogDownloadFuture {
-    result: Arc<Mutex<Option<Result<PathBuf>>>>,
+    result: Arc<Mutex<Option<Result<Vec<u8>>>>>,
     completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>>,
     // todo: add recycleCallback
 }
 
 impl RemoteLogDownloadFuture {
-    pub fn new(receiver: oneshot::Receiver<Result<PathBuf>>) -> Self {
+    pub fn new(receiver: oneshot::Receiver<Result<Vec<u8>>>) -> Self {
         let result = Arc::new(Mutex::new(None));
         let result_clone = Arc::clone(&result);
         let completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>> =
@@ -111,10 +111,11 @@ impl RemoteLogDownloadFuture {
                 Ok(Ok(path)) => Ok(path),
                 Ok(Err(e)) => Err(e),
                 Err(e) => Err(Error::UnexpectedError {
-                    message: format!("Download future cancelled: {e:?}"),
+                    message: format!("Download & Read future cancelled: {e:?}"),
                     source: None,
                 }),
             };
+
             *result_clone.lock() = Some(download_result);
 
             // Call all registered callbacks
@@ -143,17 +144,27 @@ impl RemoteLogDownloadFuture {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        // Check if already completed - need to check while holding the lock to avoid race condition
+        // Acquire callbacks lock first to ensure atomicity of the check-and-register operation
         let mut callbacks_guard = self.completion_callbacks.lock();
-        let is_done = self.is_done();
+
+        // Check completion status while holding the callbacks lock.
+        // This ensures that:
+        // 1. If the task completes between checking is_done() and registering the callback,
+        //    we'll see the completion state correctly
+        // 2. The background task cannot clear the callbacks list while we're checking/registering
+        let is_done = self.result.lock().is_some();
 
         if is_done {
             // If already completed, call immediately (drop lock first to avoid deadlock)
             drop(callbacks_guard);
             callback();
         } else {
-            // Otherwise, register the callback
+            // Register the callback while holding the callbacks lock.
+            // This ensures that even if the background task completes right after we check
+            // is_done(), it will wait for us to release the lock before taking callbacks.
+            // When it does take callbacks, it will see our callback in the list and execute it.
             callbacks_guard.push(Box::new(callback));
+            // Lock is automatically released here
         }
     }
 
@@ -162,18 +173,18 @@ impl RemoteLogDownloadFuture {
     }
 
     /// Get the downloaded file path (synchronous, only works after is_done() returns true)
-    pub fn get_file_path(&self) -> Result<PathBuf> {
+    pub fn get_remote_log_bytes(&self) -> Result<Vec<u8>> {
         // todo: handle download fail
         let guard = self.result.lock();
         match guard.as_ref() {
             Some(Ok(path)) => Ok(path.clone()),
             Some(Err(e)) => Err(Error::IoUnexpectedError {
-                message: format!("Download failed: {e}"),
+                message: format!("Fail to get remote log bytes: {e}"),
                 source: io::Error::other(format!("{e:?}")),
             }),
             None => Err(Error::IoUnexpectedError {
-                message: "Download not completed yet".to_string(),
-                source: io::Error::other("Download not completed yet"),
+                message: "Get remote log bytes not completed yet".to_string(),
+                source: io::Error::other("Get remote log bytes not completed yet"),
             }),
         }
     }
@@ -209,15 +220,28 @@ impl RemoteLogDownloader {
         let remote_path = self.build_remote_path(remote_log_tablet_dir, segment);
         let remote_log_tablet_dir = remote_log_tablet_dir.to_string();
         let remote_fs_props = self.remote_fs_props.read().clone();
-        // Spawn async download task
+        // Spawn async download & read task
         tokio::spawn(async move {
-            let result = Self::download_file(
-                &remote_log_tablet_dir,
-                &remote_path,
-                &local_file_path,
-                &remote_fs_props,
-            )
+            let result = async {
+                let file_path = Self::download_file(
+                    &remote_log_tablet_dir,
+                    &remote_path,
+                    &local_file_path,
+                    &remote_fs_props,
+                )
+                .await?;
+                let bytes = tokio::fs::read(&file_path).await?;
+
+                // Delete the downloaded local file to free disk (async, but we'll do it in background)
+                let file_path_clone = file_path.clone();
+                tokio::spawn(async move {
+                    let _ = delete_file(file_path_clone).await;
+                });
+
+                Ok(bytes)
+            }
             .await;
+
             let _ = sender.send(result);
         });
         RemoteLogDownloadFuture::new(receiver)
@@ -364,19 +388,13 @@ impl PendingFetch for RemotePendingFetch {
 
     fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
         // Get the file path (this should only be called when is_completed() returns true)
-        let file_path = self.download_future.get_file_path()?;
-        // Read the file data synchronously (we're in a sync context)
-        // Note: This is a limitation - we need to use blocking I/O here
-        let mut file_data = std::fs::read(&file_path).map_err(|e| Error::IoUnexpectedError {
-            message: format!("Failed to read downloaded file: {file_path:?}."),
-            source: e,
-        })?;
+        let mut data = self.download_future.get_remote_log_bytes()?;
 
         // Slice the data if needed
         let data = if self.pos_in_log_segment > 0 {
-            file_data.split_off(self.pos_in_log_segment as usize)
+            data.split_off(self.pos_in_log_segment as usize)
         } else {
-            file_data
+            data
         };
 
         let size_in_bytes = data.len();
@@ -392,12 +410,6 @@ impl PendingFetch for RemotePendingFetch {
             self.fetch_offset,
             self.high_watermark,
         )?;
-
-        // Delete the downloaded local file to free disk (async, but we'll do it in background)
-        let file_path_clone = file_path.clone();
-        tokio::spawn(async move {
-            let _ = delete_file(file_path_clone).await;
-        });
 
         Ok(Box::new(completed_fetch))
     }

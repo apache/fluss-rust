@@ -387,7 +387,7 @@ impl Iterator for LogRecordsBatches {
             Some(batch_size) => {
                 let start = self.current_pos;
                 let end = start + batch_size;
-                // Since LogRecordsBatchs owns the Vec<u8>, the slice is valid
+                // Since LogRecordsBatches owns the Vec<u8>, the slice is valid
                 // as long as the mutable reference exists, which is 'a
                 let record_batch = LogRecordBatch::new(self.data.slice(start..end));
                 self.current_pos += batch_size;
@@ -743,6 +743,8 @@ impl ReadContext {
         is_from_remote: bool,
     ) -> ReadContext {
         let target_schema = Self::project_schema(arrow_schema.clone(), projected_fields.as_slice());
+        // the logic is little bit of hard to understand, to refactor it to follow
+        // java side
         let (need_do_reorder, sorted_fields) = {
             // currently, for remote read, arrow log doesn't support projection pushdown,
             // so, only need to do reordering when is not from remote
@@ -751,6 +753,8 @@ impl ReadContext {
                 sorted_fields.sort_unstable();
                 (!sorted_fields.eq(&projected_fields), sorted_fields)
             } else {
+                // sorted_fields won't be used when need_do_reorder is false,
+                // let's use an empty vec directly
                 (false, vec![])
             }
         };
