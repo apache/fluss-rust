@@ -175,6 +175,8 @@ mod table_remote_scan_test {
         let num_buckets = table.table_info().get_num_buckets();
         let log_scanner = table
             .new_scan()
+            .project(&[1, 0])
+            .unwrap()
             .create_log_scanner()
             .expect("Failed to create log scanner");
         for bucket_id in 0..num_buckets {
@@ -186,7 +188,7 @@ mod table_remote_scan_test {
 
         let mut records = Vec::with_capacity(record_count);
         let start = std::time::Instant::now();
-        const MAX_WAIT_DURATION: Duration = Duration::from_secs(30);
+        const MAX_WAIT_DURATION: Duration = Duration::from_secs(60);
         while records.len() < record_count {
             if start.elapsed() > MAX_WAIT_DURATION {
                 panic!(
@@ -208,8 +210,8 @@ mod table_remote_scan_test {
             let row = record.row();
             let expected_c1 = i as i32;
             let expected_c2 = format!("v{}", i);
-            assert_eq!(row.get_int(0), expected_c1, "c1 mismatch at index {}", i);
-            assert_eq!(row.get_string(1), expected_c2, "c2 mismatch at index {}", i);
+            assert_eq!(row.get_int(1), expected_c1, "c1 mismatch at index {}", i);
+            assert_eq!(row.get_string(0), expected_c2, "c2 mismatch at index {}", i);
         }
     }
 

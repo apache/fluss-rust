@@ -18,23 +18,26 @@
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
+use crate::client::table::log_fetch_buffer::{
+    CompletedFetch, DefaultCompletedFetch, LogFetchBuffer,
+};
+use crate::client::table::remote_log::{
+    RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
+};
 use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
-use crate::record::{LogRecordsBatchs, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
-use crate::rpc::RpcClient;
+use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
+use crate::rpc::{RpcClient, message};
 use crate::util::FairBucketStatusMap;
 use arrow_schema::SchemaRef;
-use parking_lot::RwLock;
-use std::collections::HashMap;
+use log::{debug, error, warn};
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, HashSet};
 use std::slice::from_ref;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
-
-use crate::client::table::remote_log::{
-    RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
-};
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 #[allow(dead_code)]
@@ -171,8 +174,43 @@ impl LogScanner {
         })
     }
 
-    pub async fn poll(&self, _timeout: Duration) -> Result<ScanRecords> {
-        Ok(ScanRecords::new(self.poll_for_fetches().await?))
+    pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
+        let start = std::time::Instant::now();
+        let deadline = start + timeout;
+
+        loop {
+            // Try to collect fetches
+            let fetch_result = self.poll_for_fetches().await?;
+
+            if !fetch_result.is_empty() {
+                // We have data, send next round of fetches and return
+                // This enables pipelining while user processes the data
+                self.log_fetcher.send_fetches().await?;
+                return Ok(ScanRecords::new(fetch_result));
+            }
+
+            // No data available, check if we should wait
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                // Timeout reached, return empty result
+                return Ok(ScanRecords::new(HashMap::new()));
+            }
+
+            // Wait for buffer to become non-empty with remaining time
+            let remaining = deadline - now;
+            let has_data = self
+                .log_fetcher
+                .log_fetch_buffer
+                .await_not_empty(remaining)
+                .await;
+
+            if !has_data {
+                // Timeout while waiting
+                return Ok(ScanRecords::new(HashMap::new()));
+            }
+
+            // Buffer became non-empty, try again
+        }
     }
 
     pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
@@ -208,20 +246,31 @@ impl LogScanner {
     }
 
     async fn poll_for_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
-        self.log_fetcher.send_fetches_and_collect().await
+        let result = self.log_fetcher.collect_fetches()?;
+        if !result.is_empty() {
+            return Ok(result);
+        }
+
+        // send any new fetches (won't resend pending fetches).
+        self.log_fetcher.send_fetches().await?;
+
+        // Collect completed fetches from buffer
+        self.log_fetcher.collect_fetches()
     }
 }
 
-#[allow(dead_code)]
 struct LogFetcher {
-    table_path: TablePath,
     conns: Arc<RpcClient>,
-    table_info: TableInfo,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     read_context: ReadContext,
-    remote_log_downloader: RemoteLogDownloader,
-    credentials_cache: CredentialsCache,
+    remote_read_context: ReadContext,
+    remote_log_downloader: Arc<RemoteLogDownloader>,
+    // todo: consider schedule a background thread to update
+    // token instead of update in fetch phase
+    credentials_cache: Arc<CredentialsCache>,
+    log_fetch_buffer: Arc<LogFetchBuffer>,
+    nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
 }
 
 impl LogFetcher {
@@ -233,131 +282,388 @@ impl LogFetcher {
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let full_arrow_schema = to_arrow_schema(table_info.get_row_type());
-        let read_context = Self::create_read_context(full_arrow_schema, projected_fields.clone());
+        let read_context =
+            Self::create_read_context(full_arrow_schema.clone(), projected_fields.clone(), false);
+        let remote_read_context =
+            Self::create_read_context(full_arrow_schema, projected_fields.clone(), true);
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
 
         Ok(LogFetcher {
-            table_path: table_info.table_path.clone(),
-            conns,
-            table_info,
-            metadata,
+            conns: conns.clone(),
+            metadata: metadata.clone(),
             log_scanner_status,
             read_context,
-            remote_log_downloader: RemoteLogDownloader::new(tmp_dir)?,
-            credentials_cache: CredentialsCache::new(),
+            remote_read_context,
+            remote_log_downloader: Arc::new(RemoteLogDownloader::new(tmp_dir)?),
+            credentials_cache: Arc::new(CredentialsCache::new(conns.clone(), metadata.clone())),
+            log_fetch_buffer: Arc::new(LogFetchBuffer::new()),
+            nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
     fn create_read_context(
         full_arrow_schema: SchemaRef,
         projected_fields: Option<Vec<usize>>,
+        is_from_remote: bool,
     ) -> ReadContext {
         match projected_fields {
-            None => ReadContext::new(full_arrow_schema),
-            Some(fields) => ReadContext::with_projection_pushdown(full_arrow_schema, fields),
+            None => ReadContext::new(full_arrow_schema, is_from_remote),
+            Some(fields) => {
+                ReadContext::with_projection_pushdown(full_arrow_schema, fields, is_from_remote)
+            }
         }
     }
 
-    async fn send_fetches_and_collect(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
+    /// Send fetch requests asynchronously without waiting for responses
+    async fn send_fetches(&self) -> Result<()> {
+        // todo: check update metadata like fluss-java in case leader changes
         let fetch_request = self.prepare_fetch_log_requests().await;
-        let mut result: HashMap<TableBucket, Vec<ScanRecord>> = HashMap::new();
+
         for (leader, fetch_request) in fetch_request {
-            let cluster = self.metadata.get_cluster();
-            let server_node = cluster
-                .get_tablet_server(leader)
-                .expect("todo: handle leader not exist.");
-            let con = self.conns.get_connection(server_node).await?;
+            debug!("Adding pending request for node id {leader}");
+            // Check if we already have a pending request for this node
+            {
+                self.nodes_with_pending_fetch_requests.lock().insert(leader);
+            }
 
-            let fetch_response = con
-                .request(crate::rpc::message::FetchLogRequest::new(fetch_request))
-                .await?;
+            let cluster = self.metadata.get_cluster().clone();
 
-            for pb_fetch_log_resp in fetch_response.tables_resp {
-                let table_id = pb_fetch_log_resp.table_id;
-                let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
+            let conns = Arc::clone(&self.conns);
+            let log_fetch_buffer = self.log_fetch_buffer.clone();
+            let log_scanner_status = self.log_scanner_status.clone();
+            let read_context = self.read_context.clone();
+            let remote_read_context = self.remote_read_context.clone();
+            let remote_log_downloader = Arc::clone(&self.remote_log_downloader);
+            let creds_cache = self.credentials_cache.clone();
+            let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
 
-                for fetch_log_for_bucket in fetch_log_for_buckets {
-                    let bucket: i32 = fetch_log_for_bucket.bucket_id;
-                    let table_bucket = TableBucket::new(table_id, bucket);
+            // Spawn async task to handle the fetch request
+            // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
+            // This is acceptable because:
+            // 1. Tasks will naturally complete (network requests will return or timeout)
+            // 2. Tasks use Arc references, so resources are properly shared
+            // 3. When the program exits, tokio runtime will clean up all tasks
+            // 4. Tasks are short-lived (network I/O operations)
+            tokio::spawn(async move {
+                // make sure it will always remove leader from pending nodes
+                let _guard = scopeguard::guard((), |_| {
+                    nodes_with_pending.lock().remove(&leader);
+                });
 
-                    // Check if this is a remote log fetch
-                    if let Some(ref remote_log_fetch_info) =
-                        fetch_log_for_bucket.remote_log_fetch_info
-                    {
-                        let remote_fs_props = self
-                            .credentials_cache
-                            .get_or_refresh(&self.conns, &self.metadata)
-                            .await?;
-                        self.remote_log_downloader
-                            .set_remote_fs_props(remote_fs_props);
-                        let remote_fetch_info = RemoteLogFetchInfo::from_proto(
-                            remote_log_fetch_info,
-                            table_bucket.clone(),
-                        )?;
+                let server_node = cluster
+                    .get_tablet_server(leader)
+                    .expect("todo: handle leader not exist.");
 
-                        if let Some(fetch_offset) =
-                            self.log_scanner_status.get_bucket_offset(&table_bucket)
-                        {
-                            let high_watermark = fetch_log_for_bucket.high_watermark.unwrap_or(-1);
-                            // Download and process remote log segments
-                            let mut pos_in_log_segment = remote_fetch_info.first_start_pos;
-                            let mut current_fetch_offset = fetch_offset;
-                            // todo: make segment download in parallel
-                            for (i, segment) in
-                                remote_fetch_info.remote_log_segments.iter().enumerate()
-                            {
-                                if i > 0 {
-                                    pos_in_log_segment = 0;
-                                    current_fetch_offset = segment.start_offset;
-                                }
-
-                                let download_future =
-                                    self.remote_log_downloader.request_remote_log(
-                                        &remote_fetch_info.remote_log_tablet_dir,
-                                        segment,
-                                    )?;
-                                let pending_fetch = RemotePendingFetch::new(
-                                    segment.clone(),
-                                    download_future,
-                                    pos_in_log_segment,
-                                    current_fetch_offset,
-                                    high_watermark,
-                                    self.read_context.clone(),
-                                );
-                                let remote_records =
-                                    pending_fetch.convert_to_completed_fetch().await?;
-                                // Update offset and merge results
-                                for (tb, records) in remote_records {
-                                    if let Some(last_record) = records.last() {
-                                        self.log_scanner_status
-                                            .update_offset(&tb, last_record.offset() + 1);
-                                    }
-                                    result.entry(tb).or_default().extend(records);
-                                }
-                            }
-                        } else {
-                            // if the offset is null, it means the bucket has been unsubscribed,
-                            // skip processing and continue to the next bucket.
-                            continue;
-                        }
-                    } else if fetch_log_for_bucket.records.is_some() {
-                        // Handle regular in-memory records
-                        let mut fetch_records = vec![];
-                        let data = fetch_log_for_bucket.records.unwrap();
-                        for log_record in &mut LogRecordsBatchs::new(&data) {
-                            let last_offset = log_record.last_log_offset();
-                            fetch_records.extend(log_record.records(&self.read_context)?);
-                            self.log_scanner_status
-                                .update_offset(&table_bucket, last_offset + 1);
-                        }
-                        result.insert(table_bucket, fetch_records);
+                let con = match conns.get_connection(server_node).await {
+                    Ok(con) => con,
+                    Err(e) => {
+                        // todo: handle failed to get connection
+                        warn!("Failed to get connection to destination node: {e:?}");
+                        return;
                     }
+                };
+
+                let fetch_response = match con
+                    .request(message::FetchLogRequest::new(fetch_request))
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        // todo: handle fetch log from destination node
+                        warn!("Failed to fetch log from destination node {server_node:?}: {e:?}");
+                        return;
+                    }
+                };
+
+                if let Err(e) = Self::handle_fetch_response(
+                    fetch_response,
+                    &log_fetch_buffer,
+                    &log_scanner_status,
+                    &read_context,
+                    &remote_read_context,
+                    &remote_log_downloader,
+                    &creds_cache,
+                )
+                .await
+                {
+                    // todo: handle fail to handle fetch response
+                    error!("Fail to handle fetch response: {e:?}");
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Handle fetch response and add completed fetches to buffer
+    async fn handle_fetch_response(
+        fetch_response: crate::proto::FetchLogResponse,
+        log_fetch_buffer: &Arc<LogFetchBuffer>,
+        log_scanner_status: &Arc<LogScannerStatus>,
+        read_context: &ReadContext,
+        remote_read_context: &ReadContext,
+        remote_log_downloader: &Arc<RemoteLogDownloader>,
+        credentials_cache: &Arc<CredentialsCache>,
+    ) -> Result<()> {
+        for pb_fetch_log_resp in fetch_response.tables_resp {
+            let table_id = pb_fetch_log_resp.table_id;
+            let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
+
+            for fetch_log_for_bucket in fetch_log_for_buckets {
+                let bucket: i32 = fetch_log_for_bucket.bucket_id;
+                let table_bucket = TableBucket::new(table_id, bucket);
+
+                // todo: check fetch result code for per-bucket
+                let Some(fetch_offset) = log_scanner_status.get_bucket_offset(&table_bucket) else {
+                    debug!(
+                        "Ignoring fetch log response for bucket {table_bucket} because the bucket has been unsubscribed."
+                    );
+                    continue;
+                };
+
+                // Check if this is a remote log fetch
+                if let Some(ref remote_log_fetch_info) = fetch_log_for_bucket.remote_log_fetch_info
+                {
+                    // set remote fs props
+                    let remote_fs_props = credentials_cache.get_or_refresh().await?;
+                    remote_log_downloader.set_remote_fs_props(remote_fs_props);
+
+                    let remote_fetch_info =
+                        RemoteLogFetchInfo::from_proto(remote_log_fetch_info, table_bucket.clone());
+
+                    let high_watermark = fetch_log_for_bucket.high_watermark.unwrap_or(-1);
+                    Self::pending_remote_fetches(
+                        remote_log_downloader.clone(),
+                        log_fetch_buffer.clone(),
+                        remote_read_context.clone(),
+                        &table_bucket,
+                        remote_fetch_info,
+                        fetch_offset,
+                        high_watermark,
+                    );
+                } else if fetch_log_for_bucket.records.is_some() {
+                    // Handle regular in-memory records - create completed fetch directly
+                    let high_watermark = fetch_log_for_bucket.high_watermark.unwrap_or(-1);
+                    let records = fetch_log_for_bucket.records.unwrap_or(vec![]);
+                    let size_in_bytes = records.len();
+                    let log_record_batch = LogRecordsBatches::new(records);
+
+                    match DefaultCompletedFetch::new(
+                        table_bucket.clone(),
+                        log_record_batch,
+                        size_in_bytes,
+                        read_context.clone(),
+                        fetch_offset,
+                        high_watermark,
+                    ) {
+                        Ok(completed_fetch) => {
+                            log_fetch_buffer.add(Box::new(completed_fetch));
+                        }
+                        Err(e) => {
+                            // todo: handle error
+                            log::warn!("Failed to create completed fetch: {e:?}");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn pending_remote_fetches(
+        remote_log_downloader: Arc<RemoteLogDownloader>,
+        log_fetch_buffer: Arc<LogFetchBuffer>,
+        read_context: ReadContext,
+        table_bucket: &TableBucket,
+        remote_fetch_info: RemoteLogFetchInfo,
+        fetch_offset: i64,
+        high_watermark: i64,
+    ) {
+        // Download and process remote log segments
+        let mut pos_in_log_segment = remote_fetch_info.first_start_pos;
+        let mut current_fetch_offset = fetch_offset;
+        for (i, segment) in remote_fetch_info.remote_log_segments.iter().enumerate() {
+            if i > 0 {
+                pos_in_log_segment = 0;
+                current_fetch_offset = segment.start_offset;
+            }
+
+            // todo:
+            // 1: control the max threads to download remote segment
+            // 2: introduce priority queue to priority highest for earliest segment
+            let download_future = remote_log_downloader
+                .request_remote_log(&remote_fetch_info.remote_log_tablet_dir, segment);
+
+            // Register callback to be called when download completes
+            // (similar to Java's downloadFuture.onComplete)
+            // This must be done before creating RemotePendingFetch to avoid move issues
+            let table_bucket = table_bucket.clone();
+            let log_fetch_buffer_clone = log_fetch_buffer.clone();
+            download_future.on_complete(move || {
+                log_fetch_buffer_clone.try_complete(&table_bucket);
+            });
+
+            let pending_fetch = RemotePendingFetch::new(
+                segment.clone(),
+                download_future,
+                pos_in_log_segment,
+                current_fetch_offset,
+                high_watermark,
+                read_context.clone(),
+            );
+            // Add to pending fetches in buffer (similar to Java's logFetchBuffer.pend)
+            log_fetch_buffer.pend(Box::new(pending_fetch));
+        }
+    }
+
+    /// Collect completed fetches from buffer
+    /// Reference: LogFetchCollector.collectFetch in Java
+    fn collect_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
+        const MAX_POLL_RECORDS: usize = 500; // Default max poll records
+        let mut result: HashMap<TableBucket, Vec<ScanRecord>> = HashMap::new();
+        let mut records_remaining = MAX_POLL_RECORDS;
+
+        while records_remaining > 0 {
+            // Get the next in line fetch, or get a new one from buffer
+            let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
+
+            if next_in_line.is_none() || next_in_line.as_ref().unwrap().is_consumed() {
+                // Get a new fetch from buffer
+                if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                    // Initialize the fetch if not already initialized
+                    if !completed_fetch.is_initialized() {
+                        let size_in_bytes = completed_fetch.size_in_bytes();
+                        match self.initialize_fetch(completed_fetch) {
+                            Ok(initialized) => {
+                                self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                continue;
+                            }
+                            Err(e) => {
+                                // Remove a completedFetch upon a parse with exception if
+                                // (1) it contains no records, and
+                                // (2) there are no fetched records with actual content preceding this
+                                // exception.
+                                if result.is_empty() && size_in_bytes == 0 {
+                                    // todo: do we need to consider it like java ?
+                                    // self.log_fetch_buffer.poll();
+                                }
+                                return Err(e);
+                            }
+                        }
+                    } else {
+                        self.log_fetch_buffer
+                            .set_next_in_line_fetch(Some(completed_fetch));
+                    }
+                    // Note: poll() already removed the fetch from buffer, so no need to call poll()
+                } else {
+                    // No more fetches available
+                    break;
+                }
+            } else {
+                // Fetch records from next_in_line
+                if let Some(mut next_fetch) = next_in_line {
+                    let records =
+                        self.fetch_records_from_fetch(&mut next_fetch, records_remaining)?;
+
+                    if !records.is_empty() {
+                        let table_bucket = next_fetch.table_bucket().clone();
+                        // Merge with existing records for this bucket
+                        let existing = result.entry(table_bucket).or_default();
+                        let records_count = records.len();
+                        existing.extend(records);
+
+                        records_remaining = records_remaining.saturating_sub(records_count);
+                    }
+
+                    // If the fetch is not fully consumed, put it back for the next round
+                    if !next_fetch.is_consumed() {
+                        self.log_fetch_buffer
+                            .set_next_in_line_fetch(Some(next_fetch));
+                    }
+                    // If consumed, next_fetch will be dropped here (which is correct)
                 }
             }
         }
 
         Ok(result)
+    }
+
+    /// Initialize a completed fetch, checking offset match and updating high watermark
+    fn initialize_fetch(
+        &self,
+        mut completed_fetch: Box<dyn CompletedFetch>,
+    ) -> Result<Option<Box<dyn CompletedFetch>>> {
+        // todo: handle error in initialize fetch
+        let table_bucket = completed_fetch.table_bucket();
+        let fetch_offset = completed_fetch.next_fetch_offset();
+
+        // Check if bucket is still subscribed
+        let Some(current_offset) = self.log_scanner_status.get_bucket_offset(table_bucket) else {
+            warn!(
+                "Discarding stale fetch response for bucket {table_bucket:?} since the bucket has been unsubscribed"
+            );
+            return Ok(None);
+        };
+
+        // Check if offset matches
+        if fetch_offset != current_offset {
+            warn!(
+                "Discarding stale fetch response for bucket {table_bucket:?} since its offset {fetch_offset} does not match the expected offset {current_offset}"
+            );
+            return Ok(None);
+        }
+
+        // Update high watermark
+        let high_watermark = completed_fetch.high_watermark();
+        if high_watermark >= 0 {
+            self.log_scanner_status
+                .update_high_watermark(table_bucket, high_watermark);
+        }
+
+        completed_fetch.set_initialized();
+        Ok(Some(completed_fetch))
+    }
+
+    /// Fetch records from a completed fetch, checking offset match
+    fn fetch_records_from_fetch(
+        &self,
+        next_in_line_fetch: &mut Box<dyn CompletedFetch>,
+        max_records: usize,
+    ) -> Result<Vec<ScanRecord>> {
+        let table_bucket = next_in_line_fetch.table_bucket().clone();
+        let current_offset = self.log_scanner_status.get_bucket_offset(&table_bucket);
+
+        if current_offset.is_none() {
+            warn!(
+                "Ignoring fetched records for {table_bucket:?} since the bucket has been unsubscribed"
+            );
+            next_in_line_fetch.drain();
+            return Ok(Vec::new());
+        }
+
+        let current_offset = current_offset.unwrap();
+        let fetch_offset = next_in_line_fetch.next_fetch_offset();
+
+        // Check if this fetch is next in line
+        if fetch_offset == current_offset {
+            let records = next_in_line_fetch.fetch_records(max_records)?;
+            let next_fetch_offset = next_in_line_fetch.next_fetch_offset();
+
+            if next_fetch_offset > current_offset {
+                self.log_scanner_status
+                    .update_offset(&table_bucket, next_fetch_offset);
+            }
+
+            Ok(records)
+        } else {
+            // These records aren't next in line, ignore them
+            warn!(
+                "Ignoring fetched records for {table_bucket:?} at offset {fetch_offset} since the current offset is {current_offset}"
+            );
+            next_in_line_fetch.drain();
+            Ok(Vec::new())
+        }
     }
 
     async fn prepare_fetch_log_requests(&self) -> HashMap<i32, FetchLogRequest> {
@@ -372,25 +678,44 @@ impl LogFetcher {
             let offset = match self.log_scanner_status.get_bucket_offset(&bucket) {
                 Some(offset) => offset,
                 None => {
-                    // todo: debug
+                    debug!(
+                        "Skipping fetch request for bucket {bucket} because the bucket has been unsubscribed."
+                    );
                     continue;
                 }
             };
 
-            if let Some(leader) = self.get_table_bucket_leader(&bucket) {
-                let fetch_log_req_for_bucket = PbFetchLogReqForBucket {
-                    partition_id: None,
-                    bucket_id: bucket.bucket_id(),
-                    fetch_offset: offset,
-                    // 1M
-                    max_fetch_bytes: 1024 * 1024,
-                };
+            match self.get_table_bucket_leader(&bucket) {
+                None => {
+                    log::trace!(
+                        "Skipping fetch request for bucket {bucket} because leader is not available."
+                    )
+                }
+                Some(leader) => {
+                    if self
+                        .nodes_with_pending_fetch_requests
+                        .lock()
+                        .contains(&leader)
+                    {
+                        log::trace!(
+                            "Skipping fetch request for bucket {bucket} because previous request to server {leader} has not been processed."
+                        )
+                    } else {
+                        let fetch_log_req_for_bucket = PbFetchLogReqForBucket {
+                            partition_id: None,
+                            bucket_id: bucket.bucket_id(),
+                            fetch_offset: offset,
+                            // 1M
+                            max_fetch_bytes: 1024 * 1024,
+                        };
 
-                fetch_log_req_for_buckets
-                    .entry(leader)
-                    .or_insert_with(Vec::new)
-                    .push(fetch_log_req_for_bucket);
-                ready_for_fetch_count += 1;
+                        fetch_log_req_for_buckets
+                            .entry(leader)
+                            .or_insert_with(Vec::new)
+                            .push(fetch_log_req_for_bucket);
+                        ready_for_fetch_count += 1;
+                    }
+                }
             }
         }
 
@@ -427,8 +752,11 @@ impl LogFetcher {
     }
 
     fn fetchable_buckets(&self) -> Vec<TableBucket> {
-        // always available now
-        self.log_scanner_status.fetchable_buckets(|_| true)
+        // Get buckets that are not already in the buffer
+        let buffered = self.log_fetch_buffer.buffered_buckets();
+        let buffered_set: HashSet<TableBucket> = buffered.into_iter().collect();
+        self.log_scanner_status
+            .fetchable_buckets(|tb| !buffered_set.contains(tb))
     }
 
     fn get_table_bucket_leader(&self, tb: &TableBucket) -> Option<i32> {
