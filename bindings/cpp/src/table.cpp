@@ -210,7 +210,7 @@ Result LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
     return utils::from_ffi_result(ffi_result);
 }
 
-Result LogScanner::SubscribeBatch(const std::vector<BucketSubscription>& bucket_offsets) {
+Result LogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offsets) {
     if (!Available()) {
         return utils::make_error(1, "LogScanner not available");
     }

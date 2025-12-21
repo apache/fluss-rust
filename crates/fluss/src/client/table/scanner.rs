@@ -189,13 +189,13 @@ impl LogScanner {
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
-        
+
         let mut scan_bucket_offsets = HashMap::new();
         for (bucket_id, offset) in bucket_offsets {
             let table_bucket = TableBucket::new(self.table_id, bucket_id);
             scan_bucket_offsets.insert(table_bucket, offset);
         }
-        
+
         self.log_scanner_status
             .assign_scan_buckets(scan_bucket_offsets);
         Ok(())

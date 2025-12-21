@@ -214,7 +214,10 @@ mod ffi {
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
         fn subscribe(self: &LogScanner, bucket_id: i32, start_offset: i64) -> FfiResult;
-        fn subscribe_batch(self: &LogScanner, subscriptions: Vec<FfiBucketSubscription>) -> FfiResult;
+        fn subscribe_batch(
+            self: &LogScanner,
+            subscriptions: Vec<FfiBucketSubscription>,
+        ) -> FfiResult;
         fn poll(self: &LogScanner, timeout_ms: i64) -> FfiScanRecordsResult;
     }
 }
@@ -373,9 +376,8 @@ impl Admin {
             table_path.table_name.clone(),
         );
 
-        let result = RUNTIME.block_on(async {
-            self.inner.drop_table(&path, ignore_if_not_exists).await
-        });
+        let result =
+            RUNTIME.block_on(async { self.inner.drop_table(&path, ignore_if_not_exists).await });
 
         match result {
             Ok(_) => ok_result(),
@@ -448,24 +450,26 @@ impl Admin {
             2 => OffsetSpec::Timestamp(offset_query.timestamp),
             _ => {
                 return ffi::FfiListOffsetsResult {
-                    result: err_result(1, format!("Invalid offset_type: {}", offset_query.offset_type)),
+                    result: err_result(
+                        1,
+                        format!("Invalid offset_type: {}", offset_query.offset_type),
+                    ),
                     bucket_offsets: vec![],
                 };
             }
         };
 
         let result = RUNTIME.block_on(async {
-            self.inner.list_offsets(&path, &bucket_ids, offset_spec).await
+            self.inner
+                .list_offsets(&path, &bucket_ids, offset_spec)
+                .await
         });
 
         match result {
             Ok(offsets) => {
                 let bucket_offsets: Vec<ffi::FfiBucketOffsetPair> = offsets
                     .into_iter()
-                    .map(|(bucket_id, offset)| ffi::FfiBucketOffsetPair {
-                        bucket_id,
-                        offset,
-                    })
+                    .map(|(bucket_id, offset)| ffi::FfiBucketOffsetPair { bucket_id, offset })
                     .collect();
                 ffi::FfiListOffsetsResult {
                     result: ok_result(),
@@ -620,10 +624,8 @@ impl LogScanner {
         for sub in subscriptions {
             bucket_offsets.insert(sub.bucket_id, sub.offset);
         }
-        
-        let result = RUNTIME.block_on(async { 
-            self.inner.subscribe_batch(bucket_offsets).await 
-        });
+
+        let result = RUNTIME.block_on(async { self.inner.subscribe_batch(bucket_offsets).await });
 
         match result {
             Ok(_) => ok_result(),

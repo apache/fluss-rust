@@ -233,7 +233,7 @@ int main() {
                   << ", offset=" << offset << std::endl;
     }
     
-    check("subscribe_batch", batch_scanner.SubscribeBatch(subscriptions));
+    check("subscribe_batch", batch_scanner.Subscribe(subscriptions));
     std::cout << "Batch subscribed to " << subscriptions.size() << " buckets" << std::endl;
     
     // 8.5) Poll and verify bucket_id in records
