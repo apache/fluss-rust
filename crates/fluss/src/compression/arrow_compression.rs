@@ -84,7 +84,7 @@ impl ArrowCompressionInfo {
 
             Some(Ok(level)) => Ok(Self {
                 compression_type,
-                compression_level: level - 1,
+                compression_level: level,
             }),
             None => Ok(Self {
                 compression_type,
@@ -165,12 +165,17 @@ mod tests {
     }
 
     #[test]
-    fn test_from_conf_default_compression_level() {
+    fn test_from_conf_zstd_compression_level() {
         let compression_info = ArrowCompressionInfo::from_conf(&mk_map(&[(
             "table.log.arrow.compression.type",
             "ZSTD",
         )]));
         assert_eq!(compression_info.unwrap().compression_level, 3);
+        let compression_info = ArrowCompressionInfo::from_conf(&mk_map(&[
+            ("table.log.arrow.compression.type", "ZSTD"),
+            ("table.log.arrow.compression.zstd.level", "1"),
+        ]));
+        assert_eq!(compression_info.unwrap().compression_level, 1);
     }
 
     #[test]
