@@ -222,6 +222,7 @@ inline GenericRow from_ffi_generic_row(const ffi::FfiGenericRow& ffi_row) {
 
 inline ScanRecord from_ffi_scan_record(const ffi::FfiScanRecord& ffi_record) {
     return ScanRecord{
+        ffi_record.bucket_id,
         ffi_record.offset,
         ffi_record.timestamp,
         from_ffi_generic_row(ffi_record.row)};

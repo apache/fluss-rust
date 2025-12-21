@@ -19,6 +19,8 @@
 
 #include <iostream>
 #include <vector>
+#include <unordered_map>
+#include <chrono>
 
 static void check(const char* step, const fluss::Result& r) {
     if (!r.Ok()) {
@@ -37,6 +39,17 @@ int main() {
     fluss::Admin admin;
     check("get_admin", conn.GetAdmin(admin));
 
+    fluss::TablePath table_path("fluss", "sample_table_cpp_v1");
+    
+    // 2.1) Drop table if exists
+    std::cout << "Dropping table if exists..." << std::endl;
+    auto drop_result = admin.DropTable(table_path, true);
+    if (drop_result.Ok()) {
+        std::cout << "Table dropped successfully" << std::endl;
+    } else {
+        std::cout << "Table drop result: " << drop_result.error_message << std::endl;
+    }
+
     // 3) Schema & descriptor
     auto schema = fluss::Schema::NewBuilder()
                         .AddColumn("id", fluss::DataType::Int)
@@ -47,14 +60,14 @@ int main() {
 
     auto descriptor = fluss::TableDescriptor::NewBuilder()
                           .SetSchema(schema)
-                          .SetBucketCount(1)
+                          .SetBucketCount(3)
                           .SetProperty("table.log.arrow.compression.type", "NONE")
-                          .SetComment("cpp example table")
+                          .SetComment("cpp example table with 3 buckets")
                           .Build();
 
-    fluss::TablePath table_path("fluss", "sample_table_cpp_v1");
-    // ignore_if_exists=true to allow re-run
-    check("create_table", admin.CreateTable(table_path, descriptor, true));
+    // 3.1) Create table with 3 buckets
+    std::cout << "Creating table with 3 buckets..." << std::endl;
+    check("create_table", admin.CreateTable(table_path, descriptor, false));
 
     // 4) Get table
     fluss::Table table;
@@ -160,6 +173,82 @@ int main() {
     } else {
         std::cerr << "Column pruning verification failed!" << std::endl;
         std::exit(1);
+    }
+
+    // 8) List offsets examples
+    std::cout << "\n=== List Offsets Examples ===" << std::endl;
+    
+    // 8.1) Query earliest offsets for all buckets
+    std::vector<int32_t> all_bucket_ids;
+    for (int b = 0; b < buckets; ++b) {
+        all_bucket_ids.push_back(b);
+    }
+    
+    std::unordered_map<int32_t, int64_t> earliest_offsets;
+    check("list_earliest_offsets", 
+          admin.ListOffsets(table_path, all_bucket_ids, 
+                           fluss::OffsetQuery::Earliest(), 
+                           earliest_offsets));
+    std::cout << "Earliest offsets:" << std::endl;
+    for (const auto& [bucket_id, offset] : earliest_offsets) {
+        std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
+    }
+    
+    // 8.2) Query latest offsets for all buckets
+    std::unordered_map<int32_t, int64_t> latest_offsets;
+    check("list_latest_offsets", 
+          admin.ListOffsets(table_path, all_bucket_ids, 
+                           fluss::OffsetQuery::Latest(), 
+                           latest_offsets));
+    std::cout << "Latest offsets:" << std::endl;
+    for (const auto& [bucket_id, offset] : latest_offsets) {
+        std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
+    }
+    
+    // 8.3) Query offsets for a specific timestamp (current time - 1 hour)
+    auto now = std::chrono::system_clock::now();
+    auto one_hour_ago = now - std::chrono::hours(1);
+    auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        one_hour_ago.time_since_epoch()).count();
+    
+    std::unordered_map<int32_t, int64_t> timestamp_offsets;
+    check("list_timestamp_offsets", 
+          admin.ListOffsets(table_path, all_bucket_ids, 
+                           fluss::OffsetQuery::FromTimestamp(timestamp_ms), 
+                           timestamp_offsets));
+    std::cout << "Offsets for timestamp " << timestamp_ms << " (1 hour ago):" << std::endl;
+    for (const auto& [bucket_id, offset] : timestamp_offsets) {
+        std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
+    }
+    
+    // 8.4) Use batch subscribe with offsets from list_offsets
+    std::cout << "\n=== Batch Subscribe Example ===" << std::endl;
+    fluss::LogScanner batch_scanner;
+    check("new_log_scanner_for_batch", table.NewLogScanner(batch_scanner));
+    
+    std::vector<fluss::BucketSubscription> subscriptions;
+    for (const auto& [bucket_id, offset] : earliest_offsets) {
+        subscriptions.push_back({bucket_id, offset});
+        std::cout << "Preparing subscription: bucket=" << bucket_id 
+                  << ", offset=" << offset << std::endl;
+    }
+    
+    check("subscribe_batch", batch_scanner.Subscribe(subscriptions));
+    std::cout << "Batch subscribed to " << subscriptions.size() << " buckets" << std::endl;
+    
+    // 8.5) Poll and verify bucket_id in records
+    fluss::ScanRecords batch_records;
+    check("poll_batch", batch_scanner.Poll(5000, batch_records));
+    
+    std::cout << "Scanned " << batch_records.Size() << " records from batch subscription" << std::endl;
+    for (size_t i = 0; i < batch_records.Size() && i < 5; ++i) {
+        const auto& rec = batch_records[i];
+        std::cout << "  Record " << i << ": bucket_id=" << rec.bucket_id 
+                  << ", offset=" << rec.offset 
+                  << ", timestamp=" << rec.timestamp << std::endl;
+    }
+    if (batch_records.Size() > 5) {
+        std::cout << "  ... and " << (batch_records.Size() - 5) << " more records" << std::endl;
     }
 
     return 0;

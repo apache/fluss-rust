@@ -185,6 +185,28 @@ impl LogScanner {
         Ok(())
     }
 
+    pub async fn subscribe_batch(&self, bucket_offsets: HashMap<i32, i64>) -> Result<()> {
+        self.metadata
+            .check_and_update_table_metadata(from_ref(&self.table_path))
+            .await?;
+        if bucket_offsets.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Bucket offsets are empty.".to_string(),
+                source: None,
+            });
+        }
+
+        let mut scan_bucket_offsets = HashMap::new();
+        for (bucket_id, offset) in bucket_offsets {
+            let table_bucket = TableBucket::new(self.table_id, bucket_id);
+            scan_bucket_offsets.insert(table_bucket, offset);
+        }
+
+        self.log_scanner_status
+            .assign_scan_buckets(scan_bucket_offsets);
+        Ok(())
+    }
+
     async fn poll_for_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
         self.log_fetcher.send_fetches_and_collect().await
     }

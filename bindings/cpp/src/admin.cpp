@@ -66,6 +66,16 @@ Result Admin::CreateTable(const TablePath& table_path,
     return utils::from_ffi_result(ffi_result);
 }
 
+Result Admin::DropTable(const TablePath& table_path, bool ignore_if_not_exists) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_path = utils::to_ffi_table_path(table_path);
+    auto ffi_result = admin_->drop_table(ffi_path, ignore_if_not_exists);
+    return utils::from_ffi_result(ffi_result);
+}
+
 Result Admin::GetTable(const TablePath& table_path, TableInfo& out) {
     if (!Available()) {
         return utils::make_error(1, "Admin not available");
@@ -93,6 +103,38 @@ Result Admin::GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& o
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = utils::from_ffi_lake_snapshot(ffi_result.lake_snapshot);
+    }
+
+    return result;
+}
+
+Result Admin::ListOffsets(const TablePath& table_path,
+                          const std::vector<int32_t>& bucket_ids,
+                          const OffsetQuery& offset_query,
+                          std::unordered_map<int32_t, int64_t>& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_path = utils::to_ffi_table_path(table_path);
+    
+    rust::Vec<int32_t> rust_bucket_ids;
+    for (int32_t id : bucket_ids) {
+        rust_bucket_ids.push_back(id);
+    }
+
+    ffi::FfiOffsetQuery ffi_query;
+    ffi_query.offset_type = static_cast<int32_t>(offset_query.spec);
+    ffi_query.timestamp = offset_query.timestamp;
+
+    auto ffi_result = admin_->list_offsets(ffi_path, std::move(rust_bucket_ids), ffi_query);
+    
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.clear();
+        for (const auto& pair : ffi_result.bucket_offsets) {
+            out[pair.bucket_id] = pair.offset;
+        }
     }
 
     return result;

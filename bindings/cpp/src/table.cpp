@@ -210,6 +210,23 @@ Result LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
     return utils::from_ffi_result(ffi_result);
 }
 
+Result LogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offsets) {
+    if (!Available()) {
+        return utils::make_error(1, "LogScanner not available");
+    }
+
+    rust::Vec<ffi::FfiBucketSubscription> rust_subs;
+    for (const auto& sub : bucket_offsets) {
+        ffi::FfiBucketSubscription ffi_sub;
+        ffi_sub.bucket_id = sub.bucket_id;
+        ffi_sub.offset = sub.offset;
+        rust_subs.push_back(ffi_sub);
+    }
+
+    auto ffi_result = scanner_->subscribe_batch(std::move(rust_subs));
+    return utils::from_ffi_result(ffi_result);
+}
+
 Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
         return utils::make_error(1, "LogScanner not available");
