@@ -142,7 +142,6 @@ mod table_remote_scan_test {
                     .build()
                     .expect("Failed to build schema"),
             )
-            .property("table.log.arrow.compression.type", "NONE")
             .build()
             .expect("Failed to build table");
 

@@ -61,7 +61,6 @@ int main() {
     auto descriptor = fluss::TableDescriptor::NewBuilder()
                           .SetSchema(schema)
                           .SetBucketCount(3)
-                          .SetProperty("table.log.arrow.compression.type", "NONE")
                           .SetComment("cpp example table with 3 buckets")
                           .Build();
 
