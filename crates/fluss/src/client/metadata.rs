@@ -16,16 +16,16 @@
 // under the License.
 
 use crate::cluster::{Cluster, ServerNode, ServerType};
+use crate::error::Result;
 use crate::metadata::{TableBucket, TablePath};
+use crate::proto::MetadataResponse;
 use crate::rpc::message::UpdateMetadataRequest;
 use crate::rpc::{RpcClient, ServerConnection};
+use log::info;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use log::info;
-use crate::error::Result;
-use crate::proto::MetadataResponse;
 
 #[derive(Default)]
 pub struct Metadata {
@@ -81,10 +81,12 @@ impl Metadata {
         let server = match maybe_server {
             Some(s) => s,
             None => {
-                info!("No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
+                info!(
+                    "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server."
+                );
                 self.reinit_cluster().await?;
                 return Ok(());
-            },
+            }
         };
 
         let conn = self.connections.get_connection(&server).await?;
