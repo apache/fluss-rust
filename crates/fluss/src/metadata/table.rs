@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::compression::ArrowCompressionInfo;
 use crate::error::Error::InvalidTableError;
 use crate::error::{Error, Result};
 use crate::metadata::datatype::{DataField, DataType, RowType};
@@ -720,6 +721,10 @@ pub struct TableConfig {
 impl TableConfig {
     pub fn from_properties(properties: HashMap<String, String>) -> Self {
         TableConfig { properties }
+    }
+
+    pub fn get_arrow_compression_info(&self) -> Result<ArrowCompressionInfo> {
+        ArrowCompressionInfo::from_conf(&self.properties)
     }
 }
 

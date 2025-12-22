@@ -94,6 +94,7 @@ impl RecordAccumulator {
 
         let table_path = &record.table_path;
         let table_info = cluster.get_table(table_path);
+        let arrow_compression_info = table_info.get_table_config().get_arrow_compression_info()?;
         let row_type = &cluster.get_table(table_path).row_type;
 
         let schema_id = table_info.schema_id;
@@ -102,6 +103,7 @@ impl RecordAccumulator {
             self.batch_id.fetch_add(1, Ordering::Relaxed),
             table_path.as_ref().clone(),
             schema_id,
+            arrow_compression_info,
             row_type,
             bucket_id,
             current_time_ms(),

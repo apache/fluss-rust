@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::{Record, WriteRecord};
+use crate::compression::ArrowCompressionInfo;
 use crate::error::Result;
 use crate::metadata::DataType;
 use crate::record::{ChangeType, ScanRecord};
@@ -47,6 +48,7 @@ use std::{
     sync::Arc,
 };
 
+use arrow::ipc::writer::IpcWriteOptions;
 /// const for record batch
 pub const BASE_OFFSET_LENGTH: usize = 8;
 pub const LENGTH_LENGTH: usize = 4;
@@ -104,6 +106,7 @@ pub struct MemoryLogRecordsArrowBuilder {
     batch_sequence: i32,
     arrow_record_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder>,
     is_closed: bool,
+    arrow_compression_info: ArrowCompressionInfo,
 }
 
 pub trait ArrowRecordBatchInnerBuilder: Send + Sync {
@@ -244,7 +247,12 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
 }
 
 impl MemoryLogRecordsArrowBuilder {
-    pub fn new(schema_id: i32, row_type: &DataType, to_append_record_batch: bool) -> Self {
+    pub fn new(
+        schema_id: i32,
+        row_type: &DataType,
+        to_append_record_batch: bool,
+        arrow_compression_info: ArrowCompressionInfo,
+    ) -> Self {
         let arrow_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder> = {
             if to_append_record_batch {
                 Box::new(PrebuiltRecordBatchBuilder::default())
@@ -260,6 +268,7 @@ impl MemoryLogRecordsArrowBuilder {
             batch_sequence: NO_BATCH_SEQUENCE,
             is_closed: false,
             arrow_record_batch_builder: arrow_batch_builder,
+            arrow_compression_info,
         }
     }
 
@@ -289,7 +298,15 @@ impl MemoryLogRecordsArrowBuilder {
         // serialize arrow batch
         let mut arrow_batch_bytes = vec![];
         let table_schema = self.arrow_record_batch_builder.schema();
-        let mut writer = StreamWriter::try_new(&mut arrow_batch_bytes, &table_schema)?;
+        let compression_type = self.arrow_compression_info.get_compression_type();
+        let write_option =
+            IpcWriteOptions::try_with_compression(IpcWriteOptions::default(), compression_type);
+        let mut writer = StreamWriter::try_new_with_options(
+            &mut arrow_batch_bytes,
+            &table_schema,
+            write_option?,
+        )?;
+
         // get header len
         let header = writer.get_ref().len();
         let record_batch = self.arrow_record_batch_builder.build_arrow_record_batch()?;
