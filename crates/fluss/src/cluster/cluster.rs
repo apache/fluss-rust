@@ -214,15 +214,12 @@ impl Cluster {
             .unwrap_or(&EMPTY)
     }
 
-    pub fn get_one_available_server(&self) -> &ServerNode {
-        assert!(
-            !self.alive_tablet_servers.is_empty(),
-            "no alive tablet server in cluster"
-        );
+    pub fn get_one_available_server(&self) -> Option<&ServerNode> {
+        if self.alive_tablet_servers.is_empty() {
+            return None;
+        }
         let offset = random_range(0..self.alive_tablet_servers.len());
-        self.alive_tablet_servers
-            .get(offset)
-            .unwrap_or_else(|| panic!("can't find alive tab server by offset {offset}"))
+        self.alive_tablet_servers.get(offset)
     }
 
     pub fn get_bucket_count(&self, table_path: &TablePath) -> i32 {

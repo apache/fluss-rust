@@ -118,7 +118,7 @@ impl CredentialsCache {
 
     async fn refresh_from_server(&self) -> Result<HashMap<String, String>> {
         let cluster = self.metadata.get_cluster();
-        let server_node = cluster.get_one_available_server();
+        let server_node = cluster.get_one_available_server().expect("no available tablet server");
         let conn = self.rpc_client.get_connection(server_node).await?;
 
         let request = GetSecurityTokenRequest::new();

@@ -23,7 +23,7 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-
+use log::info;
 use crate::error::Result;
 use crate::proto::MetadataResponse;
 
@@ -31,28 +31,36 @@ use crate::proto::MetadataResponse;
 pub struct Metadata {
     cluster: RwLock<Arc<Cluster>>,
     connections: Arc<RpcClient>,
+    bootstrap: Arc<str>,
 }
 
 impl Metadata {
-    pub async fn new(boot_strap: &str, connections: Arc<RpcClient>) -> Result<Self> {
-        let custer = Self::init_cluster(boot_strap, connections.clone()).await?;
+    pub async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
+        let cluster = Self::init_cluster(bootstrap, connections.clone()).await?;
         Ok(Metadata {
-            cluster: RwLock::new(Arc::new(custer)),
+            cluster: RwLock::new(Arc::new(cluster)),
             connections,
+            bootstrap: bootstrap.into(),
         })
     }
 
     async fn init_cluster(boot_strap: &str, connections: Arc<RpcClient>) -> Result<Cluster> {
-        let socker_addrss = boot_strap.parse::<SocketAddr>().unwrap();
+        let socket_address = boot_strap.parse::<SocketAddr>().unwrap();
         let server_node = ServerNode::new(
             -1,
-            socker_addrss.ip().to_string(),
-            socker_addrss.port() as u32,
+            socket_address.ip().to_string(),
+            socket_address.port() as u32,
             ServerType::CoordinatorServer,
         );
         let con = connections.get_connection(&server_node).await?;
         let response = con.request(UpdateMetadataRequest::new(&[])).await?;
         Cluster::from_metadata_response(response, None)
+    }
+
+    async fn reinit_cluster(&self) -> Result<()> {
+        let cluster = Self::init_cluster(&self.bootstrap, self.connections.clone()).await?;
+        *self.cluster.write() = cluster.into();
+        Ok(())
     }
 
     pub async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
@@ -65,7 +73,20 @@ impl Metadata {
     }
 
     pub async fn update_tables_metadata(&self, table_paths: &HashSet<&TablePath>) -> Result<()> {
-        let server = self.cluster.read().get_one_available_server().clone();
+        let maybe_server = {
+            let guard = self.cluster.read();
+            guard.get_one_available_server().cloned()
+        };
+
+        let server = match maybe_server {
+            Some(s) => s,
+            None => {
+                info!("No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
+                self.reinit_cluster().await?;
+                return Ok(());
+            },
+        };
+
         let conn = self.connections.get_connection(&server).await?;
 
         let update_table_paths: Vec<&TablePath> = table_paths.iter().copied().collect();

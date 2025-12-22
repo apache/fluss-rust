@@ -28,6 +28,7 @@ use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
+use crate::rpc::FlussError::PartitionNotExists;
 use crate::rpc::{RpcClient, message};
 use crate::util::FairBucketStatusMap;
 use arrow_schema::SchemaRef;
@@ -271,6 +272,8 @@ struct LogFetcher {
     credentials_cache: Arc<CredentialsCache>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
+    table_path: TablePath,
+    is_partitioned: bool,
 }
 
 impl LogFetcher {
@@ -299,6 +302,8 @@ impl LogFetcher {
             credentials_cache: Arc::new(CredentialsCache::new(conns.clone(), metadata.clone())),
             log_fetch_buffer: Arc::new(LogFetchBuffer::new()),
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
+            table_path: table_info.table_path.clone(),
+            is_partitioned: table_info.is_partitioned(),
         })
     }
 
@@ -315,9 +320,52 @@ impl LogFetcher {
         }
     }
 
+    async fn check_and_update_metadata(&self) -> Result<()> {
+        if self.is_partitioned {
+            let partition_ids: Vec<i64> = self
+                .fetchable_buckets()
+                .iter()
+                .filter(|b| self.get_table_bucket_leader(b).is_none())
+                .map(|b| b.partition_id().unwrap())
+                .collect();
+
+            if !partition_ids.is_empty() {
+                // TODO: Implement once LogFetcher is partition aware
+            }
+            return Ok(());
+        }
+
+        let need_update = self
+            .fetchable_buckets()
+            .iter()
+            .any(|bucket| self.get_table_bucket_leader(bucket).is_none());
+
+        if !need_update {
+            return Ok(());
+        }
+
+        match self
+            .metadata
+            .update_tables_metadata(&HashSet::from([&self.table_path]))
+            .await
+        {
+            Err(Error::FlussAPIError { api_error })
+                if api_error.code == PartitionNotExists.code() =>
+            {
+                warn!(
+                    "Received PartitionNotExistException when updating metadata, ignoring: {}",
+                    api_error
+                );
+                Ok(())
+            }
+            Err(other) => Err(other),
+            Ok(()) => Ok(()),
+        }
+    }
+
     /// Send fetch requests asynchronously without waiting for responses
     async fn send_fetches(&self) -> Result<()> {
-        // todo: check update metadata like fluss-java in case leader changes
+        self.check_and_update_metadata().await?;
         let fetch_request = self.prepare_fetch_log_requests().await;
 
         for (leader, fetch_request) in fetch_request {
