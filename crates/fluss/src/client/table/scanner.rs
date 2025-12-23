@@ -402,6 +402,7 @@ impl LogFetcher {
                 let server_node = match cluster.get_tablet_server(leader) {
                     Some(node) => node,
                     None => {
+                        warn!("No server node found for leader {}, retrying", leader);
                         Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
@@ -411,6 +412,7 @@ impl LogFetcher {
                     Ok(con) => con,
                     Err(e) => {
                         warn!("Retrying after error getting connection to destination node: {e:?}");
+                        Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
                 };
