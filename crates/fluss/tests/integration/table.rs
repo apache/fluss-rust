@@ -137,6 +137,7 @@ mod table_test {
         let num_buckets = table.table_info().get_num_buckets();
         let log_scanner = table
             .new_scan()
+            .expect("Failed to create table scan")
             .create_log_scanner()
             .expect("Failed to create log scanner");
         for bucket_id in 0..num_buckets {
@@ -165,6 +166,7 @@ mod table_test {
 
         let log_scanner_projected = table
             .new_scan()
+            .expect("Failed to create table scan")
             .project(&[1, 0])
             .expect("Failed to project")
             .create_log_scanner()
@@ -213,7 +215,7 @@ mod table_test {
             .await
             .expect("Failed to get table");
 
-        let table_scan = table.new_scan();
+        let table_scan = table.new_scan().expect("Failed to create table scan");
         let log_scanner = table_scan
             .create_log_scanner()
             .expect("Failed to create log scanner");

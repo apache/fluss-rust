@@ -520,7 +520,11 @@ impl Table {
             self.table_info.clone(),
         );
 
-        let scanner = match fluss_table.new_scan().create_log_scanner() {
+        let scan = match fluss_table.new_scan() {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to create table scan: {e}")),
+        };
+        let scanner = match scan.create_log_scanner() {
             Ok(a) => a,
             Err(e) => return Err(format!("Failed to create log scanner: {e}")),
         };
@@ -538,7 +542,10 @@ impl Table {
             self.table_info.clone(),
         );
 
-        let scan = fluss_table.new_scan();
+        let scan = match fluss_table.new_scan() {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Failed to create table scan: {e}")),
+        };
         let scan = match scan.project(&column_indices) {
             Ok(s) => s,
             Err(e) => return Err(format!("Failed to project columns: {e}")),
