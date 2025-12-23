@@ -24,11 +24,10 @@ use crate::client::table::log_fetch_buffer::{
 use crate::client::table::remote_log::{
     RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
 };
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, RpcError};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
-use crate::rpc::FlussError::PartitionNotExists;
 use crate::rpc::{RpcClient, message};
 use crate::util::FairBucketStatusMap;
 use arrow_schema::SchemaRef;
@@ -344,23 +343,23 @@ impl LogFetcher {
             return Ok(());
         }
 
-        match self
-            .metadata
+        // TODO: Handle PartitionNotExist error
+        self.metadata
             .update_tables_metadata(&HashSet::from([&self.table_path]))
             .await
-        {
-            Err(Error::FlussAPIError { api_error })
-                if api_error.code == PartitionNotExists.code() =>
-            {
-                warn!(
-                    "Received PartitionNotExistException when updating metadata, ignoring: {}",
-                    api_error
-                );
-                Ok(())
-            }
-            Err(other) => Err(other),
-            Ok(()) => Ok(()),
-        }
+            .or_else(|e| match &e {
+                Error::RpcError { source, .. } => match source {
+                    RpcError::ConnectionError(_) | RpcError::Poisoned(_) => {
+                        warn!(
+                            "Retrying after encountering error while updating table metadata: {}",
+                            e
+                        );
+                        Ok(())
+                    }
+                    _ => Err(e),
+                },
+                _ => Err(e),
+            })
     }
 
     /// Send fetch requests asynchronously without waiting for responses
@@ -411,8 +410,7 @@ impl LogFetcher {
                 let con = match conns.get_connection(server_node).await {
                     Ok(con) => con,
                     Err(e) => {
-                        // todo: handle failed to get connection
-                        warn!("Failed to get connection to destination node: {e:?}");
+                        warn!("Retrying after error getting connection to destination node: {e:?}");
                         return;
                     }
                 };
@@ -423,8 +421,9 @@ impl LogFetcher {
                 {
                     Ok(resp) => resp,
                     Err(e) => {
-                        // todo: handle fetch log from destination node
-                        warn!("Failed to fetch log from destination node {server_node:?}: {e:?}");
+                        warn!(
+                            "Retrying after error fetching log from destination node {server_node:?}: {e:?}"
+                        );
                         Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
@@ -441,7 +440,6 @@ impl LogFetcher {
                 )
                 .await
                 {
-                    // todo: handle fail to handle fetch response
                     error!("Fail to handle fetch response: {e:?}");
                 }
             });
@@ -450,7 +448,11 @@ impl LogFetcher {
         Ok(())
     }
 
-    async fn handle_fetch_failure(metadata: Arc<Metadata>, server_id: &i32, request: &FetchLogRequest) {
+    async fn handle_fetch_failure(
+        metadata: Arc<Metadata>,
+        server_id: &i32,
+        request: &FetchLogRequest,
+    ) {
         let table_ids = request.tables_req.iter().map(|r| r.table_id).collect();
         metadata.invalidate_server(server_id, table_ids);
     }

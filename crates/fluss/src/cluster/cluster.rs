@@ -68,17 +68,24 @@ impl Cluster {
         let alive_tablet_servers_by_id = self
             .alive_tablet_servers_by_id
             .iter()
-            .filter_map(|(id, ts)| (id != server_id).then(|| (id.clone(), ts.clone())))
+            .filter(|&(id, ts)| id != server_id).map(|(id, ts)| (*id, ts.clone()))
             .collect();
 
-        let table_paths: HashSet<&TablePath> = table_ids.iter().filter_map(|id| { self.table_path_by_id.get(id) }).collect();
-
-        let available_locations_by_path = self.available_locations_by_path.iter()
-            .filter_map(|(path, locations)| { (!table_paths.contains(path)).then(|| (path.clone(), locations.clone())) })
+        let table_paths: HashSet<&TablePath> = table_ids
+            .iter()
+            .filter_map(|id| self.table_path_by_id.get(id))
             .collect();
 
-        let available_locations_by_bucket = self.available_locations_by_bucket.iter()
-            .filter_map(|(bucket, location)| { (!table_paths.contains(&location.table_path)).then(|| (bucket.clone(), location.clone())) })
+        let available_locations_by_path = self
+            .available_locations_by_path
+            .iter()
+            .filter(|&(path, locations)| !table_paths.contains(path)).map(|(path, locations)| (path.clone(), locations.clone()))
+            .collect();
+
+        let available_locations_by_bucket = self
+            .available_locations_by_bucket
+            .iter()
+            .filter(|&(bucket, location)| !table_paths.contains(&location.table_path)).map(|(bucket, location)| (bucket.clone(), location.clone()))
             .collect();
 
         Cluster::new(

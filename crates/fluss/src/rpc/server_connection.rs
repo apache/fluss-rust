@@ -66,12 +66,17 @@ impl RpcClient {
         server_node: &ServerNode,
     ) -> Result<ServerConnection, RpcError> {
         let server_id = server_node.uid();
-        {
+        let connection = {
             let connections = self.connections.read();
-            if let Some(connection) = connections.get(server_id) {
-                return Ok(connection.clone());
+            connections.get(server_id).cloned()
+        };
+
+        if let Some(conn) = connection {
+            if !conn.is_poisoned().await {
+                return Ok(conn.clone());
             }
         }
+
         let new_server = self.connect(server_node).await?;
         self.connections
             .write()
@@ -229,6 +234,11 @@ where
             state,
             join_handle,
         }
+    }
+
+    async fn is_poisoned(&self) -> bool {
+        let guard = self.state.lock();
+        matches!(*guard, ConnectionState::Poison(_))
     }
 
     pub async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, Error>
