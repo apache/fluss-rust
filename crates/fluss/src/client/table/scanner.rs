@@ -385,6 +385,7 @@ impl LogFetcher {
             let remote_log_downloader = Arc::clone(&self.remote_log_downloader);
             let creds_cache = self.credentials_cache.clone();
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
+            let metadata = self.metadata.clone();
 
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
@@ -399,9 +400,13 @@ impl LogFetcher {
                     nodes_with_pending.lock().remove(&leader);
                 });
 
-                let server_node = cluster
-                    .get_tablet_server(leader)
-                    .expect("todo: handle leader not exist.");
+                let server_node = match cluster.get_tablet_server(leader) {
+                    Some(node) => node,
+                    None => {
+                        Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
+                        return;
+                    }
+                };
 
                 let con = match conns.get_connection(server_node).await {
                     Ok(con) => con,
@@ -413,13 +418,14 @@ impl LogFetcher {
                 };
 
                 let fetch_response = match con
-                    .request(message::FetchLogRequest::new(fetch_request))
+                    .request(message::FetchLogRequest::new(fetch_request.clone()))
                     .await
                 {
                     Ok(resp) => resp,
                     Err(e) => {
                         // todo: handle fetch log from destination node
                         warn!("Failed to fetch log from destination node {server_node:?}: {e:?}");
+                        Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
                 };
@@ -442,6 +448,11 @@ impl LogFetcher {
         }
 
         Ok(())
+    }
+
+    async fn handle_fetch_failure(metadata: Arc<Metadata>, server_id: &i32, request: &FetchLogRequest) {
+        let table_ids = request.tables_req.iter().map(|r| r.table_id).collect();
+        metadata.invalidate_server(server_id, table_ids);
     }
 
     /// Handle fetch response and add completed fetches to buffer

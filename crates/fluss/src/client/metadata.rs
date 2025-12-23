@@ -63,6 +63,11 @@ impl Metadata {
         Ok(())
     }
 
+    pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) {
+        let cluster = self.cluster.read().invalidate_server(server_id, table_ids);
+        *self.cluster.write() = cluster.into();
+    }
+
     pub async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
         let origin_cluster = self.cluster.read().clone();
         let new_cluster =

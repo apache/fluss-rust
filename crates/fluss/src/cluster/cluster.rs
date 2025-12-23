@@ -22,7 +22,7 @@ use crate::metadata::{JsonSerde, TableBucket, TableDescriptor, TableInfo, TableP
 use crate::proto::MetadataResponse;
 use crate::rpc::{from_pb_server_node, from_pb_table_path};
 use rand::random_range;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 static EMPTY: Vec<BucketLocation> = Vec::new();
 
@@ -62,6 +62,33 @@ impl Cluster {
             table_path_by_id,
             table_info_by_path,
         }
+    }
+
+    pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) -> Self {
+        let alive_tablet_servers_by_id = self
+            .alive_tablet_servers_by_id
+            .iter()
+            .filter_map(|(id, ts)| (id != server_id).then(|| (id.clone(), ts.clone())))
+            .collect();
+
+        let table_paths: HashSet<&TablePath> = table_ids.iter().filter_map(|id| { self.table_path_by_id.get(id) }).collect();
+
+        let available_locations_by_path = self.available_locations_by_path.iter()
+            .filter_map(|(path, locations)| { (!table_paths.contains(path)).then(|| (path.clone(), locations.clone())) })
+            .collect();
+
+        let available_locations_by_bucket = self.available_locations_by_bucket.iter()
+            .filter_map(|(bucket, location)| { (!table_paths.contains(&location.table_path)).then(|| (bucket.clone(), location.clone())) })
+            .collect();
+
+        Cluster::new(
+            self.coordinator_server.clone(),
+            alive_tablet_servers_by_id,
+            available_locations_by_path,
+            available_locations_by_bucket,
+            self.table_id_by_path.clone(),
+            self.table_info_by_path.clone(),
+        )
     }
 
     pub fn update(&mut self, cluster: Cluster) {
