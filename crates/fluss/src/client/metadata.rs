@@ -87,7 +87,7 @@ impl Metadata {
             Some(s) => s,
             None => {
                 info!(
-                    "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server."
+                    "No available tablet server to update metadata, attempting to re-initialize cluster using bootstrap server."
                 );
                 self.reinit_cluster().await?;
                 return Ok(());

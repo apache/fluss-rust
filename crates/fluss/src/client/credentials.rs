@@ -120,7 +120,7 @@ impl CredentialsCache {
         let cluster = self.metadata.get_cluster();
         let server_node = cluster
             .get_one_available_server()
-            .expect("no available tablet server");
+            .expect("no tablet server available");
         let conn = self.rpc_client.get_connection(server_node).await?;
 
         let request = GetSecurityTokenRequest::new();
