@@ -347,18 +347,18 @@ impl LogFetcher {
         self.metadata
             .update_tables_metadata(&HashSet::from([&self.table_path]))
             .await
-            .or_else(|e| match &e {
-                Error::RpcError { source, .. } => match source {
-                    RpcError::ConnectionError(_) | RpcError::Poisoned(_) => {
-                        warn!(
-                            "Retrying after encountering error while updating table metadata: {}",
-                            e
-                        );
-                        Ok(())
-                    }
-                    _ => Err(e),
-                },
-                _ => Err(e),
+            .or_else(|e| {
+                if let Error::RpcError { source, .. } = &e
+                    && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
+                {
+                    warn!(
+                        "Retrying after encountering error while updating table metadata: {}",
+                        e
+                    );
+                    Ok(())
+                } else {
+                    Err(e)
+                }
             })
     }
 
