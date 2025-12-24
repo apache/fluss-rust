@@ -243,7 +243,7 @@ where
         }
     }
 
-    async fn is_poisoned(&self) -> bool {
+    fn is_poisoned(&self) -> bool {
         let guard = self.state.lock();
         matches!(*guard, ConnectionState::Poison(_))
     }
