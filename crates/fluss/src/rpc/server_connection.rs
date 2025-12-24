@@ -77,7 +77,14 @@ impl RpcClient {
             }
         }
 
-        let new_server = self.connect(server_node).await?;
+        let new_server = match self.connect(server_node).await {
+            Ok(new_server) => new_server,
+            Err(e) => {
+                self.connections.write().remove(server_id);
+                return Err(e);
+            }
+        };
+
         self.connections
             .write()
             .insert(server_id.clone(), new_server.clone());
