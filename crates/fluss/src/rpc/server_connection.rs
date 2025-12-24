@@ -72,7 +72,7 @@ impl RpcClient {
         };
 
         if let Some(conn) = connection {
-            if !conn.is_poisoned().await {
+            if !conn.is_poisoned() {
                 return Ok(conn);
             }
         }
