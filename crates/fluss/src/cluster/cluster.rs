@@ -68,7 +68,7 @@ impl Cluster {
         let alive_tablet_servers_by_id = self
             .alive_tablet_servers_by_id
             .iter()
-            .filter(|&(id, _ts)| id != server_id)
+            .filter(|&(id, _)| id != server_id)
             .map(|(id, ts)| (*id, ts.clone()))
             .collect();
 
