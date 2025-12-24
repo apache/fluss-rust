@@ -80,7 +80,7 @@ impl Cluster {
         let available_locations_by_path = self
             .available_locations_by_path
             .iter()
-            .filter(|&(path, _locations)| !table_paths.contains(path))
+            .filter(|&(path, _)| !table_paths.contains(path))
             .map(|(path, locations)| (path.clone(), locations.clone()))
             .collect();
 
