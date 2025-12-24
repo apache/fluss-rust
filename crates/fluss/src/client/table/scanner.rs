@@ -321,16 +321,9 @@ impl LogFetcher {
 
     async fn check_and_update_metadata(&self) -> Result<()> {
         if self.is_partitioned {
-            let partition_ids: Vec<i64> = self
-                .fetchable_buckets()
-                .iter()
-                .filter(|b| self.get_table_bucket_leader(b).is_none())
-                .map(|b| b.partition_id().unwrap())
-                .collect();
-
-            if !partition_ids.is_empty() {
-                // TODO: Implement once LogFetcher is partition aware
-            }
+            // TODO: Implement partition-aware metadata refresh for buckets whose leaders are unknown.
+            // The implementation will likely need to collect partition IDs for such buckets and
+            // perform targeted metadata updates. Until then, we avoid computing unused partition_ids.
             return Ok(());
         }
 
