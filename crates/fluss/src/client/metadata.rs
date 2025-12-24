@@ -64,8 +64,11 @@ impl Metadata {
     }
 
     pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) {
-        let cluster = self.cluster.read().invalidate_server(server_id, table_ids);
-        *self.cluster.write() = cluster.into();
+        // Take a write lock for the entire operation to avoid races between
+        // reading the current cluster state and writing back the updated one.
+        let mut cluster_guard = self.cluster.write();
+        let updated_cluster = cluster_guard.invalidate_server(server_id, table_ids);
+        *cluster_guard = Arc::new(updated_cluster);
     }
 
     pub async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
