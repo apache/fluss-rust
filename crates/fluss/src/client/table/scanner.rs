@@ -24,7 +24,7 @@ use crate::client::table::log_fetch_buffer::{
 use crate::client::table::remote_log::{
     RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
 };
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, RpcError};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
@@ -271,6 +271,8 @@ struct LogFetcher {
     credentials_cache: Arc<CredentialsCache>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
+    table_path: TablePath,
+    is_partitioned: bool,
 }
 
 impl LogFetcher {
@@ -299,6 +301,8 @@ impl LogFetcher {
             credentials_cache: Arc::new(CredentialsCache::new(conns.clone(), metadata.clone())),
             log_fetch_buffer: Arc::new(LogFetchBuffer::new()),
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
+            table_path: table_info.table_path.clone(),
+            is_partitioned: table_info.is_partitioned(),
         })
     }
 
@@ -315,9 +319,45 @@ impl LogFetcher {
         }
     }
 
+    async fn check_and_update_metadata(&self) -> Result<()> {
+        if self.is_partitioned {
+            // TODO: Implement partition-aware metadata refresh for buckets whose leaders are unknown.
+            // The implementation will likely need to collect partition IDs for such buckets and
+            // perform targeted metadata updates. Until then, we avoid computing unused partition_ids.
+            return Ok(());
+        }
+
+        let need_update = self
+            .fetchable_buckets()
+            .iter()
+            .any(|bucket| self.get_table_bucket_leader(bucket).is_none());
+
+        if !need_update {
+            return Ok(());
+        }
+
+        // TODO: Handle PartitionNotExist error
+        self.metadata
+            .update_tables_metadata(&HashSet::from([&self.table_path]))
+            .await
+            .or_else(|e| {
+                if let Error::RpcError { source, .. } = &e
+                    && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
+                {
+                    warn!(
+                        "Retrying after encountering error while updating table metadata: {}",
+                        e
+                    );
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    }
+
     /// Send fetch requests asynchronously without waiting for responses
     async fn send_fetches(&self) -> Result<()> {
-        // todo: check update metadata like fluss-java in case leader changes
+        self.check_and_update_metadata().await?;
         let fetch_request = self.prepare_fetch_log_requests().await;
 
         for (leader, fetch_request) in fetch_request {
@@ -337,6 +377,7 @@ impl LogFetcher {
             let remote_log_downloader = Arc::clone(&self.remote_log_downloader);
             let creds_cache = self.credentials_cache.clone();
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
+            let metadata = self.metadata.clone();
 
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
@@ -351,27 +392,34 @@ impl LogFetcher {
                     nodes_with_pending.lock().remove(&leader);
                 });
 
-                let server_node = cluster
-                    .get_tablet_server(leader)
-                    .expect("todo: handle leader not exist.");
+                let server_node = match cluster.get_tablet_server(leader) {
+                    Some(node) => node,
+                    None => {
+                        warn!("No server node found for leader {}, retrying", leader);
+                        Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
+                        return;
+                    }
+                };
 
                 let con = match conns.get_connection(server_node).await {
                     Ok(con) => con,
                     Err(e) => {
-                        // todo: handle failed to get connection
-                        warn!("Failed to get connection to destination node: {e:?}");
+                        warn!("Retrying after error getting connection to destination node: {e:?}");
+                        Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
                 };
 
                 let fetch_response = match con
-                    .request(message::FetchLogRequest::new(fetch_request))
+                    .request(message::FetchLogRequest::new(fetch_request.clone()))
                     .await
                 {
                     Ok(resp) => resp,
                     Err(e) => {
-                        // todo: handle fetch log from destination node
-                        warn!("Failed to fetch log from destination node {server_node:?}: {e:?}");
+                        warn!(
+                            "Retrying after error fetching log from destination node {server_node:?}: {e:?}"
+                        );
+                        Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
                 };
@@ -387,13 +435,21 @@ impl LogFetcher {
                 )
                 .await
                 {
-                    // todo: handle fail to handle fetch response
                     error!("Fail to handle fetch response: {e:?}");
                 }
             });
         }
 
         Ok(())
+    }
+
+    async fn handle_fetch_failure(
+        metadata: Arc<Metadata>,
+        server_id: &i32,
+        request: &FetchLogRequest,
+    ) {
+        let table_ids = request.tables_req.iter().map(|r| r.table_id).collect();
+        metadata.invalidate_server(server_id, table_ids);
     }
 
     /// Handle fetch response and add completed fetches to buffer
