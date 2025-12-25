@@ -37,9 +37,12 @@ mod table_test {
     use crate::integration::utils::create_table;
     use arrow::array::record_batch;
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
+    use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
+    use jiff::Timestamp;
     use std::sync::Arc;
     use std::thread;
+
     fn before_all() {
         // Create a new tokio runtime in a separate thread
         let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
@@ -307,6 +310,8 @@ mod table_test {
             "Latest offset should be 0 for empty table"
         );
 
+        let before_append_ms = Timestamp::now().as_millisecond();
+
         // Append some records
         let append_writer = connection
             .get_table(&table_path)
@@ -326,8 +331,9 @@ mod table_test {
             .await
             .expect("Failed to append batch");
 
-        // Wait for records to be committed
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        let after_append_ms = Timestamp::now().as_millisecond();
 
         // Test latest offset after appending (should be 3)
         let latest_offsets_after = admin
@@ -353,31 +359,28 @@ mod table_test {
             "Earliest offset should still be 0"
         );
 
-        // Test with multiple buckets
-        let multi_bucket_offsets = admin
-            .list_offsets(&table_path, &[0], OffsetSpec::Latest)
-            .await
-            .expect("Failed to list offsets for multiple buckets");
-
-        assert!(
-            multi_bucket_offsets.contains_key(&0),
-            "Should have offset for bucket 0"
-        );
-
         // Test list_offsets_by_timestamp
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Failed to get current time")
-            .as_millis() as i64;
 
         let timestamp_offsets = admin
-            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(now_ms))
+            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(before_append_ms))
             .await
             .expect("Failed to list offsets by timestamp");
 
-        assert!(
-            timestamp_offsets.contains_key(&0),
-            "Should have offset for bucket 0 at current timestamp"
+        assert_eq!(
+            timestamp_offsets.get(&0),
+            Some(&0),
+            "Timestamp before append should resolve to offset 0 (start of new data)"
+        );
+
+        let timestamp_offsets = admin
+            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(after_append_ms))
+            .await
+            .expect("Failed to list offsets by timestamp");
+
+        assert_eq!(
+            timestamp_offsets.get(&0),
+            Some(&3),
+            "Timestamp after append should resolve to offset 0 (no newer records)"
         );
     }
 }
