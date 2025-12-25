@@ -59,6 +59,11 @@ impl<'a> FlussTable<'a> {
     }
 
     pub fn new_append(&self) -> Result<TableAppend> {
+        if self.table_info.is_partitioned() {
+            return Err(crate::error::Error::UnsupportedOperation {
+                message: "Partitioned tables are not supported".to_string(),
+            });
+        }
         Ok(TableAppend::new(
             self.table_path.clone(),
             self.table_info.clone(),
@@ -66,8 +71,17 @@ impl<'a> FlussTable<'a> {
         ))
     }
 
-    pub fn new_scan(&self) -> TableScan<'_> {
-        TableScan::new(self.conn, self.table_info.clone(), self.metadata.clone())
+    pub fn new_scan(&self) -> Result<TableScan<'_>> {
+        if self.table_info.is_partitioned() {
+            return Err(crate::error::Error::UnsupportedOperation {
+                message: "Partitioned tables are not supported".to_string(),
+            });
+        }
+        Ok(TableScan::new(
+            self.conn,
+            self.table_info.clone(),
+            self.metadata.clone(),
+        ))
     }
 
     pub fn metadata(&self) -> &Arc<Metadata> {
