@@ -40,6 +40,7 @@ mod table_test {
     use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
     use jiff::Timestamp;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::thread;
 
@@ -380,6 +381,209 @@ mod table_test {
             timestamp_offsets.get(&0),
             Some(&3),
             "Timestamp after append should resolve to offset 0 (no newer records)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_batch() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_subscribe_batch".to_string());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("value", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Append 6 records
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer();
+
+        let batch = record_batch!(
+            ("id", Int32, [1, 2, 3, 4, 5, 6]),
+            ("value", Utf8, ["a", "b", "c", "d", "e", "f"])
+        )
+        .unwrap();
+        append_writer
+            .append_arrow_batch(batch)
+            .await
+            .expect("Failed to append batch");
+        append_writer.flush().await.expect("Failed to flush");
+
+        // Test subscribe_batch with HashMap
+        let log_scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+
+        let mut bucket_offsets = HashMap::new();
+        bucket_offsets.insert(0, 0i64);
+        log_scanner
+            .subscribe_batch(bucket_offsets)
+            .await
+            .expect("Failed to subscribe batch");
+
+        let scan_records = log_scanner
+            .poll(std::time::Duration::from_secs(60))
+            .await
+            .expect("Failed to poll");
+
+        let records: Vec<_> = scan_records.into_iter().collect();
+        assert_eq!(
+            records.len(),
+            6,
+            "Should have 6 records via subscribe_batch"
+        );
+
+        // Verify record contents
+        for record in records.iter() {
+            let row = record.row();
+            let id = row.get_int(0);
+            let value = row.get_string(1);
+            assert!(id >= 1 && id <= 6, "id should be between 1 and 6");
+            assert!(
+                ["a", "b", "c", "d", "e", "f"].contains(&value.as_str()),
+                "value should be one of a-f"
+            );
+        }
+
+        // Test error case: empty HashMap should fail
+        let log_scanner_empty = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+
+        let result = log_scanner_empty.subscribe_batch(HashMap::new()).await;
+        assert!(
+            result.is_err(),
+            "subscribe_batch with empty HashMap should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_project_by_name() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_project_by_name".to_string());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("col_a", DataTypes::int())
+                    .column("col_b", DataTypes::string())
+                    .column("col_c", DataTypes::int())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Append 3 records
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer();
+
+        let batch = record_batch!(
+            ("col_a", Int32, [1, 2, 3]),
+            ("col_b", Utf8, ["x", "y", "z"]),
+            ("col_c", Int32, [10, 20, 30])
+        )
+        .unwrap();
+        append_writer
+            .append_arrow_batch(batch)
+            .await
+            .expect("Failed to append batch");
+        append_writer.flush().await.expect("Failed to flush");
+
+        // Test project_by_name: select col_b and col_c only
+        let log_scanner = table
+            .new_scan()
+            .project_by_name(&["col_b", "col_c"])
+            .expect("Failed to project by name")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+
+        log_scanner
+            .subscribe(0, 0)
+            .await
+            .expect("Failed to subscribe");
+
+        let scan_records = log_scanner
+            .poll(std::time::Duration::from_secs(60))
+            .await
+            .expect("Failed to poll");
+
+        let mut records: Vec<_> = scan_records.into_iter().collect();
+        records.sort_by_key(|r| r.offset());
+
+        assert_eq!(
+            records.len(),
+            3,
+            "Should have 3 records with project_by_name"
+        );
+
+        // Verify projected columns are in the correct order (col_b, col_c)
+        let expected_col_b = vec!["x", "y", "z"];
+        let expected_col_c = vec![10, 20, 30];
+
+        for (i, record) in records.iter().enumerate() {
+            let row = record.row();
+            // col_b is now at index 0, col_c is at index 1
+            assert_eq!(
+                row.get_string(0),
+                expected_col_b[i],
+                "col_b mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                row.get_int(1),
+                expected_col_c[i],
+                "col_c mismatch at index {}",
+                i
+            );
+        }
+
+        // Test error case: empty column names should fail
+        let result = table.new_scan().project_by_name(&[]);
+        assert!(
+            result.is_err(),
+            "project_by_name with empty names should fail"
+        );
+
+        // Test error case: non-existent column should fail
+        let result = table.new_scan().project_by_name(&["nonexistent_column"]);
+        assert!(
+            result.is_err(),
+            "project_by_name with non-existent column should fail"
         );
     }
 }
