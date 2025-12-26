@@ -1,0 +1,142 @@
+licenses(["notice"])
+
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_binary")
+
+genrule(
+    name = "cargo_build_debug",
+    srcs = glob([
+        "src/**/*.rs",
+        "Cargo.toml",
+    ]),
+    outs = [
+        "rust_lib_debug.a",
+        "rust_bridge_cc.cc",
+        "rust_bridge_h.h",
+        "src/lib.rs.h",
+        "cxxbridge/rust/cxx.h",
+    ],
+    cmd = """
+        set -e
+        EXECROOT=$$(pwd)
+        OUTPUT_LIB=$(location rust_lib_debug.a)
+        OUTPUT_CC=$(location rust_bridge_cc.cc)
+        OUTPUT_H=$(location rust_bridge_h.h)
+        OUTPUT_SRC_H=$(location src/lib.rs.h)
+        OUTPUT_CXX_H=$(location cxxbridge/rust/cxx.h)
+        # Resolve real source path from sandbox symlink
+        SANDBOX_CARGO=$(location Cargo.toml)
+        REAL_CARGO=$$(readlink -f $$SANDBOX_CARGO 2>/dev/null || python3 -c "import os; print(os.path.realpath('$$SANDBOX_CARGO'))")
+        CARGO_DIR=$$(dirname $$REAL_CARGO)
+        # Find Cargo workspace root (fluss-rust directory, 2 levels up from bindings/cpp)
+        WORKSPACE_ROOT=$$(cd $$CARGO_DIR/../.. && pwd)
+        if [ ! -f $$WORKSPACE_ROOT/Cargo.toml ]; then
+            echo "Error: Cannot find workspace root Cargo.toml at $$WORKSPACE_ROOT" >&2
+            exit 1
+        fi
+        cd $$WORKSPACE_ROOT
+        cargo build --manifest-path $$CARGO_DIR/Cargo.toml
+        CARGO_TARGET_DIR=$$WORKSPACE_ROOT/target
+        RUST_BRIDGE_DIR=$$CARGO_TARGET_DIR/cxxbridge/fluss-cpp/src
+        RUST_LIB=$$CARGO_TARGET_DIR/debug/libfluss_cpp.a
+        if [ ! -f $$RUST_LIB ]; then
+            echo "Error: Rust library not found at $$RUST_LIB" >&2
+            exit 1
+        fi
+        if [ ! -f $$RUST_BRIDGE_DIR/lib.rs.cc ]; then
+            echo "Error: cxxbridge CC file not found at $$RUST_BRIDGE_DIR/lib.rs.cc" >&2
+            exit 1
+        fi
+        if [ ! -f $$RUST_BRIDGE_DIR/lib.rs.h ]; then
+            echo "Error: cxxbridge header file not found at $$RUST_BRIDGE_DIR/lib.rs.h" >&2
+            exit 1
+        fi
+        cd $$EXECROOT
+        mkdir -p $$(dirname $$OUTPUT_SRC_H) $$(dirname $$OUTPUT_CXX_H)
+        cp $$RUST_LIB $$OUTPUT_LIB || (echo "Failed to copy $$RUST_LIB to $$OUTPUT_LIB" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.cc $$OUTPUT_CC || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.cc to $$OUTPUT_CC" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.h $$OUTPUT_H || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.h to $$OUTPUT_H" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.h $$OUTPUT_SRC_H || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.h to $$OUTPUT_SRC_H" >&2; exit 1)
+        CXX_H_SOURCE=$$CARGO_TARGET_DIR/cxxbridge/rust/cxx.h
+        if [ ! -f $$CXX_H_SOURCE ] && [ ! -L $$CXX_H_SOURCE ]; then
+            echo "Error: cxx.h not found at $$CXX_H_SOURCE" >&2
+            exit 1
+        fi
+        cp -L $$CXX_H_SOURCE $$OUTPUT_CXX_H || (echo "Failed to copy $$CXX_H_SOURCE to $$OUTPUT_CXX_H" >&2; exit 1)
+    """,
+    message = "Building Rust library with cargo...",
+    local = 1,
+)
+
+cc_import(
+    name = "rust_lib",
+    static_library = ":rust_lib_debug.a",
+    alwayslink = True,
+)
+
+cc_library(
+    name = "fluss_cpp",
+    srcs = [
+        "src/admin.cpp",
+        "src/connection.cpp",
+        "src/table.cpp",
+        ":rust_bridge_cc.cc",
+    ],
+    hdrs = [
+        "include/fluss.hpp",
+    ],
+    textual_hdrs = [
+        ":rust_bridge_h.h",
+        "src/lib.rs.h",
+        "cxxbridge/rust/cxx.h",
+        "src/ffi_converter.hpp",
+    ],
+    strip_include_prefix = "include",
+    copts = [
+        "-std=c++17",
+        "-g3",
+        "-O0",
+        "-ggdb",
+        "-fno-omit-frame-pointer",
+        "-DDEBUG",
+    ],
+    includes = [
+        "src",
+        "cxxbridge",
+    ],
+    linkopts = [
+        "-g",
+        "-ldl",
+        "-lpthread",
+    ] + select({
+        "@platforms//os:macos": [
+            "-framework", "CoreFoundation",
+            "-framework", "Security",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":rust_lib",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "fluss_cpp_example",
+    srcs = [
+        "examples/example.cpp",
+    ],
+    deps = [":fluss_cpp"],
+    copts = [
+        "-std=c++17",
+        "-g3",
+        "-O0",
+        "-ggdb",
+        "-fno-omit-frame-pointer",
+        "-DDEBUG",
+    ],
+    linkopts = [
+        "-g",
+    ],
+    visibility = ["//visibility:public"],
+)
+
