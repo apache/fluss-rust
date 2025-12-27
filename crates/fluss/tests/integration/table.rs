@@ -458,7 +458,7 @@ mod table_test {
             let row = record.row();
             let id = row.get_int(0);
             let value = row.get_string(1);
-            assert!(id >= 1 && id <= 6, "id should be between 1 and 6");
+            assert!((1..=6).contains(&id), "id should be between 1 and 6");
             assert!(
                 ["a", "b", "c", "d", "e", "f"].contains(&value),
                 "value should be one of a-f"
@@ -552,8 +552,8 @@ mod table_test {
         );
 
         // Verify projected columns are in the correct order (col_b, col_c)
-        let expected_col_b = vec!["x", "y", "z"];
-        let expected_col_c = vec![10, 20, 30];
+        let expected_col_b = ["x", "y", "z"];
+        let expected_col_c = [10, 20, 30];
 
         for (i, record) in records.iter().enumerate() {
             let row = record.row();
