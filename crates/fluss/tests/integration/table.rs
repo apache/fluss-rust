@@ -460,7 +460,7 @@ mod table_test {
             let value = row.get_string(1);
             assert!(id >= 1 && id <= 6, "id should be between 1 and 6");
             assert!(
-                ["a", "b", "c", "d", "e", "f"].contains(&value.as_str()),
+                ["a", "b", "c", "d", "e", "f"].contains(&value),
                 "value should be one of a-f"
             );
         }
