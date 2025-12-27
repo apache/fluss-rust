@@ -19,6 +19,7 @@ use crate::cluster::Cluster;
 use crate::metadata::TablePath;
 use rand::Rng;
 use std::sync::atomic::{AtomicI32, Ordering};
+use crate::bucketing::BucketingFunction;
 
 pub trait BucketAssigner: Sync + Send {
     fn abort_if_batch_full(&self) -> bool;
@@ -98,5 +99,35 @@ impl BucketAssigner for StickyBucketAssigner {
         } else {
             bucket_id
         }
+    }
+}
+
+pub struct HashBucketAssigner {
+    num_buckets: i32,
+    bucketing_function: Box<dyn BucketingFunction>,
+}
+
+#[allow(dead_code)]
+impl HashBucketAssigner {
+    pub fn new(num_buckets: i32, bucketing_function: Box<dyn BucketingFunction>) -> Self {
+        HashBucketAssigner {
+            num_buckets,
+            bucketing_function,
+        }
+    }
+}
+
+impl BucketAssigner for HashBucketAssigner {
+    fn abort_if_batch_full(&self) -> bool {
+        false
+    }
+
+    fn on_new_batch(&self, _: &Cluster, _: i32) {
+        // do nothing
+    }
+
+    fn assign_bucket(&self, bucket_key: Option<&[u8]>, _: &Cluster) -> i32 {
+        let key = bucket_key.expect("no bucket key provided");
+        self.bucketing_function.bucketing(key, self.num_buckets)
     }
 }
