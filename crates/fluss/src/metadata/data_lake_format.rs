@@ -15,26 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod client;
-pub mod metadata;
-pub mod record;
-pub mod row;
-pub mod rpc;
-
-mod cluster;
-
-pub mod config;
-pub mod error;
-
-mod bucketing;
-mod compression;
-pub mod io;
-mod util;
-
-pub type TableId = u64;
-pub type PartitionId = u64;
-pub type BucketId = i32;
-
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/proto.rs"));
+pub enum DataLakeFormat {
+    PAIMON,
+    LANCE,
+    ICEBERG,
 }
