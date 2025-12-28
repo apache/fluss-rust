@@ -104,7 +104,7 @@ impl BucketAssigner for StickyBucketAssigner {
     }
 }
 
-// A [BucketAssigner] which assigns based on a modulo hashing function
+/// A [BucketAssigner] which assigns based on a modulo hashing function
 pub struct HashBucketAssigner {
     num_buckets: i32,
     bucketing_function: Box<dyn BucketingFunction>,
