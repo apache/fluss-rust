@@ -446,22 +446,32 @@ mod table_test {
             .await
             .expect("Failed to poll");
 
-        let records: Vec<_> = scan_records.into_iter().collect();
+        let mut records: Vec<_> = scan_records.into_iter().collect();
+        records.sort_by_key(|r| r.offset());
+
         assert_eq!(
             records.len(),
             6,
             "Should have 6 records via subscribe_batch"
         );
 
-        // Verify record contents
-        for record in records.iter() {
+        // Verify record contents and ordering
+        let expected_ids = [1, 2, 3, 4, 5, 6];
+        let expected_values = ["a", "b", "c", "d", "e", "f"];
+
+        for (i, record) in records.iter().enumerate() {
             let row = record.row();
-            let id = row.get_int(0);
-            let value = row.get_string(1);
-            assert!((1..=6).contains(&id), "id should be between 1 and 6");
-            assert!(
-                ["a", "b", "c", "d", "e", "f"].contains(&value),
-                "value should be one of a-f"
+            assert_eq!(
+                row.get_int(0),
+                expected_ids[i],
+                "id mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                row.get_string(1),
+                expected_values[i],
+                "value mismatch at index {}",
+                i
             );
         }
 
