@@ -100,7 +100,7 @@ impl BucketingFunction for IcebergBucketingFunction {
             });
         };
 
-        Ok((murmur_hash::hash_bytes(bucket_key) & i32::MAX) % num_buckets)
+        Ok((murmur_hash::hash_bytes(bucket_key) as i32 & i32::MAX) % num_buckets)
     }
 }
 

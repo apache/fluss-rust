@@ -19,15 +19,15 @@
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
 
-pub const MURMUR3_DEFAULT_SEED: i32 = 0;
+pub const MURMUR3_DEFAULT_SEED: u32 = 0;
 pub const FLINK_MURMUR3_DEFAULT_SEED: i32 = 42;
 
-const C1: i32 = 0xCC9E_2D51_u32 as i32;
-const C2: i32 = 0x1B87_3593;
+const C1: u32 = 0xCC9E_2D51;
+const C2: u32 = 0x1B87_3593;
 const R1: u32 = 15;
 const R2: u32 = 13;
-const M: i32 = 5;
-const N: i32 = 0xE654_6B64_u32 as i32;
+const M: u32 = 5;
+const N: u32 = 0xE654_6B64;
 const CHUNK_SIZE: usize = 4;
 
 /// Hashes the data using 32-bit Murmur3 hash with 0 as seed
@@ -37,21 +37,21 @@ const CHUNK_SIZE: usize = 4;
 ///
 /// # Returns
 /// Returns hash value
-pub fn hash_bytes(data: &[u8]) -> i32 {
+pub fn hash_bytes(data: &[u8]) -> u32 {
     hash_bytes_with_seed(data, MURMUR3_DEFAULT_SEED)
 }
 
 #[inline(always)]
-fn hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
+fn hash_bytes_with_seed(data: &[u8], seed: u32) -> u32 {
     let length = data.len();
     let chunks = length / CHUNK_SIZE;
     let length_aligned = chunks * CHUNK_SIZE;
 
     let mut h1 = hash_full_chunks(data, seed);
-    let mut k1 = 0i32;
+    let mut k1 = 0u32;
 
     for (shift, &b) in data[length_aligned..].iter().enumerate() {
-        k1 |= (b as i32) << (8 * shift);
+        k1 |= (b as u32) << (8 * shift);
     }
 
     h1 ^= k1.wrapping_mul(C1).rotate_left(R1).wrapping_mul(C2);
@@ -75,39 +75,39 @@ fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
     let chunks = length / CHUNK_SIZE;
     let length_aligned = chunks * CHUNK_SIZE;
 
-    let mut h1 = hash_full_chunks(data, seed);
+    let mut h1 = hash_full_chunks(data, seed as u32);
 
     for byte in data.iter().take(length).skip(length_aligned) {
-        let k1 = mix_k1(*byte as i32);
+        let k1 = mix_k1(*byte as u32);
         h1 = mix_h1(h1, k1);
     }
 
-    fmix(h1, length)
+    fmix(h1, length) as i32
 }
 
 #[inline(always)]
-fn hash_full_chunks(data: &[u8], seed: i32) -> i32 {
+fn hash_full_chunks(data: &[u8], seed: u32) -> u32 {
     data.chunks_exact(CHUNK_SIZE).fold(seed, |h1, chunk| {
-        let block = i32::from_le_bytes(chunk.try_into().unwrap());
+        let block = u32::from_le_bytes(chunk.try_into().unwrap());
         let k1 = mix_k1(block);
         mix_h1(h1, k1)
     })
 }
 
 #[inline(always)]
-fn mix_k1(k1: i32) -> i32 {
+fn mix_k1(k1: u32) -> u32 {
     k1.wrapping_mul(C1).rotate_left(R1).wrapping_mul(C2)
 }
 
 #[inline(always)]
-fn mix_h1(h1: i32, k1: i32) -> i32 {
+fn mix_h1(h1: u32, k1: u32) -> u32 {
     (h1 ^ k1).rotate_left(R2).wrapping_mul(M).wrapping_add(N)
 }
 
 // Finalization mix - force all bits of a hash block to avalanche
 #[inline(always)]
-fn fmix(mut h1: i32, length: usize) -> i32 {
-    h1 ^= length as i32;
+fn fmix(mut h1: u32, length: usize) -> u32 {
+    h1 ^= length as u32;
     bit_mix(h1)
 }
 
@@ -118,35 +118,36 @@ fn fmix(mut h1: i32, length: usize) -> i32 {
 ///
 /// # Returns
 /// Returns hash value
-pub fn fluss_hash_i32(mut input: i32) -> i32 {
+pub fn fluss_hash_i32(input: i32) -> i32 {
+    let mut input = input as u32;
     input = input.wrapping_mul(C1);
     input = input.rotate_left(R1);
     input = input.wrapping_mul(C2);
     input = input.rotate_left(R2);
 
     input = input.wrapping_mul(M).wrapping_add(N);
-    input ^= CHUNK_SIZE as i32;
-    input = bit_mix(input);
+    input ^= CHUNK_SIZE as u32;
+    let output = bit_mix(input) as i32;
 
-    if input >= 0 {
-        input
-    } else if input != i32::MIN {
-        -input
+    if output >= 0 {
+        output
+    } else if output != i32::MIN {
+        -output
     } else {
         0
     }
 }
 
-const BIT_MIX_A: i32 = 0x85EB_CA6Bu32 as i32;
-const BIT_MIX_B: i32 = 0xC2B2_AE35u32 as i32;
+const BIT_MIX_A: u32 = 0x85EB_CA6B;
+const BIT_MIX_B: u32 = 0xC2B2_AE35;
 
 #[inline(always)]
-fn bit_mix(mut input: i32) -> i32 {
-    input = input ^ ((input as u32) >> 16) as i32;
+fn bit_mix(mut input: u32) -> u32 {
+    input = input ^ (input >> 16);
     input = input.wrapping_mul(BIT_MIX_A);
-    input = input ^ ((input as u32) >> 13) as i32;
+    input = input ^ (input >> 13);
     input = input.wrapping_mul(BIT_MIX_B);
-    input = input ^ ((input as u32) >> 16) as i32;
+    input = input ^ (input >> 16);
     input
 }
 
@@ -162,15 +163,15 @@ mod tests {
         let empty_data_hash = hash_bytes_with_seed(&[], 1);
         assert_eq!(0x514E_28B7, empty_data_hash);
 
-        let empty_data_hash = hash_bytes_with_seed(&[], 0xFFFF_FFFFu32 as i32);
-        assert_eq!(0x81F1_6F39u32 as i32, empty_data_hash);
+        let empty_data_hash = hash_bytes_with_seed(&[], 0xFFFF_FFFF);
+        assert_eq!(0x81F1_6F39, empty_data_hash);
 
         let hash = hash_bytes("The quick brown fox jumps over the lazy dog".as_bytes());
         assert_eq!(0x2E4F_F723, hash);
 
         let hash = hash_bytes_with_seed(
             "The quick brown fox jumps over the lazy dog".as_bytes(),
-            0x9747_B28Cu32 as i32,
+            0x9747_B28C,
         );
         assert_eq!(0x2FA8_26CD, hash);
     }
