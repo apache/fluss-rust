@@ -59,18 +59,18 @@ fn hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
     fmix(h1, length)
 }
 
-/// Hashes the data using Flink's variant of 32-bit Murmur hash with 42 as seed and tail bytes mixed into hash byte-by-byte
+/// Hashes the data using Fluss'/Flink's variant of 32-bit Murmur hash with 42 as seed and tail bytes mixed into hash byte-by-byte
 ///
 /// # Arguments
 /// * `data` - byte array containing data to be hashed
 ///
 /// # Returns
-/// Returns hash value
-pub fn flink_hash_bytes(data: &[u8]) -> i32 {
-    flink_hash_bytes_with_seed(data, FLINK_MURMUR3_DEFAULT_SEED)
+/// * hash value
+pub fn fluss_hash_bytes(data: &[u8]) -> i32 {
+    fluss_hash_bytes_with_seed(data, FLINK_MURMUR3_DEFAULT_SEED)
 }
 #[inline(always)]
-fn flink_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
+fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
     let length = data.len();
     let chunks = length / CHUNK_SIZE;
     let length_aligned = chunks * CHUNK_SIZE;
@@ -183,20 +183,20 @@ mod tests {
 
     #[test]
     fn test_flink_murmur() {
-        let empty_data_hash = flink_hash_bytes_with_seed(&[], 0);
+        let empty_data_hash = fluss_hash_bytes_with_seed(&[], 0);
         assert_eq!(empty_data_hash, 0);
 
-        let empty_data_hash = flink_hash_bytes(&[]);
+        let empty_data_hash = fluss_hash_bytes(&[]);
         assert_eq!(0x087F_CD5C, empty_data_hash);
 
-        let empty_data_hash = flink_hash_bytes_with_seed(&[], 0xFFFF_FFFFu32 as i32);
+        let empty_data_hash = fluss_hash_bytes_with_seed(&[], 0xFFFF_FFFFu32 as i32);
         assert_eq!(0x81F1_6F39u32 as i32, empty_data_hash);
 
         let hash =
-            flink_hash_bytes_with_seed("The quick brown fox jumps over the lazy dog".as_bytes(), 0);
+            fluss_hash_bytes_with_seed("The quick brown fox jumps over the lazy dog".as_bytes(), 0);
         assert_eq!(0x5FD2_0A20, hash);
 
-        let hash = flink_hash_bytes("The quick brown fox jumps over the lazy dog".as_bytes());
+        let hash = fluss_hash_bytes("The quick brown fox jumps over the lazy dog".as_bytes());
         assert_eq!(0x1BC6_F880, hash);
 
         let hash = flink_hash_i32(0);
