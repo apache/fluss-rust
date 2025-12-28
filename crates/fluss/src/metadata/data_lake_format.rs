@@ -15,8 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Identifies the logical format of a data lake table supported by Fluss.
+///
+/// This enum is typically used in metadata and configuration to distinguish
+/// between different table formats so that the appropriate integration and
+/// semantics can be applied.
 pub enum DataLakeFormat {
-    PAIMON,
-    LANCE,
-    ICEBERG,
+    /// Apache Paimon data lake table format.
+    Paimon,
+    /// Lance columnar data format / lakehouse table format.
+    Lance,
+    /// Apache Iceberg data lake table format.
+    Iceberg,
 }

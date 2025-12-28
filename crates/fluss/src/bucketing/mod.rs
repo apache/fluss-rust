@@ -36,9 +36,9 @@ impl dyn BucketingFunction {
     pub fn of(lake_format: Option<&DataLakeFormat>) -> Box<dyn BucketingFunction> {
         match lake_format {
             None => Box::new(FlussBucketingFunction),
-            Some(DataLakeFormat::PAIMON) => Box::new(PaimonBucketingFunction),
-            Some(DataLakeFormat::LANCE) => Box::new(FlussBucketingFunction),
-            Some(DataLakeFormat::ICEBERG) => Box::new(IcebergBucketingFunction),
+            Some(DataLakeFormat::Paimon) => Box::new(PaimonBucketingFunction),
+            Some(DataLakeFormat::Lance) => Box::new(FlussBucketingFunction),
+            Some(DataLakeFormat::Iceberg) => Box::new(IcebergBucketingFunction),
         }
     }
 }
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_paimon_bucketing() {
-        let paimon_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::PAIMON));
+        let paimon_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::Paimon));
 
         let expected = 1;
         let actual = paimon_bucketing.bucketing(&[00u8, 10u8], 7).unwrap();
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_lance_bucketing() {
-        let lance_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::LANCE));
+        let lance_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::Lance));
 
         let expected = 1;
         let actual = lance_bucketing.bucketing(&[00u8, 10u8], 7).unwrap();
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_iceberg_bucketing() {
-        let iceberg_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::ICEBERG));
+        let iceberg_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::Iceberg));
 
         let expected = 3;
         let actual = iceberg_bucketing.bucketing(&[00u8, 10u8], 7).unwrap();
