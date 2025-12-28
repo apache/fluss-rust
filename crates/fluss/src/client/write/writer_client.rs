@@ -91,7 +91,7 @@ impl WriterClient {
         let table_path = &record.table_path;
         let cluster = self.metadata.get_cluster();
 
-        let (bucket_assigner, bucket_id) = self.assign_bucket(table_path);
+        let (bucket_assigner, bucket_id) = self.assign_bucket(table_path)?;
 
         let mut result = self
             .accumulate
@@ -101,7 +101,7 @@ impl WriterClient {
         if result.abort_record_for_new_batch {
             let prev_bucket_id = bucket_id;
             bucket_assigner.on_new_batch(&cluster, prev_bucket_id);
-            let bucket_id = bucket_assigner.assign_bucket(None, &cluster);
+            let bucket_id = bucket_assigner.assign_bucket(None, &cluster)?;
             result = self
                 .accumulate
                 .append(record, bucket_id, &cluster, false)
@@ -114,7 +114,10 @@ impl WriterClient {
 
         Ok(result.result_handle.expect("result_handle should exist"))
     }
-    fn assign_bucket(&self, table_path: &Arc<TablePath>) -> (Arc<Box<dyn BucketAssigner>>, i32) {
+    fn assign_bucket(
+        &self,
+        table_path: &Arc<TablePath>,
+    ) -> Result<(Arc<Box<dyn BucketAssigner>>, i32)> {
         let cluster = self.metadata.get_cluster();
         let bucket_assigner = {
             if let Some(assigner) = self.bucket_assigners.get(table_path) {
@@ -126,8 +129,8 @@ impl WriterClient {
                 assigner
             }
         };
-        let bucket_id = bucket_assigner.assign_bucket(None, &cluster);
-        (bucket_assigner, bucket_id)
+        let bucket_id = bucket_assigner.assign_bucket(None, &cluster)?;
+        Ok((bucket_assigner, bucket_id))
     }
 
     pub async fn close(self) -> Result<()> {

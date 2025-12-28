@@ -15,15 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
 use crate::metadata::DataLakeFormat;
 use crate::util::murmur_hash;
 
 pub trait BucketingFunction: Sync + Send {
-    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> i32;
+    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> Result<i32>;
 }
 
 #[allow(dead_code)]
 impl dyn BucketingFunction {
+    /// Provides the bucketing function for a given [DataLakeFormat]
+    ///
+    /// # Arguments
+    /// * `lake_format` - Data lake format or none
+    ///
+    /// # Returns
+    /// Returns BucketingFunction
     pub fn of(lake_format: Option<&DataLakeFormat>) -> Box<dyn BucketingFunction> {
         match lake_format {
             None => Box::new(FlussBucketingFunction),
@@ -36,34 +45,62 @@ impl dyn BucketingFunction {
 
 struct FlussBucketingFunction;
 impl BucketingFunction for FlussBucketingFunction {
-    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> i32 {
-        assert!(!bucket_key.is_empty(), "Assigned key must not be empty!");
+    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> Result<i32> {
+        if bucket_key.is_empty() {
+            return Err(IllegalArgument {
+                message: "bucket_key must not be empty!".to_string(),
+            });
+        }
+
+        if num_buckets <= 0 {
+            return Err(IllegalArgument {
+                message: "num_buckets must be positive!".to_string(),
+            });
+        }
+
         let key_hash = murmur_hash::flink_hash_bytes(bucket_key);
-        murmur_hash::flink_hash_i32(key_hash) % num_buckets
+
+        Ok(murmur_hash::flink_hash_i32(key_hash) % num_buckets)
     }
 }
 
 struct PaimonBucketingFunction;
 impl BucketingFunction for PaimonBucketingFunction {
-    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> i32 {
-        assert!(!bucket_key.is_empty(), "Assigned key must not be empty!");
+    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> Result<i32> {
+        if bucket_key.is_empty() {
+            return Err(IllegalArgument {
+                message: "bucket_key must not be empty!".to_string(),
+            });
+        }
+
+        if num_buckets <= 0 {
+            return Err(IllegalArgument {
+                message: "num_buckets must be positive!".to_string(),
+            });
+        }
+
         let key_hash = murmur_hash::flink_hash_bytes(bucket_key);
-        (key_hash % num_buckets).abs()
+
+        Ok((key_hash % num_buckets).abs())
     }
 }
 
 struct IcebergBucketingFunction;
 impl BucketingFunction for IcebergBucketingFunction {
-    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> i32 {
+    fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> Result<i32> {
         if bucket_key.is_empty() {
-            panic!("bucket_key must not be empty!");
+            return Err(IllegalArgument {
+                message: "bucket_key must not be empty!".to_string(),
+            });
         }
 
         if num_buckets <= 0 {
-            panic!("num_buckets must be positive!");
-        }
+            return Err(IllegalArgument {
+                message: "num_buckets must be positive!".to_string(),
+            });
+        };
 
-        (murmur_hash::hash_bytes(bucket_key) & i32::MAX) % num_buckets
+        Ok((murmur_hash::hash_bytes(bucket_key) & i32::MAX) % num_buckets)
     }
 }
 
@@ -76,22 +113,16 @@ mod tests {
         let default_bucketing = <dyn BucketingFunction>::of(None);
 
         let expected = 1;
-        let actual = default_bucketing.bucketing(&[00u8, 10u8], 7);
+        let actual = default_bucketing.bucketing(&[00u8, 10u8], 7).unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 0;
-        let actual = default_bucketing.bucketing(&[00u8, 10u8, 10u8, 10u8], 12);
-        assert_eq!(
-            expected, actual,
-            "Expecting bucket to be {expected} but got {actual}"
-        );
-
-        let expected = 6;
-        let actual =
-            default_bucketing.bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16);
+        let actual = default_bucketing
+            .bucketing(&[00u8, 10u8, 10u8, 10u8], 12)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
@@ -99,7 +130,17 @@ mod tests {
 
         let expected = 6;
         let actual = default_bucketing
-            .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8);
+            .bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16)
+            .unwrap();
+        assert_eq!(
+            expected, actual,
+            "Expecting bucket to be {expected} but got {actual}"
+        );
+
+        let expected = 6;
+        let actual = default_bucketing
+            .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
@@ -111,30 +152,34 @@ mod tests {
         let paimon_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::PAIMON));
 
         let expected = 1;
-        let actual = paimon_bucketing.bucketing(&[00u8, 10u8], 7);
+        let actual = paimon_bucketing.bucketing(&[00u8, 10u8], 7).unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 11;
-        let actual = paimon_bucketing.bucketing(&[00u8, 10u8, 10u8, 10u8], 12);
+        let actual = paimon_bucketing
+            .bucketing(&[00u8, 10u8, 10u8, 10u8], 12)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 12;
-        let actual =
-            paimon_bucketing.bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16);
+        let actual = paimon_bucketing
+            .bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 0;
-        let actual =
-            paimon_bucketing.bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8);
+        let actual = paimon_bucketing
+            .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
@@ -146,30 +191,34 @@ mod tests {
         let lance_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::LANCE));
 
         let expected = 1;
-        let actual = lance_bucketing.bucketing(&[00u8, 10u8], 7);
+        let actual = lance_bucketing.bucketing(&[00u8, 10u8], 7).unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 0;
-        let actual = lance_bucketing.bucketing(&[00u8, 10u8, 10u8, 10u8], 12);
+        let actual = lance_bucketing
+            .bucketing(&[00u8, 10u8, 10u8, 10u8], 12)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 6;
-        let actual =
-            lance_bucketing.bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16);
+        let actual = lance_bucketing
+            .bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 6;
-        let actual =
-            lance_bucketing.bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8);
+        let actual = lance_bucketing
+            .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
@@ -181,22 +230,25 @@ mod tests {
         let iceberg_bucketing = <dyn BucketingFunction>::of(Some(&DataLakeFormat::ICEBERG));
 
         let expected = 3;
-        let actual = iceberg_bucketing.bucketing(&[00u8, 10u8], 7);
+        let actual = iceberg_bucketing.bucketing(&[00u8, 10u8], 7).unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 4;
-        let actual = iceberg_bucketing.bucketing(&[00u8, 10u8, 10u8, 10u8], 12);
+        let actual = iceberg_bucketing
+            .bucketing(&[00u8, 10u8, 10u8, 10u8], 12)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
         );
 
         let expected = 12;
-        let actual =
-            iceberg_bucketing.bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16);
+        let actual = iceberg_bucketing
+            .bucketing("2bb87d68-baf9-4e64-90f9-f80910419fa6".as_bytes(), 16)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
@@ -204,7 +256,8 @@ mod tests {
 
         let expected = 3;
         let actual = iceberg_bucketing
-            .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8);
+            .bucketing("The quick brown fox jumps over the lazy dog".as_bytes(), 8)
+            .unwrap();
         assert_eq!(
             expected, actual,
             "Expecting bucket to be {expected} but got {actual}"
