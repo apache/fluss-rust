@@ -87,12 +87,11 @@ fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
 
 #[inline(always)]
 fn hash_full_chunks(data: &[u8], seed: i32) -> i32 {
-    data.chunks_exact(CHUNK_SIZE)
-        .fold(seed, |h1, chunk| {
-            let block = i32::from_le_bytes(chunk.try_into().unwrap());
-            let k1 = mix_k1(block);
-            mix_h1(h1, k1)
-        })
+    data.chunks_exact(CHUNK_SIZE).fold(seed, |h1, chunk| {
+        let block = i32::from_le_bytes(chunk.try_into().unwrap());
+        let k1 = mix_k1(block);
+        mix_h1(h1, k1)
+    })
 }
 
 #[inline(always)]
