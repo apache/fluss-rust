@@ -47,7 +47,7 @@ fn hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
     let chunks = length / CHUNK_SIZE;
     let length_aligned = chunks * CHUNK_SIZE;
 
-    let mut h1 = hash_full_chunks(data, seed, length_aligned);
+    let mut h1 = hash_full_chunks(data, seed);
     let mut k1 = 0i32;
 
     for (shift, &b) in data[length_aligned..].iter().enumerate() {
@@ -75,12 +75,10 @@ fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
     let chunks = length / CHUNK_SIZE;
     let length_aligned = chunks * CHUNK_SIZE;
 
-    let mut h1 = hash_full_chunks(data, seed, length_aligned);
+    let mut h1 = hash_full_chunks(data, seed);
 
-    #[allow(clippy::needless_range_loop)]
-    for index in length_aligned..length {
-        let byte = i32::from(data[index]);
-        let k1 = mix_k1(byte);
+    for byte in data.iter().take(length).skip(length_aligned) {
+        let k1 = mix_k1(*byte as i32);
         h1 = mix_h1(h1, k1);
     }
 
@@ -88,16 +86,13 @@ fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
 }
 
 #[inline(always)]
-fn hash_full_chunks(data: &[u8], seed: i32, length_aligned: usize) -> i32 {
-    let mut h1 = seed;
-
-    for i in 0..length_aligned / CHUNK_SIZE {
-        let offset = i * 4;
-        let block = i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-        let k1 = mix_k1(block);
-        h1 = mix_h1(h1, k1);
-    }
-    h1
+fn hash_full_chunks(data: &[u8], seed: i32) -> i32 {
+    data.chunks_exact(CHUNK_SIZE)
+        .fold(seed, |h1, chunk| {
+            let block = i32::from_le_bytes(chunk.try_into().unwrap());
+            let k1 = mix_k1(block);
+            mix_h1(h1, k1)
+        })
 }
 
 #[inline(always)]
@@ -120,24 +115,24 @@ fn fmix(mut h1: i32, length: usize) -> i32 {
 /// Hashes an i32 using Fluss'/Flink's variant of Murmur
 ///
 /// # Arguments
-/// * `code` - byte array containing data to be hashed
+/// * `input` - i32 value to be hashed
 ///
 /// # Returns
 /// Returns hash value
-pub fn fluss_hash_i32(code: i32) -> i32 {
-    let mut code = code.wrapping_mul(C1);
-    code = code.rotate_left(R1);
-    code = code.wrapping_mul(C2);
-    code = code.rotate_left(R2);
+pub fn fluss_hash_i32(mut input: i32) -> i32 {
+    input = input.wrapping_mul(C1);
+    input = input.rotate_left(R1);
+    input = input.wrapping_mul(C2);
+    input = input.rotate_left(R2);
 
-    code = code.wrapping_mul(M).wrapping_add(N);
-    code ^= CHUNK_SIZE as i32;
-    code = bit_mix(code);
+    input = input.wrapping_mul(M).wrapping_add(N);
+    input ^= CHUNK_SIZE as i32;
+    input = bit_mix(input);
 
-    if code >= 0 {
-        code
-    } else if code != i32::MIN {
-        -code
+    if input >= 0 {
+        input
+    } else if input != i32::MIN {
+        -input
     } else {
         0
     }
