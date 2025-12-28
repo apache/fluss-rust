@@ -60,7 +60,7 @@ impl BucketingFunction for FlussBucketingFunction {
 
         let key_hash = murmur_hash::fluss_hash_bytes(bucket_key);
 
-        Ok(murmur_hash::flink_hash_i32(key_hash) % num_buckets)
+        Ok(murmur_hash::fluss_hash_i32(key_hash) % num_buckets)
     }
 }
 

@@ -117,14 +117,14 @@ fn fmix(mut h1: i32, length: usize) -> i32 {
     bit_mix(h1)
 }
 
-/// Hashes an i32 using Flink's variant of Murmur
+/// Hashes an i32 using Fluss'/Flink's variant of Murmur
 ///
 /// # Arguments
 /// * `code` - byte array containing data to be hashed
 ///
 /// # Returns
 /// Returns hash value
-pub fn flink_hash_i32(code: i32) -> i32 {
+pub fn fluss_hash_i32(code: i32) -> i32 {
     let mut code = code.wrapping_mul(C1);
     code = code.rotate_left(R1);
     code = code.wrapping_mul(C2);
@@ -199,13 +199,13 @@ mod tests {
         let hash = fluss_hash_bytes("The quick brown fox jumps over the lazy dog".as_bytes());
         assert_eq!(0x1BC6_F880, hash);
 
-        let hash = flink_hash_i32(0);
+        let hash = fluss_hash_i32(0);
         assert_eq!(0x2362_F9DE, hash);
 
-        let hash = flink_hash_i32(42);
+        let hash = fluss_hash_i32(42);
         assert_eq!(0x43A4_6E1D, hash);
 
-        let hash = flink_hash_i32(-77);
+        let hash = fluss_hash_i32(-77);
         assert_eq!(0x2EEB_27DE, hash);
     }
 }
