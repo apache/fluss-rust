@@ -32,7 +32,7 @@ impl dyn BucketingFunction {
     /// * `lake_format` - Data lake format or none
     ///
     /// # Returns
-    /// Returns BucketingFunction
+    /// * BucketingFunction
     pub fn of(lake_format: Option<&DataLakeFormat>) -> Box<dyn BucketingFunction> {
         match lake_format {
             None => Box::new(FlussBucketingFunction),
@@ -58,7 +58,7 @@ impl BucketingFunction for FlussBucketingFunction {
             });
         }
 
-        let key_hash = murmur_hash::fluss_hash_bytes(bucket_key);
+        let key_hash = murmur_hash::fluss_hash_bytes(bucket_key)?;
 
         Ok(murmur_hash::fluss_hash_i32(key_hash) % num_buckets)
     }
@@ -79,7 +79,7 @@ impl BucketingFunction for PaimonBucketingFunction {
             });
         }
 
-        let key_hash = murmur_hash::fluss_hash_bytes(bucket_key);
+        let key_hash = murmur_hash::fluss_hash_bytes(bucket_key)?;
 
         Ok((key_hash % num_buckets).abs())
     }

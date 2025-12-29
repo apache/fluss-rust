@@ -18,6 +18,8 @@
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
 
 pub const MURMUR3_DEFAULT_SEED: u32 = 0;
 pub const FLINK_MURMUR3_DEFAULT_SEED: i32 = 42;
@@ -60,18 +62,29 @@ fn hash_bytes_with_seed(data: &[u8], seed: u32) -> u32 {
 }
 
 /// Hashes the data using Fluss'/Flink's variant of 32-bit Murmur hash with 42 as seed and tail bytes mixed into hash byte-by-byte
+/// Maximum data array size supported is 2GB
 ///
 /// # Arguments
 /// * `data` - byte array containing data to be hashed
 ///
 /// # Returns
-/// * hash value
-pub fn fluss_hash_bytes(data: &[u8]) -> i32 {
+/// * result of hashing, `Ok(hash_value)`
+///
+/// # Error
+/// Returns `Err(IllegalArgument)` if byte array is larger than 2GB
+pub fn fluss_hash_bytes(data: &[u8]) -> Result<i32> {
     fluss_hash_bytes_with_seed(data, FLINK_MURMUR3_DEFAULT_SEED)
 }
 #[inline(always)]
-fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
+fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> Result<i32> {
     let length = data.len();
+
+    if length >= i32::MAX as usize {
+        return Err(IllegalArgument {
+            message: "data array size {length} is bigger than supported".to_string(),
+        });
+    }
+
     let chunks = length / CHUNK_SIZE;
     let length_aligned = chunks * CHUNK_SIZE;
 
@@ -82,7 +95,7 @@ fn fluss_hash_bytes_with_seed(data: &[u8], seed: i32) -> i32 {
         h1 = mix_h1(h1, k1);
     }
 
-    fmix(h1, length) as i32
+    Ok(fmix(h1, length) as i32)
 }
 
 #[inline(always)]
@@ -178,20 +191,23 @@ mod tests {
 
     #[test]
     fn test_flink_murmur() {
-        let empty_data_hash = fluss_hash_bytes_with_seed(&[], 0);
+        let empty_data_hash = fluss_hash_bytes_with_seed(&[], 0).expect("Failed to hash");
         assert_eq!(empty_data_hash, 0);
 
-        let empty_data_hash = fluss_hash_bytes(&[]);
+        let empty_data_hash = fluss_hash_bytes(&[]).expect("Failed to hash");
         assert_eq!(0x087F_CD5C, empty_data_hash);
 
-        let empty_data_hash = fluss_hash_bytes_with_seed(&[], 0xFFFF_FFFFu32 as i32);
+        let empty_data_hash =
+            fluss_hash_bytes_with_seed(&[], 0xFFFF_FFFFu32 as i32).expect("Failed to hash");
         assert_eq!(0x81F1_6F39u32 as i32, empty_data_hash);
 
         let hash =
-            fluss_hash_bytes_with_seed("The quick brown fox jumps over the lazy dog".as_bytes(), 0);
+            fluss_hash_bytes_with_seed("The quick brown fox jumps over the lazy dog".as_bytes(), 0)
+                .expect("Failed to hash");
         assert_eq!(0x5FD2_0A20, hash);
 
-        let hash = fluss_hash_bytes("The quick brown fox jumps over the lazy dog".as_bytes());
+        let hash = fluss_hash_bytes("The quick brown fox jumps over the lazy dog".as_bytes())
+            .expect("Failed to hash");
         assert_eq!(0x1BC6_F880, hash);
 
         let hash = fluss_hash_i32(0);
