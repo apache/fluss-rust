@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod data_lake_format;
 mod database;
 mod datatype;
 mod json_serde;
 mod table;
 
+pub use data_lake_format::*;
 pub use database::*;
 pub use datatype::*;
 pub use json_serde::*;

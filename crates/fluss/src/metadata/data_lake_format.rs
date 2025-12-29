@@ -15,26 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod client;
-pub mod metadata;
-pub mod record;
-pub mod row;
-pub mod rpc;
-
-mod cluster;
-
-pub mod config;
-pub mod error;
-
-mod bucketing;
-mod compression;
-pub mod io;
-mod util;
-
-pub type TableId = u64;
-pub type PartitionId = u64;
-pub type BucketId = i32;
-
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/proto.rs"));
+/// Identifies the logical format of a data lake table supported by Fluss.
+///
+/// This enum is typically used in metadata and configuration to distinguish
+/// between different table formats so that the appropriate integration and
+/// semantics can be applied.
+pub enum DataLakeFormat {
+    /// Apache Paimon data lake table format.
+    Paimon,
+    /// Lance columnar data format / lakehouse table format.
+    Lance,
+    /// Apache Iceberg data lake table format.
+    Iceberg,
 }
