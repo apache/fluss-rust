@@ -16,6 +16,15 @@
 // under the License.
 
 mod compacted_key_writer;
+
+mod compacted_row;
+mod compacted_row_reader;
 mod compacted_row_writer;
 
 pub use compacted_key_writer::CompactedKeyWriter;
+#[allow(unused_imports)]
+pub use compacted_row::CompactedRow;
+#[allow(unused_imports)]
+pub use compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
+#[allow(unused_imports)]
+pub use compacted_row_writer::CompactedRowWriter;
