@@ -17,6 +17,7 @@
 
 use crate::error::{Error, Result};
 use arrow::ipc::CompressionType;
+use arrow_schema::ArrowError;
 use std::collections::HashMap;
 
 pub const TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL: &str = "table.log.arrow.compression.zstd.level";
@@ -71,23 +72,24 @@ impl ArrowCompressionInfo {
         {
             Some(Ok(level)) if !(1..=22).contains(&level) => Err(Error::IllegalArgument {
                 message: format!(
-                    "Invalid ZSTD compression level: {}. Expected a value between 1 and 22.",
-                    level
+                    "Invalid ZSTD compression level: {level}. Expected a value between 1 and 22."
                 ),
             }),
             Some(Err(e)) => Err(Error::IllegalArgument {
                 message: format!(
-                    "Invalid ZSTD compression level. Expected a value between 1 and 22. {}",
-                    e
+                    "Invalid ZSTD compression level. Expected a value between 1 and 22. {e}"
                 ),
             }),
             Some(Ok(level)) => {
                 // TODO Remove once non-default ZSTD compression level is implemented https://github.com/apache/fluss-rust/issues/109
                 if level != DEFAULT_ZSTD_COMPRESSION_LEVEL {
-                    return Err(Error::IoUnsupported {
+                    return Err(Error::ArrowError {
                         message: format!(
-                            "Rust client currently only implements default ZSTD compression level {DEFAULT_ZSTD_COMPRESSION_LEVEL}. Got: {level}"
+                            "Rust client currently only implements default ZSTD compression level {DEFAULT_ZSTD_COMPRESSION_LEVEL}. Got: {level}."
                         ),
+                        source: ArrowError::NotYetImplemented(format!(
+                            "zstd compression level {level}."
+                        )),
                     });
                 }
                 Ok(Self {
