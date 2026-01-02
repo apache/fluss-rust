@@ -73,7 +73,7 @@ impl<'a> TableScan<'a> {
     ///
     /// # Example
     /// ```
-    /// let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner();
+    /// let scanner = table.new_scan()?.project(&[0, 2, 3])?.create_log_scanner();
     /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
         if column_indices.is_empty() {
@@ -107,7 +107,7 @@ impl<'a> TableScan<'a> {
     ///
     /// # Example
     /// ```
-    /// let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner();
+    /// let scanner = table.new_scan()?.project_by_name(&["col1", "col3"])?.create_log_scanner();
     /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
         if column_names.is_empty() {

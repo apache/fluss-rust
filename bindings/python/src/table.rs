@@ -65,7 +65,11 @@ impl FlussTable {
             let fluss_table =
                 fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
 
-            let table_scan = fluss_table.new_scan();
+            let table_scan = fluss_table.new_scan().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to create table scan: {e:?}"
+                ))
+            })?;
 
             let rust_scanner = table_scan.create_log_scanner().map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
