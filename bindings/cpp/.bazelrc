@@ -12,4 +12,3 @@ build:debug --copt=-fno-omit-frame-pointer
 build:debug --copt=-DDEBUG
 build:debug --strip=never
 build:debug --linkopt=-g
-
