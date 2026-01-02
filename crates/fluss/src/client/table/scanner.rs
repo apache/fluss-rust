@@ -344,10 +344,7 @@ impl LogFetcher {
                 if let Error::RpcError { source, .. } = &e
                     && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
                 {
-                    warn!(
-                        "Retrying after encountering error while updating table metadata: {}",
-                        e
-                    );
+                    warn!("Retrying after encountering error while updating table metadata: {e}");
                     Ok(())
                 } else {
                     Err(e)
@@ -395,7 +392,7 @@ impl LogFetcher {
                 let server_node = match cluster.get_tablet_server(leader) {
                     Some(node) => node,
                     None => {
-                        warn!("No server node found for leader {}, retrying", leader);
+                        warn!("No server node found for leader {leader}, retrying");
                         Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
