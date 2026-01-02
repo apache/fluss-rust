@@ -625,7 +625,7 @@ impl LogScanner {
             bucket_offsets.insert(sub.bucket_id, sub.offset);
         }
 
-        let result = RUNTIME.block_on(async { self.inner.subscribe_batch(bucket_offsets).await });
+        let result = RUNTIME.block_on(async { self.inner.subscribe_batch(&bucket_offsets).await });
 
         match result {
             Ok(_) => ok_result(),

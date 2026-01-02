@@ -36,13 +36,16 @@ mod table_test {
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
     use crate::integration::utils::create_table;
     use arrow::array::record_batch;
+    use fluss::client::{FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
+    use fluss::record::ScanRecord;
     use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
     use jiff::Timestamp;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::thread;
+    use std::time::Duration;
 
     fn before_all() {
         // Create a new tokio runtime in a separate thread
@@ -138,6 +141,11 @@ mod table_test {
 
         append_writer.flush().await.expect("Failed to flush");
 
+        // Create scanner to verify appended records
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
         let num_buckets = table.table_info().get_num_buckets();
         let log_scanner = table
             .new_scan()
@@ -149,84 +157,6 @@ mod table_test {
                 .await
                 .expect("Failed to subscribe");
         }
-
-        let scan_records = log_scanner
-            .poll(std::time::Duration::from_secs(60))
-            .await
-            .expect("Failed to poll");
-
-        let mut records: Vec<_> = scan_records.into_iter().collect();
-        records.sort_by_key(|r| r.offset());
-
-        assert_eq!(records.len(), 6, "Should have 6 records");
-        for (i, record) in records.iter().enumerate() {
-            let row = record.row();
-            let expected_c1 = (i + 1) as i32;
-            let expected_c2 = format!("a{}", i + 1);
-            assert_eq!(row.get_int(0), expected_c1, "c1 mismatch at index {}", i);
-            assert_eq!(row.get_string(1), expected_c2, "c2 mismatch at index {}", i);
-        }
-
-        let log_scanner_projected = table
-            .new_scan()
-            .project(&[1, 0])
-            .expect("Failed to project")
-            .create_log_scanner()
-            .expect("Failed to create log scanner");
-        for bucket_id in 0..num_buckets {
-            log_scanner_projected
-                .subscribe(bucket_id, 0)
-                .await
-                .expect("Failed to subscribe");
-        }
-
-        let scan_records_projected = log_scanner_projected
-            .poll(std::time::Duration::from_secs(10))
-            .await
-            .expect("Failed to poll");
-
-        let mut records_projected: Vec<_> = scan_records_projected.into_iter().collect();
-        records_projected.sort_by_key(|r| r.offset());
-
-        assert_eq!(
-            records_projected.len(),
-            6,
-            "Should have 6 records with projection"
-        );
-        for (i, record) in records_projected.iter().enumerate() {
-            let row = record.row();
-            let expected_c2 = format!("a{}", i + 1);
-            let expected_c1 = (i + 1) as i32;
-            assert_eq!(
-                row.get_string(0),
-                expected_c2,
-                "Projected c2 (first column) mismatch at index {}",
-                i
-            );
-            assert_eq!(
-                row.get_int(1),
-                expected_c1,
-                "Projected c1 (second column) mismatch at index {}",
-                i
-            );
-        }
-
-        // Create scanner to verify appended records
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let table_scan = table.new_scan();
-        let log_scanner = table_scan
-            .create_log_scanner()
-            .expect("Failed to create log scanner");
-
-        // Subscribe to bucket 0 starting from offset 0
-        log_scanner
-            .subscribe(0, 0)
-            .await
-            .expect("Failed to subscribe to bucket");
 
         // Poll for records
         let scan_records = log_scanner
@@ -385,117 +315,13 @@ mod table_test {
     }
 
     #[tokio::test]
-    async fn test_subscribe_batch() {
+    async fn test_project() {
         let cluster = get_fluss_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_subscribe_batch".to_string());
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("value", DataTypes::string())
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        // Append 6 records
-        let append_writer = table
-            .new_append()
-            .expect("Failed to create append")
-            .create_writer();
-
-        let batch = record_batch!(
-            ("id", Int32, [1, 2, 3, 4, 5, 6]),
-            ("value", Utf8, ["a", "b", "c", "d", "e", "f"])
-        )
-        .unwrap();
-        append_writer
-            .append_arrow_batch(batch)
-            .await
-            .expect("Failed to append batch");
-        append_writer.flush().await.expect("Failed to flush");
-
-        // Test subscribe_batch with HashMap
-        let log_scanner = table
-            .new_scan()
-            .create_log_scanner()
-            .expect("Failed to create log scanner");
-
-        let mut bucket_offsets = HashMap::new();
-        bucket_offsets.insert(0, 0i64);
-        log_scanner
-            .subscribe_batch(bucket_offsets)
-            .await
-            .expect("Failed to subscribe batch");
-
-        let scan_records = log_scanner
-            .poll(std::time::Duration::from_secs(60))
-            .await
-            .expect("Failed to poll");
-
-        let mut records: Vec<_> = scan_records.into_iter().collect();
-        records.sort_by_key(|r| r.offset());
-
-        assert_eq!(
-            records.len(),
-            6,
-            "Should have 6 records via subscribe_batch"
-        );
-
-        // Verify record contents and ordering
-        let expected_ids = [1, 2, 3, 4, 5, 6];
-        let expected_values = ["a", "b", "c", "d", "e", "f"];
-
-        for (i, record) in records.iter().enumerate() {
-            let row = record.row();
-            assert_eq!(
-                row.get_int(0),
-                expected_ids[i],
-                "id mismatch at index {}",
-                i
-            );
-            assert_eq!(
-                row.get_string(1),
-                expected_values[i],
-                "value mismatch at index {}",
-                i
-            );
-        }
-
-        // Test error case: empty HashMap should fail
-        let log_scanner_empty = table
-            .new_scan()
-            .create_log_scanner()
-            .expect("Failed to create log scanner");
-
-        let result = log_scanner_empty.subscribe_batch(HashMap::new()).await;
-        assert!(
-            result.is_err(),
-            "subscribe_batch with empty HashMap should fail"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_project_by_name() {
-        let cluster = get_fluss_cluster();
-        let connection = cluster.get_fluss_connection().await;
-
-        let admin = connection.get_admin().await.expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss".to_string(), "test_project_by_name".to_string());
+        let table_path = TablePath::new("fluss".to_string(), "test_project".to_string());
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -535,25 +361,11 @@ mod table_test {
         append_writer.flush().await.expect("Failed to flush");
 
         // Test project_by_name: select col_b and col_c only
-        let log_scanner = table
-            .new_scan()
-            .project_by_name(&["col_b", "col_c"])
-            .expect("Failed to project by name")
-            .create_log_scanner()
-            .expect("Failed to create log scanner");
-
-        log_scanner
-            .subscribe(0, 0)
-            .await
-            .expect("Failed to subscribe");
-
-        let scan_records = log_scanner
-            .poll(std::time::Duration::from_secs(60))
-            .await
-            .expect("Failed to poll");
-
-        let mut records: Vec<_> = scan_records.into_iter().collect();
-        records.sort_by_key(|r| r.offset());
+        let records = scan_table(&table, |scan| {
+            scan.project_by_name(&["col_b", "col_c"])
+                .expect("Failed to project by name")
+        })
+        .await;
 
         assert_eq!(
             records.len(),
@@ -582,6 +394,38 @@ mod table_test {
             );
         }
 
+        // test project by column indices
+        let records = scan_table(&table, |scan| {
+            scan.project(&[1, 0]).expect("Failed to project by indices")
+        })
+        .await;
+
+        assert_eq!(
+            records.len(),
+            3,
+            "Should have 3 records with project_by_name"
+        );
+        // Verify projected columns are in the correct order (col_b, col_a)
+        let expected_col_b = ["x", "y", "z"];
+        let expected_col_a = [1, 2, 3];
+
+        for (i, record) in records.iter().enumerate() {
+            let row = record.row();
+            // col_b is now at index 0, col_c is at index 1
+            assert_eq!(
+                row.get_string(0),
+                expected_col_b[i],
+                "col_b mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                row.get_int(1),
+                expected_col_a[i],
+                "col_c mismatch at index {}",
+                i
+            );
+        }
+
         // Test error case: empty column names should fail
         let result = table.new_scan().project_by_name(&[]);
         assert!(
@@ -595,5 +439,34 @@ mod table_test {
             result.is_err(),
             "project_by_name with non-existent column should fail"
         );
+    }
+
+    async fn scan_table<'a>(
+        table: &FlussTable<'a>,
+        setup_scan: impl FnOnce(TableScan) -> TableScan,
+    ) -> Vec<ScanRecord> {
+        // 1. build log scanner
+        let log_scanner = setup_scan(table.new_scan())
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+
+        // 2. subscribe
+        let mut bucket_offsets = HashMap::new();
+        bucket_offsets.insert(0, 0);
+        log_scanner
+            .subscribe_batch(&bucket_offsets)
+            .await
+            .expect("Failed to subscribe");
+
+        // 3. poll records
+        let scan_records = log_scanner
+            .poll(Duration::from_secs(10))
+            .await
+            .expect("Failed to poll");
+
+        // 4. collect and sort
+        let mut records: Vec<_> = scan_records.into_iter().collect();
+        records.sort_by_key(|r| r.offset());
+        records
     }
 }
