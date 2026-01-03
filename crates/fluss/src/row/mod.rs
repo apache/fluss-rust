@@ -19,6 +19,8 @@ mod column;
 
 mod datum;
 
+mod compacted;
+
 pub use column::*;
 pub use datum::*;
 
