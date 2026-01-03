@@ -1,5 +1,22 @@
-use std::cmp;
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 
+
+use std::cmp;
 use bytes::{Bytes, BytesMut};
 
 pub struct CompactedRowWriter {
@@ -69,11 +86,13 @@ impl CompactedRowWriter {
         self.write_raw(&[b]);
     }
 
-    pub fn write_byte(&mut self, value: i8) {
+    pub fn write_byte(&mut self, value: u8) {
         self.write_raw(&[value as u8]);
     }
 
     pub fn write_binary(&mut self, bytes: &[u8], length: usize) {
+        // TODO: currently, we encoding BINARY(length) as the same with BYTES, the length info can
+        //  be omitted and the bytes length should be enforced in the future.
         self.write_bytes(&bytes[..length.min(bytes.len())]);
     }
 
@@ -83,6 +102,8 @@ impl CompactedRowWriter {
     }
 
     pub fn write_char(&mut self, value: &str, length: usize) {
+        // TODO: currently, we encoding CHAR(length) as the same with STRING, the length info can be
+        //  omitted and the bytes length should be enforced in the future.
         self.write_string(value);
     }
 
