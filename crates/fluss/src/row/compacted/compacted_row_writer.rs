@@ -19,6 +19,10 @@
 use std::cmp;
 use bytes::{Bytes, BytesMut};
 
+
+// Writer for CompactedRow
+// Reference implementation:
+// https://github.com/apache/fluss/blob/d4a72fad240d4b81563aaf83fa3b09b5058674ed/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRowWriter.java#L71
 pub struct CompactedRowWriter {
     header_size_in_bytes: usize,
     position: usize,
@@ -61,15 +65,16 @@ impl CompactedRowWriter {
         Bytes::copy_from_slice(&self.buffer[..self.position])
     }
 
-    fn ensure_len(&mut self, need_len: usize) {
-        if self.buffer.len() < need_len {
-            self.buffer.resize(need_len, 0);
+    fn ensure_capacity(&mut self, need_len: usize) {
+        if (self.buffer.len() - self.position) < need_len {
+            let new_len = cmp::max(self.buffer.len() * 2, self.buffer.len() + need_len);
+            self.buffer.resize(new_len, 0);
         }
     }
 
     fn write_raw(&mut self, src: &[u8]) {
         let end = self.position + src.len();
-        self.ensure_len(end);
+        self.ensure_capacity(src.len());
         self.buffer[self.position..end].copy_from_slice(src);
         self.position = end;
     }
@@ -97,7 +102,9 @@ impl CompactedRowWriter {
     }
 
     pub fn write_bytes(&mut self, value: &[u8]) {
-        self.write_int(value.len() as i32);
+        let len_i32 = i32::try_from(value.len())
+            .expect("byte slice too large to encode length as i32");
+        self.write_int(len_i32);
         self.write_raw(value);
     }
 
@@ -112,11 +119,11 @@ impl CompactedRowWriter {
     }
 
     pub fn write_short(&mut self, value: i16) {
-        self.write_raw(&value.to_be_bytes());
+        self.write_raw(&value.to_ne_bytes());
     }
 
     pub fn write_int(&mut self, value: i32) {
-        self.ensure_len(self.position + Self::MAX_INT_SIZE);
+        self.ensure_capacity(Self::MAX_INT_SIZE);
         let mut v = value as u32;
         while (v & !0x7F) != 0 {
             self.buffer[self.position] = ((v as u8) & 0x7F) | 0x80;
@@ -127,7 +134,7 @@ impl CompactedRowWriter {
         self.position += 1;
     }
     pub fn write_long(&mut self, value: i64) {
-        self.ensure_len(self.position + Self::MAX_LONG_SIZE);
+        self.ensure_capacity(Self::MAX_LONG_SIZE);
         let mut v = value as u64;
         while (v & !0x7F) != 0 {
             self.buffer[self.position] = ((v as u8) & 0x7F) | 0x80;
@@ -139,10 +146,10 @@ impl CompactedRowWriter {
     }
 
     pub fn write_float(&mut self, value: f32) {
-        self.write_raw(&value.to_be_bytes());
+        self.write_raw(&value.to_ne_bytes());
     }
 
     pub fn write_double(&mut self, value: f64) {
-        self.write_raw(&value.to_be_bytes());
+        self.write_raw(&value.to_ne_bytes());
     }
 }
