@@ -27,6 +27,7 @@ mod field_getter;
 pub use column::*;
 pub use datum::*;
 
+// TODO Decide if migrate to Result<?>
 pub trait InternalRow {
     /// Returns the number of fields in this row
     fn get_field_count(&self) -> usize;
@@ -81,6 +82,7 @@ pub struct GenericRow<'a> {
     pub values: Vec<Datum<'a>>,
 }
 
+// TODO Decide if migrate to Result<?>
 impl<'a> InternalRow for GenericRow<'a> {
     fn get_field_count(&self) -> usize {
         self.values.len()
@@ -146,6 +148,11 @@ impl<'a> Default for GenericRow<'a> {
 }
 
 impl<'a> GenericRow<'a> {
+    pub fn from_data(data: Vec<impl Into<Datum<'a>>>) -> GenericRow<'a> {
+        GenericRow {
+            values: data.into_iter().map(Into::into).collect(),
+        }
+    }
     pub fn new() -> GenericRow<'a> {
         GenericRow { values: vec![] }
     }

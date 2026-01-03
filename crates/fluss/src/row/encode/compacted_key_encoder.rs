@@ -61,6 +61,11 @@ impl CompactedKeyEncoder {
         Ok(Self::new(row_type, encode_col_indexes))
     }
 
+    #[cfg(test)]
+    pub fn for_test_row_type(row_type: &RowType) -> Self {
+        Self::new(row_type, (0..row_type.fields().len()).collect())
+    }
+
     pub fn new(row_type: &RowType, encode_field_pos: Vec<usize>) -> CompactedKeyEncoder {
         let mut field_getters: Vec<Box<dyn FieldGetter>> =
             Vec::with_capacity(encode_field_pos.len());
@@ -100,4 +105,128 @@ impl KeyEncoder for CompactedKeyEncoder {
 
         self.compacted_encoder.to_bytes()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::DataTypes;
+    use crate::row::{Datum, GenericRow};
+
+    #[test]
+    fn test_encode_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::int(),
+            DataTypes::bigint(),
+            DataTypes::int(),
+        ]);
+        let row = GenericRow::from_data(vec![
+            Datum::from(1i32),
+            Datum::from(3i64),
+            Datum::from(2i32),
+        ]);
+
+        let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
+
+        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [1u8, 3u8, 2u8]);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from(2i32),
+            Datum::from(5i64),
+            Datum::from(6i32),
+        ]);
+
+        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [2u8, 5u8, 6u8]);
+    }
+
+    #[test]
+    fn test_encode_key_with_key_names() {
+        let data_types = vec![
+            DataTypes::string(),
+            DataTypes::bigint(),
+            DataTypes::string(),
+        ];
+        let field_names = vec!["partition", "f1", "f2"];
+
+        let row_type = RowType::with_data_types_and_field_names(data_types, field_names);
+
+        let primary_keys = &["f2".to_string()];
+
+        let mut encoder = CompactedKeyEncoder::create_key_encoder(&row_type, primary_keys).unwrap();
+
+        let row = GenericRow::from_data(vec![
+            Datum::from("p1"),
+            Datum::from(1i64),
+            Datum::from("a2"),
+        ]);
+
+        // should only get "a2" 's ASCII representation
+        assert_eq!(
+            encoder.encode_key(&row).iter().as_slice(),
+            //  2 (start of text), 97 (the letter a), 50 (the number 2)
+            [2u8, 97u8, 50u8]
+        );
+    }
+
+    #[test]
+    // TODO Migrate to Results
+    #[should_panic(expected = "called `Result::unwrap()` on an `Err` value: ()")]
+    fn test_null_primary_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::int(),
+            DataTypes::bigint(),
+            DataTypes::int(),
+            DataTypes::string(),
+        ]);
+
+        let primary_key_indices = vec![0, 1, 2];
+
+        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from(1i32),
+            Datum::from(3i64),
+            Datum::from(2i32),
+            Datum::from("a2"),
+        ]);
+
+        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [1u8, 3u8, 2u8]);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from(1i32),
+            Datum::from(3i64),
+            Datum::Null,
+            Datum::from("a2"),
+        ]);
+
+        encoder.encode_key(&row);
+    }
+
+    #[test]
+    fn test_int_string_as_primary_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::string(),
+            DataTypes::int(),
+            DataTypes::string(),
+            DataTypes::string(),
+        ]);
+
+        let primary_key_indices = vec![1, 2];
+        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from("a1"),
+            Datum::from(1i32),
+            Datum::from("a2"),
+            Datum::from("a3"),
+        ]);
+
+        assert_eq!(
+            encoder.encode_key(&row).iter().as_slice(),
+            // 1 (1i32), 2 (start of text), 97 (the letter a), 50 (the number 2)
+            [1u8, 2u8, 97u8, 50u8]
+        );
+    }
+
+    // TODO All data type test case
 }

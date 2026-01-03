@@ -112,7 +112,7 @@ impl dyn BinaryWriter {
             DataType::Map(_) => Err(IoUnsupported {
                 message: "Map type is not supported yet. Will be added in Issue #1973.".to_string(),
             }),
-            // TODO Row
+            // TODO ROW
             _ => Err(IllegalArgument {
                 message: format!("Type {} is not supported yet", element_type),
             }),
