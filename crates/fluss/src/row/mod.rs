@@ -19,7 +19,10 @@ mod column;
 
 mod datum;
 
+mod binary;
 mod compacted;
+mod encode;
+mod field_getter;
 
 pub use column::*;
 pub use datum::*;

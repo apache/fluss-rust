@@ -15,7 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod compacted_key_writer;
-mod compacted_row_writer;
+mod binary_writer;
 
-pub use compacted_key_writer::CompactedKeyWriter;
+pub use binary_writer::*;
+
+/// The binary row format types, it indicates the generated [`BinaryRow`] type by the [`BinaryWriter`]
+#[allow(dead_code)]
+pub enum BinaryRowFormat {
+    Compacted,
+    Aligned,
+    Indexed,
+}

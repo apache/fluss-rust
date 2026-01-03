@@ -852,6 +852,10 @@ impl RowType {
     pub fn fields(&self) -> &Vec<DataField> {
         &self.fields
     }
+
+    pub fn get_field_index(&self, field_name: &str) -> Option<usize> {
+        self.fields.iter().position(|f| f.name == field_name)
+    }
 }
 
 impl Display for RowType {
