@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
-use std::cmp;
 use bytes::{Bytes, BytesMut};
-
+use std::cmp;
 
 // Writer for CompactedRow
 // Reference implementation:
@@ -102,8 +100,8 @@ impl CompactedRowWriter {
     }
 
     pub fn write_bytes(&mut self, value: &[u8]) {
-        let len_i32 = i32::try_from(value.len())
-            .expect("byte slice too large to encode length as i32");
+        let len_i32 =
+            i32::try_from(value.len()).expect("byte slice too large to encode length as i32");
         self.write_int(len_i32);
         self.write_raw(value);
     }
