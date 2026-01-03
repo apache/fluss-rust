@@ -1,0 +1,232 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
+use crate::metadata::RowType;
+use crate::row::InternalRow;
+use crate::row::binary::ValueWriter;
+use crate::row::compacted::CompactedKeyWriter;
+use crate::row::encode::KeyEncoder;
+use crate::row::field_getter::FieldGetter;
+use bytes::Bytes;
+
+#[allow(dead_code)]
+pub struct CompactedKeyEncoder {
+    field_getters: Vec<Box<dyn FieldGetter>>,
+    field_encoders: Vec<Box<dyn ValueWriter>>,
+    compacted_encoder: CompactedKeyWriter,
+}
+
+impl CompactedKeyEncoder {
+    /// Create a key encoder to encode the key of the input row.
+    ///
+    /// # Arguments
+    /// * `row_type` - the row type of the input row
+    /// * `keys` - the key fields to encode
+    ///
+    /// # Returns
+    /// * key_encoder - the [`KeyEncoder`]
+    pub fn create_key_encoder(row_type: &RowType, keys: &[String]) -> Result<CompactedKeyEncoder> {
+        let mut encode_col_indexes = Vec::with_capacity(keys.len());
+
+        for key in keys {
+            match row_type.get_field_index(key) {
+                Some(idx) => encode_col_indexes.push(idx),
+                None => {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Field {} not found in input row type {:?}",
+                            key, row_type
+                        ),
+                    });
+                }
+            }
+        }
+
+        Ok(Self::new(row_type, encode_col_indexes))
+    }
+
+    #[cfg(test)]
+    pub fn for_test_row_type(row_type: &RowType) -> Self {
+        Self::new(row_type, (0..row_type.fields().len()).collect())
+    }
+
+    pub fn new(row_type: &RowType, encode_field_pos: Vec<usize>) -> CompactedKeyEncoder {
+        let mut field_getters: Vec<Box<dyn FieldGetter>> =
+            Vec::with_capacity(encode_field_pos.len());
+        let mut field_encoders: Vec<Box<dyn ValueWriter>> =
+            Vec::with_capacity(encode_field_pos.len());
+
+        for pos in &encode_field_pos {
+            let data_type = row_type.fields().get(*pos).unwrap().data_type();
+            field_getters.push(<dyn FieldGetter>::create_field_getter(data_type, *pos));
+            field_encoders.push(CompactedKeyWriter::create_value_writer(data_type));
+        }
+
+        CompactedKeyEncoder {
+            field_encoders,
+            field_getters,
+            compacted_encoder: CompactedKeyWriter::new(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl KeyEncoder for CompactedKeyEncoder {
+    fn encode_key(&mut self, row: &dyn InternalRow) -> Bytes {
+        self.compacted_encoder.reset();
+
+        // iterate all the fields of the row, and encode each field
+        self.field_getters
+            .iter()
+            .enumerate()
+            .for_each(|(pos, field_getter)| {
+                self.field_encoders.get(pos).unwrap().write_value(
+                    &mut self.compacted_encoder,
+                    pos,
+                    &field_getter.get_field(row),
+                );
+            });
+
+        self.compacted_encoder.to_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::DataTypes;
+    use crate::row::{Datum, GenericRow};
+
+    #[test]
+    fn test_encode_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::int(),
+            DataTypes::bigint(),
+            DataTypes::int(),
+        ]);
+        let row = GenericRow::from_data(vec![
+            Datum::from(1i32),
+            Datum::from(3i64),
+            Datum::from(2i32),
+        ]);
+
+        let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
+
+        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [1u8, 3u8, 2u8]);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from(2i32),
+            Datum::from(5i64),
+            Datum::from(6i32),
+        ]);
+
+        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [2u8, 5u8, 6u8]);
+    }
+
+    #[test]
+    fn test_encode_key_with_key_names() {
+        let data_types = vec![
+            DataTypes::string(),
+            DataTypes::bigint(),
+            DataTypes::string(),
+        ];
+        let field_names = vec!["partition", "f1", "f2"];
+
+        let row_type = RowType::with_data_types_and_field_names(data_types, field_names);
+
+        let primary_keys = &["f2".to_string()];
+
+        let mut encoder = CompactedKeyEncoder::create_key_encoder(&row_type, primary_keys).unwrap();
+
+        let row = GenericRow::from_data(vec![
+            Datum::from("p1"),
+            Datum::from(1i64),
+            Datum::from("a2"),
+        ]);
+
+        // should only get "a2" 's ASCII representation
+        assert_eq!(
+            encoder.encode_key(&row).iter().as_slice(),
+            //  2 (start of text), 97 (the letter a), 50 (the number 2)
+            [2u8, 97u8, 50u8]
+        );
+    }
+
+    #[test]
+    // TODO Migrate to Results
+    #[should_panic(expected = "called `Result::unwrap()` on an `Err` value: ()")]
+    fn test_null_primary_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::int(),
+            DataTypes::bigint(),
+            DataTypes::int(),
+            DataTypes::string(),
+        ]);
+
+        let primary_key_indices = vec![0, 1, 2];
+
+        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from(1i32),
+            Datum::from(3i64),
+            Datum::from(2i32),
+            Datum::from("a2"),
+        ]);
+
+        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [1u8, 3u8, 2u8]);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from(1i32),
+            Datum::from(3i64),
+            Datum::Null,
+            Datum::from("a2"),
+        ]);
+
+        encoder.encode_key(&row);
+    }
+
+    #[test]
+    fn test_int_string_as_primary_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::string(),
+            DataTypes::int(),
+            DataTypes::string(),
+            DataTypes::string(),
+        ]);
+
+        let primary_key_indices = vec![1, 2];
+        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from("a1"),
+            Datum::from(1i32),
+            Datum::from("a2"),
+            Datum::from("a3"),
+        ]);
+
+        assert_eq!(
+            encoder.encode_key(&row).iter().as_slice(),
+            // 1 (1i32), 2 (start of text), 97 (the letter a), 50 (the number 2)
+            [1u8, 2u8, 97u8, 50u8]
+        );
+    }
+
+    // TODO All data type test case
+}
