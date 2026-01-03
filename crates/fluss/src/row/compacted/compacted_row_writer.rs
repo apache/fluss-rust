@@ -21,19 +21,21 @@ use std::cmp;
 // Writer for CompactedRow
 // Reference implementation:
 // https://github.com/apache/fluss/blob/d4a72fad240d4b81563aaf83fa3b09b5058674ed/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRowWriter.java#L71
+#[allow(dead_code)]
 pub struct CompactedRowWriter {
     header_size_in_bytes: usize,
     position: usize,
     buffer: BytesMut,
 }
 
+#[allow(dead_code)]
 impl CompactedRowWriter {
     pub const MAX_INT_SIZE: usize = 5;
     pub const MAX_LONG_SIZE: usize = 10;
 
     pub fn new(field_count: usize) -> Self {
         // bitset width in bytes, it should be in CompactedRow
-        let header_size = (field_count + 7) / 8;
+        let header_size = field_count.div_ceil(8);
         let cap = cmp::max(64, header_size);
 
         let mut buffer = BytesMut::with_capacity(cap);
@@ -90,7 +92,7 @@ impl CompactedRowWriter {
     }
 
     pub fn write_byte(&mut self, value: u8) {
-        self.write_raw(&[value as u8]);
+        self.write_raw(&[value]);
     }
 
     pub fn write_binary(&mut self, bytes: &[u8], length: usize) {
@@ -106,7 +108,7 @@ impl CompactedRowWriter {
         self.write_raw(value);
     }
 
-    pub fn write_char(&mut self, value: &str, length: usize) {
+    pub fn write_char(&mut self, value: &str, _length: usize) {
         // TODO: currently, we encoding CHAR(length) as the same with STRING, the length info can be
         //  omitted and the bytes length should be enforced in the future.
         self.write_string(value);
