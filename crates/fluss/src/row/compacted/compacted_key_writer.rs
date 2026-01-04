@@ -18,7 +18,10 @@ use bytes::Bytes;
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
 use crate::metadata::DataType;
+use crate::row::Datum;
 use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
 use delegate::delegate;
 
@@ -39,11 +42,14 @@ impl CompactedKeyWriter {
     }
 
     pub fn create_value_writer(field_type: &DataType) -> Box<dyn ValueWriter> {
-        <dyn ValueWriter>::create_not_null_value_writer(
-            field_type,
-            Some(&BinaryRowFormat::Compacted),
+        RejectNullValueWriter::wrap(
+            field_type.clone(),
+            <dyn ValueWriter>::create_not_null_value_writer(
+                field_type,
+                Some(&BinaryRowFormat::Compacted),
+            )
+            .unwrap(),
         )
-        .unwrap()
     }
 
     delegate! {
@@ -58,6 +64,33 @@ impl CompactedKeyWriter {
 
             pub fn to_bytes(&self) -> Bytes;
         }
+    }
+}
+
+pub struct RejectNullValueWriter {
+    field_type: DataType,
+    delegate: Box<dyn ValueWriter>,
+}
+
+impl RejectNullValueWriter {
+    fn wrap(field_type: DataType, delegate: Box<dyn ValueWriter>) -> Box<dyn ValueWriter> {
+        Box::new(RejectNullValueWriter {
+            field_type,
+            delegate,
+        })
+    }
+}
+impl ValueWriter for RejectNullValueWriter {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()> {
+        if let Datum::Null = value {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Null value is not allowed for compacted key encoder in position {} with type {}",
+                    pos, self.field_type
+                ),
+            });
+        }
+        self.delegate.write_value(writer, pos, value)
     }
 }
 
