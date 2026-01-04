@@ -18,8 +18,8 @@
 use crate::error::Error::{IllegalArgument, IoUnsupported};
 use crate::error::Result;
 use crate::metadata::DataType;
-use crate::row::binary::BinaryRowFormat;
 use crate::row::Datum;
+use crate::row::binary::BinaryRowFormat;
 
 /// Writer to write a composite data format, like row, array,
 #[allow(dead_code)]
@@ -122,51 +122,70 @@ impl dyn BinaryWriter {
 }
 
 pub trait ValueWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum);
+    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()>;
 }
 
 #[derive(Default)]
 struct CharWriter;
 impl ValueWriter for CharWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::String(v) = value {
-            writer.write_char(*v, v.len());
+            writer.write_char(v, v.len());
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct StringWriter;
 impl ValueWriter for StringWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::String(v) = value {
-            writer.write_string(*v);
+            writer.write_string(v);
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct BoolWriter;
 impl ValueWriter for BoolWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Bool(v) = value {
             writer.write_boolean(*v);
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct BinaryValueWriter;
 impl ValueWriter for BinaryValueWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         match value {
             Datum::Blob(v) => {
                 writer.write_binary(v.as_ref(), v.len());
-            },
+                Ok(())
+            }
             Datum::BorrowedBlob(v) => {
                 writer.write_binary(v.as_ref(), v.len());
-            },
-            _ => unimplemented!()
+                Ok(())
+            }
+            _ => Err(IllegalArgument {
+                message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            }),
         }
     }
 }
@@ -174,15 +193,19 @@ impl ValueWriter for BinaryValueWriter {
 #[derive(Default)]
 struct BytesWriter;
 impl ValueWriter for BytesWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         match value {
             Datum::Blob(v) => {
                 writer.write_binary(v.as_ref(), v.len());
-            },
+                Ok(())
+            }
             Datum::BorrowedBlob(v) => {
                 writer.write_binary(v.as_ref(), v.len());
-            },
-            _ => unimplemented!()
+                Ok(())
+            }
+            value => Err(IllegalArgument {
+                message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            }),
         }
     }
 }
@@ -192,60 +215,90 @@ impl ValueWriter for BytesWriter {
 #[derive(Default)]
 struct TinyIntWriter;
 impl ValueWriter for TinyIntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Int8(v) = value {
             writer.write_byte(*v as u8);
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct SmallIntWriter;
 impl ValueWriter for SmallIntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Int16(v) = value {
             writer.write_short(*v);
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct IntWriter;
 impl ValueWriter for IntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Int32(v) = value {
             writer.write_int(*v);
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct LongWriter;
 impl ValueWriter for LongWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Int64(v) = value {
             writer.write_long(*v);
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct FloatWriter;
 impl ValueWriter for FloatWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Float32(v) = value {
             writer.write_float(v.into_inner());
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
 #[derive(Default)]
 struct DoubleWriter;
 impl ValueWriter for DoubleWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Float64(v) = value {
             writer.write_double(v.into_inner());
+            return Ok(());
         }
+
+        Err(IllegalArgument {
+            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+        })
     }
 }
 
@@ -258,11 +311,12 @@ struct NullWriter {
     delegate: Box<dyn ValueWriter>,
 }
 impl ValueWriter for NullWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()> {
         if let Datum::Null = value {
             writer.set_null_at(pos);
+            Ok(())
         } else {
-            self.delegate.write_value(writer, pos, value);
+            self.delegate.write_value(writer, pos, value)
         }
     }
 }

@@ -17,6 +17,7 @@
 
 mod compacted_key_encoder;
 
+use crate::error::Result;
 use crate::metadata::{DataLakeFormat, RowType};
 use crate::row::InternalRow;
 use crate::row::encode::compacted_key_encoder::CompactedKeyEncoder;
@@ -25,7 +26,7 @@ use bytes::Bytes;
 /// An interface for encoding key of row into bytes.
 #[allow(dead_code)]
 pub trait KeyEncoder {
-    fn encode_key(&mut self, row: &dyn InternalRow) -> Bytes;
+    fn encode_key(&mut self, row: &dyn InternalRow) -> Result<Bytes>;
 }
 
 #[allow(dead_code)]

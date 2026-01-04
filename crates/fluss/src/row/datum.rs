@@ -82,7 +82,7 @@ impl Datum<'_> {
     pub fn as_blob(&self) -> &[u8] {
         match self {
             Self::Blob(blob) => blob.as_ref(),
-            Self::BorrowedBlob(blob) => *blob,
+            Self::BorrowedBlob(blob) => blob,
             _ => panic!("not a blob: {self:?}"),
         }
     }
@@ -412,7 +412,7 @@ impl From<Vec<u8>> for Blob {
 
 impl<'a> From<&'a [u8]> for Datum<'a> {
     fn from(bytes: &'a [u8]) -> Datum<'a> {
-        Datum::BorrowedBlob(bytes.into())
+        Datum::BorrowedBlob(bytes)
     }
 }
 

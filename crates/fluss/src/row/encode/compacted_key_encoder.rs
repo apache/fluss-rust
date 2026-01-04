@@ -88,7 +88,7 @@ impl CompactedKeyEncoder {
 
 #[allow(dead_code)]
 impl KeyEncoder for CompactedKeyEncoder {
-    fn encode_key(&mut self, row: &dyn InternalRow) -> Bytes {
+    fn encode_key(&mut self, row: &dyn InternalRow) -> Result<Bytes> {
         self.compacted_encoder.reset();
 
         // iterate all the fields of the row, and encode each field
@@ -96,14 +96,18 @@ impl KeyEncoder for CompactedKeyEncoder {
             .iter()
             .enumerate()
             .for_each(|(pos, field_getter)| {
-                self.field_encoders.get(pos).unwrap().write_value(
-                    &mut self.compacted_encoder,
-                    pos,
-                    &field_getter.get_field(row),
-                );
+                self.field_encoders
+                    .get(pos)
+                    .unwrap()
+                    .write_value(
+                        &mut self.compacted_encoder,
+                        pos,
+                        &field_getter.get_field(row),
+                    )
+                    .unwrap();
             });
 
-        self.compacted_encoder.to_bytes()
+        Ok(self.compacted_encoder.to_bytes())
     }
 }
 
@@ -128,7 +132,10 @@ mod tests {
 
         let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
 
-        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [1u8, 3u8, 2u8]);
+        assert_eq!(
+            encoder.encode_key(&row).unwrap().iter().as_slice(),
+            [1u8, 3u8, 2u8]
+        );
 
         let row = GenericRow::from_data(vec![
             Datum::from(2i32),
@@ -136,7 +143,10 @@ mod tests {
             Datum::from(6i32),
         ]);
 
-        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [2u8, 5u8, 6u8]);
+        assert_eq!(
+            encoder.encode_key(&row).unwrap().iter().as_slice(),
+            [2u8, 5u8, 6u8]
+        );
     }
 
     #[test]
@@ -162,7 +172,7 @@ mod tests {
 
         // should only get "a2" 's ASCII representation
         assert_eq!(
-            encoder.encode_key(&row).iter().as_slice(),
+            encoder.encode_key(&row).unwrap().iter().as_slice(),
             //  2 (start of text), 97 (the letter a), 50 (the number 2)
             [2u8, 97u8, 50u8]
         );
@@ -190,7 +200,10 @@ mod tests {
             Datum::from("a2"),
         ]);
 
-        assert_eq!(encoder.encode_key(&row).iter().as_slice(), [1u8, 3u8, 2u8]);
+        assert_eq!(
+            encoder.encode_key(&row).unwrap().iter().as_slice(),
+            [1u8, 3u8, 2u8]
+        );
 
         let row = GenericRow::from_data(vec![
             Datum::from(1i32),
@@ -199,7 +212,7 @@ mod tests {
             Datum::from("a2"),
         ]);
 
-        encoder.encode_key(&row);
+        encoder.encode_key(&row).unwrap();
     }
 
     #[test]
@@ -222,7 +235,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            encoder.encode_key(&row).iter().as_slice(),
+            encoder.encode_key(&row).unwrap().iter().as_slice(),
             // 1 (1i32), 2 (start of text), 97 (the letter a), 50 (the number 2)
             [1u8, 2u8, 97u8, 50u8]
         );
@@ -278,19 +291,23 @@ mod tests {
 
         let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
 
-        assert_eq!(encoder.encode_key(&row).iter().as_slice(),
-                   [
-                       0x01, // boolean: true
-                       0x02, // byte: 2
-                       0x0A, // short: 10
-                       0x00, 0x64, // int: 100
-                       0xD2, 0x95, 0xFC, 0xD8, 0xCE, 0xB1, 0xAA, 0xAA, 0xAB, 0x01, // long: -6101065172474983726
-                       0x33, 0x33, 0x53, 0x41, // float: 13.2
-                       0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40, // double: 15.21
-                       0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, // byte[]: "1234567890".getBytes()
-                       0x02, 0x32, 0x30, // bytes[]: "20".getBytes()
-                       0x01, 0x31, // String: "1"
-                       0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F, // String: "hello"
-                   ]);
+        assert_eq!(
+            encoder.encode_key(&row).unwrap().iter().as_slice(),
+            [
+                0x01, // boolean: true
+                0x02, // byte: 2
+                0x0A, // short: 10
+                0x00, 0x64, // int: 100
+                0xD2, 0x95, 0xFC, 0xD8, 0xCE, 0xB1, 0xAA, 0xAA, 0xAB,
+                0x01, // long: -6101065172474983726
+                0x33, 0x33, 0x53, 0x41, // float: 13.2
+                0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40, // double: 15.21
+                0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+                0x30, // byte[]: "1234567890".getBytes()
+                0x02, 0x32, 0x30, // bytes[]: "20".getBytes()
+                0x01, 0x31, // String: "1"
+                0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F, // String: "hello"
+            ]
+        );
     }
 }
