@@ -159,8 +159,14 @@ impl ValueWriter for BoolWriter {
 struct BinaryValueWriter;
 impl ValueWriter for BinaryValueWriter {
     fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
-        if let Datum::Blob(v) = value {
-            writer.write_binary(v.as_ref(), v.len());
+        match value {
+            Datum::Blob(v) => {
+                writer.write_binary(v.as_ref(), v.len());
+            },
+            Datum::BorrowedBlob(v) => {
+                writer.write_binary(v.as_ref(), v.len());
+            },
+            _ => unimplemented!()
         }
     }
 }
@@ -169,8 +175,14 @@ impl ValueWriter for BinaryValueWriter {
 struct BytesWriter;
 impl ValueWriter for BytesWriter {
     fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
-        if let Datum::Blob(v) = value {
-            writer.write_bytes(v.as_ref());
+        match value {
+            Datum::Blob(v) => {
+                writer.write_binary(v.as_ref(), v.len());
+            },
+            Datum::BorrowedBlob(v) => {
+                writer.write_binary(v.as_ref(), v.len());
+            },
+            _ => unimplemented!()
         }
     }
 }

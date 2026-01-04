@@ -82,6 +82,7 @@ impl Datum<'_> {
     pub fn as_blob(&self) -> &[u8] {
         match self {
             Self::Blob(blob) => blob.as_ref(),
+            Self::BorrowedBlob(blob) => *blob,
             _ => panic!("not a blob: {self:?}"),
         }
     }

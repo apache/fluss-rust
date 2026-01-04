@@ -228,5 +228,69 @@ mod tests {
         );
     }
 
-    // TODO All data type test case
+    #[test]
+    fn test_all_data_types() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::boolean(),
+            DataTypes::tinyint(),
+            DataTypes::smallint(),
+            DataTypes::int(),
+            DataTypes::bigint(),
+            DataTypes::float(),
+            DataTypes::double(),
+            // TODO Date
+            // TODO Time
+            DataTypes::binary(20),
+            DataTypes::bytes(),
+            DataTypes::char(2),
+            DataTypes::string(),
+            // TODO Decimal
+            // TODO Timestamp
+            // TODO Timestamp LTZ
+            // TODO Array of Int
+            // TODO Array of Float
+            // TODO Array of String
+            // TODO: Add Map and Row fields in Issue #1973
+        ]);
+
+        let row = GenericRow::from_data(vec![
+            Datum::from(true),
+            Datum::from(2i8),
+            Datum::from(10i16),
+            Datum::from(100i32),
+            Datum::from(-6101065172474983726i64), // from Java test case: new BigInteger("12345678901234567890").longValue()
+            Datum::from(13.2f32),
+            Datum::from(15.21f64),
+            // TODO Date
+            // TODO Time
+            Datum::from("1234567890".as_bytes()),
+            Datum::from("20".as_bytes()),
+            Datum::from("1"),
+            Datum::from("hello"),
+            // TODO Decimal
+            // TODO Timestamp
+            // TODO Timestamp LTZ
+            // TODO Array of Int
+            // TODO Array of Float
+            // TODO Array of String
+            // TODO: Add Map and Row fields in Issue #1973
+        ]);
+
+        let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
+
+        assert_eq!(encoder.encode_key(&row).iter().as_slice(),
+                   [
+                       0x01, // boolean: true
+                       0x02, // byte: 2
+                       0x0A, // short: 10
+                       0x00, 0x64, // int: 100
+                       0xD2, 0x95, 0xFC, 0xD8, 0xCE, 0xB1, 0xAA, 0xAA, 0xAB, 0x01, // long: -6101065172474983726
+                       0x33, 0x33, 0x53, 0x41, // float: 13.2
+                       0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40, // double: 15.21
+                       0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, // byte[]: "1234567890".getBytes()
+                       0x02, 0x32, 0x30, // bytes[]: "20".getBytes()
+                       0x01, 0x31, // String: "1"
+                       0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F, // String: "hello"
+                   ]);
+    }
 }
