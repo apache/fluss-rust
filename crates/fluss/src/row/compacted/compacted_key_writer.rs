@@ -39,7 +39,11 @@ impl CompactedKeyWriter {
     }
 
     pub fn create_value_writer(field_type: &DataType) -> Box<dyn ValueWriter> {
-        <dyn BinaryWriter>::create_value_writer(field_type, &BinaryRowFormat::Compacted)
+        <dyn ValueWriter>::create_not_null_value_writer(
+            field_type,
+            Some(&BinaryRowFormat::Compacted),
+        )
+        .unwrap()
     }
 
     delegate! {

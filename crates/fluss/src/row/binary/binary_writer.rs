@@ -71,9 +71,14 @@ pub trait BinaryWriter {
     fn complete(&mut self);
 }
 
-#[allow(dead_code)]
-impl dyn BinaryWriter {
+/// Accessor for writing the fields/elements of a binary writer during runtime, the
+/// fields/elements must be written in the order.
+pub trait ValueWriter {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()>;
+}
 
+#[allow(dead_code)]
+impl dyn ValueWriter {
     /// Creates an accessor for setting the elements of a binary writer during runtime.
     pub fn create_value_writer(
         element_type: &DataType,
@@ -123,12 +128,6 @@ impl dyn BinaryWriter {
             }),
         }
     }
-}
-
-/// Accessor for writing the fields/elements of a binary writer during runtime, the
-/// fields/elements must be written in the order.
-pub trait ValueWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()>;
 }
 
 #[derive(Default)]
