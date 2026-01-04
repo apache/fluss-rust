@@ -837,31 +837,6 @@ pub struct RowType {
 }
 
 impl RowType {
-    pub fn with_data_types(data_types: Vec<DataType>) -> Self {
-        let mut fields: Vec<DataField> = Vec::new();
-        data_types.iter().enumerate().for_each(|(idx, data_type)| {
-            fields.push(DataField::new(format!("f{}", idx), data_type.clone(), None));
-        });
-
-        Self::with_nullable(true, fields)
-    }
-
-    pub fn with_data_types_and_field_names(
-        data_types: Vec<DataType>,
-        field_names: Vec<&str>,
-    ) -> Self {
-        let mut fields: Vec<DataField> = Vec::new();
-        data_types.iter().enumerate().for_each(|(idx, data_type)| {
-            fields.push(DataField::new(
-                field_names.get(idx).unwrap().to_string(),
-                data_type.clone(),
-                None,
-            ));
-        });
-
-        Self::with_nullable(true, fields)
-    }
-
     pub const fn new(fields: Vec<DataField>) -> Self {
         Self::with_nullable(true, fields)
     }
@@ -880,6 +855,33 @@ impl RowType {
 
     pub fn get_field_index(&self, field_name: &str) -> Option<usize> {
         self.fields.iter().position(|f| f.name == field_name)
+    }
+
+    #[cfg(test)]
+    pub fn with_data_types(data_types: Vec<DataType>) -> Self {
+        let mut fields: Vec<DataField> = Vec::new();
+        data_types.iter().enumerate().for_each(|(idx, data_type)| {
+            fields.push(DataField::new(format!("f{}", idx), data_type.clone(), None));
+        });
+
+        Self::with_nullable(true, fields)
+    }
+
+    #[cfg(test)]
+    pub fn with_data_types_and_field_names(
+        data_types: Vec<DataType>,
+        field_names: Vec<&str>,
+    ) -> Self {
+        let mut fields: Vec<DataField> = Vec::new();
+        data_types.iter().enumerate().for_each(|(idx, data_type)| {
+            fields.push(DataField::new(
+                field_names.get(idx).unwrap().to_string(),
+                data_type.clone(),
+                None,
+            ));
+        });
+
+        Self::with_nullable(true, fields)
     }
 }
 
