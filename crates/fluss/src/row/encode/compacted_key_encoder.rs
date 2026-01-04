@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    // TODO Migrate to Results
+    // TODO Migrate InternalRow to Results and remove this should_panic
     #[should_panic(expected = "called `Result::unwrap()` on an `Err` value: ()")]
     fn test_null_primary_key() {
         let row_type = RowType::with_data_types(vec![
