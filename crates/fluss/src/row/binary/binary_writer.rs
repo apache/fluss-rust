@@ -73,6 +73,8 @@ pub trait BinaryWriter {
 
 #[allow(dead_code)]
 impl dyn BinaryWriter {
+
+    /// Creates an accessor for setting the elements of a binary writer during runtime.
     pub fn create_value_writer(
         element_type: &DataType,
         binary_row_format: &BinaryRowFormat,
@@ -88,6 +90,8 @@ impl dyn BinaryWriter {
             })
         }
     }
+
+    /// Creates an accessor for setting the elements of a binary writer during runtime.
     pub fn create_not_null_value_writer(
         element_type: &DataType,
         _: Option<&BinaryRowFormat>,
@@ -121,6 +125,8 @@ impl dyn BinaryWriter {
     }
 }
 
+/// Accessor for writing the fields/elements of a binary writer during runtime, the
+/// fields/elements must be written in the order.
 pub trait ValueWriter {
     fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()>;
 }
