@@ -19,6 +19,7 @@ use crate::error::Error::{IllegalArgument, IoUnsupported};
 use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::binary::BinaryRowFormat;
+use crate::row::Datum;
 
 /// Writer to write a composite data format, like row, array,
 #[allow(dead_code)]
@@ -120,38 +121,16 @@ impl dyn BinaryWriter {
     }
 }
 
-pub enum Value<'a> {
-    Char(&'a str),
-    String(&'a str),
-    Boolean(bool),
-    Binary(&'a [u8]),
-    #[allow(dead_code)]
-    Bytes(&'a [u8]),
-    // TODO DECIMAL
-    TinyInt(i8),
-    SmallInt(i16),
-    Integer(i32),
-    Long(i64),
-    Float(f32),
-    Double(f64),
-    // TODO TIMESTAMP_NTZ
-    // TODO TIMESTAMP_LTZ
-    // TODO ARRAY
-    // TODO ROW
-    #[allow(dead_code)]
-    Null(),
-}
-
 pub trait ValueWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Value);
+    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum);
 }
 
 #[derive(Default)]
 struct CharWriter;
 impl ValueWriter for CharWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Char(v) = value {
-            writer.write_char(v, v.len());
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::String(v) = value {
+            writer.write_char(*v, v.len());
         }
     }
 }
@@ -159,9 +138,9 @@ impl ValueWriter for CharWriter {
 #[derive(Default)]
 struct StringWriter;
 impl ValueWriter for StringWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::String(v) = value {
-            writer.write_string(v);
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::String(v) = value {
+            writer.write_string(*v);
         }
     }
 }
@@ -169,8 +148,8 @@ impl ValueWriter for StringWriter {
 #[derive(Default)]
 struct BoolWriter;
 impl ValueWriter for BoolWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Boolean(v) = value {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Bool(v) = value {
             writer.write_boolean(*v);
         }
     }
@@ -179,9 +158,9 @@ impl ValueWriter for BoolWriter {
 #[derive(Default)]
 struct BinaryValueWriter;
 impl ValueWriter for BinaryValueWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Binary(v) = value {
-            writer.write_binary(v, v.len());
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Blob(v) = value {
+            writer.write_binary(v.as_ref(), v.len());
         }
     }
 }
@@ -189,9 +168,9 @@ impl ValueWriter for BinaryValueWriter {
 #[derive(Default)]
 struct BytesWriter;
 impl ValueWriter for BytesWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Bytes(v) = value {
-            writer.write_bytes(v);
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Blob(v) = value {
+            writer.write_bytes(v.as_ref());
         }
     }
 }
@@ -201,8 +180,8 @@ impl ValueWriter for BytesWriter {
 #[derive(Default)]
 struct TinyIntWriter;
 impl ValueWriter for TinyIntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::TinyInt(v) = value {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Int8(v) = value {
             writer.write_byte(*v as u8);
         }
     }
@@ -211,8 +190,8 @@ impl ValueWriter for TinyIntWriter {
 #[derive(Default)]
 struct SmallIntWriter;
 impl ValueWriter for SmallIntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::SmallInt(v) = value {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Int16(v) = value {
             writer.write_short(*v);
         }
     }
@@ -221,8 +200,8 @@ impl ValueWriter for SmallIntWriter {
 #[derive(Default)]
 struct IntWriter;
 impl ValueWriter for IntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Integer(v) = value {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Int32(v) = value {
             writer.write_int(*v);
         }
     }
@@ -231,8 +210,8 @@ impl ValueWriter for IntWriter {
 #[derive(Default)]
 struct LongWriter;
 impl ValueWriter for LongWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Long(v) = value {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Int64(v) = value {
             writer.write_long(*v);
         }
     }
@@ -241,9 +220,9 @@ impl ValueWriter for LongWriter {
 #[derive(Default)]
 struct FloatWriter;
 impl ValueWriter for FloatWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Float(v) = value {
-            writer.write_float(*v);
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Float32(v) = value {
+            writer.write_float(v.into_inner());
         }
     }
 }
@@ -251,9 +230,9 @@ impl ValueWriter for FloatWriter {
 #[derive(Default)]
 struct DoubleWriter;
 impl ValueWriter for DoubleWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Value) {
-        if let Value::Double(v) = value {
-            writer.write_double(*v);
+    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) {
+        if let Datum::Float64(v) = value {
+            writer.write_double(v.into_inner());
         }
     }
 }
@@ -267,8 +246,8 @@ struct NullWriter {
     delegate: Box<dyn ValueWriter>,
 }
 impl ValueWriter for NullWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Value) {
-        if let Value::Null() = value {
+    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) {
+        if let Datum::Null = value {
             writer.set_null_at(pos);
         } else {
             self.delegate.write_value(writer, pos, value);

@@ -16,11 +16,10 @@
 // under the License.
 
 use crate::metadata::DataType;
-use crate::row::InternalRow;
-use crate::row::binary::Value;
+use crate::row::{Datum, InternalRow};
 
 pub trait FieldGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a>;
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a>;
 }
 
 struct CharGetter {
@@ -28,8 +27,8 @@ struct CharGetter {
     length: usize,
 }
 impl FieldGetter for CharGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Char(row.get_char(self.field_position, self.length))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_char(self.field_position, self.length))
     }
 }
 
@@ -38,8 +37,8 @@ struct StringGetter {
 }
 
 impl FieldGetter for StringGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::String(row.get_string(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_string(self.field_position))
     }
 }
 
@@ -48,8 +47,8 @@ struct BooleanGetter {
 }
 
 impl FieldGetter for BooleanGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Boolean(row.get_boolean(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_boolean(self.field_position))
     }
 }
 
@@ -58,8 +57,8 @@ struct BinaryGetter {
     length: usize,
 }
 impl FieldGetter for BinaryGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Binary(row.get_binary(self.field_position, self.length))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_binary(self.field_position, self.length))
     }
 }
 
@@ -67,8 +66,8 @@ struct BytesGetter {
     field_position: usize,
 }
 impl FieldGetter for BytesGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Binary(row.get_bytes(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_bytes(self.field_position))
     }
 }
 
@@ -78,8 +77,8 @@ struct TinyIntGetter {
     field_position: usize,
 }
 impl FieldGetter for TinyIntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::TinyInt(row.get_byte(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_byte(self.field_position))
     }
 }
 
@@ -87,8 +86,8 @@ struct SmallIntGetter {
     field_position: usize,
 }
 impl FieldGetter for SmallIntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::SmallInt(row.get_short(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_short(self.field_position))
     }
 }
 
@@ -96,8 +95,8 @@ struct IntGetter {
     field_position: usize,
 }
 impl FieldGetter for IntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Integer(row.get_int(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_int(self.field_position))
     }
 }
 
@@ -105,8 +104,8 @@ struct BigIntGetter {
     field_position: usize,
 }
 impl FieldGetter for BigIntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Long(row.get_long(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_long(self.field_position))
     }
 }
 
@@ -114,8 +113,8 @@ struct FloatGetter {
     field_position: usize,
 }
 impl FieldGetter for FloatGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Float(row.get_float(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_float(self.field_position))
     }
 }
 
@@ -123,8 +122,8 @@ struct DoubleGetter {
     field_position: usize,
 }
 impl FieldGetter for DoubleGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Value<'a> {
-        Value::Double(row.get_double(self.field_position))
+    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        Datum::from(row.get_double(self.field_position))
     }
 }
 
