@@ -58,15 +58,16 @@ impl CompactedKeyEncoder {
             }
         }
 
-        Ok(Self::new(row_type, encode_col_indexes))
+        Self::new(row_type, encode_col_indexes)
     }
 
     #[cfg(test)]
     pub fn for_test_row_type(row_type: &RowType) -> Self {
         Self::new(row_type, (0..row_type.fields().len()).collect())
+            .expect("CompactedKeyEncoder initialization failed")
     }
 
-    pub fn new(row_type: &RowType, encode_field_pos: Vec<usize>) -> CompactedKeyEncoder {
+    pub fn new(row_type: &RowType, encode_field_pos: Vec<usize>) -> Result<CompactedKeyEncoder> {
         let mut field_getters: Vec<Box<dyn FieldGetter>> =
             Vec::with_capacity(encode_field_pos.len());
         let mut field_encoders: Vec<Box<dyn ValueWriter>> =
@@ -75,14 +76,14 @@ impl CompactedKeyEncoder {
         for pos in &encode_field_pos {
             let data_type = row_type.fields().get(*pos).unwrap().data_type();
             field_getters.push(<dyn FieldGetter>::create_field_getter(data_type, *pos));
-            field_encoders.push(CompactedKeyWriter::create_value_writer(data_type));
+            field_encoders.push(CompactedKeyWriter::create_value_writer(data_type)?);
         }
 
-        CompactedKeyEncoder {
+        Ok(CompactedKeyEncoder {
             field_encoders,
             field_getters,
             compacted_encoder: CompactedKeyWriter::new(),
-        }
+        })
     }
 }
 
@@ -191,7 +192,8 @@ mod tests {
 
         let primary_key_indices = vec![0, 1, 2];
 
-        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices);
+        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices)
+            .expect("CompactedKeyEncoder initialization failed");
 
         let row = GenericRow::from_data(vec![
             Datum::from(1i32),
@@ -225,7 +227,8 @@ mod tests {
         ]);
 
         let primary_key_indices = vec![1, 2];
-        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices);
+        let mut encoder = CompactedKeyEncoder::new(&row_type, primary_key_indices)
+            .expect("CompactedKeyEncoder initialization failed");
 
         let row = GenericRow::from_data(vec![
             Datum::from("a1"),

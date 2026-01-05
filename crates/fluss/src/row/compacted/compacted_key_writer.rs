@@ -41,15 +41,12 @@ impl CompactedKeyWriter {
         }
     }
 
-    pub fn create_value_writer(field_type: &DataType) -> Box<dyn ValueWriter> {
-        RejectNullValueWriter::wrap(
-            field_type.clone(),
-            <dyn ValueWriter>::create_not_null_value_writer(
-                field_type,
-                Some(&BinaryRowFormat::Compacted),
-            )
-            .unwrap(),
-        )
+    pub fn create_value_writer(field_type: &DataType) -> Result<Box<dyn ValueWriter>> {
+        let inner = <dyn ValueWriter>::create_not_null_value_writer(
+            field_type,
+            Some(&BinaryRowFormat::Compacted),
+        )?;
+        Ok(RejectNullValueWriter::wrap(field_type.clone(), inner))
     }
 
     delegate! {
