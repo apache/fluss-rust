@@ -83,16 +83,15 @@ impl dyn ValueWriter {
     pub fn create_value_writer(
         element_type: &DataType,
         binary_row_format: &BinaryRowFormat,
-    ) -> Box<dyn ValueWriter> {
+    ) -> Result<Box<dyn ValueWriter>> {
         let value_writer =
-            Self::create_not_null_value_writer(element_type, Some(binary_row_format)).unwrap();
-
+            Self::create_not_null_value_writer(element_type, Some(binary_row_format))?;
         if !element_type.is_nullable() {
-            value_writer
+            Ok(value_writer)
         } else {
-            Box::new(NullWriter {
+            Ok(Box::new(NullWriter {
                 delegate: value_writer,
-            })
+            }))
         }
     }
 
@@ -155,7 +154,7 @@ impl ValueWriter for StringWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("StringWriter used to write value: {:?}", value),
         })
     }
 }
@@ -170,7 +169,7 @@ impl ValueWriter for BoolWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("BoolWriter used to write value: {:?}", value),
         })
     }
 }
@@ -189,7 +188,7 @@ impl ValueWriter for BinaryValueWriter {
                 Ok(())
             }
             _ => Err(IllegalArgument {
-                message: format!("Wrong ValueWriter used to write value: {:?}", value),
+                message: format!("BinaryValueWriter used to write value: {:?}", value),
             }),
         }
     }
@@ -201,15 +200,15 @@ impl ValueWriter for BytesWriter {
     fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
         match value {
             Datum::Blob(v) => {
-                writer.write_binary(v.as_ref(), v.len());
+                writer.write_bytes(v.as_ref());
                 Ok(())
             }
             Datum::BorrowedBlob(v) => {
-                writer.write_binary(v.as_ref(), v.len());
+                writer.write_bytes(v.as_ref());
                 Ok(())
             }
             value => Err(IllegalArgument {
-                message: format!("Wrong ValueWriter used to write value: {:?}", value),
+                message: format!("BytesWriter used to write value: {:?}", value),
             }),
         }
     }
@@ -227,7 +226,7 @@ impl ValueWriter for TinyIntWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("TinyIntWriter used to write value: {:?}", value),
         })
     }
 }
@@ -242,7 +241,7 @@ impl ValueWriter for SmallIntWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("SmallIntWriter used to write value: {:?}", value),
         })
     }
 }
@@ -257,7 +256,7 @@ impl ValueWriter for IntWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("IntWriter used to write value: {:?}", value),
         })
     }
 }
@@ -272,7 +271,7 @@ impl ValueWriter for LongWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("LongWriter used to write value: {:?}", value),
         })
     }
 }
@@ -287,7 +286,7 @@ impl ValueWriter for FloatWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("FloatWriter used to write value: {:?}", value),
         })
     }
 }
@@ -302,7 +301,7 @@ impl ValueWriter for DoubleWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("DoubleWriter used to write value: {:?}", value),
         })
     }
 }
