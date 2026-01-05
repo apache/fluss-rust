@@ -94,14 +94,11 @@ impl KeyEncoder for CompactedKeyEncoder {
 
         // iterate all the fields of the row, and encode each field
         for (pos, field_getter) in self.field_getters.iter().enumerate() {
-            self.field_encoders
-                .get(pos)
-                .unwrap()
-                .write_value(
-                    &mut self.compacted_encoder,
-                    pos,
-                    &field_getter.get_field(row),
-                )?;
+            self.field_encoders.get(pos).unwrap().write_value(
+                &mut self.compacted_encoder,
+                pos,
+                &field_getter.get_field(row),
+            )?;
         }
 
         Ok(self.compacted_encoder.to_bytes())
