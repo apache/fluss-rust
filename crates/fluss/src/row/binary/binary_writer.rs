@@ -86,12 +86,12 @@ impl dyn ValueWriter {
     ) -> Result<Box<dyn ValueWriter>> {
         let value_writer =
             Self::create_not_null_value_writer(element_type, Some(binary_row_format))?;
-        if !element_type.is_nullable() {
-            Ok(value_writer)
-        } else {
+        if element_type.is_nullable() {
             Ok(Box::new(NullWriter {
                 delegate: value_writer,
             }))
+        } else {
+            Ok(value_writer)
         }
     }
 
