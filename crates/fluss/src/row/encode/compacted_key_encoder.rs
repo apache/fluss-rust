@@ -291,23 +291,37 @@ mod tests {
 
         let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
 
+        let mut expected: Vec<u8> = Vec::new();
+        // BOOLEAN: true
+        expected.extend(vec![0x01]);
+        // TINYINT: 2
+        expected.extend(vec![0x02]);
+        // SMALLINT: 10
+        expected.extend(vec![0x0A]);
+        // INT: 100
+        expected.extend(vec![0x00, 0x64]);
+        // BIGINT: -6101065172474983726
+        expected.extend(vec![
+            0xD2, 0x95, 0xFC, 0xD8, 0xCE, 0xB1, 0xAA, 0xAA, 0xAB, 0x01,
+        ]);
+        // FLOAT: 13.2
+        expected.extend(vec![0x33, 0x33, 0x53, 0x41]);
+        // DOUBLE: 15.21
+        expected.extend(vec![0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40]);
+        // BINARY(20): "1234567890".getBytes()
+        expected.extend(vec![
+            0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30,
+        ]);
+
+        // BYTES: "20".getBytes()
+        expected.extend(vec![0x02, 0x32, 0x30]);
+        // CHAR(2): "1"
+        expected.extend(vec![0x01, 0x31]);
+        // STRING: String: "hello"
+        expected.extend(vec![0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F]);
         assert_eq!(
             encoder.encode_key(&row).unwrap().iter().as_slice(),
-            [
-                0x01, // boolean: true
-                0x02, // byte: 2
-                0x0A, // short: 10
-                0x00, 0x64, // int: 100
-                0xD2, 0x95, 0xFC, 0xD8, 0xCE, 0xB1, 0xAA, 0xAA, 0xAB,
-                0x01, // long: -6101065172474983726
-                0x33, 0x33, 0x53, 0x41, // float: 13.2
-                0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40, // double: 15.21
-                0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
-                0x30, // byte[]: "1234567890".getBytes()
-                0x02, 0x32, 0x30, // bytes[]: "20".getBytes()
-                0x01, 0x31, // String: "1"
-                0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F, // String: "hello"
-            ]
+            expected.as_slice()
         );
     }
 }
