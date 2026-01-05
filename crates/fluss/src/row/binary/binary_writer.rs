@@ -139,7 +139,10 @@ impl ValueWriter for CharWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("CharWriter used to write non Datum::String(v) value: {:?}", value),
+            message: format!(
+                "CharWriter used to write non Datum::String(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -154,7 +157,10 @@ impl ValueWriter for StringWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("StringWriter used to write non Datum::String(v) value: {:?}", value),
+            message: format!(
+                "StringWriter used to write non Datum::String(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -169,7 +175,10 @@ impl ValueWriter for BoolWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("BoolWriter used to write non Datum::Bool(v) value: {:?}", value),
+            message: format!(
+                "BoolWriter used to write non Datum::Bool(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -188,7 +197,10 @@ impl ValueWriter for BinaryValueWriter {
                 Ok(())
             }
             _ => Err(IllegalArgument {
-                message: format!("BinaryValueWriter used to write non Datum::Blob(v) or Datum::BorrowedBlob(v) value: {:?}", value),
+                message: format!(
+                    "BinaryValueWriter used to write non Datum::Blob(v) or Datum::BorrowedBlob(v) value: {:?}",
+                    value
+                ),
             }),
         }
     }
@@ -208,7 +220,10 @@ impl ValueWriter for BytesWriter {
                 Ok(())
             }
             value => Err(IllegalArgument {
-                message: format!("BytesWriter used to write non Datum::Blob(v) or Datum::BorrowedBlob(v) value: {:?}", value),
+                message: format!(
+                    "BytesWriter used to write non Datum::Blob(v) or Datum::BorrowedBlob(v) value: {:?}",
+                    value
+                ),
             }),
         }
     }
@@ -226,7 +241,10 @@ impl ValueWriter for TinyIntWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("TinyIntWriter used to write non Datum::Int8(v) value: {:?}", value),
+            message: format!(
+                "TinyIntWriter used to write non Datum::Int8(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -241,7 +259,10 @@ impl ValueWriter for SmallIntWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("SmallIntWriter used to write non Datum::Int16(v) value: {:?}", value),
+            message: format!(
+                "SmallIntWriter used to write non Datum::Int16(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -256,7 +277,10 @@ impl ValueWriter for IntWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("IntWriter used to write non Datum::Int32(v) value: {:?}", value),
+            message: format!(
+                "IntWriter used to write non Datum::Int32(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -271,7 +295,10 @@ impl ValueWriter for LongWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("LongWriter used to write non Datum::Int64(v) value: {:?}", value),
+            message: format!(
+                "LongWriter used to write non Datum::Int64(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -286,7 +313,10 @@ impl ValueWriter for FloatWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("FloatWriter used to write non Datum::Float32(v) value: {:?}", value),
+            message: format!(
+                "FloatWriter used to write non Datum::Float32(v) value: {:?}",
+                value
+            ),
         })
     }
 }
@@ -301,7 +331,10 @@ impl ValueWriter for DoubleWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("DoubleWriter used to write non Datum::Float64(v) value: {:?}", value),
+            message: format!(
+                "DoubleWriter used to write non Datum::Float64(v) value: {:?}",
+                value
+            ),
         })
     }
 }
