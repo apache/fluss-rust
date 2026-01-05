@@ -24,8 +24,6 @@ use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 use crate::{impl_read_version_type, impl_write_version_type, proto};
-use std::sync::Arc;
-
 use crate::client::ReadyWriteBatch;
 use bytes::{Buf, BufMut};
 use prost::Message;
@@ -39,7 +37,7 @@ impl ProduceLogRequest {
         table_id: i64,
         ack: i16,
         max_request_timeout_ms: i32,
-        ready_batches: Vec<&Arc<ReadyWriteBatch>>,
+        ready_batches: &[&ReadyWriteBatch],
     ) -> FlussResult<Self> {
         let mut request = proto::ProduceLogRequest {
             table_id,

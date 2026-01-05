@@ -100,6 +100,12 @@ pub enum Error {
 
     #[snafu(
         visibility(pub(crate)),
+        display("Fluss hitting wakeup error {}.", message)
+    )]
+    WakeupError { message: String },
+
+    #[snafu(
+        visibility(pub(crate)),
         display("Fluss hitting leader not available error {}.", message)
     )]
     LeaderNotAvailable { message: String },

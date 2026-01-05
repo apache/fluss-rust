@@ -250,7 +250,7 @@ impl RecordAccumulator {
         cluster: Arc<Cluster>,
         nodes: &HashSet<ServerNode>,
         max_size: i32,
-    ) -> Result<HashMap<i32, Vec<Arc<ReadyWriteBatch>>>> {
+    ) -> Result<HashMap<i32, Vec<ReadyWriteBatch>>> {
         if nodes.is_empty() {
             return Ok(HashMap::new());
         }
@@ -272,7 +272,7 @@ impl RecordAccumulator {
         cluster: &Cluster,
         node: &ServerNode,
         max_size: i32,
-    ) -> Result<Vec<Arc<ReadyWriteBatch>>> {
+    ) -> Result<Vec<ReadyWriteBatch>> {
         let mut size = 0;
         let buckets = self.get_all_buckets_in_current_node(node, cluster);
         let mut ready = Vec::new();
@@ -323,10 +323,10 @@ impl RecordAccumulator {
 
                     // mark the batch as drained.
                     batch.drained(current_time_ms());
-                    ready.push(Arc::new(ReadyWriteBatch {
+                    ready.push(ReadyWriteBatch {
                         table_bucket,
                         write_batch: batch,
-                    }));
+                    });
                 }
             }
             if current_index == start {
@@ -338,6 +338,29 @@ impl RecordAccumulator {
 
     pub fn remove_incomplete_batches(&self, batch_id: i64) {
         self.incomplete_batches.write().remove(&batch_id);
+    }
+
+    pub async fn re_enqueue(&self, ready_write_batch: ReadyWriteBatch) {
+        ready_write_batch.write_batch.re_enqueued();
+        let table_path = ready_write_batch.write_batch.table_path().clone();
+        let bucket_id = ready_write_batch.table_bucket.bucket_id();
+        let table_id = u64::try_from(ready_write_batch.table_bucket.table_id()).unwrap_or(0);
+        let mut binding = self
+            .write_batches
+            .entry(table_path)
+            .or_insert_with(|| BucketAndWriteBatches {
+                table_id,
+                is_partitioned_table: false,
+                partition_id: None,
+                batches: Default::default(),
+            });
+        let bucket_and_batches = binding.value_mut();
+        let dq = bucket_and_batches
+            .batches
+            .entry(bucket_id)
+            .or_insert_with(|| Mutex::new(VecDeque::new()));
+        let mut dq_guard = dq.lock().await;
+        dq_guard.push_front(ready_write_batch.write_batch);
     }
 
     fn get_all_buckets_in_current_node(
@@ -379,6 +402,93 @@ impl RecordAccumulator {
 pub struct ReadyWriteBatch {
     pub table_bucket: TableBucket,
     pub write_batch: WriteBatch,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
+    use crate::metadata::{DataField, DataTypes, Schema, TableDescriptor, TableInfo, TablePath};
+    use crate::row::{Datum, GenericRow};
+    use std::sync::Arc;
+
+    fn build_table_info(table_path: TablePath, table_id: i64) -> TableInfo {
+        let row_type = DataTypes::row(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let mut schema_builder = Schema::builder().with_row_type(&row_type);
+        let schema = schema_builder.build().expect("schema build");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![])
+            .build()
+            .expect("descriptor build");
+        TableInfo::of(table_path, table_id, 1, table_descriptor, 0, 0)
+    }
+
+    fn build_cluster(table_path: &TablePath, table_id: i64) -> Cluster {
+        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
+        let table_bucket = TableBucket::new(table_id, 0);
+        let bucket_location =
+            BucketLocation::new(table_bucket.clone(), Some(server.clone()), table_path.clone());
+
+        let mut servers = HashMap::new();
+        servers.insert(server.id(), server);
+
+        let mut locations_by_path = HashMap::new();
+        locations_by_path.insert(table_path.clone(), vec![bucket_location.clone()]);
+
+        let mut locations_by_bucket = HashMap::new();
+        locations_by_bucket.insert(table_bucket, bucket_location);
+
+        let mut table_id_by_path = HashMap::new();
+        table_id_by_path.insert(table_path.clone(), table_id);
+
+        let mut table_info_by_path = HashMap::new();
+        table_info_by_path.insert(table_path.clone(), build_table_info(table_path.clone(), table_id));
+
+        Cluster::new(
+            None,
+            servers,
+            locations_by_path,
+            locations_by_bucket,
+            table_id_by_path,
+            table_info_by_path,
+        )
+    }
+
+    #[tokio::test]
+    async fn re_enqueue_increments_attempts() -> Result<()> {
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config);
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = Arc::new(build_cluster(table_path.as_ref(), 1));
+        let record = WriteRecord::new(
+            table_path.clone(),
+            GenericRow {
+                values: vec![Datum::Int32(1)],
+            },
+        );
+
+        accumulator.append(&record, 0, &cluster, false).await?;
+
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024).await?;
+        let mut drained = batches.remove(&1).expect("drained batches");
+        let batch = drained.pop().expect("batch");
+        assert_eq!(batch.write_batch.attempts(), 0);
+
+        accumulator.re_enqueue(batch).await;
+
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024).await?;
+        let mut drained = batches.remove(&1).expect("drained batches");
+        let batch = drained.pop().expect("batch");
+        assert_eq!(batch.write_batch.attempts(), 1);
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]

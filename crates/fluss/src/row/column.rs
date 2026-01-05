@@ -166,3 +166,67 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{
+        BinaryArray, BooleanArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array,
+        Int16Array, Int32Array, Int64Array, StringArray,
+    };
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    #[test]
+    fn columnar_row_reads_values() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Boolean, false),
+            Field::new("i8", DataType::Int8, false),
+            Field::new("i16", DataType::Int16, false),
+            Field::new("i32", DataType::Int32, false),
+            Field::new("i64", DataType::Int64, false),
+            Field::new("f32", DataType::Float32, false),
+            Field::new("f64", DataType::Float64, false),
+            Field::new("s", DataType::Utf8, false),
+            Field::new("bin", DataType::Binary, false),
+            Field::new("char", DataType::FixedSizeBinary(2), false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(BooleanArray::from(vec![true])),
+                Arc::new(Int8Array::from(vec![1])),
+                Arc::new(Int16Array::from(vec![2])),
+                Arc::new(Int32Array::from(vec![3])),
+                Arc::new(Int64Array::from(vec![4])),
+                Arc::new(Float32Array::from(vec![1.25])),
+                Arc::new(Float64Array::from(vec![2.5])),
+                Arc::new(StringArray::from(vec!["hello"])),
+                Arc::new(BinaryArray::from(vec![b"data".as_slice()])),
+                Arc::new(
+                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                        vec![Some(b"ab".as_slice())].into_iter(),
+                        2,
+                    )
+                    .expect("fixed array"),
+                ),
+            ],
+        )
+        .expect("record batch");
+
+        let mut row = ColumnarRow::new(Arc::new(batch));
+        assert_eq!(row.get_field_count(), 10);
+        assert_eq!(row.get_boolean(0), true);
+        assert_eq!(row.get_byte(1), 1);
+        assert_eq!(row.get_short(2), 2);
+        assert_eq!(row.get_int(3), 3);
+        assert_eq!(row.get_long(4), 4);
+        assert_eq!(row.get_float(5), 1.25);
+        assert_eq!(row.get_double(6), 2.5);
+        assert_eq!(row.get_string(7), "hello");
+        assert_eq!(row.get_bytes(8), b"data");
+        assert_eq!(row.get_char(9, 2), "ab");
+        row.set_row_id(0);
+        assert_eq!(row.get_row_id(), 0);
+    }
+}

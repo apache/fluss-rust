@@ -17,7 +17,7 @@
 
 use crate::{impl_read_version_type, impl_write_version_type, proto};
 
-use crate::error::Error;
+use crate::error::{ApiError, Error, FlussError};
 use crate::error::Result as FlussResult;
 use crate::proto::ListOffsetsResponse;
 use crate::rpc::frame::ReadError;
@@ -108,22 +108,55 @@ impl ListOffsetsResponse {
         self.buckets_resp
             .iter()
             .map(|resp| {
-                if resp.error_code.is_some() {
-                    // todo: consider use another suitable error
-                    Err(Error::UnexpectedError {
+                if let Some(error_code) = resp.error_code {
+                    if error_code != FlussError::None.code() {
+                        let error = FlussError::for_code(error_code);
+                        let message = resp
+                            .error_message
+                            .clone()
+                            .unwrap_or_else(|| error.message().to_string());
+                        return Err(Error::FlussAPIError {
+                            api_error: ApiError {
+                                code: error_code,
+                                message,
+                            },
+                        });
+                    }
+                }
+
+                // if no error msg, offset must exists
+                resp.offset
+                    .map(|offset| (resp.bucket_id, offset))
+                    .ok_or_else(|| Error::UnexpectedError {
                         message: format!(
-                            "Missing offset, error message: {}",
-                            resp.error_message
-                                .as_deref()
-                                .unwrap_or("unknown server exception")
+                            "Missing offset for bucket {} without error code.",
+                            resp.bucket_id
                         ),
                         source: None,
                     })
-                } else {
-                    // if no error msg, offset must exists
-                    Ok((resp.bucket_id, resp.offset.unwrap()))
-                }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::{ListOffsetsResponse, PbListOffsetsRespForBucket};
+
+    #[test]
+    fn offsets_returns_api_error_on_error_code() {
+        let response = ListOffsetsResponse {
+            buckets_resp: vec![PbListOffsetsRespForBucket {
+                bucket_id: 1,
+                error_code: Some(FlussError::TableNotExist.code()),
+                error_message: Some("missing".to_string()),
+                offset: None,
+            }],
+            ..Default::default()
+        };
+
+        let result = response.offsets();
+        assert!(matches!(result, Err(Error::FlussAPIError { .. })));
     }
 }

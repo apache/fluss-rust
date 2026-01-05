@@ -181,3 +181,65 @@ impl IntoIterator for ScanRecords {
             .into_iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::arrow::array::{Int32Array, RecordBatch};
+    use ::arrow::datatypes::{DataType, Field, Schema};
+    use std::sync::Arc;
+
+    fn make_row(values: Vec<i32>, row_id: usize) -> ColumnarRow {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(values))])
+            .expect("record batch");
+        ColumnarRow::new_with_row_id(Arc::new(batch), row_id)
+    }
+
+    #[test]
+    fn change_type_round_trip() {
+        let cases = [
+            (ChangeType::AppendOnly, "+A", 0),
+            (ChangeType::Insert, "+I", 1),
+            (ChangeType::UpdateBefore, "-U", 2),
+            (ChangeType::UpdateAfter, "+U", 3),
+            (ChangeType::Delete, "-D", 4),
+        ];
+
+        for (change_type, short, byte) in cases {
+            assert_eq!(change_type.short_string(), short);
+            assert_eq!(change_type.to_byte_value(), byte);
+            assert_eq!(ChangeType::from_byte_value(byte).unwrap(), change_type);
+        }
+
+        let err = ChangeType::from_byte_value(9).unwrap_err();
+        assert!(err.contains("Unsupported byte value"));
+    }
+
+    #[test]
+    fn scan_records_counts_and_iterates() {
+        let bucket0 = TableBucket::new(1, 0);
+        let bucket1 = TableBucket::new(1, 1);
+        let record0 = ScanRecord::new(make_row(vec![10, 11], 0), 5, 7, ChangeType::Insert);
+        let record1 = ScanRecord::new(make_row(vec![10, 11], 1), 6, 8, ChangeType::Delete);
+
+        let mut records = HashMap::new();
+        records.insert(bucket0.clone(), vec![record0.clone(), record1.clone()]);
+
+        let scan_records = ScanRecords::new(records);
+        assert_eq!(scan_records.records(&bucket0).len(), 2);
+        assert!(scan_records.records(&bucket1).is_empty());
+        assert_eq!(scan_records.count(), 2);
+
+        let collected: Vec<_> = scan_records.into_iter().collect();
+        assert_eq!(collected.len(), 2);
+    }
+
+    #[test]
+    fn scan_record_default_values() {
+        let record = ScanRecord::new_default(make_row(vec![1], 0));
+        assert_eq!(record.offset(), -1);
+        assert_eq!(record.timestamp(), -1);
+        assert_eq!(record.change_type(), &ChangeType::Insert);
+    }
+}

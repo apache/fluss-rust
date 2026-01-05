@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::TableBucket;
 use crate::record::{
     LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
@@ -32,6 +32,7 @@ pub trait CompletedFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>>;
     fn is_consumed(&self) -> bool;
+    fn records_read(&self) -> usize;
     fn drain(&mut self);
     fn size_in_bytes(&self) -> usize;
     fn high_watermark(&self) -> i64;
@@ -54,6 +55,7 @@ pub struct LogFetchBuffer {
     next_in_line_fetch: Mutex<Option<Box<dyn CompletedFetch>>>,
     not_empty_notify: Notify,
     woken_up: Arc<AtomicBool>,
+    error: Mutex<Option<Error>>,
 }
 
 impl LogFetchBuffer {
@@ -64,6 +66,7 @@ impl LogFetchBuffer {
             next_in_line_fetch: Mutex::new(None),
             not_empty_notify: Notify::new(),
             woken_up: Arc::new(AtomicBool::new(false)),
+            error: Mutex::new(None),
         }
     }
 
@@ -72,26 +75,32 @@ impl LogFetchBuffer {
         self.completed_fetches.lock().is_empty()
     }
 
-    /// Wait for the buffer to become non-empty, with timeout
-    /// Returns true if data became available, false if timeout
-    pub async fn await_not_empty(&self, timeout: Duration) -> bool {
+    /// Wait for the buffer to become non-empty, with timeout.
+    /// Returns true if data became available, false if timeout.
+    pub async fn await_not_empty(&self, timeout: Duration) -> Result<bool> {
         let deadline = std::time::Instant::now() + timeout;
 
         loop {
+            if let Some(error) = self.take_error() {
+                return Err(error);
+            }
+
             // Check if buffer is not empty
             if !self.is_empty() {
-                return true;
+                return Ok(true);
             }
 
             // Check if woken up
             if self.woken_up.swap(false, Ordering::Acquire) {
-                return true;
+                return Err(Error::WakeupError {
+                    message: "The await is wakeup.".to_string(),
+                });
             }
 
             // Check if timeout
             let now = std::time::Instant::now();
             if now >= deadline {
-                return false;
+                return Ok(false);
             }
 
             // Wait for notification with remaining time
@@ -99,7 +108,7 @@ impl LogFetchBuffer {
             let notified = self.not_empty_notify.notified();
             tokio::select! {
                 _ = tokio::time::sleep(remaining) => {
-                    return false; // Timeout
+                    return Ok(false); // Timeout
                 }
                 _ = notified => {
                     // Got notification, check again
@@ -114,6 +123,18 @@ impl LogFetchBuffer {
     pub fn wakeup(&self) {
         self.woken_up.store(true, Ordering::Release);
         self.not_empty_notify.notify_waiters();
+    }
+
+    pub(crate) fn set_error(&self, error: Error) {
+        let mut guard = self.error.lock();
+        if guard.is_none() {
+            *guard = Some(error);
+        }
+        self.not_empty_notify.notify_waiters();
+    }
+
+    pub(crate) fn take_error(&self) -> Option<Error> {
+        self.error.lock().take()
     }
 
     /// Add a pending fetch to the buffer
@@ -133,6 +154,7 @@ impl LogFetchBuffer {
         // holding both locks simultaneously.
         let mut completed_to_push: Vec<Box<dyn CompletedFetch>> = Vec::new();
         let mut has_completed = false;
+        let mut pending_error: Option<Error> = None;
         {
             let mut pending_map = self.pending_fetches.lock();
             if let Some(pendings) = pending_map.get_mut(table_bucket) {
@@ -145,8 +167,9 @@ impl LogFetchBuffer {
                                 has_completed = true;
                             }
                             Err(e) => {
-                                // todo: handle exception?
-                                log::error!("Error when completing: {e}");
+                                pending_error = Some(e);
+                                has_completed = true;
+                                break;
                             }
                         }
                     } else {
@@ -164,6 +187,11 @@ impl LogFetchBuffer {
             for completed in completed_to_push {
                 completed_queue.push_back(completed);
             }
+        }
+
+        if let Some(error) = pending_error {
+            self.set_error(error);
+            return;
         }
 
         if has_completed {
@@ -269,6 +297,9 @@ pub struct DefaultCompletedFetch {
     records_read: usize,
     current_record_iterator: Option<LogRecordIterator>,
     current_record_batch: Option<LogRecordBatch>,
+    last_record: Option<ScanRecord>,
+    cached_record_error: Option<String>,
+    corrupt_last_record: bool,
 }
 
 impl DefaultCompletedFetch {
@@ -292,6 +323,9 @@ impl DefaultCompletedFetch {
             records_read: 0,
             current_record_iterator: None,
             current_record_batch: None,
+            last_record: None,
+            cached_record_error: None,
+            corrupt_last_record: false,
         })
     }
 
@@ -318,6 +352,20 @@ impl DefaultCompletedFetch {
             }
         }
     }
+
+    fn fetch_error(&self) -> Error {
+        let mut message = format!(
+            "Received exception when fetching the next record from {table_bucket}. If needed, please back to past the record to continue scanning.",
+            table_bucket = self.table_bucket
+        );
+        if let Some(cause) = self.cached_record_error.as_deref() {
+            message.push_str(&format!(" Cause: {cause}"));
+        }
+        Error::UnexpectedError {
+            message,
+            source: None,
+        }
+    }
 }
 
 impl CompletedFetch for DefaultCompletedFetch {
@@ -326,7 +374,10 @@ impl CompletedFetch for DefaultCompletedFetch {
     }
 
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>> {
-        // todo: handle corrupt_last_record
+        if self.corrupt_last_record {
+            return Err(self.fetch_error());
+        }
+
         if self.consumed {
             return Ok(Vec::new());
         }
@@ -334,13 +385,34 @@ impl CompletedFetch for DefaultCompletedFetch {
         let mut scan_records = Vec::new();
 
         for _ in 0..max_records {
-            if let Some(record) = self.next_fetched_record()? {
-                self.next_fetch_offset = record.offset() + 1;
-                self.records_read += 1;
-                scan_records.push(record);
-            } else {
-                break;
+            if self.cached_record_error.is_none() {
+                self.corrupt_last_record = true;
+                match self.next_fetched_record() {
+                    Ok(Some(record)) => {
+                        self.corrupt_last_record = false;
+                        self.last_record = Some(record);
+                    }
+                    Ok(None) => {
+                        self.corrupt_last_record = false;
+                        self.last_record = None;
+                    }
+                    Err(e) => {
+                        self.cached_record_error = Some(e.to_string());
+                    }
+                }
             }
+
+            let Some(record) = self.last_record.take() else {
+                break;
+            };
+
+            self.next_fetch_offset = record.offset() + 1;
+            self.records_read += 1;
+            scan_records.push(record);
+        }
+
+        if self.cached_record_error.is_some() && scan_records.is_empty() {
+            return Err(self.fetch_error());
         }
 
         Ok(scan_records)
@@ -350,8 +422,15 @@ impl CompletedFetch for DefaultCompletedFetch {
         self.consumed
     }
 
+    fn records_read(&self) -> usize {
+        self.records_read
+    }
+
     fn drain(&mut self) {
         self.consumed = true;
+        self.cached_record_error = None;
+        self.corrupt_last_record = false;
+        self.last_record = None;
     }
 
     fn size_in_bytes(&self) -> usize {
@@ -372,5 +451,108 @@ impl CompletedFetch for DefaultCompletedFetch {
 
     fn next_fetch_offset(&self) -> i64 {
         self.next_fetch_offset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::WriteRecord;
+    use crate::compression::{
+        ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+    };
+    use crate::metadata::{DataField, DataTypes, TablePath};
+    use crate::record::{MemoryLogRecordsArrowBuilder, to_arrow_schema};
+    use crate::row::GenericRow;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct ErrorPendingFetch {
+        table_bucket: TableBucket,
+    }
+
+    impl PendingFetch for ErrorPendingFetch {
+        fn table_bucket(&self) -> &TableBucket {
+            &self.table_bucket
+        }
+
+        fn is_completed(&self) -> bool {
+            true
+        }
+
+        fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
+            Err(Error::UnexpectedError {
+                message: "pending fetch failure".to_string(),
+                source: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn await_not_empty_returns_wakeup_error() {
+        let buffer = LogFetchBuffer::new();
+        buffer.wakeup();
+
+        let result = buffer.await_not_empty(Duration::from_millis(10)).await;
+        assert!(matches!(result, Err(Error::WakeupError { .. })));
+    }
+
+    #[tokio::test]
+    async fn await_not_empty_returns_pending_error() {
+        let buffer = LogFetchBuffer::new();
+        let table_bucket = TableBucket::new(1, 0);
+        buffer.pend(Box::new(ErrorPendingFetch {
+            table_bucket: table_bucket.clone(),
+        }));
+        buffer.try_complete(&table_bucket);
+
+        let result = buffer.await_not_empty(Duration::from_millis(10)).await;
+        assert!(matches!(result, Err(Error::UnexpectedError { .. })));
+    }
+
+    #[test]
+    fn default_completed_fetch_reads_records() -> Result<()> {
+        let row_type = DataTypes::row(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            1,
+            &row_type,
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+        );
+
+        let mut row = GenericRow::new();
+        row.set_field(0, 1_i32);
+        row.set_field(1, "alice");
+        let record = WriteRecord::new(table_path, row);
+        builder.append(&record)?;
+
+        let data = builder.build()?;
+        let log_records = LogRecordsBatches::new(data.clone());
+        let read_context = ReadContext::new(to_arrow_schema(&row_type), false);
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            log_records,
+            data.len(),
+            read_context,
+            0,
+            0,
+        )?;
+
+        let records = fetch.fetch_records(10)?;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].offset(), 0);
+
+        let empty = fetch.fetch_records(10)?;
+        assert!(empty.is_empty());
+
+        Ok(())
     }
 }

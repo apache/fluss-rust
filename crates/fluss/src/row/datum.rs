@@ -432,3 +432,69 @@ impl Date {
         date.day()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Int32Builder, StringBuilder};
+
+    #[test]
+    fn datum_accessors_and_conversions() {
+        let datum = Datum::String("value");
+        assert_eq!(datum.as_str(), "value");
+        assert!(!datum.is_null());
+
+        let blob = Blob::from(vec![1, 2, 3]);
+        let datum = Datum::Blob(blob);
+        assert_eq!(datum.as_blob(), &[1, 2, 3]);
+
+        assert!(Datum::Null.is_null());
+
+        let datum = Datum::Int32(42);
+        let value: i32 = (&datum).try_into().unwrap();
+        assert_eq!(value, 42);
+        let value: std::result::Result<i16, _> = (&datum).try_into();
+        assert!(value.is_err());
+    }
+
+    #[test]
+    fn datum_append_to_builder() {
+        let mut builder = Int32Builder::new();
+        Datum::Null.append_to(&mut builder).unwrap();
+        Datum::Int32(5).append_to(&mut builder).unwrap();
+        let array = builder.finish();
+        assert!(array.is_null(0));
+        assert_eq!(array.value(1), 5);
+
+        let mut builder = StringBuilder::new();
+        let err = Datum::Int32(1).append_to(&mut builder).unwrap_err();
+        assert!(matches!(err, crate::error::Error::RowConvertError { .. }));
+
+        let mut builder = Int32Builder::new();
+        let err = Datum::Date(Date::new(0))
+            .append_to(&mut builder)
+            .unwrap_err();
+        assert!(matches!(err, crate::error::Error::RowConvertError { .. }));
+    }
+
+    #[test]
+    #[should_panic]
+    fn datum_as_str_panics_on_non_string() {
+        let _ = Datum::Int32(1).as_str();
+    }
+
+    #[test]
+    #[should_panic]
+    fn datum_as_blob_panics_on_non_blob() {
+        let _ = Datum::Int16(1).as_blob();
+    }
+
+    #[test]
+    fn date_components() {
+        let date = Date::new(0);
+        assert_eq!(date.get_inner(), 0);
+        assert_eq!(date.year(), 1970);
+        assert_eq!(date.month(), 1);
+        assert_eq!(date.day(), 1);
+    }
+}

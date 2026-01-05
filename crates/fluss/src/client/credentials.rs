@@ -156,3 +156,55 @@ impl CredentialsCache {
         Ok(props)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::metadata::Metadata;
+    use crate::cluster::Cluster;
+
+    #[test]
+    fn convert_hadoop_key_to_opendal_maps_known_keys() {
+        let (key, invert) = convert_hadoop_key_to_opendal("fs.s3a.endpoint").expect("key");
+        assert_eq!(key, "endpoint");
+        assert!(!invert);
+
+        let (key, invert) =
+            convert_hadoop_key_to_opendal("fs.s3a.path.style.access").expect("key");
+        assert_eq!(key, "enable_virtual_host_style");
+        assert!(invert);
+
+        assert!(convert_hadoop_key_to_opendal("fs.s3a.connection.ssl.enabled").is_none());
+        assert!(convert_hadoop_key_to_opendal("unknown.key").is_none());
+    }
+
+    #[tokio::test]
+    async fn credentials_cache_returns_cached_props() -> Result<()> {
+        let cached = CachedToken {
+            access_key_id: "ak".to_string(),
+            secret_access_key: "sk".to_string(),
+            security_token: Some("token".to_string()),
+            addition_infos: HashMap::from([(
+                "fs.s3a.path.style.access".to_string(),
+                "true".to_string(),
+            )]),
+            cached_at: Instant::now(),
+        };
+
+        let cache = CredentialsCache {
+            inner: RwLock::new(Some(cached)),
+            rpc_client: Arc::new(RpcClient::new()),
+            metadata: Arc::new(Metadata::new_for_test(Arc::new(Cluster::default()))),
+        };
+
+        let props = cache.get_or_refresh().await?;
+        assert_eq!(props.get("access_key_id"), Some(&"ak".to_string()));
+        assert_eq!(props.get("secret_access_key"), Some(&"sk".to_string()));
+        assert_eq!(props.get("security_token"), Some(&"token".to_string()));
+        assert_eq!(
+            props.get("enable_virtual_host_style"),
+            Some(&"false".to_string())
+        );
+        Ok(())
+    }
+}
