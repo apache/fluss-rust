@@ -77,6 +77,11 @@ impl FlussConnection {
     pub async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>> {
         self.metadata.update_table_metadata(table_path).await?;
         let table_info = self.metadata.get_cluster().get_table(table_path).clone();
+        if table_info.is_partitioned() {
+            return Err(crate::error::Error::UnsupportedOperation {
+                message: "Partitioned tables are not supported".to_string(),
+            });
+        }
         Ok(FlussTable::new(self, self.metadata.clone(), table_info))
     }
 }
