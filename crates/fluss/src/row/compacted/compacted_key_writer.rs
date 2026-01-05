@@ -27,7 +27,7 @@ use delegate::delegate;
 
 /// A wrapping of [`CompactedRowWriter`] used to encode key columns.
 /// The encoding is the same as [`CompactedRowWriter`], but is without header of null bits to
-//  represent whether the field value is null or not since the key columns must be not null.
+/// represent whether the field value is null or not since the key columns must be not null.
 pub struct CompactedKeyWriter {
     delegate: CompactedRowWriter,
 }
