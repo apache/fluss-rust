@@ -15,6 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::RecordBatch;
+use arrow_schema::SchemaRef;
+use log::{debug, error, warn};
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::slice::from_ref;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
+use tempfile::TempDir;
+
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
@@ -30,14 +41,6 @@ use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTabl
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::{RpcClient, message};
 use crate::util::FairBucketStatusMap;
-use arrow_schema::SchemaRef;
-use log::{debug, error, warn};
-use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet};
-use std::slice::from_ref;
-use std::sync::Arc;
-use std::time::Duration;
-use tempfile::TempDir;
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 #[allow(dead_code)]
@@ -143,12 +146,20 @@ impl<'a> TableScan<'a> {
     }
 }
 
+/// Poll mode for LogScanner - ensures poll() and poll_batches() are not mixed
+const POLL_MODE_UNSET: u8 = 0;
+const POLL_MODE_RECORDS: u8 = 1;
+const POLL_MODE_BATCHES: u8 = 2;
+
 pub struct LogScanner {
     table_path: TablePath,
     table_id: i64,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
+    /// Tracks whether scanner is in records mode (poll) or batches mode (poll_batches).
+    /// Once set, cannot be changed to prevent data loss from mixing polling methods.
+    poll_mode: AtomicU8,
 }
 
 impl LogScanner {
@@ -171,10 +182,32 @@ impl LogScanner {
                 log_scanner_status.clone(),
                 projected_fields,
             )?,
+            poll_mode: AtomicU8::new(POLL_MODE_UNSET),
         })
     }
 
     pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
+        // Check and set poll mode to prevent mixing with poll_batches
+        match self.poll_mode.compare_exchange(
+            POLL_MODE_UNSET,
+            POLL_MODE_RECORDS,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => { /* First call, set to records mode */ }
+            Err(POLL_MODE_RECORDS) => { /* Already in records mode, ok */ }
+            Err(POLL_MODE_BATCHES) => {
+                return Err(Error::IllegalState {
+                    message: "Cannot call poll() after poll_batches(). Mixing polling methods causes data loss. Create a new scanner to switch methods.".to_string(),
+                });
+            }
+            Err(invalid) => {
+                return Err(Error::IllegalState {
+                    message: format!("Invalid poll mode state: {}", invalid),
+                });
+            }
+        }
+
         let start = std::time::Instant::now();
         let deadline = start + timeout;
 
@@ -256,6 +289,77 @@ impl LogScanner {
 
         // Collect completed fetches from buffer
         self.log_fetcher.collect_fetches()
+    }
+
+    /// Poll for Arrow RecordBatches directly.
+    ///
+    /// More efficient than `poll()` when you need batch-level access for analytics
+    /// - This method does not expose per-record offsets or timestamps.
+    ///   Use `poll()` if you need that metadata.
+    ///
+    ///   Do not mix `poll()` and `poll_batches()` on the same scanner.
+    ///   Calling `poll_batches()` after `poll()` (or vice versa) will return an error
+    ///   to prevent data loss. Create a new scanner if you need to switch methods.
+    /// 
+    pub async fn poll_batches(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+        // Check and set poll mode to prevent mixing with poll
+        match self.poll_mode.compare_exchange(
+            POLL_MODE_UNSET,
+            POLL_MODE_BATCHES,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => { /* First call, set to batches mode */ }
+            Err(POLL_MODE_BATCHES) => { /* Already in batches mode, ok */ }
+            Err(POLL_MODE_RECORDS) => {
+                return Err(Error::IllegalState {
+                    message: "Cannot call poll_batches() after poll(). Mixing polling methods causes data loss. Create a new scanner to switch methods.".to_string(),
+                });
+            }
+            Err(invalid) => {
+                return Err(Error::IllegalState {
+                    message: format!("Invalid poll mode state: {}", invalid),
+                });
+            }
+        }
+
+        let start = std::time::Instant::now();
+        let deadline = start + timeout;
+
+        loop {
+            let batches = self.poll_for_batches().await?;
+
+            if !batches.is_empty() {
+                self.log_fetcher.send_fetches().await?;
+                return Ok(batches);
+            }
+
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Ok(Vec::new());
+            }
+
+            let remaining = deadline - now;
+            let has_data = self
+                .log_fetcher
+                .log_fetch_buffer
+                .await_not_empty(remaining)
+                .await;
+
+            if !has_data {
+                return Ok(Vec::new());
+            }
+        }
+    }
+
+    async fn poll_for_batches(&self) -> Result<Vec<RecordBatch>> {
+        let result = self.log_fetcher.collect_batches()?;
+        if !result.is_empty() {
+            return Ok(result);
+        }
+
+        self.log_fetcher.send_fetches().await?;
+        self.log_fetcher.collect_batches()
     }
 }
 
@@ -713,6 +817,134 @@ impl LogFetcher {
             // These records aren't next in line, ignore them
             warn!(
                 "Ignoring fetched records for {table_bucket:?} at offset {fetch_offset} since the current offset is {current_offset}"
+            );
+            next_in_line_fetch.drain();
+            Ok(Vec::new())
+        }
+    }
+
+    /// Collect completed fetches as RecordBatches
+    fn collect_batches(&self) -> Result<Vec<RecordBatch>> {
+        // Limit memory usage with both batch count and byte size constraints.
+        // Max 100 batches per poll, but also check total bytes (soft cap ~64MB).
+        const MAX_BATCHES: usize = 100;
+        const MAX_BYTES: usize = 64 * 1024 * 1024; // 64MB soft cap
+        let mut result: Vec<RecordBatch> = Vec::new();
+        let mut batches_remaining = MAX_BATCHES;
+        let mut bytes_consumed: usize = 0;
+
+        while batches_remaining > 0 && bytes_consumed < MAX_BYTES {
+            let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
+
+            match next_in_line {
+                None => {
+                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                        if !completed_fetch.is_initialized() {
+                            let size_in_bytes = completed_fetch.size_in_bytes();
+                            match self.initialize_fetch(completed_fetch) {
+                                Ok(initialized) => {
+                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    if result.is_empty() && size_in_bytes == 0 {
+                                        continue;
+                                    }
+                                    return Err(e);
+                                }
+                            }
+                        } else {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(completed_fetch));
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                Some(ref f) if f.is_consumed() => {
+                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                        if !completed_fetch.is_initialized() {
+                            let size_in_bytes = completed_fetch.size_in_bytes();
+                            match self.initialize_fetch(completed_fetch) {
+                                Ok(initialized) => {
+                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    if result.is_empty() && size_in_bytes == 0 {
+                                        continue;
+                                    }
+                                    return Err(e);
+                                }
+                            }
+                        } else {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(completed_fetch));
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                Some(mut next_fetch) => {
+                    let batches =
+                        self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
+                    let batch_count = batches.len();
+
+                    if !batches.is_empty() {
+                        // Track bytes consumed (soft cap - may exceed by one fetch)
+                        let batch_bytes: usize =
+                            batches.iter().map(|b| b.get_array_memory_size()).sum();
+                        bytes_consumed += batch_bytes;
+
+                        result.extend(batches);
+                        batches_remaining = batches_remaining.saturating_sub(batch_count);
+                    }
+
+                    if !next_fetch.is_consumed() {
+                        self.log_fetch_buffer
+                            .set_next_in_line_fetch(Some(next_fetch));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn fetch_batches_from_fetch(
+        &self,
+        next_in_line_fetch: &mut Box<dyn CompletedFetch>,
+        max_batches: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let table_bucket = next_in_line_fetch.table_bucket().clone();
+        let current_offset = self.log_scanner_status.get_bucket_offset(&table_bucket);
+
+        if current_offset.is_none() {
+            warn!(
+                "Ignoring fetched batches for {:?} since bucket was unsubscribed",
+                table_bucket
+            );
+            next_in_line_fetch.drain();
+            return Ok(Vec::new());
+        }
+
+        let current_offset = current_offset.unwrap();
+        let fetch_offset = next_in_line_fetch.next_fetch_offset();
+
+        if fetch_offset == current_offset {
+            let batches = next_in_line_fetch.fetch_batches(max_batches)?;
+            let next_fetch_offset = next_in_line_fetch.next_fetch_offset();
+
+            if next_fetch_offset > current_offset {
+                self.log_scanner_status
+                    .update_offset(&table_bucket, next_fetch_offset);
+            }
+
+            Ok(batches)
+        } else {
+            warn!(
+                "Ignoring fetched batches for {:?} at offset {}, expected {}",
+                table_bucket, fetch_offset, current_offset
             );
             next_in_line_fetch.drain();
             Ok(Vec::new())

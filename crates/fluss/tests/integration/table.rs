@@ -469,4 +469,336 @@ mod table_test {
         records.sort_by_key(|r| r.offset());
         records
     }
+
+    #[tokio::test]
+    async fn test_poll_batches_basic() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_poll_batches_basic".to_string());
+
+        // Create table
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .expect("Failed to build schema");
+
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &descriptor).await;
+
+        // Wait for table to be ready
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Write data
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer();
+
+        let batch = record_batch!(
+            ("id", Int32, [1, 2, 3, 4, 5]),
+            ("name", Utf8, ["a", "b", "c", "d", "e"])
+        )
+        .unwrap();
+        writer
+            .append_arrow_batch(batch)
+            .await
+            .expect("Failed to append");
+        writer.flush().await.expect("Failed to flush");
+
+        // Scan using poll_batches
+        let scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create scanner");
+        scanner.subscribe(0, 0).await.expect("Failed to subscribe");
+
+        let batches = scanner
+            .poll_batches(Duration::from_secs(10))
+            .await
+            .expect("Failed to poll batches");
+
+        // Verify - just Vec<RecordBatch>, no wrappers
+        assert!(!batches.is_empty());
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+
+        // Verify it's real Arrow data
+        let batch = &batches[0];
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 5);
+
+        // Verify actual data values
+        use arrow::array::{Int32Array, StringArray};
+        let id_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("Column 0 should be Int32Array");
+        let name_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Column 1 should be StringArray");
+
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(id_col.value(4), 5);
+        assert_eq!(name_col.value(0), "a");
+        assert_eq!(name_col.value(4), "e");
+    }
+
+    #[tokio::test]
+    async fn test_poll_batches_empty() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_poll_batches_empty".to_string());
+
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .build()
+            .expect("Failed to build schema");
+
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &descriptor).await;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create scanner");
+        scanner.subscribe(0, 0).await.expect("Failed to subscribe");
+
+        let batches = scanner
+            .poll_batches(Duration::from_millis(500))
+            .await
+            .expect("Failed to poll batches");
+
+        assert!(batches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_poll_batches_with_projection() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new(
+            "fluss".to_string(),
+            "test_poll_batches_projection".to_string(),
+        );
+
+        // Create table with multiple columns
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .column("value", DataTypes::int())
+            .build()
+            .expect("Failed to build schema");
+
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &descriptor).await;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Write data
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer();
+
+        let batch = record_batch!(
+            ("id", Int32, [1, 2, 3]),
+            ("name", Utf8, ["a", "b", "c"]),
+            ("value", Int32, [10, 20, 30])
+        )
+        .unwrap();
+        writer
+            .append_arrow_batch(batch)
+            .await
+            .expect("Failed to append");
+        writer.flush().await.expect("Failed to flush");
+
+        // Scan with projection - only id and value
+        let scanner = table
+            .new_scan()
+            .project_by_name(&["id", "value"])
+            .expect("Failed to set projection")
+            .create_log_scanner()
+            .expect("Failed to create scanner");
+
+        scanner.subscribe(0, 0).await.expect("Failed to subscribe");
+
+        let batches = scanner
+            .poll_batches(Duration::from_secs(10))
+            .await
+            .expect("Failed to poll batches");
+
+        assert!(!batches.is_empty());
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_columns(), 2, "Should only have projected columns");
+
+        // Verify schema has correct column names
+        let schema = batch.schema();
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(1).name(), "value");
+
+        // Verify projected data values
+        use arrow::array::Int32Array;
+        let id_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column should be Int32Array");
+        let value_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("value column should be Int32Array");
+
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(value_col.value(0), 10);
+        assert_eq!(id_col.value(2), 3);
+        assert_eq!(value_col.value(2), 30);
+    }
+
+    #[tokio::test]
+    async fn test_poll_and_poll_batches_mixed_returns_error() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new(
+            "fluss".to_string(),
+            "test_poll_batches_mixed_error".to_string(),
+        );
+
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .expect("Failed to build schema");
+
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &descriptor).await;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Write some data
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer();
+
+        let batch = record_batch!(
+            ("id", Int32, [1, 2, 3, 4, 5]),
+            ("name", Utf8, ["a", "b", "c", "d", "e"])
+        )
+        .unwrap();
+        writer
+            .append_arrow_batch(batch)
+            .await
+            .expect("Failed to append");
+        writer.flush().await.expect("Failed to flush");
+
+        // Test 1: poll() then poll_batches() should error
+        let scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create scanner");
+
+        scanner.subscribe(0, 0).await.expect("Failed to subscribe");
+
+        // First call poll() - should succeed
+        let records = scanner
+            .poll(Duration::from_secs(10))
+            .await
+            .expect("First poll() should succeed");
+        assert!(!records.is_empty(), "Should get records from poll()");
+
+        // Now try poll_batches() - should error
+        let result = scanner.poll_batches(Duration::from_secs(10)).await;
+        assert!(
+            result.is_err(),
+            "poll_batches() after poll() should return error"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Cannot call poll_batches() after poll()"),
+            "Error message should mention mixing methods: {}",
+            err_msg
+        );
+
+        // Test 2: poll_batches() then poll() should error
+        let scanner2 = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create scanner");
+
+        scanner2.subscribe(0, 0).await.expect("Failed to subscribe");
+
+        // First call poll_batches() - should succeed
+        let batches = scanner2
+            .poll_batches(Duration::from_secs(10))
+            .await
+            .expect("First poll_batches() should succeed");
+        assert!(
+            !batches.is_empty(),
+            "Should get batches from poll_batches()"
+        );
+
+        // Now try poll() - should error
+        let result2 = scanner2.poll(Duration::from_secs(10)).await;
+        match result2 {
+            Err(e) => {
+                let err_msg = e.to_string();
+                assert!(
+                    err_msg.contains("Cannot call poll() after poll_batches()"),
+                    "Error message should mention mixing methods: {}",
+                    err_msg
+                );
+            }
+            Ok(_) => panic!("poll() after poll_batches() should return error"),
+        }
+    }
 }
