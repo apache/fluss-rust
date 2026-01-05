@@ -31,11 +31,11 @@ pub trait KeyEncoder {
 
 #[allow(dead_code)]
 impl dyn KeyEncoder {
-    /// Create a key encoder to encode the key array bytes of the input row.
+    /// Create a key encoder to encode the key bytes of the input row.
     /// # Arguments
     /// * `row_type` - the row type of the input row
     /// * `key_fields` - the key fields to encode
-    /// * `lake_format` - the datalake format
+    /// * `lake_format` - the data lake format
     ///
     /// # Returns
     /// key encoder
