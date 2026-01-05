@@ -139,7 +139,7 @@ impl ValueWriter for CharWriter {
         }
 
         Err(IllegalArgument {
-            message: format!("Wrong ValueWriter used to write value: {:?}", value),
+            message: format!("CharWriter used to write value: {:?}", value),
         })
     }
 }
