@@ -100,6 +100,12 @@ pub enum Error {
 
     #[snafu(
         visibility(pub(crate)),
+        display("Fluss hitting unsupported operation error {}.", message)
+    )]
+    UnsupportedOperation { message: String },
+
+    #[snafu(
+        visibility(pub(crate)),
         display("Fluss hitting leader not available error {}.", message)
     )]
     LeaderNotAvailable { message: String },
