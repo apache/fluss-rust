@@ -801,4 +801,231 @@ mod table_test {
             Ok(_) => panic!("poll() after poll_batches() should return error"),
         }
     }
+
+    #[tokio::test]
+    async fn test_poll_batches_multiple_batches_preserves_order() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new(
+            "fluss".to_string(),
+            "test_poll_batches_multiple".to_string(),
+        );
+
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .expect("Failed to build schema");
+
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &descriptor).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer();
+
+        // Write first batch
+        let batch1 = record_batch!(
+            ("id", Int32, [1, 2]),
+            ("name", Utf8, ["a", "b"])
+        )
+        .unwrap();
+        writer
+            .append_arrow_batch(batch1)
+            .await
+            .expect("Failed to append batch 1");
+        writer.flush().await.expect("Failed to flush");
+
+        // Write second batch
+        let batch2 = record_batch!(
+            ("id", Int32, [3, 4]),
+            ("name", Utf8, ["c", "d"])
+        )
+        .unwrap();
+        writer
+            .append_arrow_batch(batch2)
+            .await
+            .expect("Failed to append batch 2");
+        writer.flush().await.expect("Failed to flush");
+
+        // Write third batch
+        let batch3 = record_batch!(
+            ("id", Int32, [5, 6]),
+            ("name", Utf8, ["e", "f"])
+        )
+        .unwrap();
+        writer
+            .append_arrow_batch(batch3)
+            .await
+            .expect("Failed to append batch 3");
+        writer.flush().await.expect("Failed to flush");
+
+        // Scan and verify all three batches are returned in order
+        let scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create scanner");
+        scanner.subscribe(0, 0).await.expect("Failed to subscribe");
+
+        let batches = scanner
+            .poll_batches(Duration::from_secs(10))
+            .await
+            .expect("Failed to poll batches");
+
+        // Verify we got batches
+        assert!(!batches.is_empty(), "Should receive batches");
+
+        // Collect all data and verify order
+        use arrow::array::{Int32Array, StringArray};
+        let mut all_ids = Vec::new();
+        let mut all_names = Vec::new();
+
+        for batch in &batches {
+            let id_col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("id column");
+            let name_col = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("name column");
+
+            for i in 0..batch.num_rows() {
+                all_ids.push(id_col.value(i));
+                all_names.push(name_col.value(i).to_string());
+            }
+        }
+
+        // Verify order is preserved
+        assert_eq!(all_ids, vec![1, 2, 3, 4, 5, 6], "IDs should be in order");
+        assert_eq!(
+            all_names,
+            vec!["a", "b", "c", "d", "e", "f"],
+            "Names should be in order"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_poll_batches_offset_continuation() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new(
+            "fluss".to_string(),
+            "test_poll_batches_offset_continuation".to_string(),
+        );
+
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .build()
+            .expect("Failed to build schema");
+
+        let descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &descriptor).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer();
+
+        // Write first batch
+        let batch1 = record_batch!(("id", Int32, [1, 2, 3])).unwrap();
+        writer
+            .append_arrow_batch(batch1)
+            .await
+            .expect("Failed to append batch 1");
+        writer.flush().await.expect("Failed to flush");
+
+        // Create scanner and read first batch
+        let scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create scanner");
+        scanner.subscribe(0, 0).await.expect("Failed to subscribe");
+
+        let first_batches = scanner
+            .poll_batches(Duration::from_secs(10))
+            .await
+            .expect("Failed to poll first time");
+
+        assert!(!first_batches.is_empty(), "Should receive first batch");
+
+        use arrow::array::Int32Array;
+        let first_ids: Vec<i32> = first_batches
+            .iter()
+            .flat_map(|b| {
+                let col = b
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("id column");
+                (0..b.num_rows()).map(|i| col.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert_eq!(first_ids, vec![1, 2, 3], "First poll should get [1,2,3]");
+
+        // Write second batch
+        let batch2 = record_batch!(("id", Int32, [4, 5, 6])).unwrap();
+        writer
+            .append_arrow_batch(batch2)
+            .await
+            .expect("Failed to append batch 2");
+        writer.flush().await.expect("Failed to flush");
+
+        // Poll again - should get new data, not repeat
+        let second_batches = scanner
+            .poll_batches(Duration::from_secs(10))
+            .await
+            .expect("Failed to poll second time");
+
+        assert!(
+            !second_batches.is_empty(),
+            "Should receive second batch"
+        );
+
+        let second_ids: Vec<i32> = second_batches
+            .iter()
+            .flat_map(|b| {
+                let col = b
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("id column");
+                (0..b.num_rows()).map(|i| col.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert_eq!(
+            second_ids,
+            vec![4, 5, 6],
+            "Second poll should get [4,5,6], not repeat [1,2,3]"
+        );
+    }
 }
