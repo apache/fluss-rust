@@ -18,149 +18,99 @@
 use crate::metadata::DataType;
 use crate::row::{Datum, InternalRow};
 
-pub trait FieldGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a>;
+pub enum FieldGetter {
+    Nullable(InnerFieldGetter),
+    NonNullable(InnerFieldGetter),
 }
+impl FieldGetter {
+    pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        match self {
+            FieldGetter::Nullable(getter) => {
+                if row.is_null_at(getter.pos()) {
+                    Datum::Null
+                } else {
+                    getter.get_field(row)
+                }
+            }
+            FieldGetter::NonNullable(getter) => getter.get_field(row),
+        }
+    }
 
-struct CharGetter {
-    field_position: usize,
-    length: usize,
-}
-impl FieldGetter for CharGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_char(self.field_position, self.length))
+    pub fn create(data_type: &DataType, pos: usize) -> FieldGetter {
+        let inner_field_getter = match data_type {
+            DataType::Char(t) => InnerFieldGetter::Char {
+                pos,
+                len: t.length() as usize,
+            },
+            DataType::String(_) => InnerFieldGetter::String { pos },
+            DataType::Boolean(_) => InnerFieldGetter::Bool { pos },
+            DataType::Binary(t) => InnerFieldGetter::Binary {
+                pos,
+                len: t.length(),
+            },
+            DataType::Bytes(_) => InnerFieldGetter::Bytes { pos },
+            DataType::TinyInt(_) => InnerFieldGetter::TinyInt { pos },
+            DataType::SmallInt(_) => InnerFieldGetter::SmallInt { pos },
+            DataType::Int(_) => InnerFieldGetter::Int { pos },
+            DataType::BigInt(_) => InnerFieldGetter::BigInt { pos },
+            DataType::Float(_) => InnerFieldGetter::Float { pos },
+            DataType::Double(_) => InnerFieldGetter::Double { pos },
+            _ => unimplemented!("DataType {:?} is currently unimplemented", data_type),
+        };
+
+        if data_type.is_nullable() {
+            Self::Nullable(inner_field_getter)
+        } else {
+            Self::NonNullable(inner_field_getter)
+        }
     }
 }
 
-struct StringGetter {
-    field_position: usize,
+pub enum InnerFieldGetter {
+    Char { pos: usize, len: usize },
+    String { pos: usize },
+    Bool { pos: usize },
+    Binary { pos: usize, len: usize },
+    Bytes { pos: usize },
+    TinyInt { pos: usize },
+    SmallInt { pos: usize },
+    Int { pos: usize },
+    BigInt { pos: usize },
+    Float { pos: usize },
+    Double { pos: usize },
 }
 
-impl FieldGetter for StringGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_string(self.field_position))
+impl InnerFieldGetter {
+    pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+        match self {
+            InnerFieldGetter::Char { pos, len } => Datum::String(row.get_char(*pos, *len)),
+            InnerFieldGetter::String { pos } => Datum::from(row.get_string(*pos)),
+            InnerFieldGetter::Bool { pos } => Datum::from(row.get_boolean(*pos)),
+            InnerFieldGetter::Binary { pos, len } => Datum::from(row.get_binary(*pos, *len)),
+            InnerFieldGetter::Bytes { pos } => Datum::from(row.get_bytes(*pos)),
+            InnerFieldGetter::TinyInt { pos } => Datum::from(row.get_byte(*pos)),
+            InnerFieldGetter::SmallInt { pos } => Datum::from(row.get_short(*pos)),
+            InnerFieldGetter::Int { pos } => Datum::from(row.get_int(*pos)),
+            InnerFieldGetter::BigInt { pos } => Datum::from(row.get_long(*pos)),
+            InnerFieldGetter::Float { pos } => Datum::from(row.get_float(*pos)),
+            InnerFieldGetter::Double { pos } => Datum::from(row.get_double(*pos)),
+            //TODO Decimal, Date, Time, Timestamp, TimestampLTZ, Array, Map, Row
+        }
     }
-}
 
-struct BooleanGetter {
-    field_position: usize,
-}
-
-impl FieldGetter for BooleanGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_boolean(self.field_position))
-    }
-}
-
-struct BinaryGetter {
-    field_position: usize,
-    length: usize,
-}
-impl FieldGetter for BinaryGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_binary(self.field_position, self.length))
-    }
-}
-
-struct BytesGetter {
-    field_position: usize,
-}
-impl FieldGetter for BytesGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_bytes(self.field_position))
-    }
-}
-
-//TODO Decimal Getter
-
-struct TinyIntGetter {
-    field_position: usize,
-}
-impl FieldGetter for TinyIntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_byte(self.field_position))
-    }
-}
-
-struct SmallIntGetter {
-    field_position: usize,
-}
-impl FieldGetter for SmallIntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_short(self.field_position))
-    }
-}
-
-struct IntGetter {
-    field_position: usize,
-}
-impl FieldGetter for IntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_int(self.field_position))
-    }
-}
-
-struct BigIntGetter {
-    field_position: usize,
-}
-impl FieldGetter for BigIntGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_long(self.field_position))
-    }
-}
-
-struct FloatGetter {
-    field_position: usize,
-}
-impl FieldGetter for FloatGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_float(self.field_position))
-    }
-}
-
-struct DoubleGetter {
-    field_position: usize,
-}
-impl FieldGetter for DoubleGetter {
-    fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        Datum::from(row.get_double(self.field_position))
-    }
-}
-
-#[allow(dead_code)]
-impl dyn FieldGetter {
-    pub fn create_field_getter(
-        data_type: &DataType,
-        field_position: usize,
-    ) -> Box<dyn FieldGetter> {
-        match data_type {
-            DataType::Char(t) => Box::new(CharGetter {
-                field_position,
-                length: t.length() as usize,
-            }),
-            DataType::String(_) => Box::new(StringGetter { field_position }),
-            DataType::Boolean(_) => Box::new(BooleanGetter { field_position }),
-            DataType::Binary(t) => Box::new(BinaryGetter {
-                field_position,
-                length: t.length(),
-            }),
-            DataType::Bytes(_) => Box::new(BytesGetter { field_position }),
-            DataType::TinyInt(_) => Box::new(TinyIntGetter { field_position }),
-            DataType::SmallInt(_) => Box::new(SmallIntGetter { field_position }),
-            DataType::Int(_) => Box::new(IntGetter { field_position }),
-            DataType::BigInt(_) => Box::new(BigIntGetter { field_position }),
-            DataType::Float(_) => Box::new(FloatGetter { field_position }),
-            DataType::Double(_) => Box::new(DoubleGetter { field_position }),
-            _ => unimplemented!(),
-            // // TODO
-            // DataType::Decimal(_) => {}
-            // DataType::Date(_) => {}
-            // DataType::Time(_) => {}
-            // DataType::Timestamp(_) => {}
-            // DataType::TimestampLTz(_) => {}
-            // DataType::Array(_) => {}
-            // DataType::Map(_) => {}
-            // DataType::Row(_) => {}
+    pub fn pos(&self) -> usize {
+        match self {
+            Self::Char { pos, .. }
+            | Self::String { pos }
+            | Self::Bool { pos }
+            | Self::Binary { pos, .. }
+            | Self::Bytes { pos }
+            | Self::TinyInt { pos }
+            | Self::SmallInt { pos, .. }
+            | Self::Int { pos }
+            | Self::BigInt { pos }
+            | Self::Float { pos, .. }
+            | Self::Double { pos } => *pos,
         }
     }
 }

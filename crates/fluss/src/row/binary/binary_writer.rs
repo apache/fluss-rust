@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Error::{IllegalArgument, IoUnsupported};
+use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::Datum;
@@ -71,289 +71,193 @@ pub trait BinaryWriter {
     fn complete(&mut self);
 }
 
-/// Accessor for writing the fields/elements of a binary writer during runtime, the
-/// fields/elements must be written in the order.
-pub trait ValueWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()>;
+pub enum ValueWriter {
+    Nullable(InnerValueWriter),
+    NonNullable(InnerValueWriter),
 }
 
-#[allow(dead_code)]
-impl dyn ValueWriter {
-    /// Creates an accessor for setting the elements of a binary writer during runtime.
+impl ValueWriter {
     pub fn create_value_writer(
         element_type: &DataType,
-        binary_row_format: &BinaryRowFormat,
-    ) -> Result<Box<dyn ValueWriter>> {
+        binary_row_format: Option<&BinaryRowFormat>,
+    ) -> Result<ValueWriter> {
         let value_writer =
-            Self::create_not_null_value_writer(element_type, Some(binary_row_format))?;
+            InnerValueWriter::create_inner_value_writer(element_type, binary_row_format)?;
         if element_type.is_nullable() {
-            Ok(Box::new(NullWriter {
-                delegate: value_writer,
-            }))
+            Ok(Self::Nullable(value_writer))
         } else {
-            Ok(value_writer)
+            Ok(Self::NonNullable(value_writer))
         }
     }
 
-    /// Creates an accessor for setting the elements of a binary writer during runtime.
-    pub fn create_not_null_value_writer(
-        element_type: &DataType,
+    pub fn write_value(
+        &self,
+        writer: &mut dyn BinaryWriter,
+        pos: usize,
+        value: &Datum,
+    ) -> Result<()> {
+        match self {
+            Self::Nullable(inner_value_writer) => {
+                if let Datum::Null = value {
+                    writer.set_null_at(pos);
+                    Ok(())
+                } else {
+                    inner_value_writer.write_value(writer, pos, value)
+                }
+            }
+            Self::NonNullable(inner_value_writer) => inner_value_writer.write_value(writer, pos, value),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum InnerValueWriter {
+    Char,
+    String,
+    Boolean,
+    Binary,
+    Bytes,
+    TinyInt,
+    SmallInt,
+    Int,
+    BigInt,
+    Float,
+    Double,
+    // TODO Decimal, Date, TimeWithoutTimeZone, TimestampWithoutTimeZone, TimestampWithLocalTimeZone, Array, Row
+}
+
+/// Accessor for writing the fields/elements of a binary writer during runtime, the
+/// fields/elements must be written in the order.
+impl InnerValueWriter {
+    pub fn create_inner_value_writer(
+        data_type: &DataType,
         _: Option<&BinaryRowFormat>,
-    ) -> Result<Box<dyn ValueWriter>> {
-        match element_type {
-            DataType::Char(_) => Ok(Box::new(CharWriter)),
-            DataType::String(_) => Ok(Box::new(StringWriter)),
-            DataType::Boolean(_) => Ok(Box::new(BoolWriter)),
-            DataType::Binary(_) => Ok(Box::new(BinaryValueWriter)),
-            DataType::Bytes(_) => Ok(Box::new(BytesWriter)),
-            // TODO DECIMAL
-            DataType::TinyInt(_) => Ok(Box::new(TinyIntWriter)),
-            DataType::SmallInt(_) => Ok(Box::new(SmallIntWriter)),
-            DataType::Int(_) => Ok(Box::new(IntWriter)),
-            // TODO DATE
-            // TODO TIME_WITHOUT_TIME_ZONE
-            DataType::BigInt(_) => Ok(Box::new(LongWriter)),
-            DataType::Float(_) => Ok(Box::new(FloatWriter)),
-            DataType::Double(_) => Ok(Box::new(DoubleWriter)),
-            // TODO TIMESTAMP_WITHOUT_TIME_ZONE
-            // TODO TIMESTAMP_WITH_LOCAL_TIME_ZONE
-            // TODO ARRAY
-            DataType::Map(_) => Err(IoUnsupported {
-                message: "Map type is not supported yet. Will be added in Issue #1973.".to_string(),
-            }),
-            // TODO ROW
-            _ => Err(IllegalArgument {
-                message: format!("Type {} is not supported yet", element_type),
-            }),
-        }
-    }
-}
-
-#[derive(Default)]
-struct CharWriter;
-impl ValueWriter for CharWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::String(v) = value {
-            writer.write_char(v, v.len());
-            return Ok(());
-        }
-
-        Err(IllegalArgument {
-            message: format!(
-                "CharWriter used to write non Datum::String(v) value: {:?}",
-                value
+    ) -> Result<InnerValueWriter> {
+        match data_type {
+            DataType::Char(_) => Ok(InnerValueWriter::Char),
+            DataType::String(_) => Ok(InnerValueWriter::String),
+            DataType::Boolean(_) => Ok(InnerValueWriter::Boolean),
+            DataType::Binary(_) => Ok(InnerValueWriter::Binary),
+            DataType::Bytes(_) => Ok(InnerValueWriter::Bytes),
+            DataType::TinyInt(_) => Ok(InnerValueWriter::TinyInt),
+            DataType::SmallInt(_) => Ok(InnerValueWriter::SmallInt),
+            DataType::Int(_) => Ok(InnerValueWriter::Int),
+            DataType::BigInt(_) => Ok(InnerValueWriter::BigInt),
+            DataType::Float(_) => Ok(InnerValueWriter::Float),
+            DataType::Double(_) => Ok(InnerValueWriter::Double),
+            _ => unimplemented!(
+                "ValueWriter for DataType {:?} is currently not implemented",
+                data_type
             ),
-        })
-    }
-}
-
-#[derive(Default)]
-struct StringWriter;
-impl ValueWriter for StringWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::String(v) = value {
-            writer.write_string(v);
-            return Ok(());
         }
-
-        Err(IllegalArgument {
-            message: format!(
-                "StringWriter used to write non Datum::String(v) value: {:?}",
-                value
-            ),
-        })
     }
-}
+    pub fn write_value(
+        &self,
+        writer: &mut dyn BinaryWriter,
+        _pos: usize,
+        value: &Datum,
+    ) -> Result<()> {
+        match self {
+            InnerValueWriter::Char => {
+                if let Datum::String(v) = value {
+                    writer.write_char(v, v.len());
+                    return Ok(());
+                }
 
-#[derive(Default)]
-struct BoolWriter;
-impl ValueWriter for BoolWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Bool(v) = value {
-            writer.write_boolean(*v);
-            return Ok(());
-        }
-
-        Err(IllegalArgument {
-            message: format!(
-                "BoolWriter used to write non Datum::Bool(v) value: {:?}",
-                value
-            ),
-        })
-    }
-}
-
-#[derive(Default)]
-struct BinaryValueWriter;
-impl ValueWriter for BinaryValueWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        match value {
-            Datum::Blob(v) => {
-                writer.write_binary(v.as_ref(), v.len());
-                Ok(())
+                self.raise_error(value)
             }
-            Datum::BorrowedBlob(v) => {
-                writer.write_binary(v.as_ref(), v.len());
-                Ok(())
+            InnerValueWriter::String => {
+                if let Datum::String(v) = value {
+                    writer.write_string(v);
+                    return Ok(());
+                }
+
+                self.raise_error(value)
             }
-            _ => Err(IllegalArgument {
-                message: format!(
-                    "BinaryValueWriter used to write non Datum::Blob(v) or Datum::BorrowedBlob(v) value: {:?}",
-                    value
-                ),
-            }),
-        }
-    }
-}
+            InnerValueWriter::Boolean => {
+                if let Datum::Bool(v) = value {
+                    writer.write_boolean(*v);
+                    return Ok(());
+                }
 
-#[derive(Default)]
-struct BytesWriter;
-impl ValueWriter for BytesWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        match value {
-            Datum::Blob(v) => {
-                writer.write_bytes(v.as_ref());
-                Ok(())
+                self.raise_error(value)
             }
-            Datum::BorrowedBlob(v) => {
-                writer.write_bytes(v.as_ref());
-                Ok(())
+            InnerValueWriter::Binary => match value {
+                Datum::Blob(v) => {
+                    writer.write_binary(v.as_ref(), v.len());
+                    Ok(())
+                }
+                Datum::BorrowedBlob(v) => {
+                    writer.write_binary(v.as_ref(), v.len());
+                    Ok(())
+                }
+                _ => self.raise_error(value),
+            },
+            InnerValueWriter::Bytes => match value {
+                Datum::Blob(v) => {
+                    writer.write_bytes(v.as_ref());
+                    Ok(())
+                }
+                Datum::BorrowedBlob(v) => {
+                    writer.write_bytes(v.as_ref());
+                    Ok(())
+                }
+                value => self.raise_error(value),
+            },
+            InnerValueWriter::TinyInt => {
+                if let Datum::Int8(v) = value {
+                    writer.write_byte(*v as u8);
+                    return Ok(());
+                }
+
+                self.raise_error(value)
             }
-            value => Err(IllegalArgument {
-                message: format!(
-                    "BytesWriter used to write non Datum::Blob(v) or Datum::BorrowedBlob(v) value: {:?}",
-                    value
-                ),
-            }),
+            InnerValueWriter::SmallInt => {
+                if let Datum::Int16(v) = value {
+                    writer.write_short(*v);
+                    return Ok(());
+                }
+
+                self.raise_error(value)
+            }
+            InnerValueWriter::Int => {
+                if let Datum::Int32(v) = value {
+                    writer.write_int(*v);
+                    return Ok(());
+                }
+
+                self.raise_error(value)
+            }
+            InnerValueWriter::BigInt => {
+                if let Datum::Int64(v) = value {
+                    writer.write_long(*v);
+                    return Ok(());
+                }
+
+                self.raise_error(value)
+            }
+            InnerValueWriter::Float => {
+                if let Datum::Float32(v) = value {
+                    writer.write_float(v.into_inner());
+                    return Ok(());
+                }
+
+                self.raise_error(value)
+            }
+            InnerValueWriter::Double => {
+                if let Datum::Float64(v) = value {
+                    writer.write_double(v.into_inner());
+                    return Ok(());
+                }
+
+                self.raise_error(value)
+            }
         }
     }
-}
 
-// TODO DecimalWriter
-
-#[derive(Default)]
-struct TinyIntWriter;
-impl ValueWriter for TinyIntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Int8(v) = value {
-            writer.write_byte(*v as u8);
-            return Ok(());
-        }
-
+    fn raise_error(&self, value: &Datum) -> Result<()> {
         Err(IllegalArgument {
-            message: format!(
-                "TinyIntWriter used to write non Datum::Int8(v) value: {:?}",
-                value
-            ),
+            message: format!("{:?} used to write value {:?}", self, value),
         })
-    }
-}
-
-#[derive(Default)]
-struct SmallIntWriter;
-impl ValueWriter for SmallIntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Int16(v) = value {
-            writer.write_short(*v);
-            return Ok(());
-        }
-
-        Err(IllegalArgument {
-            message: format!(
-                "SmallIntWriter used to write non Datum::Int16(v) value: {:?}",
-                value
-            ),
-        })
-    }
-}
-
-#[derive(Default)]
-struct IntWriter;
-impl ValueWriter for IntWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Int32(v) = value {
-            writer.write_int(*v);
-            return Ok(());
-        }
-
-        Err(IllegalArgument {
-            message: format!(
-                "IntWriter used to write non Datum::Int32(v) value: {:?}",
-                value
-            ),
-        })
-    }
-}
-
-#[derive(Default)]
-struct LongWriter;
-impl ValueWriter for LongWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Int64(v) = value {
-            writer.write_long(*v);
-            return Ok(());
-        }
-
-        Err(IllegalArgument {
-            message: format!(
-                "LongWriter used to write non Datum::Int64(v) value: {:?}",
-                value
-            ),
-        })
-    }
-}
-
-#[derive(Default)]
-struct FloatWriter;
-impl ValueWriter for FloatWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Float32(v) = value {
-            writer.write_float(v.into_inner());
-            return Ok(());
-        }
-
-        Err(IllegalArgument {
-            message: format!(
-                "FloatWriter used to write non Datum::Float32(v) value: {:?}",
-                value
-            ),
-        })
-    }
-}
-
-#[derive(Default)]
-struct DoubleWriter;
-impl ValueWriter for DoubleWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, _pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Float64(v) = value {
-            writer.write_double(v.into_inner());
-            return Ok(());
-        }
-
-        Err(IllegalArgument {
-            message: format!(
-                "DoubleWriter used to write non Datum::Float64(v) value: {:?}",
-                value
-            ),
-        })
-    }
-}
-
-// TODO TIMESTAMP_NTZ writer
-// TODO TIMESTAMP_LTZ writer
-// TODO ARRAY writer
-// TODO ROW writer
-
-struct NullWriter {
-    delegate: Box<dyn ValueWriter>,
-}
-impl ValueWriter for NullWriter {
-    fn write_value(&self, writer: &mut dyn BinaryWriter, pos: usize, value: &Datum) -> Result<()> {
-        if let Datum::Null = value {
-            writer.set_null_at(pos);
-            Ok(())
-        } else {
-            self.delegate.write_value(writer, pos, value)
-        }
     }
 }

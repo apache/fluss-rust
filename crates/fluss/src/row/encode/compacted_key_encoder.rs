@@ -18,17 +18,17 @@
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::RowType;
-use crate::row::InternalRow;
 use crate::row::binary::ValueWriter;
 use crate::row::compacted::CompactedKeyWriter;
 use crate::row::encode::KeyEncoder;
 use crate::row::field_getter::FieldGetter;
+use crate::row::{Datum, InternalRow};
 use bytes::Bytes;
 
 #[allow(dead_code)]
 pub struct CompactedKeyEncoder {
-    field_getters: Vec<Box<dyn FieldGetter>>,
-    field_encoders: Vec<Box<dyn ValueWriter>>,
+    field_getters: Vec<FieldGetter>,
+    field_encoders: Vec<ValueWriter>,
     compacted_encoder: CompactedKeyWriter,
 }
 
@@ -68,14 +68,12 @@ impl CompactedKeyEncoder {
     }
 
     pub fn new(row_type: &RowType, encode_field_pos: Vec<usize>) -> Result<CompactedKeyEncoder> {
-        let mut field_getters: Vec<Box<dyn FieldGetter>> =
-            Vec::with_capacity(encode_field_pos.len());
-        let mut field_encoders: Vec<Box<dyn ValueWriter>> =
-            Vec::with_capacity(encode_field_pos.len());
+        let mut field_getters: Vec<FieldGetter> = Vec::with_capacity(encode_field_pos.len());
+        let mut field_encoders: Vec<ValueWriter> = Vec::with_capacity(encode_field_pos.len());
 
         for pos in &encode_field_pos {
             let data_type = row_type.fields().get(*pos).unwrap().data_type();
-            field_getters.push(<dyn FieldGetter>::create_field_getter(data_type, *pos));
+            field_getters.push(FieldGetter::create(data_type, *pos));
             field_encoders.push(CompactedKeyWriter::create_value_writer(data_type)?);
         }
 
@@ -94,11 +92,21 @@ impl KeyEncoder for CompactedKeyEncoder {
 
         // iterate all the fields of the row, and encode each field
         for (pos, field_getter) in self.field_getters.iter().enumerate() {
-            self.field_encoders.get(pos).unwrap().write_value(
-                &mut self.compacted_encoder,
-                pos,
-                &field_getter.get_field(row),
-            )?;
+            match &field_getter.get_field(row) {
+                Datum::Null => {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Null value is not allowed for compacted key encoder. Position: {:?}",
+                            pos
+                        ),
+                    });
+                }
+                value => self.field_encoders.get(pos).unwrap().write_value(
+                    &mut self.compacted_encoder,
+                    pos,
+                    value,
+                )?,
+            }
         }
 
         Ok(self.compacted_encoder.to_bytes())
@@ -173,8 +181,7 @@ mod tests {
     }
 
     #[test]
-    // TODO Decide/Migrate InternalRow to return Results and replace this should_panic with error message check
-    #[should_panic(expected = "called `Result::unwrap()` on an `Err` value: ()")]
+    #[should_panic(expected = "Null value is not allowed for compacted key encoder. Position: 2")]
     fn test_null_primary_key() {
         let row_type = RowType::with_data_types(vec![
             DataTypes::int(),
