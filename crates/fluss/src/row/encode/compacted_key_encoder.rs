@@ -50,7 +50,7 @@ impl CompactedKeyEncoder {
                 None => {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Field {} not found in input row type {:?}",
+                            "Field {:?} not found in input row type {:?}",
                             key, row_type
                         ),
                     });
