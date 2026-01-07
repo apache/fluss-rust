@@ -45,7 +45,6 @@ pub struct RecordAccumulator {
     batch_id: AtomicI64,
 }
 
-
 impl RecordAccumulator {
     pub fn new(config: Config) -> Self {
         RecordAccumulator {
