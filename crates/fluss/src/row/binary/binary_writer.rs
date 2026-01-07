@@ -199,16 +199,12 @@ impl InnerValueWriter {
             (InnerValueWriter::Double, Datum::Float64(v)) => {
                 writer.write_double(v.into_inner());
             }
-            _ => return Err(IllegalArgument {
-                message: format!("{:?} used to write value {:?}", self, value),
-            }),
+            _ => {
+                return Err(IllegalArgument {
+                    message: format!("{:?} used to write value {:?}", self, value),
+                });
+            }
         }
         Ok(())
-    }
-
-    fn raise_error(&self, value: &Datum) -> Result<()> {
-        Err(IllegalArgument {
-            message: format!("{:?} used to write value {:?}", self, value),
-        })
     }
 }
