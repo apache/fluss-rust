@@ -124,5 +124,7 @@ impl BinaryWriter for CompactedKeyWriter {
         }
     }
 
-    fn complete(&mut self) {}
+    fn complete(&mut self) {
+        // do nothing
+    }
 }

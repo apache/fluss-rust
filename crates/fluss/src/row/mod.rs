@@ -27,7 +27,7 @@ mod field_getter;
 pub use column::*;
 pub use datum::*;
 
-// TODO Decide if migrate to Result<?>
+// TODO make functions return Result<?> for better error handling
 pub trait InternalRow {
     /// Returns the number of fields in this row
     fn get_field_count(&self) -> usize;
