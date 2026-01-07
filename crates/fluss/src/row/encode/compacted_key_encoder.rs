@@ -96,7 +96,7 @@ impl KeyEncoder for CompactedKeyEncoder {
                 Datum::Null => {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Null value is not allowed for compacted key encoder. Position: {:?}",
+                            "Cannot encode key with null value at position: {:?}",
                             pos
                         ),
                     });
