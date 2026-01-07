@@ -82,7 +82,6 @@ pub struct GenericRow<'a> {
     pub values: Vec<Datum<'a>>,
 }
 
-// TODO Decide if migrate to Result<?>
 impl<'a> InternalRow for GenericRow<'a> {
     fn get_field_count(&self) -> usize {
         self.values.len()
