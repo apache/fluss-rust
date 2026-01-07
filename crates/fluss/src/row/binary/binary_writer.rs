@@ -90,9 +90,9 @@ impl ValueWriter {
         }
     }
 
-    pub fn write_value(
+    pub fn write_value<W: BinaryWriter>(
         &self,
-        writer: &mut dyn BinaryWriter,
+        writer: &mut W,
         pos: usize,
         value: &Datum,
     ) -> Result<()> {
