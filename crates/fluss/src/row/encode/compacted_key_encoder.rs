@@ -181,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Null value is not allowed for compacted key encoder. Position: 2")]
+    #[should_panic(expected = "Cannot encode key with null value at position: 2")]
     fn test_null_primary_key() {
         let row_type = RowType::with_data_types(vec![
             DataTypes::int(),
