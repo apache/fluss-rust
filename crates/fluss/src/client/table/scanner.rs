@@ -22,7 +22,6 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::slice::from_ref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -137,33 +136,57 @@ impl<'a> TableScan<'a> {
     }
 
     pub fn create_log_scanner(self) -> Result<LogScanner> {
-        LogScanner::new(
+        let inner = LogScannerInner::new(
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
             self.projected_fields,
-        )
+        )?;
+        Ok(LogScanner {
+            inner: Arc::new(inner),
+        })
+    }
+
+    pub fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner> {
+        let inner = LogScannerInner::new(
+            &self.table_info,
+            self.metadata.clone(),
+            self.conn.get_connections(),
+            self.projected_fields,
+        )?;
+        Ok(RecordBatchLogScanner {
+            inner: Arc::new(inner),
+        })
     }
 }
 
-/// Poll mode for LogScanner - ensures poll() and poll_batches() are not mixed
-const POLL_MODE_UNSET: u8 = 0;
-const POLL_MODE_RECORDS: u8 = 1;
-const POLL_MODE_BATCHES: u8 = 2;
-
+/// Scanner for reading log records one at a time with per-record metadata.
+///
+/// Use this scanner when you need access to individual record offsets and timestamps.
+/// For batch-level access, use [`RecordBatchLogScanner`] instead.
 pub struct LogScanner {
+    inner: Arc<LogScannerInner>,
+}
+
+/// Scanner for reading log data as Arrow RecordBatches.
+///
+/// More efficient than [`LogScanner`] for batch-level analytics where per-record
+/// metadata (offsets, timestamps) is not needed.
+pub struct RecordBatchLogScanner {
+    inner: Arc<LogScannerInner>,
+}
+
+/// Private shared implementation for both scanner types
+struct LogScannerInner {
     table_path: TablePath,
     table_id: i64,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
-    /// Tracks whether scanner is in records mode (poll) or batches mode (poll_batches).
-    /// Once set, cannot be changed to prevent data loss from mixing polling methods.
-    poll_mode: AtomicU8,
 }
 
-impl LogScanner {
-    pub fn new(
+impl LogScannerInner {
+    fn new(
         table_info: &TableInfo,
         metadata: Arc<Metadata>,
         connections: Arc<RpcClient>,
@@ -182,32 +205,10 @@ impl LogScanner {
                 log_scanner_status.clone(),
                 projected_fields,
             )?,
-            poll_mode: AtomicU8::new(POLL_MODE_UNSET),
         })
     }
 
-    pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
-        // Check and set poll mode to prevent mixing with poll_batches
-        match self.poll_mode.compare_exchange(
-            POLL_MODE_UNSET,
-            POLL_MODE_RECORDS,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => { /* First call, set to records mode */ }
-            Err(POLL_MODE_RECORDS) => { /* Already in records mode, ok */ }
-            Err(POLL_MODE_BATCHES) => {
-                return Err(Error::IllegalState {
-                    message: "Cannot call poll() after poll_batches(). Mixing polling methods causes data loss. Create a new scanner to switch methods.".to_string(),
-                });
-            }
-            Err(invalid) => {
-                return Err(Error::IllegalState {
-                    message: format!("Invalid poll mode state: {}", invalid),
-                });
-            }
-        }
-
+    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
         let start = std::time::Instant::now();
         let deadline = start + timeout;
 
@@ -246,7 +247,7 @@ impl LogScanner {
         }
     }
 
-    pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+    async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
         let table_bucket = TableBucket::new(self.table_id, bucket);
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
@@ -256,7 +257,7 @@ impl LogScanner {
         Ok(())
     }
 
-    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+    async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
@@ -291,38 +292,7 @@ impl LogScanner {
         self.log_fetcher.collect_fetches()
     }
 
-    /// Poll for Arrow RecordBatches directly.
-    ///
-    /// More efficient than `poll()` when you need batch-level access for analytics
-    /// - This method does not expose per-record offsets or timestamps.
-    ///   Use `poll()` if you need that metadata.
-    ///
-    ///   Do not mix `poll()` and `poll_batches()` on the same scanner.
-    ///   Calling `poll_batches()` after `poll()` (or vice versa) will return an error
-    ///   to prevent data loss. Create a new scanner if you need to switch methods.
-    /// 
-    pub async fn poll_batches(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
-        // Check and set poll mode to prevent mixing with poll
-        match self.poll_mode.compare_exchange(
-            POLL_MODE_UNSET,
-            POLL_MODE_BATCHES,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => { /* First call, set to batches mode */ }
-            Err(POLL_MODE_BATCHES) => { /* Already in batches mode, ok */ }
-            Err(POLL_MODE_RECORDS) => {
-                return Err(Error::IllegalState {
-                    message: "Cannot call poll_batches() after poll(). Mixing polling methods causes data loss. Create a new scanner to switch methods.".to_string(),
-                });
-            }
-            Err(invalid) => {
-                return Err(Error::IllegalState {
-                    message: format!("Invalid poll mode state: {}", invalid),
-                });
-            }
-        }
-
+    async fn poll_batches(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
         let start = std::time::Instant::now();
         let deadline = start + timeout;
 
@@ -360,6 +330,36 @@ impl LogScanner {
 
         self.log_fetcher.send_fetches().await?;
         self.log_fetcher.collect_batches()
+    }
+}
+
+// Implementation for LogScanner (records mode)
+impl LogScanner {
+    pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
+        self.inner.poll_records(timeout).await
+    }
+
+    pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+        self.inner.subscribe(bucket, offset).await
+    }
+
+    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.inner.subscribe_batch(bucket_offsets).await
+    }
+}
+
+// Implementation for RecordBatchLogScanner (batches mode)
+impl RecordBatchLogScanner {
+    pub async fn poll(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+        self.inner.poll_batches(timeout).await
+    }
+
+    pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+        self.inner.subscribe(bucket, offset).await
+    }
+
+    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.inner.subscribe_batch(bucket_offsets).await
     }
 }
 

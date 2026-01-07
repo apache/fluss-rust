@@ -94,12 +94,6 @@ pub enum Error {
 
     #[snafu(
         visibility(pub(crate)),
-        display("Fluss hitting illegal state error {}.", message)
-    )]
-    IllegalState { message: String },
-
-    #[snafu(
-        visibility(pub(crate)),
         display("Fluss hitting IO not supported error {}.", message)
     )]
     IoUnsupported { message: String },
