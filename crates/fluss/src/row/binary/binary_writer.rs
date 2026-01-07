@@ -105,7 +105,9 @@ impl ValueWriter {
                     inner_value_writer.write_value(writer, pos, value)
                 }
             }
-            Self::NonNullable(inner_value_writer) => inner_value_writer.write_value(writer, pos, value),
+            Self::NonNullable(inner_value_writer) => {
+                inner_value_writer.write_value(writer, pos, value)
+            }
         }
     }
 }
