@@ -159,102 +159,51 @@ impl InnerValueWriter {
         _pos: usize,
         value: &Datum,
     ) -> Result<()> {
-        match self {
-            InnerValueWriter::Char => {
-                if let Datum::String(v) = value {
-                    writer.write_char(v, v.len());
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+        match (self, value) {
+            (InnerValueWriter::Char, Datum::String(v)) => {
+                writer.write_char(v, v.len());
             }
-            InnerValueWriter::String => {
-                if let Datum::String(v) = value {
-                    writer.write_string(v);
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::String, Datum::String(v)) => {
+                writer.write_string(v);
             }
-            InnerValueWriter::Boolean => {
-                if let Datum::Bool(v) = value {
-                    writer.write_boolean(*v);
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::Boolean, Datum::Bool(v)) => {
+                writer.write_boolean(*v);
             }
-            InnerValueWriter::Binary => match value {
-                Datum::Blob(v) => {
-                    writer.write_binary(v.as_ref(), v.len());
-                    Ok(())
-                }
-                Datum::BorrowedBlob(v) => {
-                    writer.write_binary(v.as_ref(), v.len());
-                    Ok(())
-                }
-                _ => self.raise_error(value),
-            },
-            InnerValueWriter::Bytes => match value {
-                Datum::Blob(v) => {
-                    writer.write_bytes(v.as_ref());
-                    Ok(())
-                }
-                Datum::BorrowedBlob(v) => {
-                    writer.write_bytes(v.as_ref());
-                    Ok(())
-                }
-                value => self.raise_error(value),
-            },
-            InnerValueWriter::TinyInt => {
-                if let Datum::Int8(v) = value {
-                    writer.write_byte(*v as u8);
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::Binary, Datum::Blob(v)) => {
+                writer.write_binary(v.as_ref(), v.len());
             }
-            InnerValueWriter::SmallInt => {
-                if let Datum::Int16(v) = value {
-                    writer.write_short(*v);
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::Binary, Datum::BorrowedBlob(v)) => {
+                writer.write_binary(v.as_ref(), v.len());
             }
-            InnerValueWriter::Int => {
-                if let Datum::Int32(v) = value {
-                    writer.write_int(*v);
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::Bytes, Datum::Blob(v)) => {
+                writer.write_bytes(v.as_ref());
             }
-            InnerValueWriter::BigInt => {
-                if let Datum::Int64(v) = value {
-                    writer.write_long(*v);
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::Bytes, Datum::BorrowedBlob(v)) => {
+                writer.write_bytes(v.as_ref());
             }
-            InnerValueWriter::Float => {
-                if let Datum::Float32(v) = value {
-                    writer.write_float(v.into_inner());
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::TinyInt, Datum::Int8(v)) => {
+                writer.write_byte(*v as u8);
             }
-            InnerValueWriter::Double => {
-                if let Datum::Float64(v) = value {
-                    writer.write_double(v.into_inner());
-                    return Ok(());
-                }
-
-                self.raise_error(value)
+            (InnerValueWriter::SmallInt, Datum::Int16(v)) => {
+                writer.write_short(*v);
             }
+            (InnerValueWriter::Int, Datum::Int32(v)) => {
+                writer.write_int(*v);
+            }
+            (InnerValueWriter::BigInt, Datum::Int64(v)) => {
+                writer.write_long(*v);
+            }
+            (InnerValueWriter::Float, Datum::Float32(v)) => {
+                writer.write_float(v.into_inner());
+            }
+            (InnerValueWriter::Double, Datum::Float64(v)) => {
+                writer.write_double(v.into_inner());
+            }
+            _ => return Err(IllegalArgument {
+                message: format!("{:?} used to write value {:?}", self, value),
+            }),
         }
+        Ok(())
     }
 
     fn raise_error(&self, value: &Datum) -> Result<()> {
