@@ -43,17 +43,17 @@ impl dyn KeyEncoder {
         row_type: &RowType,
         key_fields: Vec<String>,
         data_lake_format: Option<DataLakeFormat>,
-    ) -> crate::error::Result<Box<dyn KeyEncoder>> {
+    ) -> Result<Box<dyn KeyEncoder>> {
         match data_lake_format {
             Some(DataLakeFormat::Paimon) => {
-                todo!()
+                unimplemented!("KeyEncoder for Paimon format is currently unimplemented")
             }
             Some(DataLakeFormat::Lance) => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
                 row_type,
                 key_fields.as_slice(),
             )?)),
             Some(DataLakeFormat::Iceberg) => {
-                todo!()
+                unimplemented!("KeyEncoder for Iceberg format is currently unimplemented")
             }
             None => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
                 row_type,
