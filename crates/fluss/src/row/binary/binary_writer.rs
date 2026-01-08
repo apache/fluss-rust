@@ -153,9 +153,9 @@ impl InnerValueWriter {
             ),
         }
     }
-    pub fn write_value(
+    pub fn write_value<W: BinaryWriter>(
         &self,
-        writer: &mut dyn BinaryWriter,
+        writer: &mut W,
         _pos: usize,
         value: &Datum,
     ) -> Result<()> {
