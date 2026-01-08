@@ -837,55 +837,7 @@ impl LogFetcher {
             let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
 
             match next_in_line {
-                None => {
-                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
-                        if !completed_fetch.is_initialized() {
-                            let size_in_bytes = completed_fetch.size_in_bytes();
-                            match self.initialize_fetch(completed_fetch) {
-                                Ok(initialized) => {
-                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
-                                    continue;
-                                }
-                                Err(e) => {
-                                    if result.is_empty() && size_in_bytes == 0 {
-                                        continue;
-                                    }
-                                    return Err(e);
-                                }
-                            }
-                        } else {
-                            self.log_fetch_buffer
-                                .set_next_in_line_fetch(Some(completed_fetch));
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                Some(ref f) if f.is_consumed() => {
-                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
-                        if !completed_fetch.is_initialized() {
-                            let size_in_bytes = completed_fetch.size_in_bytes();
-                            match self.initialize_fetch(completed_fetch) {
-                                Ok(initialized) => {
-                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
-                                    continue;
-                                }
-                                Err(e) => {
-                                    if result.is_empty() && size_in_bytes == 0 {
-                                        continue;
-                                    }
-                                    return Err(e);
-                                }
-                            }
-                        } else {
-                            self.log_fetch_buffer
-                                .set_next_in_line_fetch(Some(completed_fetch));
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                Some(mut next_fetch) => {
+                Some(mut next_fetch) if !next_fetch.is_consumed() => {
                     let batches =
                         self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
                     let batch_count = batches.len();
@@ -905,6 +857,30 @@ impl LogFetcher {
                             .set_next_in_line_fetch(Some(next_fetch));
                     }
                 }
+                _ => {
+                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                        if !completed_fetch.is_initialized() {
+                            let size_in_bytes = completed_fetch.size_in_bytes();
+                            match self.initialize_fetch(completed_fetch) {
+                                Ok(initialized) => {
+                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    if result.is_empty() && size_in_bytes == 0 {
+                                        continue;
+                                    }
+                                    return Err(e);
+                                }
+                            }
+                        } else {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(completed_fetch));
+                        }
+                    } else {
+                        break;
+                    }
+                }
             }
         }
 
@@ -921,8 +897,7 @@ impl LogFetcher {
 
         if current_offset.is_none() {
             warn!(
-                "Ignoring fetched batches for {:?} since bucket was unsubscribed",
-                table_bucket
+                "Ignoring fetched batches for {table_bucket:?} since the bucket has been unsubscribed"
             );
             next_in_line_fetch.drain();
             return Ok(Vec::new());
@@ -943,8 +918,7 @@ impl LogFetcher {
             Ok(batches)
         } else {
             warn!(
-                "Ignoring fetched batches for {:?} at offset {}, expected {}",
-                table_bucket, fetch_offset, current_offset
+                "Ignoring fetched batches for {table_bucket:?} at offset {fetch_offset} since the current offset is {current_offset}"
             );
             next_in_line_fetch.drain();
             Ok(Vec::new())
