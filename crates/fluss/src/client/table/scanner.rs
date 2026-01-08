@@ -72,7 +72,7 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_indices` is empty or if any column index is out of range.
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner();
     /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
@@ -106,7 +106,7 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_names` is empty or if any column name is not found in the table schema.
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner();
     /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
