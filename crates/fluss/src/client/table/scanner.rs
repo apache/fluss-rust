@@ -72,8 +72,50 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_indices` is empty or if any column index is out of range.
     ///
     /// # Example
-    /// ```ignore
-    /// let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner();
+    /// ```
+    /// # use fluss::client::FlussConnection;
+    /// # use fluss::config::Config;
+    /// # use fluss::error::Result;
+    /// # use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    /// # use fluss::row::InternalRow;
+    /// # use std::time::Duration;
+    ///
+    /// # pub async fn example() -> Result<()> {
+    ///     let mut config = Config::default();
+    ///     config.bootstrap_server = Some("127.0.0.1:9123".to_string());
+    ///     let conn = FlussConnection::new(config).await?;
+    ///
+    ///     let table_descriptor = TableDescriptor::builder()
+    ///         .schema(
+    ///             Schema::builder()
+    ///                 .column("col1", DataTypes::int())
+    ///                 .column("col2", DataTypes::string())
+    ///                 .column("col3", DataTypes::string())
+    ///                 .column("col3", DataTypes::string())
+    ///             .build()?,
+    ///         ).build()?;
+    ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
+    ///     let admin = conn.get_admin().await?;
+    ///     admin.create_table(&table_path, &table_descriptor, true)
+    ///         .await?;
+    ///     let table_info = admin.get_table(&table_path).await?;
+    ///     let table = conn.get_table(&table_path).await?;
+    ///
+    ///     // Project columns by indices
+    ///     let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner()?;
+    ///     let scan_records = scanner.poll(Duration::from_secs(10)).await?;
+    ///     for record in scan_records {
+    ///         let row = record.row();
+    ///         println!(
+    ///             "{{{}, {}, {}}}@{}",
+    ///             row.get_int(0),
+    ///             row.get_string(2),
+    ///             row.get_string(3),
+    ///             record.offset()
+    ///         );
+    ///     }
+    ///     # Ok(())
+    /// # }
     /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
         if column_indices.is_empty() {
@@ -106,8 +148,48 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_names` is empty or if any column name is not found in the table schema.
     ///
     /// # Example
-    /// ```ignore
-    /// let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner();
+    /// ```
+    /// # use fluss::client::FlussConnection;
+    /// # use fluss::config::Config;
+    /// # use fluss::error::Result;
+    /// # use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    /// # use fluss::row::InternalRow;
+    /// # use std::time::Duration;
+    ///
+    /// # pub async fn example() -> Result<()> {
+    ///     let mut config = Config::default();
+    ///     config.bootstrap_server = Some("127.0.0.1:9123".to_string());
+    ///     let conn = FlussConnection::new(config).await?;
+    ///
+    ///     let table_descriptor = TableDescriptor::builder()
+    ///         .schema(
+    ///             Schema::builder()
+    ///                 .column("col1", DataTypes::int())
+    ///                 .column("col2", DataTypes::string())
+    ///                 .column("col3", DataTypes::string())
+    ///             .build()?,
+    ///         ).build()?;
+    ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
+    ///     let admin = conn.get_admin().await?;
+    ///     admin.create_table(&table_path, &table_descriptor, true)
+    ///         .await?;
+    ///     let table_info = admin.get_table(&table_path).await?;
+    ///     let table = conn.get_table(&table_path).await?;
+    ///
+    ///     // Project columns by column names
+    ///     let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner()?;
+    ///     let scan_records = scanner.poll(Duration::from_secs(10)).await?;
+    ///     for record in scan_records {
+    ///         let row = record.row();
+    ///         println!(
+    ///             "{{{}, {}}}@{}",
+    ///             row.get_int(0),
+    ///             row.get_string(1),
+    ///             record.offset()
+    ///         );
+    ///     }
+    ///     # Ok(())
+    /// # }
     /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
         if column_names.is_empty() {
