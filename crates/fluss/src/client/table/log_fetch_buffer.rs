@@ -330,11 +330,22 @@ impl DefaultCompletedFetch {
                 return Ok(None);
             };
 
-            let record_batch = log_batch.record_batch(&self.read_context)?;
+            let mut record_batch = log_batch.record_batch(&self.read_context)?;
 
             // Skip empty batches
             if record_batch.num_rows() == 0 {
                 continue;
+            }
+
+            // Truncate batch
+            let base_offset = log_batch.base_log_offset();
+            if self.next_fetch_offset > base_offset {
+                let skip_count = (self.next_fetch_offset - base_offset) as usize;
+                if skip_count >= record_batch.num_rows() {
+                    continue;
+                }
+                // Slice the batch to skip the first skip_count rows
+                record_batch = record_batch.slice(skip_count, record_batch.num_rows() - skip_count);
             }
 
             self.next_fetch_offset = log_batch.next_log_offset();
