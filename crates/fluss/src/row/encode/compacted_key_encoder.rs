@@ -61,12 +61,6 @@ impl CompactedKeyEncoder {
         Self::new(row_type, encode_col_indexes)
     }
 
-    #[cfg(test)]
-    pub fn for_test_row_type(row_type: &RowType) -> Self {
-        Self::new(row_type, (0..row_type.fields().len()).collect())
-            .expect("CompactedKeyEncoder initialization failed")
-    }
-
     pub fn new(row_type: &RowType, encode_field_pos: Vec<usize>) -> Result<CompactedKeyEncoder> {
         let mut field_getters: Vec<FieldGetter> = Vec::with_capacity(encode_field_pos.len());
         let mut field_encoders: Vec<ValueWriter> = Vec::with_capacity(encode_field_pos.len());
@@ -119,6 +113,11 @@ mod tests {
     use crate::metadata::DataTypes;
     use crate::row::{Datum, GenericRow};
 
+    pub fn for_test_row_type(row_type: &RowType) -> CompactedKeyEncoder {
+        CompactedKeyEncoder::new(row_type, (0..row_type.fields().len()).collect())
+            .expect("CompactedKeyEncoder initialization failed")
+    }
+
     #[test]
     fn test_encode_key() {
         let row_type = RowType::with_data_types(vec![
@@ -132,7 +131,7 @@ mod tests {
             Datum::from(2i32),
         ]);
 
-        let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
+        let mut encoder = for_test_row_type(&row_type);
 
         assert_eq!(
             encoder.encode_key(&row).unwrap().iter().as_slice(),
@@ -292,7 +291,7 @@ mod tests {
             // TODO: Add Map and Row fields in Issue #1973
         ]);
 
-        let mut encoder = CompactedKeyEncoder::for_test_row_type(&row_type);
+        let mut encoder = for_test_row_type(&row_type);
 
         let mut expected: Vec<u8> = Vec::new();
         // BOOLEAN: true
