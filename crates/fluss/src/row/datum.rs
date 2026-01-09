@@ -55,6 +55,8 @@ pub enum Datum<'a> {
     String(&'a str),
     #[display("{0}")]
     Blob(Blob),
+    #[display("{:?}")]
+    BorrowedBlob(&'a [u8]),
     #[display("{0}")]
     Decimal(Decimal),
     #[display("{0}")]
@@ -80,6 +82,7 @@ impl Datum<'_> {
     pub fn as_blob(&self) -> &[u8] {
         match self {
             Self::Blob(blob) => blob.as_ref(),
+            Self::BorrowedBlob(blob) => blob,
             _ => panic!("not a blob: {self:?}"),
         }
     }
@@ -289,6 +292,7 @@ impl Datum<'_> {
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, *v),
             Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
+            Datum::BorrowedBlob(v) => append_value_to_arrow!(BinaryBuilder, *v),
             Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {
                 return Err(RowConvertError {
                     message: format!(
@@ -403,6 +407,12 @@ pub struct TimestampLtz(i64);
 impl From<Vec<u8>> for Blob {
     fn from(vec: Vec<u8>) -> Self {
         Blob(vec.into())
+    }
+}
+
+impl<'a> From<&'a [u8]> for Datum<'a> {
+    fn from(bytes: &'a [u8]) -> Datum<'a> {
+        Datum::BorrowedBlob(bytes)
     }
 }
 
