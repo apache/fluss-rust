@@ -872,14 +872,13 @@ impl RowType {
         data_types: Vec<DataType>,
         field_names: Vec<&str>,
     ) -> Self {
-        let mut fields: Vec<DataField> = Vec::new();
-        data_types.iter().enumerate().for_each(|(idx, data_type)| {
-            fields.push(DataField::new(
-                field_names.get(idx).unwrap().to_string(),
-                data_type.clone(),
-                None,
-            ));
-        });
+        let fields = data_types
+            .into_iter()
+            .zip(field_names)
+            .map(|(data_type, field_name)| {
+                DataField::new(field_name.to_string(), data_type.clone(), None)
+            })
+            .collect::<Vec<_>>();
 
         Self::with_nullable(true, fields)
     }
