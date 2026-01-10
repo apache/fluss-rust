@@ -49,10 +49,7 @@ impl CompactedKeyEncoder {
                 Some(idx) => encode_col_indexes.push(idx),
                 None => {
                     return Err(IllegalArgument {
-                        message: format!(
-                            "Field {:?} not found in input row type {:?}",
-                            key, row_type
-                        ),
+                        message: format!("Field {key:?} not found in input row type {row_type:?}"),
                     });
                 }
             }
@@ -89,10 +86,7 @@ impl KeyEncoder for CompactedKeyEncoder {
             match &field_getter.get_field(row) {
                 Datum::Null => {
                     return Err(IllegalArgument {
-                        message: format!(
-                            "Cannot encode key with null value at position: {:?}",
-                            pos
-                        ),
+                        message: format!("Cannot encode key with null value at position: {pos:?}"),
                     });
                 }
                 value => self.field_encoders.get(pos).unwrap().write_value(

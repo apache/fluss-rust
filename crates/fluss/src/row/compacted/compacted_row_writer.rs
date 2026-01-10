@@ -18,6 +18,8 @@
 use bytes::{Bytes, BytesMut};
 use std::cmp;
 
+use crate::row::compacted::compacted_row::CompactedRow;
+
 // Writer for CompactedRow
 // Reference implementation:
 // https://github.com/apache/fluss/blob/d4a72fad240d4b81563aaf83fa3b09b5058674ed/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRowWriter.java#L71
@@ -34,8 +36,7 @@ impl CompactedRowWriter {
     pub const MAX_LONG_SIZE: usize = 10;
 
     pub fn new(field_count: usize) -> Self {
-        // bitset width in bytes, it should be in CompactedRow
-        let header_size = field_count.div_ceil(8);
+        let header_size = CompactedRow::calculate_bit_set_width_in_bytes(field_count);
         let cap = cmp::max(64, header_size);
 
         let mut buffer = BytesMut::with_capacity(cap);
