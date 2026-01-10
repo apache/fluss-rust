@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{ApiError, Error, Result};
 use arrow::array::RecordBatch;
 use parking_lot::Mutex;
 
+use crate::error::{ApiError, Error, Result};
 use crate::metadata::TableBucket;
 use crate::record::{
     LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
@@ -491,7 +491,6 @@ impl DefaultCompletedFetch {
             source: None,
         }
     }
-
     /// Get the next batch directly without row iteration
     fn next_fetched_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
