@@ -469,4 +469,137 @@ mod table_test {
         records.sort_by_key(|r| r.offset());
         records
     }
+
+    #[tokio::test]
+    async fn test_poll_batches() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_poll_batches".to_string());
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .unwrap();
+
+        create_table(
+            &admin,
+            &table_path,
+            &TableDescriptor::builder().schema(schema).build().unwrap(),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let table = connection.get_table(&table_path).await.unwrap();
+        let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+        scanner.subscribe(0, 0).await.unwrap();
+
+        // Test 1: Empty table should return empty result
+        assert!(
+            scanner
+                .poll(Duration::from_millis(500))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let writer = table.new_append().unwrap().create_writer();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
+            )
+            .await
+            .unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [3, 4]), ("name", Utf8, ["c", "d"])).unwrap(),
+            )
+            .await
+            .unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [5, 6]), ("name", Utf8, ["e", "f"])).unwrap(),
+            )
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        use arrow::array::Int32Array;
+        let batches = scanner.poll(Duration::from_secs(10)).await.unwrap();
+        let mut all_ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                (0..b.num_rows()).map(|i| {
+                    b.column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .value(i)
+                })
+            })
+            .collect();
+
+        // Test 2: Order should be preserved across multiple batches
+        assert_eq!(all_ids, vec![1, 2, 3, 4, 5, 6]);
+
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [7, 8]), ("name", Utf8, ["g", "h"])).unwrap(),
+            )
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let more = scanner.poll(Duration::from_secs(10)).await.unwrap();
+        let new_ids: Vec<i32> = more
+            .iter()
+            .flat_map(|b| {
+                (0..b.num_rows()).map(|i| {
+                    b.column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .value(i)
+                })
+            })
+            .collect();
+
+        // Test 3: Subsequent polls should not return duplicate data (offset continuation)
+        assert_eq!(new_ids, vec![7, 8]);
+
+        // Test 4: Subscribing from mid-offset should truncate batch (Arrow batch slicing)
+        // Server returns all records from start of batch, but client truncates to subscription offset
+        let trunc_scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+        trunc_scanner.subscribe(0, 3).await.unwrap();
+        let trunc_batches = trunc_scanner.poll(Duration::from_secs(10)).await.unwrap();
+        let trunc_ids: Vec<i32> = trunc_batches
+            .iter()
+            .flat_map(|b| {
+                (0..b.num_rows()).map(|i| {
+                    b.column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .value(i)
+                })
+            })
+            .collect();
+
+        // Subscribing from offset 3 should return [4,5,6,7,8], not [1,2,3,4,5,6,7,8]
+        assert_eq!(trunc_ids, vec![4, 5, 6, 7, 8]);
+
+        // Test 5: Projection should only return requested columns
+        let proj = table
+            .new_scan()
+            .project_by_name(&["id"])
+            .unwrap()
+            .create_record_batch_log_scanner()
+            .unwrap();
+        proj.subscribe(0, 0).await.unwrap();
+        let proj_batches = proj.poll(Duration::from_secs(10)).await.unwrap();
+
+        // Projected batch should have 1 column (id), not 2 (id, name)
+        assert_eq!(proj_batches[0].num_columns(), 1);
+    }
 }

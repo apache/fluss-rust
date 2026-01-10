@@ -15,6 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::RecordBatch;
+use arrow_schema::SchemaRef;
+use log::{debug, error, warn};
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::slice::from_ref;
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::TempDir;
+
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
@@ -30,14 +40,6 @@ use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTabl
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::{RpcClient, message};
 use crate::util::FairBucketStatusMap;
-use arrow_schema::SchemaRef;
-use log::{debug, error, warn};
-use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet};
-use std::slice::from_ref;
-use std::sync::Arc;
-use std::time::Duration;
-use tempfile::TempDir;
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 #[allow(dead_code)]
@@ -72,11 +74,49 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_indices` is empty or if any column index is out of range.
     ///
     /// # Example
-    /// ```no_run
-    /// # fn example() -> fluss::error::Result<()> {
-    /// # let table: fluss::client::FlussTable<'_> = todo!("requires a Fluss connection");
-    /// let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner()?;
-    /// # Ok(())
+    /// ```
+    /// # use fluss::client::FlussConnection;
+    /// # use fluss::config::Config;
+    /// # use fluss::error::Result;
+    /// # use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    /// # use fluss::row::InternalRow;
+    /// # use std::time::Duration;
+    ///
+    /// # pub async fn example() -> Result<()> {
+    ///     let mut config = Config::default();
+    ///     config.bootstrap_server = Some("127.0.0.1:9123".to_string());
+    ///     let conn = FlussConnection::new(config).await?;
+    ///
+    ///     let table_descriptor = TableDescriptor::builder()
+    ///         .schema(
+    ///             Schema::builder()
+    ///                 .column("col1", DataTypes::int())
+    ///                 .column("col2", DataTypes::string())
+    ///                 .column("col3", DataTypes::string())
+    ///                 .column("col3", DataTypes::string())
+    ///             .build()?,
+    ///         ).build()?;
+    ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
+    ///     let admin = conn.get_admin().await?;
+    ///     admin.create_table(&table_path, &table_descriptor, true)
+    ///         .await?;
+    ///     let table_info = admin.get_table(&table_path).await?;
+    ///     let table = conn.get_table(&table_path).await?;
+    ///
+    ///     // Project columns by indices
+    ///     let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner()?;
+    ///     let scan_records = scanner.poll(Duration::from_secs(10)).await?;
+    ///     for record in scan_records {
+    ///         let row = record.row();
+    ///         println!(
+    ///             "{{{}, {}, {}}}@{}",
+    ///             row.get_int(0),
+    ///             row.get_string(2),
+    ///             row.get_string(3),
+    ///             record.offset()
+    ///         );
+    ///     }
+    ///     # Ok(())
     /// # }
     /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
@@ -110,14 +150,47 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_names` is empty or if any column name is not found in the table schema.
     ///
     /// # Example
-    /// ```no_run
-    /// # fn example() -> fluss::error::Result<()> {
-    /// # let table: fluss::client::FlussTable<'_> = todo!("requires a Fluss connection");
-    /// let scanner = table
-    ///     .new_scan()
-    ///     .project_by_name(&["col1", "col3"])?
-    ///     .create_log_scanner()?;
-    /// # Ok(())
+    /// ```
+    /// # use fluss::client::FlussConnection;
+    /// # use fluss::config::Config;
+    /// # use fluss::error::Result;
+    /// # use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    /// # use fluss::row::InternalRow;
+    /// # use std::time::Duration;
+    ///
+    /// # pub async fn example() -> Result<()> {
+    ///     let mut config = Config::default();
+    ///     config.bootstrap_server = Some("127.0.0.1:9123".to_string());
+    ///     let conn = FlussConnection::new(config).await?;
+    ///
+    ///     let table_descriptor = TableDescriptor::builder()
+    ///         .schema(
+    ///             Schema::builder()
+    ///                 .column("col1", DataTypes::int())
+    ///                 .column("col2", DataTypes::string())
+    ///                 .column("col3", DataTypes::string())
+    ///             .build()?,
+    ///         ).build()?;
+    ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
+    ///     let admin = conn.get_admin().await?;
+    ///     admin.create_table(&table_path, &table_descriptor, true)
+    ///         .await?;
+    ///     let table_info = admin.get_table(&table_path).await?;
+    ///     let table = conn.get_table(&table_path).await?;
+    ///
+    ///     // Project columns by column names
+    ///     let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner()?;
+    ///     let scan_records = scanner.poll(Duration::from_secs(10)).await?;
+    ///     for record in scan_records {
+    ///         let row = record.row();
+    ///         println!(
+    ///             "{{{}, {}}}@{}",
+    ///             row.get_int(0),
+    ///             row.get_string(1),
+    ///             record.offset()
+    ///         );
+    ///     }
+    ///     # Ok(())
     /// # }
     /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
@@ -145,16 +218,48 @@ impl<'a> TableScan<'a> {
     }
 
     pub fn create_log_scanner(self) -> Result<LogScanner> {
-        LogScanner::new(
+        let inner = LogScannerInner::new(
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
             self.projected_fields,
-        )
+        )?;
+        Ok(LogScanner {
+            inner: Arc::new(inner),
+        })
+    }
+
+    pub fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner> {
+        let inner = LogScannerInner::new(
+            &self.table_info,
+            self.metadata.clone(),
+            self.conn.get_connections(),
+            self.projected_fields,
+        )?;
+        Ok(RecordBatchLogScanner {
+            inner: Arc::new(inner),
+        })
     }
 }
 
+/// Scanner for reading log records one at a time with per-record metadata.
+///
+/// Use this scanner when you need access to individual record offsets and timestamps.
+/// For batch-level access, use [`RecordBatchLogScanner`] instead.
 pub struct LogScanner {
+    inner: Arc<LogScannerInner>,
+}
+
+/// Scanner for reading log data as Arrow RecordBatches.
+///
+/// More efficient than [`LogScanner`] for batch-level analytics where per-record
+/// metadata (offsets, timestamps) is not needed.
+pub struct RecordBatchLogScanner {
+    inner: Arc<LogScannerInner>,
+}
+
+/// Private shared implementation for both scanner types
+struct LogScannerInner {
     table_path: TablePath,
     table_id: i64,
     metadata: Arc<Metadata>,
@@ -162,8 +267,8 @@ pub struct LogScanner {
     log_fetcher: LogFetcher,
 }
 
-impl LogScanner {
-    pub fn new(
+impl LogScannerInner {
+    fn new(
         table_info: &TableInfo,
         metadata: Arc<Metadata>,
         connections: Arc<RpcClient>,
@@ -185,7 +290,7 @@ impl LogScanner {
         })
     }
 
-    pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
+    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
         let start = std::time::Instant::now();
         let deadline = start + timeout;
 
@@ -224,7 +329,7 @@ impl LogScanner {
         }
     }
 
-    pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+    async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
         let table_bucket = TableBucket::new(self.table_id, bucket);
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
@@ -234,7 +339,7 @@ impl LogScanner {
         Ok(())
     }
 
-    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+    async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
@@ -267,6 +372,76 @@ impl LogScanner {
 
         // Collect completed fetches from buffer
         self.log_fetcher.collect_fetches()
+    }
+
+    async fn poll_batches(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+        let start = std::time::Instant::now();
+        let deadline = start + timeout;
+
+        loop {
+            let batches = self.poll_for_batches().await?;
+
+            if !batches.is_empty() {
+                self.log_fetcher.send_fetches().await?;
+                return Ok(batches);
+            }
+
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Ok(Vec::new());
+            }
+
+            let remaining = deadline - now;
+            let has_data = self
+                .log_fetcher
+                .log_fetch_buffer
+                .await_not_empty(remaining)
+                .await;
+
+            if !has_data {
+                return Ok(Vec::new());
+            }
+        }
+    }
+
+    async fn poll_for_batches(&self) -> Result<Vec<RecordBatch>> {
+        let result = self.log_fetcher.collect_batches()?;
+        if !result.is_empty() {
+            return Ok(result);
+        }
+
+        self.log_fetcher.send_fetches().await?;
+        self.log_fetcher.collect_batches()
+    }
+}
+
+// Implementation for LogScanner (records mode)
+impl LogScanner {
+    pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
+        self.inner.poll_records(timeout).await
+    }
+
+    pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+        self.inner.subscribe(bucket, offset).await
+    }
+
+    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.inner.subscribe_batch(bucket_offsets).await
+    }
+}
+
+// Implementation for RecordBatchLogScanner (batches mode)
+impl RecordBatchLogScanner {
+    pub async fn poll(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+        self.inner.poll_batches(timeout).await
+    }
+
+    pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+        self.inner.subscribe(bucket, offset).await
+    }
+
+    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.inner.subscribe_batch(bucket_offsets).await
     }
 }
 
@@ -724,6 +899,108 @@ impl LogFetcher {
             // These records aren't next in line, ignore them
             warn!(
                 "Ignoring fetched records for {table_bucket:?} at offset {fetch_offset} since the current offset is {current_offset}"
+            );
+            next_in_line_fetch.drain();
+            Ok(Vec::new())
+        }
+    }
+
+    /// Collect completed fetches as RecordBatches
+    fn collect_batches(&self) -> Result<Vec<RecordBatch>> {
+        // Limit memory usage with both batch count and byte size constraints.
+        // Max 100 batches per poll, but also check total bytes (soft cap ~64MB).
+        const MAX_BATCHES: usize = 100;
+        const MAX_BYTES: usize = 64 * 1024 * 1024; // 64MB soft cap
+        let mut result: Vec<RecordBatch> = Vec::new();
+        let mut batches_remaining = MAX_BATCHES;
+        let mut bytes_consumed: usize = 0;
+
+        while batches_remaining > 0 && bytes_consumed < MAX_BYTES {
+            let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
+
+            match next_in_line {
+                Some(mut next_fetch) if !next_fetch.is_consumed() => {
+                    let batches =
+                        self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
+                    let batch_count = batches.len();
+
+                    if !batches.is_empty() {
+                        // Track bytes consumed (soft cap - may exceed by one fetch)
+                        let batch_bytes: usize =
+                            batches.iter().map(|b| b.get_array_memory_size()).sum();
+                        bytes_consumed += batch_bytes;
+
+                        result.extend(batches);
+                        batches_remaining = batches_remaining.saturating_sub(batch_count);
+                    }
+
+                    if !next_fetch.is_consumed() {
+                        self.log_fetch_buffer
+                            .set_next_in_line_fetch(Some(next_fetch));
+                    }
+                }
+                _ => {
+                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                        if !completed_fetch.is_initialized() {
+                            let size_in_bytes = completed_fetch.size_in_bytes();
+                            match self.initialize_fetch(completed_fetch) {
+                                Ok(initialized) => {
+                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    if result.is_empty() && size_in_bytes == 0 {
+                                        continue;
+                                    }
+                                    return Err(e);
+                                }
+                            }
+                        } else {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(completed_fetch));
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn fetch_batches_from_fetch(
+        &self,
+        next_in_line_fetch: &mut Box<dyn CompletedFetch>,
+        max_batches: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        let table_bucket = next_in_line_fetch.table_bucket().clone();
+        let current_offset = self.log_scanner_status.get_bucket_offset(&table_bucket);
+
+        if current_offset.is_none() {
+            warn!(
+                "Ignoring fetched batches for {table_bucket:?} since the bucket has been unsubscribed"
+            );
+            next_in_line_fetch.drain();
+            return Ok(Vec::new());
+        }
+
+        let current_offset = current_offset.unwrap();
+        let fetch_offset = next_in_line_fetch.next_fetch_offset();
+
+        if fetch_offset == current_offset {
+            let batches = next_in_line_fetch.fetch_batches(max_batches)?;
+            let next_fetch_offset = next_in_line_fetch.next_fetch_offset();
+
+            if next_fetch_offset > current_offset {
+                self.log_scanner_status
+                    .update_offset(&table_bucket, next_fetch_offset);
+            }
+
+            Ok(batches)
+        } else {
+            warn!(
+                "Ignoring fetched batches for {table_bucket:?} at offset {fetch_offset} since the current offset is {current_offset}"
             );
             next_in_line_fetch.drain();
             Ok(Vec::new())

@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::RecordBatch;
+use parking_lot::Mutex;
+
 use crate::error::Result;
 use crate::metadata::TableBucket;
 use crate::record::{
     LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
 };
-use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +33,7 @@ use tokio::sync::Notify;
 pub trait CompletedFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>>;
+    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<RecordBatch>>;
     fn is_consumed(&self) -> bool;
     fn drain(&mut self);
     fn size_in_bytes(&self) -> usize;
@@ -318,6 +321,38 @@ impl DefaultCompletedFetch {
             }
         }
     }
+
+    /// Get the next batch directly without row iteration
+    fn next_fetched_batch(&mut self) -> Result<Option<RecordBatch>> {
+        loop {
+            let Some(log_batch) = self.log_record_batch.next() else {
+                self.drain();
+                return Ok(None);
+            };
+
+            let mut record_batch = log_batch.record_batch(&self.read_context)?;
+
+            // Skip empty batches
+            if record_batch.num_rows() == 0 {
+                continue;
+            }
+
+            // Truncate batch
+            let base_offset = log_batch.base_log_offset();
+            if self.next_fetch_offset > base_offset {
+                let skip_count = (self.next_fetch_offset - base_offset) as usize;
+                if skip_count >= record_batch.num_rows() {
+                    continue;
+                }
+                // Slice the batch to skip the first skip_count rows
+                record_batch = record_batch.slice(skip_count, record_batch.num_rows() - skip_count);
+            }
+
+            self.next_fetch_offset = log_batch.next_log_offset();
+            self.records_read += record_batch.num_rows();
+            return Ok(Some(record_batch));
+        }
+    }
 }
 
 impl CompletedFetch for DefaultCompletedFetch {
@@ -344,6 +379,23 @@ impl CompletedFetch for DefaultCompletedFetch {
         }
 
         Ok(scan_records)
+    }
+
+    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<RecordBatch>> {
+        if self.consumed {
+            return Ok(Vec::new());
+        }
+
+        let mut batches = Vec::with_capacity(max_batches.min(16));
+
+        for _ in 0..max_batches {
+            match self.next_fetched_batch()? {
+                Some(batch) => batches.push(batch),
+                None => break,
+            }
+        }
+
+        Ok(batches)
     }
 
     fn is_consumed(&self) -> bool {
