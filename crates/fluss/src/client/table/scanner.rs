@@ -72,8 +72,12 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_indices` is empty or if any column index is out of range.
     ///
     /// # Example
-    /// ```
-    /// let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner();
+    /// ```no_run
+    /// # fn example() -> fluss::error::Result<()> {
+    /// # let table: fluss::client::FlussTable<'_> = todo!("requires a Fluss connection");
+    /// let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner()?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn project(mut self, column_indices: &[usize]) -> Result<Self> {
         if column_indices.is_empty() {
@@ -106,8 +110,15 @@ impl<'a> TableScan<'a> {
     /// Returns an error if `column_names` is empty or if any column name is not found in the table schema.
     ///
     /// # Example
-    /// ```
-    /// let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner();
+    /// ```no_run
+    /// # fn example() -> fluss::error::Result<()> {
+    /// # let table: fluss::client::FlussTable<'_> = todo!("requires a Fluss connection");
+    /// let scanner = table
+    ///     .new_scan()
+    ///     .project_by_name(&["col1", "col3"])?
+    ///     .create_log_scanner()?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
         if column_names.is_empty() {
