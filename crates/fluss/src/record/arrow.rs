@@ -546,6 +546,28 @@ impl LogRecordBatch {
         };
         Ok(log_record_iterator)
     }
+
+    /// Returns the record batch directly without creating an iterator.
+    /// This is more efficient when you need the entire batch rather than
+    /// iterating row-by-row.
+    pub fn record_batch(&self, read_context: &ReadContext) -> Result<RecordBatch> {
+        if self.record_count() == 0 {
+            // Return empty batch with correct schema
+            return Ok(RecordBatch::new_empty(read_context.target_schema.clone()));
+        }
+
+        let data = self.data.get(RECORDS_OFFSET..).ok_or_else(|| {
+            crate::error::Error::UnexpectedError {
+                message: format!(
+                    "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
+                    self.data.len(),
+                    RECORDS_OFFSET
+                ),
+                source: None,
+            }
+        })?;
+        read_context.record_batch(data)
+    }
 }
 
 /// Parse an Arrow IPC message from a byte slice.
