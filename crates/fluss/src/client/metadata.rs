@@ -178,8 +178,11 @@ mod tests {
     fn build_cluster(table_path: &TablePath, table_id: i64) -> Arc<Cluster> {
         let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
         let table_bucket = TableBucket::new(table_id, 0);
-        let bucket_location =
-            BucketLocation::new(table_bucket.clone(), Some(server.clone()), table_path.clone());
+        let bucket_location = BucketLocation::new(
+            table_bucket.clone(),
+            Some(server.clone()),
+            table_path.clone(),
+        );
 
         let mut servers = HashMap::new();
         servers.insert(server.id(), server);
@@ -194,7 +197,10 @@ mod tests {
         table_id_by_path.insert(table_path.clone(), table_id);
 
         let mut table_info_by_path = HashMap::new();
-        table_info_by_path.insert(table_path.clone(), build_table_info(table_path.clone(), table_id));
+        table_info_by_path.insert(
+            table_path.clone(),
+            build_table_info(table_path.clone(), table_id),
+        );
 
         Arc::new(Cluster::new(
             None,
@@ -211,7 +217,9 @@ mod tests {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let cluster = build_cluster(&table_path, 1);
         let metadata = Metadata::new_for_test(cluster);
-        let leader = metadata.leader_for(&TableBucket::new(1, 0)).expect("leader");
+        let leader = metadata
+            .leader_for(&TableBucket::new(1, 0))
+            .expect("leader");
         assert_eq!(leader.id(), 1);
     }
 

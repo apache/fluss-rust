@@ -123,7 +123,8 @@ impl Sender {
         collated: HashMap<i32, Vec<ReadyWriteBatch>>,
     ) -> Result<()> {
         for (leader_id, batches) in collated {
-            self.send_write_request(leader_id, self.ack, batches).await?;
+            self.send_write_request(leader_id, self.ack, batches)
+                .await?;
         }
         Ok(())
     }
@@ -151,19 +152,18 @@ impl Sender {
 
         let cluster = self.metadata.get_cluster();
 
-        let destination_node =
-            match cluster.get_tablet_server(destination) {
-                Some(node) => node,
-                None => {
-                    self.handle_batches_with_error(
-                        records_by_bucket.into_values().collect(),
-                        FlussError::LeaderNotAvailableException,
-                        format!("Destination node not found in metadata cache {destination}."),
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            };
+        let destination_node = match cluster.get_tablet_server(destination) {
+            Some(node) => node,
+            None => {
+                self.handle_batches_with_error(
+                    records_by_bucket.into_values().collect(),
+                    FlussError::LeaderNotAvailableException,
+                    format!("Destination node not found in metadata cache {destination}."),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
         let connection = match self.metadata.get_connection(destination_node).await {
             Ok(connection) => connection,
             Err(e) => {
@@ -263,8 +263,9 @@ impl Sender {
                     .error_message
                     .clone()
                     .unwrap_or_else(|| error.message().to_string());
-                if let Some(table_path) =
-                    self.handle_write_batch_error(ready_batch, error, message).await?
+                if let Some(table_path) = self
+                    .handle_write_batch_error(ready_batch, error, message)
+                    .await?
                 {
                     invalid_metadata_tables.insert(table_path);
                 }
@@ -275,19 +276,20 @@ impl Sender {
         if !pending_buckets.is_empty() {
             for bucket in pending_buckets {
                 if let Some(ready_batch) = records_by_bucket.remove(&bucket) {
-                    let message = format!(
-                        "Missing response for table bucket {bucket} in produce response."
-                    );
+                    let message =
+                        format!("Missing response for table bucket {bucket} in produce response.");
                     let error = FlussError::UnknownServerError;
-                    if let Some(table_path) =
-                        self.handle_write_batch_error(ready_batch, error, message).await?
+                    if let Some(table_path) = self
+                        .handle_write_batch_error(ready_batch, error, message)
+                        .await?
                     {
                         invalid_metadata_tables.insert(table_path);
                     }
                 }
             }
         }
-        self.update_metadata_if_needed(invalid_metadata_tables).await;
+        self.update_metadata_if_needed(invalid_metadata_tables)
+            .await;
         Ok(())
     }
 
@@ -316,13 +318,15 @@ impl Sender {
     ) -> Result<()> {
         let mut invalid_metadata_tables: HashSet<TablePath> = HashSet::new();
         for batch in batches {
-            if let Some(table_path) =
-                self.handle_write_batch_error(batch, error, message.clone()).await?
+            if let Some(table_path) = self
+                .handle_write_batch_error(batch, error, message.clone())
+                .await?
             {
                 invalid_metadata_tables.insert(table_path);
             }
         }
-        self.update_metadata_if_needed(invalid_metadata_tables).await;
+        self.update_metadata_if_needed(invalid_metadata_tables)
+            .await;
         Ok(())
     }
 
@@ -417,9 +421,9 @@ impl Sender {
         )
     }
 
-pub async fn close(&mut self) {
-    self.running = false;
-}
+    pub async fn close(&mut self) {
+        self.running = false;
+    }
 }
 
 #[cfg(test)]
@@ -429,9 +433,9 @@ mod tests {
     use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
     use crate::config::Config;
     use crate::metadata::{DataField, DataTypes, Schema, TableDescriptor, TableInfo, TablePath};
+    use crate::proto::{PbProduceLogRespForBucket, ProduceLogResponse};
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::proto::{PbProduceLogRespForBucket, ProduceLogResponse};
     use std::collections::HashSet;
 
     fn build_table_info(table_path: TablePath, table_id: i64) -> TableInfo {
@@ -453,8 +457,11 @@ mod tests {
     fn build_cluster(table_path: &TablePath, table_id: i64) -> Arc<Cluster> {
         let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
         let table_bucket = TableBucket::new(table_id, 0);
-        let bucket_location =
-            BucketLocation::new(table_bucket.clone(), Some(server.clone()), table_path.clone());
+        let bucket_location = BucketLocation::new(
+            table_bucket.clone(),
+            Some(server.clone()),
+            table_path.clone(),
+        );
 
         let mut servers = HashMap::new();
         servers.insert(server.id(), server);
@@ -511,14 +518,7 @@ mod tests {
         let cluster = build_cluster(table_path.as_ref(), 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(
-            metadata,
-            accumulator.clone(),
-            1024 * 1024,
-            1000,
-            1,
-            1,
-        );
+        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 1);
 
         let (batch, _handle) =
             build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone()).await?;
@@ -528,11 +528,7 @@ mod tests {
         let batch = inflight.remove(&1).unwrap().pop().unwrap();
 
         sender
-            .handle_write_batch_error(
-                batch,
-                FlussError::RequestTimeOut,
-                "timeout".to_string(),
-            )
+            .handle_write_batch_error(batch, FlussError::RequestTimeOut, "timeout".to_string())
             .await?;
 
         let server = cluster.get_tablet_server(1).expect("server");
@@ -550,14 +546,7 @@ mod tests {
         let cluster = build_cluster(table_path.as_ref(), 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(
-            metadata,
-            accumulator.clone(),
-            1024 * 1024,
-            1000,
-            1,
-            0,
-        );
+        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
 
         let (batch, handle) =
             build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path).await?;
@@ -584,17 +573,9 @@ mod tests {
         let cluster = build_cluster(table_path.as_ref(), 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(
-            metadata,
-            accumulator.clone(),
-            1024 * 1024,
-            1000,
-            1,
-            0,
-        );
+        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
 
-        let (batch, handle) =
-            build_ready_batch(accumulator.as_ref(), cluster, table_path).await?;
+        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster, table_path).await?;
         let request_buckets = vec![batch.table_bucket.clone()];
         let mut records_by_bucket = HashMap::new();
         records_by_bucket.insert(batch.table_bucket.clone(), batch);
@@ -626,17 +607,9 @@ mod tests {
         let cluster = build_cluster(table_path.as_ref(), 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(
-            metadata,
-            accumulator.clone(),
-            1024 * 1024,
-            1000,
-            1,
-            0,
-        );
+        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
 
-        let (batch, handle) =
-            build_ready_batch(accumulator.as_ref(), cluster, table_path).await?;
+        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster, table_path).await?;
         let request_buckets = vec![batch.table_bucket.clone()];
         let mut records_by_bucket = HashMap::new();
         records_by_bucket.insert(batch.table_bucket.clone(), batch);

@@ -169,8 +169,7 @@ mod tests {
         assert_eq!(key, "endpoint");
         assert!(!invert);
 
-        let (key, invert) =
-            convert_hadoop_key_to_opendal("fs.s3a.path.style.access").expect("key");
+        let (key, invert) = convert_hadoop_key_to_opendal("fs.s3a.path.style.access").expect("key");
         assert_eq!(key, "enable_virtual_host_style");
         assert!(invert);
 

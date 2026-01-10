@@ -184,8 +184,11 @@ mod tests {
 
         for bucket_id in 0..buckets {
             let table_bucket = TableBucket::new(table_id, bucket_id);
-            let bucket_location =
-                BucketLocation::new(table_bucket.clone(), Some(server.clone()), table_path.clone());
+            let bucket_location = BucketLocation::new(
+                table_bucket.clone(),
+                Some(server.clone()),
+                table_path.clone(),
+            );
             bucket_locations.push(bucket_location.clone());
             locations_by_bucket.insert(table_bucket, bucket_location);
         }

@@ -243,24 +243,16 @@ mod tests {
 
     #[test]
     fn complete_only_once() {
-        let batch = InnerWriteBatch::new(
-            1,
-            TablePath::new("db".to_string(), "tbl".to_string()),
-            0,
-            0,
-        );
+        let batch =
+            InnerWriteBatch::new(1, TablePath::new("db".to_string(), "tbl".to_string()), 0, 0);
         assert!(batch.complete(Ok(())));
         assert!(!batch.complete(Err(crate::client::broadcast::Error::Dropped)));
     }
 
     #[test]
     fn attempts_increment_on_reenqueue() {
-        let batch = InnerWriteBatch::new(
-            1,
-            TablePath::new("db".to_string(), "tbl".to_string()),
-            0,
-            0,
-        );
+        let batch =
+            InnerWriteBatch::new(1, TablePath::new("db".to_string(), "tbl".to_string()), 0, 0);
         assert_eq!(batch.attempts(), 0);
         batch.re_enqueued();
         assert_eq!(batch.attempts(), 1);

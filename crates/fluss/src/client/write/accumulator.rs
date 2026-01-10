@@ -347,15 +347,15 @@ impl RecordAccumulator {
         let table_path = ready_write_batch.write_batch.table_path().clone();
         let bucket_id = ready_write_batch.table_bucket.bucket_id();
         let table_id = u64::try_from(ready_write_batch.table_bucket.table_id()).unwrap_or(0);
-        let mut binding = self
-            .write_batches
-            .entry(table_path)
-            .or_insert_with(|| BucketAndWriteBatches {
-                table_id,
-                is_partitioned_table: false,
-                partition_id: None,
-                batches: Default::default(),
-            });
+        let mut binding =
+            self.write_batches
+                .entry(table_path)
+                .or_insert_with(|| BucketAndWriteBatches {
+                    table_id,
+                    is_partitioned_table: false,
+                    partition_id: None,
+                    batches: Default::default(),
+                });
         let bucket_and_batches = binding.value_mut();
         let dq = bucket_and_batches
             .batches
@@ -433,8 +433,11 @@ mod tests {
     fn build_cluster(table_path: &TablePath, table_id: i64) -> Cluster {
         let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
         let table_bucket = TableBucket::new(table_id, 0);
-        let bucket_location =
-            BucketLocation::new(table_bucket.clone(), Some(server.clone()), table_path.clone());
+        let bucket_location = BucketLocation::new(
+            table_bucket.clone(),
+            Some(server.clone()),
+            table_path.clone(),
+        );
 
         let mut servers = HashMap::new();
         servers.insert(server.id(), server);
@@ -449,7 +452,10 @@ mod tests {
         table_id_by_path.insert(table_path.clone(), table_id);
 
         let mut table_info_by_path = HashMap::new();
-        table_info_by_path.insert(table_path.clone(), build_table_info(table_path.clone(), table_id));
+        table_info_by_path.insert(
+            table_path.clone(),
+            build_table_info(table_path.clone(), table_id),
+        );
 
         Cluster::new(
             None,
@@ -478,7 +484,9 @@ mod tests {
 
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
-        let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024).await?;
+        let mut batches = accumulator
+            .drain(cluster.clone(), &nodes, 1024 * 1024)
+            .await?;
         let mut drained = batches.remove(&1).expect("drained batches");
         let batch = drained.pop().expect("batch");
         assert_eq!(batch.write_batch.attempts(), 0);
