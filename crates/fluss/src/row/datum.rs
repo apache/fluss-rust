@@ -117,14 +117,14 @@ pub type Str<'a> = Cow<'a, str>;
 impl<'a> From<String> for Datum<'a> {
     #[inline]
     fn from(s: String) -> Self {
-        Datum::String(Str::from(s))
+        Datum::String(Cow::Owned(s))
     }
 }
 
 impl<'a> From<&'a str> for Datum<'a> {
     #[inline]
     fn from(s: &'a str) -> Datum<'a> {
-        Datum::String(Str::from(s))
+        Datum::String(Cow::Borrowed(s))
     }
 }
 
