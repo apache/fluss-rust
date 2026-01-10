@@ -24,11 +24,10 @@ use arrow::array::{
 use jiff::ToSpan;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
-use ref_cast::RefCast;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fmt;
-use std::ops::Deref;
 
 #[allow(dead_code)]
 const THIRTY_YEARS_MICROSECONDS: i64 = 946_684_800_000_000;
@@ -57,9 +56,7 @@ pub enum Datum<'a> {
     #[display("'{0}'")]
     OwnedString(String),
     #[display("{0}")]
-    Blob(Blob),
-    #[display("{:?}")]
-    BorrowedBlob(&'a [u8]),
+    Blob(Blob<'a>),
     #[display("{0}")]
     Decimal(Decimal),
     #[display("{0}")]
@@ -86,7 +83,6 @@ impl Datum<'_> {
     pub fn as_blob(&self) -> &[u8] {
         match self {
             Self::Blob(blob) => blob.as_ref(),
-            Self::BorrowedBlob(blob) => blob,
             _ => panic!("not a blob: {self:?}"),
         }
     }
@@ -298,7 +294,6 @@ impl Datum<'_> {
             Datum::String(v) => append_value_to_arrow!(StringBuilder, *v),
             Datum::OwnedString(v) => append_value_to_arrow!(StringBuilder, v.as_str()),
             Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
-            Datum::BorrowedBlob(v) => append_value_to_arrow!(BinaryBuilder, *v),
             Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {
                 return Err(RowConvertError {
                     message: format!(
@@ -353,51 +348,34 @@ pub type F64 = OrderedFloat<f64>;
 pub type Str = Box<str>;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize, Default)]
-pub struct Blob(Box<[u8]>);
+pub struct Blob<'a>(Cow<'a, [u8]>);
 
-impl Deref for Blob {
-    type Target = BlobRef;
-
-    fn deref(&self) -> &Self::Target {
-        BlobRef::new(&self.0)
+impl<'a> From<Vec<u8>> for Blob<'a> {
+    fn from(v: Vec<u8>) -> Blob<'a> {
+        Blob(Cow::Owned(v))
+    }
+}
+impl<'a> From<&'a [u8]> for Blob<'a> {
+    fn from(v: &'a [u8]) -> Blob<'a> {
+        Blob(Cow::Borrowed(v))
     }
 }
 
-impl BlobRef {
-    pub fn new(bytes: &[u8]) -> &Self {
-        // SAFETY: `&BlobRef` and `&[u8]` have the same layout.
-        BlobRef::ref_cast(bytes)
-    }
-}
-
-/// A slice of a blob.
-#[repr(transparent)]
-#[derive(PartialEq, Eq, PartialOrd, Ord, RefCast, Hash)]
-pub struct BlobRef([u8]);
-
-impl fmt::Debug for Blob {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.as_ref())
-    }
-}
-
-impl fmt::Display for Blob {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.as_ref())
-    }
-}
-
-impl AsRef<[u8]> for BlobRef {
+impl<'a> AsRef<[u8]> for Blob<'a> {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
 
-impl Deref for BlobRef {
-    type Target = [u8];
+impl<'a> fmt::Debug for Blob<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.as_ref())
+    }
+}
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl<'a> fmt::Display for Blob<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.as_ref())
     }
 }
 
@@ -410,15 +388,15 @@ pub struct Timestamp(i64);
 #[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
 pub struct TimestampLtz(i64);
 
-impl From<Vec<u8>> for Blob {
+impl<'a> From<Vec<u8>> for Datum<'a> {
     fn from(vec: Vec<u8>) -> Self {
-        Blob(vec.into())
+        Datum::Blob(Blob::from(vec))
     }
 }
 
 impl<'a> From<&'a [u8]> for Datum<'a> {
     fn from(bytes: &'a [u8]) -> Datum<'a> {
-        Datum::BorrowedBlob(bytes)
+        Datum::Blob(Blob::from(bytes))
     }
 }
 
