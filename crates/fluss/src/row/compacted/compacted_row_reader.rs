@@ -212,6 +212,7 @@ impl CompactedRowReader {
 
     pub fn read_string(&mut self) -> String {
         let bytes = self.read_bytes();
-        String::from_utf8(bytes.into_vec()).unwrap_or_else(|e| panic!("Invalid UTF-8 in string data: {e}"))
+        String::from_utf8(bytes.into_vec())
+            .unwrap_or_else(|e| panic!("Invalid UTF-8 in string data: {e}"))
     }
 }
