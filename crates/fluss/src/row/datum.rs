@@ -55,6 +55,8 @@ pub enum Datum<'a> {
     String(&'a str),
     #[display("{0}")]
     Blob(Blob),
+    #[display("{:?}")]
+    BorrowedBlob(&'a [u8]),
     #[display("{0}")]
     Decimal(Decimal),
     #[display("{0}")]
@@ -80,6 +82,7 @@ impl Datum<'_> {
     pub fn as_blob(&self) -> &[u8] {
         match self {
             Self::Blob(blob) => blob.as_ref(),
+            Self::BorrowedBlob(blob) => blob,
             _ => panic!("not a blob: {self:?}"),
         }
     }
@@ -289,6 +292,7 @@ impl Datum<'_> {
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, *v),
             Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
+            Datum::BorrowedBlob(v) => append_value_to_arrow!(BinaryBuilder, *v),
             Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {
                 return Err(RowConvertError {
                     message: format!(
@@ -406,6 +410,12 @@ impl From<Vec<u8>> for Blob {
     }
 }
 
+impl<'a> From<&'a [u8]> for Datum<'a> {
+    fn from(bytes: &'a [u8]) -> Datum<'a> {
+        Datum::BorrowedBlob(bytes)
+    }
+}
+
 const UNIX_EPOCH_DAY: jiff::civil::Date = jiff::civil::date(1970, 1, 1);
 
 impl Date {
@@ -430,5 +440,71 @@ impl Date {
     pub fn day(&self) -> i8 {
         let date = UNIX_EPOCH_DAY + self.0.days();
         date.day()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, Int32Builder, StringBuilder};
+
+    #[test]
+    fn datum_accessors_and_conversions() {
+        let datum = Datum::String("value");
+        assert_eq!(datum.as_str(), "value");
+        assert!(!datum.is_null());
+
+        let blob = Blob::from(vec![1, 2, 3]);
+        let datum = Datum::Blob(blob);
+        assert_eq!(datum.as_blob(), &[1, 2, 3]);
+
+        assert!(Datum::Null.is_null());
+
+        let datum = Datum::Int32(42);
+        let value: i32 = (&datum).try_into().unwrap();
+        assert_eq!(value, 42);
+        let value: std::result::Result<i16, _> = (&datum).try_into();
+        assert!(value.is_err());
+    }
+
+    #[test]
+    fn datum_append_to_builder() {
+        let mut builder = Int32Builder::new();
+        Datum::Null.append_to(&mut builder).unwrap();
+        Datum::Int32(5).append_to(&mut builder).unwrap();
+        let array = builder.finish();
+        assert!(array.is_null(0));
+        assert_eq!(array.value(1), 5);
+
+        let mut builder = StringBuilder::new();
+        let err = Datum::Int32(1).append_to(&mut builder).unwrap_err();
+        assert!(matches!(err, crate::error::Error::RowConvertError { .. }));
+
+        let mut builder = Int32Builder::new();
+        let err = Datum::Date(Date::new(0))
+            .append_to(&mut builder)
+            .unwrap_err();
+        assert!(matches!(err, crate::error::Error::RowConvertError { .. }));
+    }
+
+    #[test]
+    #[should_panic]
+    fn datum_as_str_panics_on_non_string() {
+        let _ = Datum::Int32(1).as_str();
+    }
+
+    #[test]
+    #[should_panic]
+    fn datum_as_blob_panics_on_non_blob() {
+        let _ = Datum::Int16(1).as_blob();
+    }
+
+    #[test]
+    fn date_components() {
+        let date = Date::new(0);
+        assert_eq!(date.get_inner(), 0);
+        assert_eq!(date.year(), 1970);
+        assert_eq!(date.month(), 1);
+        assert_eq!(date.day(), 1);
     }
 }

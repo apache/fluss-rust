@@ -81,10 +81,16 @@ impl ResultHandle {
     }
 
     pub fn result(&self, batch_result: BatchWriteResult) -> Result<(), Error> {
-        // do nothing, just return empty result
-        batch_result.map_err(|e| Error::UnexpectedError {
-            message: format!("Fail to get write result {e:?}"),
-            source: None,
+        batch_result.map_err(|e| match e {
+            crate::client::broadcast::Error::WriteFailed { code, message } => {
+                Error::FlussAPIError {
+                    api_error: crate::rpc::ApiError { code, message },
+                }
+            }
+            crate::client::broadcast::Error::Dropped => Error::UnexpectedError {
+                message: "Fail to get write result because broadcast was dropped.".to_string(),
+                source: None,
+            },
         })
     }
 }

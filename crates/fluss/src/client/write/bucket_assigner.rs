@@ -146,3 +146,98 @@ impl BucketAssigner for HashBucketAssigner {
         self.bucketing_function.bucketing(key, self.num_buckets)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bucketing::BucketingFunction;
+    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
+    use crate::metadata::TableBucket;
+    use crate::metadata::{DataField, DataTypes, Schema, TableDescriptor, TableInfo, TablePath};
+    use std::collections::HashMap;
+
+    fn build_table_info(table_path: TablePath, table_id: i64, buckets: i32) -> TableInfo {
+        let row_type = DataTypes::row(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let mut schema_builder = Schema::builder().with_row_type(&row_type);
+        let schema = schema_builder.build().expect("schema build");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(buckets), vec![])
+            .build()
+            .expect("descriptor build");
+        TableInfo::of(table_path, table_id, 1, table_descriptor, 0, 0)
+    }
+
+    fn build_cluster(table_path: &TablePath, table_id: i64, buckets: i32) -> Cluster {
+        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
+
+        let mut servers = HashMap::new();
+        servers.insert(server.id(), server.clone());
+
+        let mut locations_by_path = HashMap::new();
+        let mut locations_by_bucket = HashMap::new();
+        let mut bucket_locations = Vec::new();
+
+        for bucket_id in 0..buckets {
+            let table_bucket = TableBucket::new(table_id, bucket_id);
+            let bucket_location =
+                BucketLocation::new(table_bucket.clone(), Some(server.clone()), table_path.clone());
+            bucket_locations.push(bucket_location.clone());
+            locations_by_bucket.insert(table_bucket, bucket_location);
+        }
+        locations_by_path.insert(table_path.clone(), bucket_locations);
+
+        let mut table_id_by_path = HashMap::new();
+        table_id_by_path.insert(table_path.clone(), table_id);
+
+        let mut table_info_by_path = HashMap::new();
+        table_info_by_path.insert(
+            table_path.clone(),
+            build_table_info(table_path.clone(), table_id, buckets),
+        );
+
+        Cluster::new(
+            None,
+            servers,
+            locations_by_path,
+            locations_by_bucket,
+            table_id_by_path,
+            table_info_by_path,
+        )
+    }
+
+    #[test]
+    fn sticky_bucket_assigner_picks_available_bucket() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = build_cluster(&table_path, 1, 2);
+        let assigner = StickyBucketAssigner::new(table_path);
+        let bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+        assert!(bucket >= 0 && bucket < 2);
+
+        assigner.on_new_batch(&cluster, bucket);
+        let next_bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+        assert!(next_bucket >= 0 && next_bucket < 2);
+    }
+
+    #[test]
+    fn hash_bucket_assigner_requires_key() {
+        let assigner = HashBucketAssigner::new(3, <dyn BucketingFunction>::of(None));
+        let cluster = Cluster::default();
+        let err = assigner.assign_bucket(None, &cluster).unwrap_err();
+        assert!(matches!(err, crate::error::Error::IllegalArgument { .. }));
+    }
+
+    #[test]
+    fn hash_bucket_assigner_hashes_key() {
+        let assigner = HashBucketAssigner::new(4, <dyn BucketingFunction>::of(None));
+        let cluster = Cluster::default();
+        let bucket = assigner
+            .assign_bucket(Some(b"key"), &cluster)
+            .expect("bucket");
+        assert!(bucket >= 0 && bucket < 4);
+    }
+}

@@ -852,6 +852,36 @@ impl RowType {
     pub fn fields(&self) -> &Vec<DataField> {
         &self.fields
     }
+
+    pub fn get_field_index(&self, field_name: &str) -> Option<usize> {
+        self.fields.iter().position(|f| f.name == field_name)
+    }
+
+    #[cfg(test)]
+    pub fn with_data_types(data_types: Vec<DataType>) -> Self {
+        let mut fields: Vec<DataField> = Vec::new();
+        data_types.iter().enumerate().for_each(|(idx, data_type)| {
+            fields.push(DataField::new(format!("f{}", idx), data_type.clone(), None));
+        });
+
+        Self::with_nullable(true, fields)
+    }
+
+    #[cfg(test)]
+    pub fn with_data_types_and_field_names(
+        data_types: Vec<DataType>,
+        field_names: Vec<&str>,
+    ) -> Self {
+        let fields = data_types
+            .into_iter()
+            .zip(field_names)
+            .map(|(data_type, field_name)| {
+                DataField::new(field_name.to_string(), data_type.clone(), None)
+            })
+            .collect::<Vec<_>>();
+
+        Self::with_nullable(true, fields)
+    }
 }
 
 impl Display for RowType {

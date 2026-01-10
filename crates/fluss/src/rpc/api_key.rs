@@ -85,3 +85,41 @@ impl From<ApiKey> for i16 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_key_round_trip() {
+        let cases = [
+            (1001, ApiKey::CreateDatabase),
+            (1002, ApiKey::DropDatabase),
+            (1003, ApiKey::ListDatabases),
+            (1004, ApiKey::DatabaseExists),
+            (1005, ApiKey::CreateTable),
+            (1006, ApiKey::DropTable),
+            (1007, ApiKey::GetTable),
+            (1008, ApiKey::ListTables),
+            (1010, ApiKey::TableExists),
+            (1012, ApiKey::MetaData),
+            (1014, ApiKey::ProduceLog),
+            (1015, ApiKey::FetchLog),
+            (1021, ApiKey::ListOffsets),
+            (1025, ApiKey::GetFileSystemSecurityToken),
+            (1032, ApiKey::GetLatestLakeSnapshot),
+            (1035, ApiKey::GetDatabaseInfo),
+        ];
+
+        for (raw, key) in cases {
+            assert_eq!(ApiKey::from(raw), key);
+            let mapped: i16 = key.into();
+            assert_eq!(mapped, raw);
+        }
+
+        let unknown = ApiKey::from(9999);
+        assert_eq!(unknown, ApiKey::Unknown(9999));
+        let mapped: i16 = unknown.into();
+        assert_eq!(mapped, 9999);
+    }
+}

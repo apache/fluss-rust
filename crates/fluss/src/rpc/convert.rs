@@ -41,3 +41,51 @@ pub fn from_pb_table_path(pb_table_path: &PbTablePath) -> TablePath {
         pb_table_path.table_name.to_string(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::{PbServerNode, PbTablePath};
+
+    #[test]
+    fn table_path_round_trip() {
+        let table_path = TablePath::new("db".to_string(), "table".to_string());
+        let pb = to_table_path(&table_path);
+        assert_eq!(pb.database_name, "db");
+        assert_eq!(pb.table_name, "table");
+
+        let restored = from_pb_table_path(&pb);
+        assert_eq!(restored, table_path);
+
+        let manual = PbTablePath {
+            database_name: "db2".to_string(),
+            table_name: "table2".to_string(),
+        };
+        let restored = from_pb_table_path(&manual);
+        assert_eq!(restored.database(), "db2");
+        assert_eq!(restored.table(), "table2");
+    }
+
+    #[test]
+    fn server_node_from_pb() {
+        let pb = PbServerNode {
+            node_id: 7,
+            host: "127.0.0.1".to_string(),
+            port: 9092,
+            listeners: None,
+        };
+        let node = from_pb_server_node(pb, ServerType::TabletServer);
+        assert_eq!(node.id(), 7);
+        assert_eq!(node.url(), "127.0.0.1:9092");
+        assert_eq!(node.uid(), "ts-7");
+
+        let pb = PbServerNode {
+            node_id: 3,
+            host: "localhost".to_string(),
+            port: 8123,
+            listeners: None,
+        };
+        let node = from_pb_server_node(pb, ServerType::CoordinatorServer);
+        assert_eq!(node.uid(), "cs-3");
+    }
+}

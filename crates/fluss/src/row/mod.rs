@@ -19,11 +19,15 @@ mod column;
 
 mod datum;
 
+mod binary;
 mod compacted;
+mod encode;
+mod field_getter;
 
 pub use column::*;
 pub use datum::*;
 
+// TODO make functions return Result<?> for better error handling
 pub trait InternalRow {
     /// Returns the number of fields in this row
     fn get_field_count(&self) -> usize;
@@ -143,6 +147,11 @@ impl<'a> Default for GenericRow<'a> {
 }
 
 impl<'a> GenericRow<'a> {
+    pub fn from_data(data: Vec<impl Into<Datum<'a>>>) -> GenericRow<'a> {
+        GenericRow {
+            values: data.into_iter().map(Into::into).collect(),
+        }
+    }
     pub fn new() -> GenericRow<'a> {
         GenericRow { values: vec![] }
     }

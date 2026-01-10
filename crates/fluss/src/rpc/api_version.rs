@@ -52,3 +52,28 @@ impl std::fmt::Display for ApiVersionRange {
         write!(f, "{}:{}", self.min, self.max)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_version_display() {
+        let version = ApiVersion(3);
+        assert_eq!(version.to_string(), "3");
+    }
+
+    #[test]
+    fn api_version_range_accessors() {
+        let range = ApiVersionRange::new(ApiVersion(1), ApiVersion(4));
+        assert_eq!(range.min(), ApiVersion(1));
+        assert_eq!(range.max(), ApiVersion(4));
+        assert_eq!(range.to_string(), "1:4");
+    }
+
+    #[test]
+    #[should_panic]
+    fn api_version_range_panics_on_invalid_bounds() {
+        let _ = ApiVersionRange::new(ApiVersion(4), ApiVersion(1));
+    }
+}
