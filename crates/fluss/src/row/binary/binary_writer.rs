@@ -170,16 +170,10 @@ impl InnerValueWriter {
                 writer.write_boolean(*v);
             }
             (InnerValueWriter::Binary, Datum::Blob(v)) => {
-                writer.write_binary(v.as_ref(), v.len());
-            }
-            (InnerValueWriter::Binary, Datum::BorrowedBlob(v)) => {
-                writer.write_binary(v.as_ref(), v.len());
+                writer.write_binary(v, v.len());
             }
             (InnerValueWriter::Bytes, Datum::Blob(v)) => {
-                writer.write_bytes(v.as_ref());
-            }
-            (InnerValueWriter::Bytes, Datum::BorrowedBlob(v)) => {
-                writer.write_bytes(v.as_ref());
+                writer.write_bytes(v);
             }
             (InnerValueWriter::TinyInt, Datum::Int8(v)) => {
                 writer.write_byte(*v as u8);

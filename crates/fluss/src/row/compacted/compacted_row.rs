@@ -16,6 +16,7 @@
 // under the License.
 
 use bytes::Bytes;
+use std::mem;
 
 use crate::metadata::DataType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
@@ -24,19 +25,19 @@ use crate::row::{GenericRow, InternalRow};
 // Reference implementation:
 // https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRow.java
 #[allow(dead_code)]
-pub struct CompactedRow {
+pub struct CompactedRow<'a> {
     arity: usize,
     segment: Bytes,
     offset: usize,
     size_in_bytes: usize,
     decoded: bool,
-    decoded_row: GenericRow<'static>,
-    reader: CompactedRowReader,
-    deserializer: CompactedRowDeserializer,
+    decoded_row: GenericRow<'a>,
+    reader: CompactedRowReader<'a>,
+    data_types: Vec<DataType>,
 }
 
 #[allow(dead_code)]
-impl CompactedRow {
+impl<'a> CompactedRow<'a> {
     pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
         arity.div_ceil(8)
     }
@@ -51,7 +52,7 @@ impl CompactedRow {
             decoded: false,
             decoded_row: GenericRow::new(),
             reader: CompactedRowReader::new(arity),
-            deserializer: CompactedRowDeserializer::new(types),
+            data_types: types,
         }
     }
 
@@ -66,7 +67,7 @@ impl CompactedRow {
             decoded: false,
             decoded_row: GenericRow::new(),
             reader: CompactedRowReader::new(arity),
-            deserializer: CompactedRowDeserializer::new(types),
+            data_types: types,
         }
     }
 
@@ -100,11 +101,29 @@ impl CompactedRow {
         (self.segment[idx] & (1u8 << bit)) != 0
     }
 
-    fn decoded_row(&mut self) -> &GenericRow<'static> {
+    fn decoded_row(&mut self) -> &GenericRow<'a> {
         if !self.decoded {
+            let deserializer = CompactedRowDeserializer::new(self.data_types.clone());
             self.reader
                 .point_to(self.segment.clone(), self.offset, self.size_in_bytes);
-            self.decoded_row = self.deserializer.deserialize(&mut self.reader);
+
+            // Safety:
+            // We use transmute to extend the lifetime of the borrow of self.reader to 'a.
+            // This is safe because:
+            // 1. self.reader internally holds the data via `Bytes`, which is heap-allocated.
+            //    The heap address remains stable throughout the lifetime 'a.
+            // 2. The deserialized `GenericRow` is stored in `self.decoded_row`, which shares
+            //    the same lifetime as `self`.
+            // 3. As long as the `CompactedRow` instance is not dropped, the heap references
+            //    produced by the reader remain valid.
+            // 4. While Rust normally forbids self-referential borrows due to move-safety concerns,
+            //    this specific implementation is move-safe because the pointers within `GenericRow`
+            //    reference the stable heap memory of the `Bytes` segment, not the stack address
+            //    of the fields themselves.
+            let long_lived_reader: &'a CompactedRowReader<'a> =
+                unsafe { mem::transmute(&self.reader) };
+            self.decoded_row = deserializer.deserialize(long_lived_reader);
+
             self.decoded = true;
         }
         &self.decoded_row
