@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use bytes::Bytes;
 
 use crate::metadata::DataType;
@@ -32,9 +30,9 @@ pub struct CompactedRow {
     offset: usize,
     size_in_bytes: usize,
     decoded: bool,
-    decoded_row: Option<GenericRow<'static>>,
-    reader: Option<CompactedRowReader>,
-    deserializer: Arc<CompactedRowDeserializer>,
+    decoded_row: GenericRow<'static>,
+    reader: CompactedRowReader,
+    deserializer: CompactedRowDeserializer,
 }
 
 #[allow(dead_code)]
@@ -51,9 +49,9 @@ impl CompactedRow {
             offset: 0,
             size_in_bytes: 0,
             decoded: false,
-            decoded_row: None,
-            reader: None,
-            deserializer: Arc::new(CompactedRowDeserializer::new(types)),
+            decoded_row: GenericRow::new(),
+            reader: CompactedRowReader::new(arity),
+            deserializer: CompactedRowDeserializer::new(types),
         }
     }
 
@@ -66,9 +64,9 @@ impl CompactedRow {
             offset: 0,
             size_in_bytes: size,
             decoded: false,
-            decoded_row: None,
-            reader: None,
-            deserializer: Arc::new(CompactedRowDeserializer::new(types)),
+            decoded_row: GenericRow::new(),
+            reader: CompactedRowReader::new(arity),
+            deserializer: CompactedRowDeserializer::new(types),
         }
     }
 
@@ -104,19 +102,12 @@ impl CompactedRow {
 
     fn decoded_row(&mut self) -> &GenericRow<'static> {
         if !self.decoded {
-            if self.reader.is_none() {
-                self.reader = Some(CompactedRowReader::new(self.arity));
-            }
-
-            let reader = self.reader.as_mut().expect("reader should be initialized");
-            reader.point_to(self.segment.clone(), self.offset, self.size_in_bytes);
-
-            self.decoded_row = Some(self.deserializer.deserialize(reader));
+            self.reader
+                .point_to(self.segment.clone(), self.offset, self.size_in_bytes);
+            self.decoded_row = self.deserializer.deserialize(&mut self.reader);
             self.decoded = true;
         }
-        self.decoded_row
-            .as_ref()
-            .expect("decoded_row should be set")
+        &self.decoded_row
     }
 
     pub fn get_boolean(&mut self, pos: usize) -> bool {
@@ -166,57 +157,8 @@ mod tests {
     use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
 
     #[test]
-    fn test_basic_types() {
-        let types = vec![
-            DataType::Int(IntType::new()),
-            DataType::BigInt(BigIntType::new()),
-            DataType::String(StringType::new()),
-            DataType::Boolean(BooleanType::new()),
-        ];
-
-        let mut row = CompactedRow::new(types.clone());
-        let mut writer = CompactedRowWriter::new(types.len());
-
-        writer.write_int(42);
-        writer.write_long(123456);
-        writer.write_string("test");
-        writer.write_boolean(true);
-
-        row.point_to(writer.to_bytes(), 0, writer.position());
-
-        assert_eq!(row.get_field_count(), 4);
-        assert_eq!(row.get_int(0), 42);
-        assert_eq!(row.get_long(1), 123456);
-        assert_eq!(row.get_string(2), "test");
-        assert!(row.get_boolean(3));
-    }
-
-    #[test]
-    fn test_with_nulls() {
-        let types = vec![
-            DataType::Int(IntType::new()),
-            DataType::String(StringType::new()),
-            DataType::Double(DoubleType::new()),
-        ];
-
-        let mut row = CompactedRow::new(types.clone());
-        let mut writer = CompactedRowWriter::new(types.len());
-
-        writer.write_int(100);
-        writer.set_null_at(1);
-        writer.write_double(3.14);
-
-        row.point_to(writer.to_bytes(), 0, writer.position());
-
-        assert!(!row.is_null_at(0));
-        assert!(row.is_null_at(1));
-        assert!(!row.is_null_at(2));
-        assert_eq!(row.get_int(0), 100);
-        assert_eq!(row.get_double(2), 3.14);
-    }
-
-    #[test]
-    fn test_all_primitive_types() {
+    fn test_compacted_row() {
+        // Test all primitive types
         let types = vec![
             DataType::Boolean(BooleanType::new()),
             DataType::TinyInt(TinyIntType::new()),
@@ -225,6 +167,8 @@ mod tests {
             DataType::BigInt(BigIntType::new()),
             DataType::Float(FloatType::new()),
             DataType::Double(DoubleType::new()),
+            DataType::String(StringType::new()),
+            DataType::Bytes(BytesType::new()),
         ];
 
         let mut row = CompactedRow::new(types.clone());
@@ -237,9 +181,12 @@ mod tests {
         writer.write_long(10000);
         writer.write_float(1.5);
         writer.write_double(2.5);
+        writer.write_string("Hello World");
+        writer.write_bytes(&[1, 2, 3, 4, 5]);
 
         row.point_to(writer.to_bytes(), 0, writer.position());
 
+        assert_eq!(row.get_field_count(), 9);
         assert!(row.get_boolean(0));
         assert_eq!(row.get_byte(1), 1);
         assert_eq!(row.get_short(2), 100);
@@ -247,64 +194,51 @@ mod tests {
         assert_eq!(row.get_long(4), 10000);
         assert_eq!(row.get_float(5), 1.5);
         assert_eq!(row.get_double(6), 2.5);
-    }
+        assert_eq!(row.get_string(7), "Hello World");
+        assert_eq!(row.get_bytes(8), &[1, 2, 3, 4, 5]);
 
-    #[test]
-    fn test_string_and_bytes() {
+        // Test with nulls
         let types = vec![
+            DataType::Int(IntType::new()),
             DataType::String(StringType::new()),
-            DataType::Bytes(BytesType::new()),
+            DataType::Double(DoubleType::new()),
         ];
 
         let mut row = CompactedRow::new(types.clone());
         let mut writer = CompactedRowWriter::new(types.len());
 
-        writer.write_string("Hello World");
-        writer.write_bytes(&[1, 2, 3, 4, 5]);
+        writer.write_int(100);
+        writer.set_null_at(1);
+        writer.write_double(2.71);
 
         row.point_to(writer.to_bytes(), 0, writer.position());
 
-        assert_eq!(row.get_string(0), "Hello World");
-        assert_eq!(row.get_bytes(1), &[1, 2, 3, 4, 5]);
-    }
+        assert!(!row.is_null_at(0));
+        assert!(row.is_null_at(1));
+        assert!(!row.is_null_at(2));
+        assert_eq!(row.get_int(0), 100);
+        assert_eq!(row.get_double(2), 2.71);
 
-    #[test]
-    fn test_get_field_count() {
+        // Test multiple reads (caching)
+        assert_eq!(row.get_int(0), 100);
+        assert_eq!(row.get_int(0), 100);
+
+        // Test from_bytes
         let types = vec![
             DataType::Int(IntType::new()),
             DataType::String(StringType::new()),
-            DataType::Double(DoubleType::new()),
-        ];
-        let row = CompactedRow::new(types);
-        assert_eq!(row.get_field_count(), 3);
-    }
-
-    #[test]
-    fn test_multiple_reads() {
-        let types = vec![
-            DataType::Int(IntType::new()),
-            DataType::String(StringType::new()),
-            DataType::Double(DoubleType::new()),
         ];
 
-        let mut row = CompactedRow::new(types.clone());
         let mut writer = CompactedRowWriter::new(types.len());
-
         writer.write_int(42);
         writer.write_string("test");
-        writer.write_double(3.14);
 
-        row.point_to(writer.to_bytes(), 0, writer.position());
+        let mut row = CompactedRow::from_bytes(types, writer.to_bytes());
 
-        // Read multiple times to test caching
-        assert_eq!(row.get_int(0), 42);
         assert_eq!(row.get_int(0), 42);
         assert_eq!(row.get_string(1), "test");
-        assert_eq!(row.get_string(1), "test");
-    }
 
-    #[test]
-    fn test_large_row() {
+        // Test large row
         let num_fields = 100;
         let types: Vec<DataType> = (0..num_fields)
             .map(|_| DataType::Int(IntType::new()))
@@ -322,22 +256,5 @@ mod tests {
         for i in 0..num_fields {
             assert_eq!(row.get_int(i), (i * 10) as i32);
         }
-    }
-
-    #[test]
-    fn test_from_bytes() {
-        let types = vec![
-            DataType::Int(IntType::new()),
-            DataType::String(StringType::new()),
-        ];
-
-        let mut writer = CompactedRowWriter::new(types.len());
-        writer.write_int(42);
-        writer.write_string("test");
-
-        let mut row = CompactedRow::from_bytes(types, writer.to_bytes());
-
-        assert_eq!(row.get_int(0), 42);
-        assert_eq!(row.get_string(1), "test");
     }
 }

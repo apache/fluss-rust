@@ -50,8 +50,7 @@ impl CompactedKeyEncoder {
                 None => {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Field {:?} not found in input row type {:?}",
-                            key, row_type
+                            "Field {key:?} not found in input row type {row_type:?}"
                         ),
                     });
                 }
@@ -90,8 +89,7 @@ impl KeyEncoder for CompactedKeyEncoder {
                 Datum::Null => {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Cannot encode key with null value at position: {:?}",
-                            pos
+                            "Cannot encode key with null value at position: {pos:?}"
                         ),
                     });
                 }

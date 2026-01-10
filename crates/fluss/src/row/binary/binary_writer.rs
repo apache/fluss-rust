@@ -201,7 +201,7 @@ impl InnerValueWriter {
             }
             _ => {
                 return Err(IllegalArgument {
-                    message: format!("{:?} used to write value {:?}", self, value),
+                    message: format!("{self:?} used to write value {value:?}"),
                 });
             }
         }
