@@ -138,7 +138,7 @@ impl Sender {
         if batches.is_empty() {
             return Ok(());
         }
-        let mut records_by_bucket: HashMap<TableBucket, ReadyWriteBatch> = HashMap::new();
+        let mut records_by_bucket = HashMap::new();
         let mut write_batch_by_table: HashMap<i64, Vec<TableBucket>> = HashMap::new();
 
         for batch in batches {
@@ -193,12 +193,11 @@ impl Sender {
             ) {
                 Ok(request) => request,
                 Err(e) => {
-                    self.handle_batches_with_error(
+                    self.handle_batches_with_local_error(
                         table_buckets
                             .iter()
                             .filter_map(|bucket| records_by_bucket.remove(bucket))
                             .collect(),
-                        FlussError::UnknownServerError,
                         format!("Failed to build produce request: {e}"),
                     )
                     .await?;
@@ -247,8 +246,7 @@ impl Sender {
             let tb = TableBucket::new(table_id, produce_log_response_for_bucket.bucket_id);
 
             let Some(ready_batch) = records_by_bucket.remove(&tb) else {
-                warn!("Missing ready batch for table bucket {tb}");
-                continue;
+                panic!("Missing ready batch for table bucket {tb}");
             };
             pending_buckets.remove(&tb);
 
@@ -330,6 +328,22 @@ impl Sender {
         Ok(())
     }
 
+    async fn handle_batches_with_local_error(
+        &self,
+        batches: Vec<ReadyWriteBatch>,
+        message: String,
+    ) -> Result<()> {
+        for batch in batches {
+            self.fail_batch(
+                batch,
+                broadcast::Error::Client {
+                    message: message.clone(),
+                },
+            );
+        }
+        Ok(())
+    }
+
     async fn handle_write_batch_error(
         &self,
         ready_write_batch: ReadyWriteBatch,
@@ -347,6 +361,10 @@ impl Sender {
         }
 
         if error == FlussError::DuplicateSequenceException {
+            warn!(
+                "Duplicate sequence for {table_path} on bucket {}: {message}",
+                ready_write_batch.table_bucket.bucket_id()
+            );
             self.complete_batch(ready_write_batch);
             return Ok(None);
         }
@@ -430,66 +448,14 @@ impl Sender {
 mod tests {
     use super::*;
     use crate::client::WriteRecord;
-    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
+    use crate::cluster::Cluster;
     use crate::config::Config;
-    use crate::metadata::{DataField, DataTypes, Schema, TableDescriptor, TableInfo, TablePath};
+    use crate::metadata::TablePath;
     use crate::proto::{PbProduceLogRespForBucket, ProduceLogResponse};
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
+    use crate::test_utils::build_cluster_arc;
     use std::collections::HashSet;
-
-    fn build_table_info(table_path: TablePath, table_id: i64) -> TableInfo {
-        let row_type = DataTypes::row(vec![DataField::new(
-            "id".to_string(),
-            DataTypes::int(),
-            None,
-        )]);
-        let mut schema_builder = Schema::builder().with_row_type(&row_type);
-        let schema = schema_builder.build().expect("schema build");
-        let table_descriptor = TableDescriptor::builder()
-            .schema(schema)
-            .distributed_by(Some(1), vec![])
-            .build()
-            .expect("descriptor build");
-        TableInfo::of(table_path, table_id, 1, table_descriptor, 0, 0)
-    }
-
-    fn build_cluster(table_path: &TablePath, table_id: i64) -> Arc<Cluster> {
-        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
-        let table_bucket = TableBucket::new(table_id, 0);
-        let bucket_location = BucketLocation::new(
-            table_bucket.clone(),
-            Some(server.clone()),
-            table_path.clone(),
-        );
-
-        let mut servers = HashMap::new();
-        servers.insert(server.id(), server);
-
-        let mut locations_by_path = HashMap::new();
-        locations_by_path.insert(table_path.clone(), vec![bucket_location.clone()]);
-
-        let mut locations_by_bucket = HashMap::new();
-        locations_by_bucket.insert(table_bucket, bucket_location);
-
-        let mut table_id_by_path = HashMap::new();
-        table_id_by_path.insert(table_path.clone(), table_id);
-
-        let mut table_info_by_path = HashMap::new();
-        table_info_by_path.insert(
-            table_path.clone(),
-            build_table_info(table_path.clone(), table_id),
-        );
-
-        Arc::new(Cluster::new(
-            None,
-            servers,
-            locations_by_path,
-            locations_by_bucket,
-            table_id_by_path,
-            table_info_by_path,
-        ))
-    }
 
     async fn build_ready_batch(
         accumulator: &RecordAccumulator,
@@ -515,7 +481,7 @@ mod tests {
     #[tokio::test]
     async fn handle_write_batch_error_retries() -> Result<()> {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
-        let cluster = build_cluster(table_path.as_ref(), 1);
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
         let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 1);
@@ -543,7 +509,7 @@ mod tests {
     #[tokio::test]
     async fn handle_write_batch_error_fails() -> Result<()> {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
-        let cluster = build_cluster(table_path.as_ref(), 1);
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
         let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
@@ -568,43 +534,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_produce_response_missing_bucket_fails() -> Result<()> {
-        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
-        let cluster = build_cluster(table_path.as_ref(), 1);
-        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
-        let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
-
-        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster, table_path).await?;
-        let request_buckets = vec![batch.table_bucket.clone()];
-        let mut records_by_bucket = HashMap::new();
-        records_by_bucket.insert(batch.table_bucket.clone(), batch);
-
-        let response = ProduceLogResponse {
-            buckets_resp: vec![PbProduceLogRespForBucket {
-                bucket_id: 1,
-                error_code: None,
-                ..Default::default()
-            }],
-        };
-
-        sender
-            .handle_produce_response(1, &request_buckets, &mut records_by_bucket, response)
-            .await?;
-
-        let batch_result = handle.wait().await?;
-        assert!(matches!(
-            batch_result,
-            Err(broadcast::Error::WriteFailed { code, .. })
-                if code == FlussError::UnknownServerError.code()
-        ));
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn handle_produce_response_duplicate_sequence_completes() -> Result<()> {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
-        let cluster = build_cluster(table_path.as_ref(), 1);
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
         let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);

@@ -30,6 +30,8 @@ pub enum Error {
     Dropped,
     #[error("Write failed: {message} (code {code})")]
     WriteFailed { code: i32, message: String },
+    #[error("Write failed before request was sent: {message}")]
+    Client { message: String },
 }
 
 #[derive(Debug, Clone)]
