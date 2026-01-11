@@ -52,14 +52,11 @@ pub trait BinaryWriter {
 
     fn write_binary(&mut self, bytes: &[u8], length: usize);
 
-    // TODO Decimal type
-    // fn write_decimal(&mut self, pos: i32, value: f64);
+    fn write_decimal(&mut self, value: &rust_decimal::Decimal, precision: u32);
 
-    // TODO Timestamp type
-    // fn write_timestamp_ntz(&mut self, pos: i32, value: i64);
+    fn write_timestamp_ntz(&mut self, value: i64, precision: u32);
 
-    // TODO Timestamp type
-    // fn write_timestamp_ltz(&mut self, pos: i32, value: i64);
+    fn write_timestamp_ltz(&mut self, value: i64, precision: u32);
 
     // TODO InternalArray, ArraySerializer
     // fn write_array(&mut self, pos: i32, value: i64);
@@ -125,7 +122,11 @@ pub enum InnerValueWriter {
     BigInt,
     Float,
     Double,
-    // TODO Decimal, Date, TimeWithoutTimeZone, TimestampWithoutTimeZone, TimestampWithLocalTimeZone, Array, Row
+    Decimal(u32), // precision
+    Date,
+    TimestampNtz(u32), // precision
+    TimestampLtz(u32), // precision
+                       // TODO TimeWithoutTimeZone, Array, Row
 }
 
 /// Accessor for writing the fields/elements of a binary writer during runtime, the
@@ -147,6 +148,10 @@ impl InnerValueWriter {
             DataType::BigInt(_) => Ok(InnerValueWriter::BigInt),
             DataType::Float(_) => Ok(InnerValueWriter::Float),
             DataType::Double(_) => Ok(InnerValueWriter::Double),
+            DataType::Decimal(d) => Ok(InnerValueWriter::Decimal(d.precision())),
+            DataType::Date(_) => Ok(InnerValueWriter::Date),
+            DataType::Timestamp(t) => Ok(InnerValueWriter::TimestampNtz(t.precision())),
+            DataType::TimestampLTz(t) => Ok(InnerValueWriter::TimestampLtz(t.precision())),
             _ => unimplemented!(
                 "ValueWriter for DataType {:?} is currently not implemented",
                 data_type
@@ -193,6 +198,18 @@ impl InnerValueWriter {
             }
             (InnerValueWriter::Double, Datum::Float64(v)) => {
                 writer.write_double(v.into_inner());
+            }
+            (InnerValueWriter::Decimal(p), Datum::Decimal(v)) => {
+                writer.write_decimal(v, *p);
+            }
+            (InnerValueWriter::Date, Datum::Date(d)) => {
+                writer.write_int(d.get_inner());
+            }
+            (InnerValueWriter::TimestampNtz(p), Datum::Timestamp(ts)) => {
+                writer.write_timestamp_ntz(ts.get_inner(), *p);
+            }
+            (InnerValueWriter::TimestampLtz(p), Datum::TimestampTz(ts)) => {
+                writer.write_timestamp_ltz(ts.get_inner(), *p);
             }
             _ => {
                 return Err(IllegalArgument {

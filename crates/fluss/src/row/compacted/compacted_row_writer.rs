@@ -153,4 +153,21 @@ impl CompactedRowWriter {
     pub fn write_double(&mut self, value: f64) {
         self.write_raw(&value.to_ne_bytes());
     }
+
+    pub fn write_decimal(&mut self, value: &rust_decimal::Decimal, _precision: u32) {
+        // For now, serialize decimal to its string representation and write as bytes
+        // TODO: implement compact decimal encoding based on precision similar to Java implementation
+        let s = value.to_string();
+        self.write_bytes(s.as_bytes());
+    }
+
+    pub fn write_timestamp_ntz(&mut self, value: i64, _precision: u32) {
+        // Currently write timestamp as a long (epoch millis or other unit depending on upstream)
+        self.write_long(value);
+    }
+
+    pub fn write_timestamp_ltz(&mut self, value: i64, _precision: u32) {
+        // Currently write timestamp as a long (epoch millis or other unit depending on upstream)
+        self.write_long(value);
+    }
 }

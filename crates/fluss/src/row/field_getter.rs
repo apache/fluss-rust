@@ -55,6 +55,9 @@ impl FieldGetter {
             DataType::BigInt(_) => InnerFieldGetter::BigInt { pos },
             DataType::Float(_) => InnerFieldGetter::Float { pos },
             DataType::Double(_) => InnerFieldGetter::Double { pos },
+            DataType::Date(_) => InnerFieldGetter::Date { pos },
+            DataType::Timestamp(_) => InnerFieldGetter::Timestamp { pos },
+            DataType::TimestampLTz(_) => InnerFieldGetter::TimestampLtz { pos },
             _ => unimplemented!("DataType {:?} is currently unimplemented", data_type),
         };
 
@@ -78,6 +81,9 @@ pub enum InnerFieldGetter {
     BigInt { pos: usize },
     Float { pos: usize },
     Double { pos: usize },
+    Date { pos: usize },
+    Timestamp { pos: usize },
+    TimestampLtz { pos: usize },
 }
 
 impl InnerFieldGetter {
@@ -94,7 +100,15 @@ impl InnerFieldGetter {
             InnerFieldGetter::BigInt { pos } => Datum::from(row.get_long(*pos)),
             InnerFieldGetter::Float { pos } => Datum::from(row.get_float(*pos)),
             InnerFieldGetter::Double { pos } => Datum::from(row.get_double(*pos)),
-            //TODO Decimal, Date, Time, Timestamp, TimestampLTZ, Array, Map, Row
+            InnerFieldGetter::Date { pos } => {
+                Datum::Date(crate::row::datum::Date::new(row.get_date(*pos)))
+            }
+            InnerFieldGetter::Timestamp { pos } => Datum::Timestamp(
+                crate::row::datum::Timestamp::new(row.get_timestamp_ntz(*pos)),
+            ),
+            InnerFieldGetter::TimestampLtz { pos } => Datum::TimestampTz(
+                crate::row::datum::TimestampLtz::new(row.get_timestamp_ltz(*pos)),
+            ), //TODO Decimal, Time, Array, Map, Row
         }
     }
 
@@ -110,7 +124,10 @@ impl InnerFieldGetter {
             | Self::Int { pos }
             | Self::BigInt { pos }
             | Self::Float { pos, .. }
-            | Self::Double { pos } => *pos,
+            | Self::Double { pos }
+            | Self::Date { pos }
+            | Self::Timestamp { pos }
+            | Self::TimestampLtz { pos } => *pos,
         }
     }
 }

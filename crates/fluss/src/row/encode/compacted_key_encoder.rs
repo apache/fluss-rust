@@ -247,14 +247,14 @@ mod tests {
             DataTypes::bigint(),
             DataTypes::float(),
             DataTypes::double(),
-            // TODO Date
-            // TODO Time
+            DataTypes::date(),
+            // TIME is not yet represented in Datum
+            DataTypes::timestamp(),
             DataTypes::binary(20),
             DataTypes::bytes(),
             DataTypes::char(2),
             DataTypes::string(),
             // TODO Decimal
-            // TODO Timestamp
             // TODO Timestamp LTZ
             // TODO Array of Int
             // TODO Array of Float
@@ -270,14 +270,13 @@ mod tests {
             Datum::from(-6101065172474983726i64), // from Java test case: new BigInteger("12345678901234567890").longValue()
             Datum::from(13.2f32),
             Datum::from(15.21f64),
-            // TODO Date
-            // TODO Time
+            Datum::Date(crate::row::datum::Date::new(5)),
+            Datum::Timestamp(crate::row::datum::Timestamp::new(13)),
             Datum::from("1234567890".as_bytes()),
             Datum::from("20".as_bytes()),
             Datum::from("1"),
             Datum::from("hello"),
             // TODO Decimal
-            // TODO Timestamp
             // TODO Timestamp LTZ
             // TODO Array of Int
             // TODO Array of Float
@@ -304,6 +303,10 @@ mod tests {
         expected.extend(vec![0x33, 0x33, 0x53, 0x41]);
         // DOUBLE: 15.21
         expected.extend(vec![0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40]);
+        // DATE: 5
+        expected.extend(vec![0x05]);
+        // TIMESTAMP: 13
+        expected.extend(vec![0x0D]);
         // BINARY(20): "1234567890".getBytes()
         expected.extend(vec![
             0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30,
