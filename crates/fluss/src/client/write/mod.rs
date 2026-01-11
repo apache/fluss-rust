@@ -18,7 +18,7 @@
 mod accumulator;
 mod batch;
 
-use crate::client::broadcast::{BatchWriteResult, BroadcastOnceReceiver};
+use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
 use crate::metadata::TablePath;
 use crate::row::GenericRow;
@@ -81,10 +81,18 @@ impl ResultHandle {
     }
 
     pub fn result(&self, batch_result: BatchWriteResult) -> Result<(), Error> {
-        // do nothing, just return empty result
-        batch_result.map_err(|e| Error::UnexpectedError {
-            message: format!("Fail to get write result {e:?}"),
-            source: None,
+        batch_result.map_err(|e| match e {
+            client_broadcast::Error::WriteFailed { code, message } => Error::FlussAPIError {
+                api_error: crate::rpc::ApiError { code, message },
+            },
+            client_broadcast::Error::Client { message } => Error::UnexpectedError {
+                message,
+                source: None,
+            },
+            client_broadcast::Error::Dropped => Error::UnexpectedError {
+                message: "Fail to get write result because broadcast was dropped.".to_string(),
+                source: None,
+            },
         })
     }
 }

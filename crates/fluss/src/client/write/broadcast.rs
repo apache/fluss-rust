@@ -28,6 +28,10 @@ pub type BatchWriteResult = Result<(), Error>;
 pub enum Error {
     #[error("BroadcastOnce dropped")]
     Dropped,
+    #[error("Write failed: {message} (code {code})")]
+    WriteFailed { code: i32, message: String },
+    #[error("Write failed before request was sent: {message}")]
+    Client { message: String },
 }
 
 #[derive(Debug, Clone)]

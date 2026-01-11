@@ -135,7 +135,47 @@ impl Metadata {
         guard.clone()
     }
 
-    pub fn leader_for(&self, _table_bucket: &TableBucket) -> Option<&ServerNode> {
-        todo!()
+    pub fn leader_for(&self, table_bucket: &TableBucket) -> Option<ServerNode> {
+        let cluster = self.cluster.read();
+        cluster.leader_for(table_bucket).cloned()
+    }
+}
+
+#[cfg(test)]
+impl Metadata {
+    pub(crate) fn new_for_test(cluster: Arc<Cluster>) -> Self {
+        Metadata {
+            cluster: RwLock::new(cluster),
+            connections: Arc::new(RpcClient::new()),
+            bootstrap: Arc::from(""),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::{TableBucket, TablePath};
+    use crate::test_utils::build_cluster_arc;
+
+    #[test]
+    fn leader_for_returns_server() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Metadata::new_for_test(cluster);
+        let leader = metadata
+            .leader_for(&TableBucket::new(1, 0))
+            .expect("leader");
+        assert_eq!(leader.id(), 1);
+    }
+
+    #[test]
+    fn invalidate_server_removes_leader() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Metadata::new_for_test(cluster);
+        metadata.invalidate_server(&1, vec![1]);
+        let cluster = metadata.get_cluster();
+        assert!(cluster.get_tablet_server(1).is_none());
     }
 }

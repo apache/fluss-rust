@@ -369,3 +369,38 @@ impl From<ApiError> for FlussError {
         FlussError::for_code(api_error.code)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn for_code_maps_known_and_unknown() {
+        assert_eq!(FlussError::for_code(0), FlussError::None);
+        assert_eq!(
+            FlussError::for_code(FlussError::AuthorizationException.code()),
+            FlussError::AuthorizationException
+        );
+        assert_eq!(FlussError::for_code(9999), FlussError::UnknownServerError);
+    }
+
+    #[test]
+    fn to_api_error_uses_message() {
+        let err = FlussError::InvalidTableException.to_api_error(None);
+        assert_eq!(err.code, FlussError::InvalidTableException.code());
+        assert!(err.message.contains("invalid table"));
+    }
+
+    #[test]
+    fn error_response_conversion_round_trip() {
+        let response = ErrorResponse {
+            error_code: FlussError::TableNotExist.code(),
+            error_message: Some("missing".to_string()),
+        };
+        let api_error = ApiError::from(response);
+        assert_eq!(api_error.code, FlussError::TableNotExist.code());
+        assert_eq!(api_error.message, "missing");
+        let fluss_error = FlussError::from(api_error);
+        assert_eq!(fluss_error, FlussError::TableNotExist);
+    }
+}

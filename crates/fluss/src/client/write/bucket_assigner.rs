@@ -146,3 +146,43 @@ impl BucketAssigner for HashBucketAssigner {
         self.bucketing_function.bucketing(key, self.num_buckets)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bucketing::BucketingFunction;
+    use crate::cluster::Cluster;
+    use crate::metadata::TablePath;
+    use crate::test_utils::build_cluster;
+
+    #[test]
+    fn sticky_bucket_assigner_picks_available_bucket() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = build_cluster(&table_path, 1, 2);
+        let assigner = StickyBucketAssigner::new(table_path);
+        let bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+        assert!((0..2).contains(&bucket));
+
+        assigner.on_new_batch(&cluster, bucket);
+        let next_bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+        assert!((0..2).contains(&next_bucket));
+    }
+
+    #[test]
+    fn hash_bucket_assigner_requires_key() {
+        let assigner = HashBucketAssigner::new(3, <dyn BucketingFunction>::of(None));
+        let cluster = Cluster::default();
+        let err = assigner.assign_bucket(None, &cluster).unwrap_err();
+        assert!(matches!(err, crate::error::Error::IllegalArgument { .. }));
+    }
+
+    #[test]
+    fn hash_bucket_assigner_hashes_key() {
+        let assigner = HashBucketAssigner::new(4, <dyn BucketingFunction>::of(None));
+        let cluster = Cluster::default();
+        let bucket = assigner
+            .assign_bucket(Some(b"key"), &cluster)
+            .expect("bucket");
+        assert!((0..4).contains(&bucket));
+    }
+}
