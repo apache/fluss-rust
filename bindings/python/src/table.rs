@@ -70,9 +70,7 @@ impl FlussTable {
             let table_scan = fluss_table.new_scan();
 
             let rust_scanner = table_scan.create_log_scanner().map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                    "Failed to create log scanner: {e:?}"
-                ))
+                FlussError::new_err(format!("Failed to create log scanner: {e}"))
             })?;
 
             let admin = conn
