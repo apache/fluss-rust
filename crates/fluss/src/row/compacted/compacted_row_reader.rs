@@ -37,7 +37,7 @@ impl<'a> CompactedRowDeserializer<'a> {
         let mut row = GenericRow::new();
         let mut cursor = reader.initial_position();
         for (col_pos, dtype) in self.schema.iter().enumerate() {
-            if reader.is_null_at(col_pos) {
+            if dtype.is_nullable() && reader.is_null_at(col_pos) {
                 row.set_field(col_pos, Datum::Null);
                 continue;
             }
@@ -139,14 +139,15 @@ impl<'a> CompactedRowReader<'a> {
     }
 
     pub fn read_short(&self, pos: usize) -> (i16, usize) {
-        debug_assert!(pos + 2 <= self.limit);
+        let next_pos = pos + 2;
+        debug_assert!(next_pos <= self.limit);
         let bytes_slice = &self.segment[pos..pos + 2];
         let val = i16::from_ne_bytes(
             bytes_slice
                 .try_into()
                 .expect("Slice must be exactly 2 bytes long"),
         );
-        (val, pos + 2)
+        (val, next_pos)
     }
 
     pub fn read_int(&self, mut pos: usize) -> (i32, usize) {
@@ -182,23 +183,25 @@ impl<'a> CompactedRowReader<'a> {
     }
 
     pub fn read_float(&self, pos: usize) -> (f32, usize) {
-        debug_assert!(pos + 4 <= self.limit);
+        let next_pos = pos + 4;
+        debug_assert!(next_pos <= self.limit);
         let val = f32::from_ne_bytes(
             self.segment[pos..pos + 4]
                 .try_into()
                 .expect("Slice must be exactly 4 bytes long"),
         );
-        (val, pos + 4)
+        (val, next_pos)
     }
 
     pub fn read_double(&self, pos: usize) -> (f64, usize) {
-        debug_assert!(pos + 8 <= self.limit);
+        let next_pos = pos + 8;
+        debug_assert!(next_pos <= self.limit);
         let val = f64::from_ne_bytes(
             self.segment[pos..pos + 8]
                 .try_into()
                 .expect("Slice must be exactly 8 bytes long"),
         );
-        (val, pos + 8)
+        (val, next_pos)
     }
 
     pub fn read_binary(&self, length: usize) -> (&'a [u8], usize) {

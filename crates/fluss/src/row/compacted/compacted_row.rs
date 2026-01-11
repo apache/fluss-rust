@@ -27,7 +27,6 @@ use crate::row::{GenericRow, InternalRow};
 pub struct CompactedRow<'a> {
     arity: usize,
     segment: &'a [u8],
-    offset: usize,
     size_in_bytes: usize,
     decoded_row: OnceLock<GenericRow<'a>>,
     deserializer: CompactedRowDeserializer<'a>,
@@ -46,7 +45,6 @@ impl<'a> CompactedRow<'a> {
         Self {
             arity,
             segment: data,
-            offset: 0,
             size_in_bytes: size,
             decoded_row: OnceLock::new(),
             deserializer: CompactedRowDeserializer::new(types),
@@ -202,13 +200,13 @@ mod tests {
         ];
 
         let mut writer = CompactedRowWriter::new(types.len());
-        writer.write_int(42);
+        writer.write_int(-1);
         writer.write_string("test");
 
         let bytes = writer.to_bytes();
         let mut row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
 
-        assert_eq!(row.get_int(0), 42);
+        assert_eq!(row.get_int(0), -1);
         assert_eq!(row.get_string(1), "test");
 
         // Test large row
