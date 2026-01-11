@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod murmur_hash;
+pub mod varint;
 
 use crate::metadata::TableBucket;
 use linked_hash_map::LinkedHashMap;

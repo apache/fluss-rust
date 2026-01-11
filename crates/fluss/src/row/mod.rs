@@ -20,7 +20,7 @@ mod column;
 mod datum;
 
 mod binary;
-mod compacted;
+pub mod compacted;
 mod encode;
 mod field_getter;
 

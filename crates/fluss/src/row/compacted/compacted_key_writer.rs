@@ -30,6 +30,12 @@ pub struct CompactedKeyWriter {
     delegate: CompactedRowWriter,
 }
 
+impl Default for CompactedKeyWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CompactedKeyWriter {
     pub fn new() -> CompactedKeyWriter {
         CompactedKeyWriter {

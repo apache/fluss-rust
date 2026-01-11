@@ -19,6 +19,7 @@ use bytes::{Bytes, BytesMut};
 use std::cmp;
 
 use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
+use crate::util::varint::{write_unsigned_varint_to_slice, write_unsigned_varint_u64_to_slice};
 
 // Writer for CompactedRow
 // Reference implementation:
@@ -125,25 +126,16 @@ impl CompactedRowWriter {
 
     pub fn write_int(&mut self, value: i32) {
         self.ensure_capacity(Self::MAX_INT_SIZE);
-        let mut v = value as u32;
-        while (v & !0x7F) != 0 {
-            self.buffer[self.position] = ((v as u8) & 0x7F) | 0x80;
-            self.position += 1;
-            v >>= 7;
-        }
-        self.buffer[self.position] = v as u8;
-        self.position += 1;
+        let bytes_written =
+            write_unsigned_varint_to_slice(value as u32, &mut self.buffer[self.position..]);
+        self.position += bytes_written;
     }
+
     pub fn write_long(&mut self, value: i64) {
         self.ensure_capacity(Self::MAX_LONG_SIZE);
-        let mut v = value as u64;
-        while (v & !0x7F) != 0 {
-            self.buffer[self.position] = ((v as u8) & 0x7F) | 0x80;
-            self.position += 1;
-            v >>= 7;
-        }
-        self.buffer[self.position] = v as u8;
-        self.position += 1;
+        let bytes_written =
+            write_unsigned_varint_u64_to_slice(value as u64, &mut self.buffer[self.position..]);
+        self.position += bytes_written;
     }
 
     pub fn write_float(&mut self, value: f32) {
