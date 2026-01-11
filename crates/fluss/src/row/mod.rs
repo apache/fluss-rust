@@ -74,7 +74,7 @@ pub trait InternalRow {
     // /// Returns the decimal value at the given position
     // fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Decimal;
 
-    /// Returns the timestamp value at the given position (date as days since epoch)
+    /// Returns the date value at the given position (date as days since epoch)
     fn get_date(&self, pos: usize) -> i32;
 
     /// Returns the timestamp value at the given position (timestamp without timezone)
