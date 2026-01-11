@@ -26,11 +26,11 @@ use crate::row::{GenericRow, InternalRow};
 #[allow(dead_code)]
 pub struct CompactedRow<'a> {
     arity: usize,
-    segment: &'a [u8],
     size_in_bytes: usize,
     decoded_row: OnceLock<GenericRow<'a>>,
     deserializer: CompactedRowDeserializer<'a>,
     reader: CompactedRowReader<'a>,
+    data_types: &'a [DataType],
 }
 
 pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
@@ -39,16 +39,16 @@ pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
 
 #[allow(dead_code)]
 impl<'a> CompactedRow<'a> {
-    pub fn from_bytes(types: &'a [DataType], data: &'a [u8]) -> Self {
-        let arity = types.len();
+    pub fn from_bytes(data_types: &'a [DataType], data: &'a [u8]) -> Self {
+        let arity = data_types.len();
         let size = data.len();
         Self {
             arity,
-            segment: data,
             size_in_bytes: size,
             decoded_row: OnceLock::new(),
-            deserializer: CompactedRowDeserializer::new(types),
+            deserializer: CompactedRowDeserializer::new(data_types),
             reader: CompactedRowReader::new(arity, data, 0, size),
+            data_types,
         }
     }
 
@@ -69,7 +69,7 @@ impl<'a> InternalRow for CompactedRow<'a> {
     }
 
     fn is_null_at(&self, pos: usize) -> bool {
-        self.decoded_row().is_null_at(pos)
+        self.data_types[pos].is_nullable() && self.reader.is_null_at(pos)
     }
 
     fn get_boolean(&self, pos: usize) -> bool {

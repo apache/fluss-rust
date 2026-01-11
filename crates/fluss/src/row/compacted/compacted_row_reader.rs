@@ -204,8 +204,8 @@ impl<'a> CompactedRowReader<'a> {
         (val, next_pos)
     }
 
-    pub fn read_binary(&self, length: usize) -> (&'a [u8], usize) {
-        self.read_bytes(length)
+    pub fn read_binary(&self, pos: usize) -> (&'a [u8], usize) {
+        self.read_bytes(pos)
     }
 
     pub fn read_bytes(&self, pos: usize) -> (&'a [u8], usize) {
