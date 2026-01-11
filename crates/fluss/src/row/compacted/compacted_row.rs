@@ -34,12 +34,12 @@ pub struct CompactedRow<'a> {
     reader: CompactedRowReader<'a>,
 }
 
+pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
+    arity.div_ceil(8)
+}
+
 #[allow(dead_code)]
 impl<'a> CompactedRow<'a> {
-    pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
-        arity.div_ceil(8)
-    }
-
     pub fn from_bytes(types: &'a [DataType], data: &'a [u8]) -> Self {
         let arity = types.len();
         let size = data.len();
@@ -71,10 +71,7 @@ impl<'a> InternalRow for CompactedRow<'a> {
     }
 
     fn is_null_at(&self, pos: usize) -> bool {
-        let byte_index = pos >> 3;
-        let bit = pos & 7;
-        let idx = self.offset + byte_index;
-        (self.segment[idx] & (1u8 << bit)) != 0
+        self.decoded_row().is_null_at(pos)
     }
 
     fn get_boolean(&self, pos: usize) -> bool {
