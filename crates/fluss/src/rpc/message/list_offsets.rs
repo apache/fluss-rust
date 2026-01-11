@@ -17,8 +17,8 @@
 
 use crate::{impl_read_version_type, impl_write_version_type, proto};
 
-use crate::error::{ApiError, Error, FlussError};
 use crate::error::Result as FlussResult;
+use crate::error::{ApiError, Error, FlussError};
 use crate::proto::ListOffsetsResponse;
 use crate::rpc::frame::ReadError;
 

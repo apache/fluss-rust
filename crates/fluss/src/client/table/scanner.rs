@@ -569,11 +569,8 @@ impl LogFetcher {
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let full_arrow_schema = to_arrow_schema(table_info.get_row_type());
-        let read_context = Self::create_read_context(
-            full_arrow_schema.clone(),
-            projected_fields.clone(),
-            false,
-        )?;
+        let read_context =
+            Self::create_read_context(full_arrow_schema.clone(), projected_fields.clone(), false)?;
         let remote_read_context =
             Self::create_read_context(full_arrow_schema, projected_fields.clone(), true)?;
 
@@ -618,11 +615,9 @@ impl LogFetcher {
     ) -> Result<ReadContext> {
         match projected_fields {
             None => Ok(ReadContext::new(full_arrow_schema, is_from_remote)),
-            Some(fields) => ReadContext::with_projection_pushdown(
-                full_arrow_schema,
-                fields,
-                is_from_remote,
-            ),
+            Some(fields) => {
+                ReadContext::with_projection_pushdown(full_arrow_schema, fields, is_from_remote)
+            }
         }
     }
 
@@ -645,7 +640,9 @@ impl LogFetcher {
                     if let Error::RpcError { source, .. } = &e
                         && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
                     {
-                        warn!("Retrying after encountering error while updating table metadata: {e}");
+                        warn!(
+                            "Retrying after encountering error while updating table metadata: {e}"
+                        );
                         Ok(())
                     } else {
                         Err(e)
@@ -693,8 +690,6 @@ impl LogFetcher {
             let creds_cache = self.credentials_cache.clone();
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
             let metadata = self.metadata.clone();
-            let table_path = self.table_path.clone();
-
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
             // This is acceptable because:
@@ -744,8 +739,6 @@ impl LogFetcher {
                     fetch_response,
                     &log_fetch_buffer,
                     &log_scanner_status,
-                    &metadata,
-                    &table_path,
                     &read_context,
                     &remote_read_context,
                     &remote_log_downloader,
@@ -790,8 +783,6 @@ impl LogFetcher {
         fetch_response: crate::proto::FetchLogResponse,
         log_fetch_buffer: &Arc<LogFetchBuffer>,
         log_scanner_status: &Arc<LogScannerStatus>,
-        _metadata: &Arc<Metadata>,
-        _table_path: &TablePath,
         read_context: &ReadContext,
         remote_read_context: &ReadContext,
         remote_log_downloader: &Arc<RemoteLogDownloader>,
@@ -917,8 +908,7 @@ impl LogFetcher {
                         }
                         Err(e) => {
                             warn!("Failed to create completed fetch: {e:?}");
-                            log_fetch_buffer
-                                .set_error(table_bucket.clone(), e, fetch_offset);
+                            log_fetch_buffer.set_error(table_bucket.clone(), e, fetch_offset);
                         }
                     }
                 }
@@ -1083,9 +1073,7 @@ impl LogFetcher {
                 | FlussError::KvStorageException
                 | FlussError::StorageException
                 | FlussError::FencedLeaderEpochException => {
-                    debug!(
-                        "Error in fetch for bucket {table_bucket}: {error:?}: {error_message}"
-                    );
+                    debug!("Error in fetch for bucket {table_bucket}: {error:?}: {error_message}");
                     self.schedule_metadata_update(error);
                     return Ok(None);
                 }
@@ -1543,8 +1531,8 @@ impl BucketScanStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::metadata::Metadata;
     use crate::client::WriteRecord;
+    use crate::client::metadata::Metadata;
     use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
@@ -1576,8 +1564,11 @@ mod tests {
     fn build_cluster(table_path: &TablePath, table_id: i64) -> Arc<Cluster> {
         let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
         let table_bucket = TableBucket::new(table_id, 0);
-        let bucket_location =
-            BucketLocation::new(table_bucket.clone(), Some(server.clone()), table_path.clone());
+        let bucket_location = BucketLocation::new(
+            table_bucket.clone(),
+            Some(server.clone()),
+            table_path.clone(),
+        );
 
         let mut servers = HashMap::new();
         servers.insert(server.id(), server);
@@ -1714,10 +1705,7 @@ mod tests {
             None,
         )?;
 
-        fetcher
-            .nodes_with_pending_fetch_requests
-            .lock()
-            .insert(1);
+        fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
 
         let requests = fetcher.prepare_fetch_log_requests().await;
         assert!(requests.is_empty());
@@ -1757,8 +1745,6 @@ mod tests {
             response,
             &fetcher.log_fetch_buffer,
             &fetcher.log_scanner_status,
-            &metadata,
-            &TablePath::new("db".to_string(), "tbl".to_string()),
             &fetcher.read_context,
             &fetcher.remote_read_context,
             &fetcher.remote_log_downloader,
@@ -1766,10 +1752,7 @@ mod tests {
         )
         .await?;
 
-        let completed = fetcher
-            .log_fetch_buffer
-            .poll()
-            .expect("completed fetch");
+        let completed = fetcher.log_fetch_buffer.poll().expect("completed fetch");
         let api_error = completed.api_error().expect("api error");
         assert_eq!(api_error.code, FlussError::AuthorizationException.code());
         Ok(())

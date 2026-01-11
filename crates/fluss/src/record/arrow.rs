@@ -862,11 +862,11 @@ impl ReadContext {
     }
 
     pub fn project_schema(schema: SchemaRef, projected_fields: &[usize]) -> Result<SchemaRef> {
-        Ok(SchemaRef::new(
-            schema.project(projected_fields).map_err(|e| Error::IllegalArgument {
+        Ok(SchemaRef::new(schema.project(projected_fields).map_err(
+            |e| Error::IllegalArgument {
                 message: format!("Invalid projection: {e}"),
-            })?,
-        ))
+            },
+        )?))
     }
 
     pub fn project_fields(&self) -> Option<&[usize]> {
@@ -1058,9 +1058,9 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::DataTypes;
-    use crate::metadata::DataField;
     use crate::error::Error;
+    use crate::metadata::DataField;
+    use crate::metadata::DataTypes;
 
     #[test]
     fn test_to_array_type() {
