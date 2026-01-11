@@ -15,29 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use bytes::Bytes;
-use std::borrow::Cow;
-
+use crate::row::compacted::CompactedRow;
 use crate::{
     metadata::DataType,
-    row::{
-        Datum, GenericRow,
-        compacted::{compacted_row::CompactedRow, compacted_row_writer::CompactedRowWriter},
-    },
+    row::{Datum, GenericRow, compacted::compacted_row_writer::CompactedRowWriter},
 };
+use std::cell::Cell;
+use std::str::from_utf8;
 
 #[allow(dead_code)]
-pub struct CompactedRowDeserializer {
-    schema: Vec<DataType>,
+pub struct CompactedRowDeserializer<'a> {
+    schema: &'a [DataType],
 }
 
 #[allow(dead_code)]
-impl CompactedRowDeserializer {
-    pub fn new(schema: Vec<DataType>) -> Self {
+impl<'a> CompactedRowDeserializer<'a> {
+    pub fn new(schema: &'a [DataType]) -> Self {
         Self { schema }
     }
 
-    pub fn deserialize(&self, reader: &mut CompactedRowReader) -> GenericRow<'static> {
+    pub fn deserialize(&self, reader: &CompactedRowReader<'a>) -> GenericRow<'a> {
         let mut row = GenericRow::new();
         for (pos, dtype) in self.schema.iter().enumerate() {
             if reader.is_null_at(pos) {
@@ -54,12 +51,10 @@ impl CompactedRowDeserializer {
                 DataType::Double(_) => Datum::Float64(reader.read_double().into()),
                 // TODO: use read_char(length) in the future, but need to keep compatibility
                 DataType::Char(_) | DataType::String(_) => {
-                    Datum::String(Cow::Owned(reader.read_string()))
+                    Datum::String(reader.read_string().into())
                 }
                 // TODO: use read_binary(length) in the future, but need to keep compatibility
-                DataType::Bytes(_) | DataType::Binary(_) => {
-                    Datum::Blob(Cow::Owned(reader.read_bytes().into_vec()))
-                }
+                DataType::Bytes(_) | DataType::Binary(_) => Datum::Blob(reader.read_bytes().into()),
                 _ => panic!("unsupported DataType in CompactedRowDeserializer"),
             };
             row.set_field(pos, datum);
@@ -71,38 +66,30 @@ impl CompactedRowDeserializer {
 // Reference implementation:
 // https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRowReader.java
 #[allow(dead_code)]
-pub struct CompactedRowReader {
-    segment: Bytes,
+pub struct CompactedRowReader<'a> {
+    segment: &'a [u8],
     offset: usize,
-    position: usize,
+    position: Cell<usize>,
     limit: usize,
     header_size_in_bytes: usize,
 }
 
 #[allow(dead_code)]
-impl CompactedRowReader {
-    pub fn new(field_count: usize) -> Self {
-        let header = CompactedRow::calculate_bit_set_width_in_bytes(field_count);
-        Self {
-            header_size_in_bytes: header,
-            segment: Bytes::new(),
-            offset: 0,
-            position: 0,
-            limit: 0,
-        }
-    }
-
-    pub fn point_to(&mut self, data: Bytes, offset: usize, length: usize) {
+impl<'a> CompactedRowReader<'a> {
+    pub fn new(field_count: usize, data: &'a [u8], offset: usize, length: usize) -> Self {
+        let header_size_in_bytes = CompactedRow::calculate_bit_set_width_in_bytes(field_count);
         let limit = offset + length;
-        let position = offset + self.header_size_in_bytes;
-
+        let position = offset + header_size_in_bytes;
         debug_assert!(limit <= data.len());
         debug_assert!(position <= limit);
 
-        self.segment = data;
-        self.offset = offset;
-        self.position = position;
-        self.limit = limit;
+        CompactedRowReader {
+            segment: data,
+            offset,
+            position: Cell::new(position),
+            limit,
+            header_size_in_bytes,
+        }
     }
 
     pub fn is_null_at(&self, pos: usize) -> bool {
@@ -113,29 +100,31 @@ impl CompactedRowReader {
         (self.segment[idx] & (1u8 << bit)) != 0
     }
 
-    pub fn read_boolean(&mut self) -> bool {
+    pub fn read_boolean(&self) -> bool {
         self.read_byte() != 0
     }
 
-    pub fn read_byte(&mut self) -> u8 {
-        debug_assert!(self.position < self.limit);
-        let b = self.segment[self.position];
-        self.position += 1;
+    pub fn read_byte(&self) -> u8 {
+        let pos = self.position.get();
+        debug_assert!(pos < self.limit);
+        let b = self.segment[pos];
+        self.position.set(pos + 1);
         b
     }
 
-    pub fn read_short(&mut self) -> i16 {
-        debug_assert!(self.position + 2 <= self.limit);
-        let bytes_slice = &self.segment[self.position..self.position + 2];
+    pub fn read_short(&self) -> i16 {
+        let pos = self.position.get();
+        debug_assert!(pos + 2 <= self.limit);
+        let bytes_slice = &self.segment[pos..pos + 2];
         let byte_array: [u8; 2] = bytes_slice
             .try_into()
             .expect("Slice must be exactly 2 bytes long");
 
-        self.position += 2;
+        self.position.set(pos + 2);
         i16::from_ne_bytes(byte_array)
     }
 
-    pub fn read_int(&mut self) -> i32 {
+    pub fn read_int(&self) -> i32 {
         let mut result: u32 = 0;
         let mut shift = 0;
 
@@ -151,7 +140,7 @@ impl CompactedRowReader {
         panic!("Invalid input stream.");
     }
 
-    pub fn read_long(&mut self) -> i64 {
+    pub fn read_long(&self) -> i64 {
         let mut result: u64 = 0;
         let mut shift = 0;
 
@@ -167,55 +156,58 @@ impl CompactedRowReader {
         panic!("Invalid input stream.");
     }
 
-    pub fn read_float(&mut self) -> f32 {
-        debug_assert!(self.position + 4 <= self.limit);
-        let bytes_slice = &self.segment[self.position..self.position + 4];
+    pub fn read_float(&self) -> f32 {
+        let pos = self.position.get();
+        debug_assert!(pos + 4 <= self.limit);
+        let bytes_slice = &self.segment[pos..pos + 4];
         let byte_array: [u8; 4] = bytes_slice
             .try_into()
             .expect("Slice must be exactly 4 bytes long");
 
-        self.position += 4;
+        self.position.set(pos + 4);
         f32::from_ne_bytes(byte_array)
     }
 
-    pub fn read_double(&mut self) -> f64 {
-        debug_assert!(self.position + 8 <= self.limit);
-        let bytes_slice = &self.segment[self.position..self.position + 8];
+    pub fn read_double(&self) -> f64 {
+        let pos = self.position.get();
+        debug_assert!(pos + 8 <= self.limit);
+        let bytes_slice = &self.segment[pos..pos + 8];
         let byte_array: [u8; 8] = bytes_slice
             .try_into()
             .expect("Slice must be exactly 8 bytes long");
 
-        self.position += 8;
+        self.position.set(pos + 8);
         f64::from_ne_bytes(byte_array)
     }
 
-    pub fn read_binary(&mut self, length: usize) -> Bytes {
-        debug_assert!(self.position + length <= self.limit);
+    pub fn read_binary(&self, length: usize) -> &[u8] {
+        let pos = self.position.get();
+        debug_assert!(pos + length <= self.limit);
 
-        let start = self.position;
+        let start = pos;
         let end = start + length;
-        self.position = end;
+        self.position.set(end);
 
-        self.segment.slice(start..end)
+        &self.segment[start..end]
     }
 
-    pub fn read_bytes(&mut self) -> Box<[u8]> {
+    pub fn read_bytes(&self) -> &'a [u8] {
         let len = self.read_int();
         debug_assert!(len >= 0);
+        let pos = self.position.get();
 
         let len = len as usize;
-        debug_assert!(self.position + len <= self.limit);
+        debug_assert!(pos + len <= self.limit);
 
-        let start = self.position;
+        let start = pos;
         let end = start + len;
-        self.position = end;
+        self.position.set(end);
 
-        self.segment[start..end].to_vec().into_boxed_slice()
+        &self.segment[start..end]
     }
 
-    pub fn read_string(&mut self) -> String {
+    pub fn read_string(&self) -> &'a str {
         let bytes = self.read_bytes();
-        String::from_utf8(bytes.into_vec())
-            .unwrap_or_else(|e| panic!("Invalid UTF-8 in string data: {e}"))
+        from_utf8(bytes).expect("Invalid UTF-8 when reading string from compacted row")
     }
 }

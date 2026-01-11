@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use bytes::Bytes;
+use std::sync::OnceLock;
 
 use crate::metadata::DataType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
@@ -24,38 +24,23 @@ use crate::row::{GenericRow, InternalRow};
 // Reference implementation:
 // https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRow.java
 #[allow(dead_code)]
-pub struct CompactedRow {
+pub struct CompactedRow<'a> {
     arity: usize,
-    segment: Bytes,
+    segment: &'a [u8],
     offset: usize,
     size_in_bytes: usize,
-    decoded: bool,
-    decoded_row: GenericRow<'static>,
-    reader: CompactedRowReader,
-    deserializer: CompactedRowDeserializer,
+    decoded_row: OnceLock<GenericRow<'a>>,
+    deserializer: CompactedRowDeserializer<'a>,
+    reader: CompactedRowReader<'a>,
 }
 
 #[allow(dead_code)]
-impl CompactedRow {
+impl<'a> CompactedRow<'a> {
     pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
         arity.div_ceil(8)
     }
 
-    pub fn new(types: Vec<DataType>) -> Self {
-        let arity = types.len();
-        Self {
-            arity,
-            segment: Bytes::new(),
-            offset: 0,
-            size_in_bytes: 0,
-            decoded: false,
-            decoded_row: GenericRow::new(),
-            reader: CompactedRowReader::new(arity),
-            deserializer: CompactedRowDeserializer::new(types),
-        }
-    }
-
-    pub fn from_bytes(types: Vec<DataType>, data: Bytes) -> Self {
+    pub fn from_bytes(types: &'a [DataType], data: &'a [u8]) -> Self {
         let arity = types.len();
         let size = data.len();
         Self {
@@ -63,86 +48,76 @@ impl CompactedRow {
             segment: data,
             offset: 0,
             size_in_bytes: size,
-            decoded: false,
-            decoded_row: GenericRow::new(),
-            reader: CompactedRowReader::new(arity),
+            decoded_row: OnceLock::new(),
             deserializer: CompactedRowDeserializer::new(types),
+            reader: CompactedRowReader::new(arity, data, 0, size),
         }
-    }
-
-    pub fn point_to(&mut self, segment: Bytes, offset: usize, size_in_bytes: usize) {
-        self.segment = segment;
-        self.offset = offset;
-        self.size_in_bytes = size_in_bytes;
-        self.decoded = false;
-    }
-
-    pub fn get_segment(&self) -> &Bytes {
-        &self.segment
-    }
-
-    pub fn get_offset(&self) -> usize {
-        self.offset
     }
 
     pub fn get_size_in_bytes(&self) -> usize {
         self.size_in_bytes
     }
 
-    pub fn get_field_count(&self) -> usize {
+    fn decoded_row(&self) -> &GenericRow<'_> {
+        self.decoded_row
+            .get_or_init(|| self.deserializer.deserialize(&self.reader))
+    }
+}
+
+#[allow(dead_code)]
+impl<'a> InternalRow for CompactedRow<'a> {
+    fn get_field_count(&self) -> usize {
         self.arity
     }
 
-    pub fn is_null_at(&self, pos: usize) -> bool {
+    fn is_null_at(&self, pos: usize) -> bool {
         let byte_index = pos >> 3;
         let bit = pos & 7;
         let idx = self.offset + byte_index;
         (self.segment[idx] & (1u8 << bit)) != 0
     }
 
-    fn decoded_row(&mut self) -> &GenericRow<'static> {
-        if !self.decoded {
-            self.reader
-                .point_to(self.segment.clone(), self.offset, self.size_in_bytes);
-            self.decoded_row = self.deserializer.deserialize(&mut self.reader);
-            self.decoded = true;
-        }
-        &self.decoded_row
-    }
-
-    pub fn get_boolean(&mut self, pos: usize) -> bool {
+    fn get_boolean(&self, pos: usize) -> bool {
         self.decoded_row().get_boolean(pos)
     }
 
-    pub fn get_byte(&mut self, pos: usize) -> i8 {
+    fn get_byte(&self, pos: usize) -> i8 {
         self.decoded_row().get_byte(pos)
     }
 
-    pub fn get_short(&mut self, pos: usize) -> i16 {
+    fn get_short(&self, pos: usize) -> i16 {
         self.decoded_row().get_short(pos)
     }
 
-    pub fn get_int(&mut self, pos: usize) -> i32 {
+    fn get_int(&self, pos: usize) -> i32 {
         self.decoded_row().get_int(pos)
     }
 
-    pub fn get_long(&mut self, pos: usize) -> i64 {
+    fn get_long(&self, pos: usize) -> i64 {
         self.decoded_row().get_long(pos)
     }
 
-    pub fn get_float(&mut self, pos: usize) -> f32 {
+    fn get_float(&self, pos: usize) -> f32 {
         self.decoded_row().get_float(pos)
     }
 
-    pub fn get_double(&mut self, pos: usize) -> f64 {
+    fn get_double(&self, pos: usize) -> f64 {
         self.decoded_row().get_double(pos)
     }
 
-    pub fn get_string(&mut self, pos: usize) -> &str {
+    fn get_char(&self, pos: usize, length: usize) -> &str {
+        self.decoded_row().get_char(pos, length)
+    }
+
+    fn get_string(&self, pos: usize) -> &str {
         self.decoded_row().get_string(pos)
     }
 
-    pub fn get_bytes(&mut self, pos: usize) -> &[u8] {
+    fn get_binary(&self, pos: usize, length: usize) -> &[u8] {
+        self.decoded_row().get_binary(pos, length)
+    }
+
+    fn get_bytes(&self, pos: usize) -> &[u8] {
         self.decoded_row().get_bytes(pos)
     }
 }
@@ -171,7 +146,6 @@ mod tests {
             DataType::Bytes(BytesType::new()),
         ];
 
-        let mut row = CompactedRow::new(types.clone());
         let mut writer = CompactedRowWriter::new(types.len());
 
         writer.write_boolean(true);
@@ -184,7 +158,8 @@ mod tests {
         writer.write_string("Hello World");
         writer.write_bytes(&[1, 2, 3, 4, 5]);
 
-        row.point_to(writer.to_bytes(), 0, writer.position());
+        let bytes = writer.to_bytes();
+        let mut row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
 
         assert_eq!(row.get_field_count(), 9);
         assert!(row.get_boolean(0));
@@ -204,14 +179,14 @@ mod tests {
             DataType::Double(DoubleType::new()),
         ];
 
-        let mut row = CompactedRow::new(types.clone());
         let mut writer = CompactedRowWriter::new(types.len());
 
         writer.write_int(100);
         writer.set_null_at(1);
         writer.write_double(2.71);
 
-        row.point_to(writer.to_bytes(), 0, writer.position());
+        let bytes = writer.to_bytes();
+        row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
 
         assert!(!row.is_null_at(0));
         assert!(row.is_null_at(1));
@@ -233,7 +208,8 @@ mod tests {
         writer.write_int(42);
         writer.write_string("test");
 
-        let mut row = CompactedRow::from_bytes(types, writer.to_bytes());
+        let bytes = writer.to_bytes();
+        let mut row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
 
         assert_eq!(row.get_int(0), 42);
         assert_eq!(row.get_string(1), "test");
@@ -244,14 +220,14 @@ mod tests {
             .map(|_| DataType::Int(IntType::new()))
             .collect();
 
-        let mut row = CompactedRow::new(types.clone());
         let mut writer = CompactedRowWriter::new(num_fields);
 
         for i in 0..num_fields {
             writer.write_int((i * 10) as i32);
         }
 
-        row.point_to(writer.to_bytes(), 0, writer.position());
+        let bytes = writer.to_bytes();
+        row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
 
         for i in 0..num_fields {
             assert_eq!(row.get_int(i), (i * 10) as i32);
