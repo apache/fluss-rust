@@ -18,7 +18,7 @@
 use bytes::{Bytes, BytesMut};
 use std::cmp;
 
-use crate::row::compacted::compacted_row::CompactedRow;
+use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
 
 // Writer for CompactedRow
 // Reference implementation:
@@ -36,7 +36,7 @@ impl CompactedRowWriter {
     pub const MAX_LONG_SIZE: usize = 10;
 
     pub fn new(field_count: usize) -> Self {
-        let header_size = CompactedRow::calculate_bit_set_width_in_bytes(field_count);
+        let header_size = calculate_bit_set_width_in_bytes(field_count);
         let cap = cmp::max(64, header_size);
 
         let mut buffer = BytesMut::with_capacity(cap);
