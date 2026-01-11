@@ -48,6 +48,23 @@ static TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
         .expect("Failed to create Tokio runtime")
 });
 
+/// Offset type constants for list_offsets()
+#[pyclass]
+#[derive(Clone)]
+pub struct OffsetType;
+
+#[pymethods]
+impl OffsetType {
+    #[classattr]
+    const EARLIEST: &'static str = "earliest";
+
+    #[classattr]
+    const LATEST: &'static str = "latest";
+
+    #[classattr]
+    const TIMESTAMP: &'static str = "timestamp";
+}
+
 #[pymodule]
 fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register all classes
@@ -69,6 +86,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChangeType>()?;
     m.add_class::<ScanRecord>()?;
     m.add_class::<RecordBatch>()?;
+    m.add_class::<OffsetType>()?;
 
     // Register exception types
     m.add_class::<FlussError>()?;

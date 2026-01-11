@@ -96,6 +96,104 @@ impl FlussAdmin {
         })
     }
 
+    /// Drop a table
+    #[pyo3(signature = (table_path, ignore_if_not_exists=false))]
+    pub fn drop_table<'py>(
+        &self,
+        py: Python<'py>,
+        table_path: &TablePath,
+        ignore_if_not_exists: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let core_table_path = table_path.to_core();
+        let admin = self.__admin.clone();
+
+        future_into_py(py, async move {
+            admin
+                .drop_table(&core_table_path, ignore_if_not_exists)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to drop table: {e}")))?;
+
+            Python::attach(|py| Ok(py.None()))
+        })
+    }
+
+    /// List offsets for buckets.
+    ///
+    /// Args:
+    ///     table_path: Path to the table
+    ///     bucket_ids: List of bucket IDs to query
+    ///     offset_type: Type of offset to retrieve:
+    ///         - "earliest" or OffsetType.EARLIEST: Start of the log
+    ///         - "latest" or OffsetType.LATEST: End of the log
+    ///         - "timestamp" or OffsetType.TIMESTAMP: Offset at given timestamp (requires timestamp arg)
+    ///     timestamp: Required when offset_type is "timestamp", ignored otherwise
+    ///
+    /// Returns:
+    ///     dict[int, int]: Mapping of bucket_id -> offset
+    ///
+    /// Example:
+    ///     >>> offsets = await admin.list_offsets(table_path, [0, 1], "latest")
+    ///     >>> print(offsets)  # {0: 100, 1: 150}
+    #[pyo3(signature = (table_path, bucket_ids, offset_type, timestamp=None))]
+    pub fn list_offsets<'py>(
+        &self,
+        py: Python<'py>,
+        table_path: &TablePath,
+        bucket_ids: Vec<i32>,
+        offset_type: &str,
+        timestamp: Option<i64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        use fcore::rpc::message::OffsetSpec;
+
+        // Validate bucket IDs
+        for &bucket_id in &bucket_ids {
+            if bucket_id < 0 {
+                return Err(FlussError::new_err(format!(
+                    "Invalid bucket_id: {}. Bucket IDs must be non-negative",
+                    bucket_id
+                )));
+            }
+        }
+
+        let core_table_path = table_path.to_core();
+        let admin = self.__admin.clone();
+
+        // Parse offset_type (case-insensitive, no allocation)
+        let offset_spec = match offset_type {
+            s if s.eq_ignore_ascii_case("earliest") => OffsetSpec::Earliest,
+            s if s.eq_ignore_ascii_case("latest") => OffsetSpec::Latest,
+            s if s.eq_ignore_ascii_case("timestamp") => {
+                let ts = timestamp.ok_or_else(|| {
+                    FlussError::new_err(
+                        "timestamp must be provided when offset_type='timestamp'".to_string(),
+                    )
+                })?;
+                OffsetSpec::Timestamp(ts)
+            }
+            _ => {
+                return Err(FlussError::new_err(format!(
+                    "Invalid offset_type: '{}'. Must be 'earliest', 'latest', or 'timestamp'",
+                    offset_type
+                )))
+            }
+        };
+
+        future_into_py(py, async move {
+            let offsets = admin
+                .list_offsets(&core_table_path, &bucket_ids, offset_spec)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to list offsets: {e}")))?;
+
+            Python::attach(|py| {
+                let dict = pyo3::types::PyDict::new(py);
+                for (bucket_id, offset) in offsets {
+                    dict.set_item(bucket_id, offset)?;
+                }
+                Ok(dict.unbind())
+            })
+        })
+    }
+
     fn __repr__(&self) -> String {
         "FlussAdmin()".to_string()
     }

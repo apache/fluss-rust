@@ -87,6 +87,19 @@ async def main():
     except Exception as e:
         print(f"Failed to get table info: {e}")
 
+    # Demo: List offsets
+    print("\n--- Testing list_offsets() ---")
+    try:
+        # Query latest offsets using OffsetType constant (recommended for type safety)
+        offsets = await admin.list_offsets(
+            table_path,
+            bucket_ids=[0],
+            offset_type=fluss.OffsetType.LATEST
+        )
+        print(f"Latest offsets for table (before writes): {offsets}")
+    except Exception as e:
+        print(f"Failed to list offsets: {e}")
+
     # Get the table instance
     table = await conn.get_table(table_path)
     print(f"Got table: {table}")
@@ -96,7 +109,7 @@ async def main():
     print(f"Created append writer: {append_writer}")
 
     try:
-        # Test 1: Write PyArrow Table
+        # Demo: Write PyArrow Table
         print("\n--- Testing PyArrow Table write ---")
         pa_table = pa.Table.from_arrays(
             [
@@ -139,7 +152,7 @@ async def main():
         append_writer.write_arrow(pa_table)
         print("Successfully wrote PyArrow Table")
 
-        # Test 2: Write PyArrow RecordBatch
+        # Demo: Write PyArrow RecordBatch
         print("\n--- Testing PyArrow RecordBatch write ---")
         pa_record_batch = pa.RecordBatch.from_arrays(
             [
@@ -202,7 +215,7 @@ async def main():
         )
         print("Successfully appended row (list with Date, Time, Timestamp, Decimal)")
 
-        # Test 4: Write Pandas DataFrame
+        # Demo: Write Pandas DataFrame
         print("\n--- Testing Pandas DataFrame write ---")
         df = pd.DataFrame(
             {
@@ -231,6 +244,19 @@ async def main():
         print("\n--- Flushing data ---")
         append_writer.flush()
         print("Successfully flushed data")
+
+        # Demo: Check offsets after writes
+        print("\n--- Checking offsets after writes ---")
+        try:
+            # Query with string constant (alternative API - both strings and constants are supported)
+            offsets = await admin.list_offsets(
+                table_path,
+                bucket_ids=[0],
+                offset_type="latest"  # Can also use "earliest" or "timestamp"
+            )
+            print(f"Latest offsets after writing 7 records: {offsets}")
+        except Exception as e:
+            print(f"Failed to list offsets: {e}")
 
     except Exception as e:
         print(f"Error during writing: {e}")
@@ -569,6 +595,15 @@ async def main():
 
     except Exception as e:
         print(f"Error during projection: {e}")
+
+    # Demo: Drop table
+    print("\n--- Testing drop_table() ---")
+    try:
+        # Drop the table (ignore_if_not_exists=True means no error if already dropped)
+        await admin.drop_table(table_path, ignore_if_not_exists=True)
+        print(f"Successfully dropped table: {table_path}")
+    except Exception as e:
+        print(f"Failed to drop table: {e}")
 
     # Close connection
     conn.close()
