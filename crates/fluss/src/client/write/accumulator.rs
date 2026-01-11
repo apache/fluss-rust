@@ -392,12 +392,24 @@ impl RecordAccumulator {
     }
 
     #[allow(unused_must_use)]
-    #[allow(clippy::await_holding_lock)]
     pub async fn await_flush_completion(&self) -> Result<()> {
-        for result_handle in self.incomplete_batches.read().values() {
-            result_handle.wait().await?;
+        // Clone handles before awaiting to avoid holding RwLock read guard across await points
+        let handles: Vec<_> = self.incomplete_batches.read().values().cloned().collect();
+
+        // Await on all handles
+        let result = async {
+            for result_handle in handles {
+                result_handle.wait().await?;
+            }
+            Ok(())
         }
-        Ok(())
+        .await;
+
+        // Always decrement flushes_in_progress, even if an error occurred
+        // This mimics the Java finally block behavior
+        self.flushes_in_progress.fetch_sub(1, Ordering::SeqCst);
+
+        result
     }
 }
 
