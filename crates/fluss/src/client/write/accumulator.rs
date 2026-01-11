@@ -171,16 +171,31 @@ impl RecordAccumulator {
     }
 
     pub async fn ready(&self, cluster: &Arc<Cluster>) -> ReadyCheckResult {
+        // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
+        let entries: Vec<(TablePath, Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>)> = self
+            .write_batches
+            .iter()
+            .map(|entry| {
+                let table_path = entry.key().clone();
+                let bucket_batches: Vec<_> = entry
+                    .value()
+                    .batches
+                    .iter()
+                    .map(|(bucket_id, batch_arc)| (*bucket_id, batch_arc.clone()))
+                    .collect();
+                (table_path, bucket_batches)
+            })
+            .collect();
+
         let mut ready_nodes = HashSet::new();
         let mut next_ready_check_delay_ms = self.batch_timeout_ms;
         let mut unknown_leader_tables = HashSet::new();
-        for entry in self.write_batches.iter() {
-            let table_path = entry.key();
-            let batches = entry.value();
+
+        for (table_path, bucket_batches) in entries {
             next_ready_check_delay_ms = self
                 .bucket_ready(
-                    table_path,
-                    batches,
+                    &table_path,
+                    bucket_batches,
                     &mut ready_nodes,
                     &mut unknown_leader_tables,
                     cluster,
@@ -199,7 +214,7 @@ impl RecordAccumulator {
     async fn bucket_ready(
         &self,
         table_path: &TablePath,
-        batches: &BucketAndWriteBatches,
+        bucket_batches: Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>,
         ready_nodes: &mut HashSet<ServerNode>,
         unknown_leader_tables: &mut HashSet<TablePath>,
         cluster: &Cluster,
@@ -207,8 +222,7 @@ impl RecordAccumulator {
     ) -> i64 {
         let mut next_delay = next_ready_check_delay_ms;
 
-        for (bucket_id, batch) in batches.batches.iter() {
-            let batch = batch.clone();
+        for (bucket_id, batch) in bucket_batches {
             let batch_guard = batch.lock().await;
             if batch_guard.is_empty() {
                 continue;
@@ -218,7 +232,7 @@ impl RecordAccumulator {
             let waited_time_ms = batch.waited_time_ms(current_time_ms());
             let deque_size = batch_guard.len();
             let full = deque_size > 1 || batch.is_closed();
-            let table_bucket = cluster.get_table_bucket(table_path, *bucket_id);
+            let table_bucket = cluster.get_table_bucket(table_path, bucket_id);
             if let Some(leader) = cluster.leader_for(&table_bucket) {
                 next_delay =
                     self.batch_ready(leader, waited_time_ms, full, ready_nodes, next_delay);
@@ -287,16 +301,21 @@ impl RecordAccumulator {
             return Ok(ready);
         }
 
-        let mut nodes_drain_index_guard = self.nodes_drain_index.lock().await;
-        let drain_index = nodes_drain_index_guard.entry(node.id()).or_insert(0);
-        let start = *drain_index % buckets.len();
+        // Get the start index without holding the lock across awaits
+        let start = {
+            let mut nodes_drain_index_guard = self.nodes_drain_index.lock().await;
+            let drain_index = nodes_drain_index_guard.entry(node.id()).or_insert(0);
+            *drain_index % buckets.len()
+        };
+
         let mut current_index = start;
+        let mut last_processed_index;
 
         loop {
             let bucket = &buckets[current_index];
             let table_path = bucket.table_path.clone();
             let table_bucket = bucket.table_bucket.clone();
-            nodes_drain_index_guard.insert(node.id(), current_index);
+            last_processed_index = current_index;
             current_index = (current_index + 1) % buckets.len();
 
             let deque = self
@@ -345,6 +364,13 @@ impl RecordAccumulator {
                 break;
             }
         }
+
+        // Store the last processed index to maintain round-robin fairness
+        {
+            let mut nodes_drain_index_guard = self.nodes_drain_index.lock().await;
+            nodes_drain_index_guard.insert(node.id(), last_processed_index);
+        }
+
         Ok(ready)
     }
 
@@ -407,9 +433,11 @@ impl RecordAccumulator {
     }
 
     #[allow(unused_must_use)]
-    #[allow(clippy::await_holding_lock)]
     pub async fn await_flush_completion(&self) -> Result<()> {
-        for result_handle in self.incomplete_batches.read().values() {
+        // Clone handles before awaiting to avoid holding RwLock read guard across await points
+        let handles: Vec<_> = self.incomplete_batches.read().values().cloned().collect();
+
+        for result_handle in handles {
             result_handle.wait().await?;
         }
         Ok(())
