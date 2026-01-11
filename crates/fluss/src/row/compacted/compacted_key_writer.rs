@@ -22,6 +22,7 @@ use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
 use delegate::delegate;
+use rust_decimal::Decimal;
 
 /// A wrapping of [`CompactedRowWriter`] used to encode key columns.
 /// The encoding is the same as [`CompactedRowWriter`], but is without header of null bits to
@@ -86,6 +87,12 @@ impl BinaryWriter for CompactedKeyWriter {
             fn write_float(&mut self, value: f32);
 
             fn write_double(&mut self, value: f64);
+
+            fn write_decimal(&mut self, value: &Decimal, precision: u32);
+
+            fn write_timestamp_ntz(&mut self, value: i64, precision: u32);
+
+            fn write_timestamp_ltz(&mut self, value: i64, precision: u32);
 
 
         }
