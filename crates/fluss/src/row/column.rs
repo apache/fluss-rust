@@ -216,7 +216,7 @@ mod tests {
 
         let mut row = ColumnarRow::new(Arc::new(batch));
         assert_eq!(row.get_field_count(), 10);
-        assert_eq!(row.get_boolean(0), true);
+        assert!(row.get_boolean(0));
         assert_eq!(row.get_byte(1), 1);
         assert_eq!(row.get_short(2), 2);
         assert_eq!(row.get_int(3), 3);

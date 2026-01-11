@@ -1732,12 +1732,15 @@ mod tests {
             tables_resp: vec![crate::proto::PbFetchLogRespForTable {
                 table_id: 1,
                 buckets_resp: vec![crate::proto::PbFetchLogRespForBucket {
+                    partition_id: None,
                     bucket_id: 0,
                     error_code: Some(FlussError::AuthorizationException.code()),
                     error_message: Some("denied".to_string()),
-                    ..Default::default()
+                    high_watermark: None,
+                    log_start_offset: None,
+                    remote_log_fetch_info: None,
+                    records: None,
                 }],
-                ..Default::default()
             }],
         };
 

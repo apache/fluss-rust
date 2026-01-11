@@ -153,7 +153,6 @@ mod tests {
                 error_message: Some("missing".to_string()),
                 offset: None,
             }],
-            ..Default::default()
         };
 
         let result = response.offsets();
