@@ -522,4 +522,35 @@ mod tests {
         assert_eq!(batch.write_batch.attempts(), 1);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn flush_counter_decremented_on_error() -> Result<()> {
+        use crate::client::write::broadcast::BroadcastOnce;
+        use std::sync::atomic::Ordering;
+
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config);
+
+        accumulator.begin_flush();
+        assert_eq!(accumulator.flushes_in_progress.load(Ordering::SeqCst), 1);
+
+        // Create a failing batch by dropping the BroadcastOnce without broadcasting
+        {
+            let broadcast = BroadcastOnce::default();
+            let receiver = broadcast.receiver();
+            let handle = ResultHandle::new(receiver);
+            accumulator.incomplete_batches.write().insert(1, handle);
+            // broadcast is dropped here, causing an error
+        }
+
+        // Await flush completion should fail but still decrement counter
+        let result = accumulator.await_flush_completion().await;
+        assert!(result.is_err());
+
+        // Counter should still be decremented (this is the critical fix!)
+        assert_eq!(accumulator.flushes_in_progress.load(Ordering::SeqCst), 0);
+        assert!(!accumulator.flush_in_progress());
+
+        Ok(())
+    }
 }
