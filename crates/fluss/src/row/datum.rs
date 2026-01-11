@@ -352,8 +352,28 @@ pub struct Date(i32);
 #[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
 pub struct Timestamp(i64);
 
+impl Timestamp {
+    pub const fn new(inner: i64) -> Self {
+        Timestamp(inner)
+    }
+
+    pub fn get_inner(&self) -> i64 {
+        self.0
+    }
+}
+
 #[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
 pub struct TimestampLtz(i64);
+
+impl TimestampLtz {
+    pub const fn new(inner: i64) -> Self {
+        TimestampLtz(inner)
+    }
+
+    pub fn get_inner(&self) -> i64 {
+        self.0
+    }
+}
 
 pub type Blob<'a> = Cow<'a, [u8]>;
 
@@ -403,7 +423,7 @@ mod tests {
 
     #[test]
     fn datum_accessors_and_conversions() {
-        let datum = Datum::String("value".into());
+        let datum = Datum::String(Cow::Borrowed("value"));
         assert_eq!(datum.as_str(), "value");
         assert!(!datum.is_null());
 

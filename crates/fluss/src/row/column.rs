@@ -126,6 +126,18 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id)
     }
 
+    fn get_date(&self, pos: usize) -> i32 {
+        self.get_int(pos)
+    }
+
+    fn get_timestamp_ntz(&self, pos: usize) -> i64 {
+        self.get_long(pos)
+    }
+
+    fn get_timestamp_ltz(&self, pos: usize) -> i64 {
+        self.get_long(pos)
+    }
+
     fn get_char(&self, pos: usize, _length: usize) -> &str {
         let array = self
             .record_batch

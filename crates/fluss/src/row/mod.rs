@@ -74,11 +74,14 @@ pub trait InternalRow {
     // /// Returns the decimal value at the given position
     // fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Decimal;
 
-    // /// Returns the timestamp value at the given position
-    // fn get_timestamp_ntz(&self, pos: usize, precision: usize) -> TimestampNtz;
+    /// Returns the timestamp value at the given position (date as days since epoch)
+    fn get_date(&self, pos: usize) -> i32;
 
-    // /// Returns the timestamp value at the given position
-    // fn get_timestamp_ltz(&self, pos: usize, precision: usize) -> TimestampLtz;
+    /// Returns the timestamp value at the given position (timestamp without timezone)
+    fn get_timestamp_ntz(&self, pos: usize) -> i64;
+
+    /// Returns the timestamp value at the given position (timestamp with local timezone)
+    fn get_timestamp_ltz(&self, pos: usize) -> i64;
 
     /// Returns the binary value at the given position with fixed length
     fn get_binary(&self, pos: usize, length: usize) -> &[u8];
@@ -121,6 +124,30 @@ impl<'a> InternalRow for GenericRow<'a> {
 
     fn get_long(&self, _pos: usize) -> i64 {
         self.values.get(_pos).unwrap().try_into().unwrap()
+    }
+
+    fn get_date(&self, pos: usize) -> i32 {
+        match self.values.get(pos).unwrap() {
+            Datum::Date(d) => d.get_inner(),
+            Datum::Int32(i) => *i,
+            other => panic!("Expected Date or Int32 at pos {pos:?}, got {other:?}"),
+        }
+    }
+
+    fn get_timestamp_ntz(&self, pos: usize) -> i64 {
+        match self.values.get(pos).unwrap() {
+            Datum::Timestamp(t) => t.get_inner(),
+            Datum::Int64(i) => *i,
+            other => panic!("Expected Timestamp or Int64 at pos {pos:?}, got {other:?}"),
+        }
+    }
+
+    fn get_timestamp_ltz(&self, pos: usize) -> i64 {
+        match self.values.get(pos).unwrap() {
+            Datum::TimestampTz(t) => t.get_inner(),
+            Datum::Int64(i) => *i,
+            other => panic!("Expected TimestampTz or Int64 at pos {pos:?}, got {other:?}"),
+        }
     }
 
     fn get_float(&self, pos: usize) -> f32 {
