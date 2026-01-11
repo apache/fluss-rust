@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn datum_accessors_and_conversions() {
-        let datum: Datum = "value".into();
+        let datum = Datum::String("value".into());
         assert_eq!(datum.as_str(), "value");
         assert!(!datum.is_null());
 
