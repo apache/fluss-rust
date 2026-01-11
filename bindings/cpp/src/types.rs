@@ -25,6 +25,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use fcore::row::InternalRow;
 use fluss as fcore;
+use std::borrow::Cow;
 
 pub const DATA_TYPE_BOOLEAN: i32 = 1;
 pub const DATA_TYPE_TINYINT: i32 = 2;
@@ -218,9 +219,8 @@ pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'_> {
             DATUM_TYPE_INT64 => Datum::Int64(field.i64_val),
             DATUM_TYPE_FLOAT32 => Datum::Float32(field.f32_val.into()),
             DATUM_TYPE_FLOAT64 => Datum::Float64(field.f64_val.into()),
-            DATUM_TYPE_STRING => Datum::String(field.string_val.as_str()),
-            // todo: avoid copy bytes for blob
-            DATUM_TYPE_BYTES => Datum::Blob(field.bytes_val.clone().into()),
+            DATUM_TYPE_STRING => Datum::String(Cow::Borrowed(field.string_val.as_str())),
+            DATUM_TYPE_BYTES => Datum::Blob(Cow::Borrowed(field.bytes_val.as_slice())),
             _ => Datum::Null,
         };
         generic_row.set_field(idx, datum);

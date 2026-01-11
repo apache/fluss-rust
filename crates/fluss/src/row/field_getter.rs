@@ -83,7 +83,7 @@ pub enum InnerFieldGetter {
 impl InnerFieldGetter {
     pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
         match self {
-            InnerFieldGetter::Char { pos, len } => Datum::String(row.get_char(*pos, *len)),
+            InnerFieldGetter::Char { pos, len } => Datum::from(row.get_char(*pos, *len)),
             InnerFieldGetter::String { pos } => Datum::from(row.get_string(*pos)),
             InnerFieldGetter::Bool { pos } => Datum::from(row.get_boolean(*pos)),
             InnerFieldGetter::Binary { pos, len } => Datum::from(row.get_binary(*pos, *len)),

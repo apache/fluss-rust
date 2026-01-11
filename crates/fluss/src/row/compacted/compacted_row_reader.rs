@@ -16,6 +16,7 @@
 // under the License.
 
 use bytes::Bytes;
+use std::borrow::Cow;
 
 use crate::{
     metadata::DataType,
@@ -52,10 +53,12 @@ impl CompactedRowDeserializer {
                 DataType::Float(_) => Datum::Float32(reader.read_float().into()),
                 DataType::Double(_) => Datum::Float64(reader.read_double().into()),
                 // TODO: use read_char(length) in the future, but need to keep compatibility
-                DataType::Char(_) | DataType::String(_) => Datum::OwnedString(reader.read_string()),
+                DataType::Char(_) | DataType::String(_) => {
+                    Datum::String(Cow::Owned(reader.read_string()))
+                }
                 // TODO: use read_binary(length) in the future, but need to keep compatibility
                 DataType::Bytes(_) | DataType::Binary(_) => {
-                    Datum::Blob(reader.read_bytes().into_vec().into())
+                    Datum::Blob(Cow::Owned(reader.read_bytes().into_vec()))
                 }
                 _ => panic!("unsupported DataType in CompactedRowDeserializer"),
             };
