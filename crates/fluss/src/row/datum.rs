@@ -53,6 +53,9 @@ pub enum Datum<'a> {
     Float64(F64),
     #[display("'{0}'")]
     String(&'a str),
+    /// Owned string
+    #[display("'{0}'")]
+    OwnedString(String),
     #[display("{0}")]
     Blob(Blob),
     #[display("{:?}")]
@@ -75,6 +78,7 @@ impl Datum<'_> {
     pub fn as_str(&self) -> &str {
         match self {
             Self::String(s) => s,
+            Self::OwnedString(s) => s.as_str(),
             _ => panic!("not a string: {self:?}"),
         }
     }
@@ -216,13 +220,14 @@ impl TryFrom<&Datum<'_>> for bool {
     }
 }
 
-impl<'a> TryFrom<&Datum<'a>> for &'a str {
+impl<'b, 'a: 'b> TryFrom<&'b Datum<'a>> for &'b str {
     type Error = ();
 
     #[inline]
-    fn try_from(from: &Datum<'a>) -> std::result::Result<Self, Self::Error> {
+    fn try_from(from: &'b Datum<'a>) -> std::result::Result<Self, Self::Error> {
         match from {
             Datum::String(i) => Ok(*i),
+            Datum::OwnedString(s) => Ok(s.as_str()),
             _ => Err(()),
         }
     }
@@ -291,6 +296,7 @@ impl Datum<'_> {
             Datum::Float32(v) => append_value_to_arrow!(Float32Builder, v.into_inner()),
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, *v),
+            Datum::OwnedString(v) => append_value_to_arrow!(StringBuilder, v.as_str()),
             Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
             Datum::BorrowedBlob(v) => append_value_to_arrow!(BinaryBuilder, *v),
             Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {

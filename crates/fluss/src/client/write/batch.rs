@@ -22,6 +22,7 @@ use crate::compression::ArrowCompressionInfo;
 use crate::error::Result;
 use crate::metadata::{DataType, TablePath};
 use crate::record::MemoryLogRecordsArrowBuilder;
+use bytes::Bytes;
 use parking_lot::Mutex;
 use std::cmp::max;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -137,7 +138,7 @@ impl WriteBatch {
         }
     }
 
-    pub fn build(&self) -> Result<Vec<u8>> {
+    pub fn build(&self) -> Result<Bytes> {
         match self {
             WriteBatch::ArrowLog(batch) => batch.build(),
         }
@@ -171,7 +172,7 @@ impl WriteBatch {
 pub struct ArrowLogWriteBatch {
     pub write_batch: InnerWriteBatch,
     pub arrow_builder: MemoryLogRecordsArrowBuilder,
-    built_records: Mutex<Option<Vec<u8>>>,
+    built_records: Mutex<Option<Bytes>>,
 }
 
 impl ArrowLogWriteBatch {
@@ -217,12 +218,12 @@ impl ArrowLogWriteBatch {
         }
     }
 
-    pub fn build(&self) -> Result<Vec<u8>> {
+    pub fn build(&self) -> Result<Bytes> {
         let mut cached = self.built_records.lock();
         if let Some(bytes) = cached.as_ref() {
             return Ok(bytes.clone());
         }
-        let bytes = self.arrow_builder.build()?;
+        let bytes = Bytes::from(self.arrow_builder.build()?);
         *cached = Some(bytes.clone());
         Ok(bytes)
     }

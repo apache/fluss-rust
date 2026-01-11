@@ -861,7 +861,7 @@ impl RowType {
     pub fn with_data_types(data_types: Vec<DataType>) -> Self {
         let mut fields: Vec<DataField> = Vec::new();
         data_types.iter().enumerate().for_each(|(idx, data_type)| {
-            fields.push(DataField::new(format!("f{}", idx), data_type.clone(), None));
+            fields.push(DataField::new(format!("f{idx}"), data_type.clone(), None));
         });
 
         Self::with_nullable(true, fields)

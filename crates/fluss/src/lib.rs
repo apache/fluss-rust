@@ -31,6 +31,9 @@ mod compression;
 pub mod io;
 mod util;
 
+#[cfg(test)]
+mod test_utils;
+
 pub type TableId = u64;
 pub type PartitionId = u64;
 pub type BucketId = i32;

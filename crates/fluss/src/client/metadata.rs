@@ -155,67 +155,13 @@ impl Metadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
-    use crate::metadata::{DataField, DataTypes, Schema, TableDescriptor, TableInfo, TablePath};
-    use std::collections::HashMap;
-
-    fn build_table_info(table_path: TablePath, table_id: i64) -> TableInfo {
-        let row_type = DataTypes::row(vec![DataField::new(
-            "id".to_string(),
-            DataTypes::int(),
-            None,
-        )]);
-        let mut schema_builder = Schema::builder().with_row_type(&row_type);
-        let schema = schema_builder.build().expect("schema build");
-        let table_descriptor = TableDescriptor::builder()
-            .schema(schema)
-            .distributed_by(Some(1), vec![])
-            .build()
-            .expect("descriptor build");
-        TableInfo::of(table_path, table_id, 1, table_descriptor, 0, 0)
-    }
-
-    fn build_cluster(table_path: &TablePath, table_id: i64) -> Arc<Cluster> {
-        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
-        let table_bucket = TableBucket::new(table_id, 0);
-        let bucket_location = BucketLocation::new(
-            table_bucket.clone(),
-            Some(server.clone()),
-            table_path.clone(),
-        );
-
-        let mut servers = HashMap::new();
-        servers.insert(server.id(), server);
-
-        let mut locations_by_path = HashMap::new();
-        locations_by_path.insert(table_path.clone(), vec![bucket_location.clone()]);
-
-        let mut locations_by_bucket = HashMap::new();
-        locations_by_bucket.insert(table_bucket, bucket_location);
-
-        let mut table_id_by_path = HashMap::new();
-        table_id_by_path.insert(table_path.clone(), table_id);
-
-        let mut table_info_by_path = HashMap::new();
-        table_info_by_path.insert(
-            table_path.clone(),
-            build_table_info(table_path.clone(), table_id),
-        );
-
-        Arc::new(Cluster::new(
-            None,
-            servers,
-            locations_by_path,
-            locations_by_bucket,
-            table_id_by_path,
-            table_info_by_path,
-        ))
-    }
+    use crate::metadata::{TableBucket, TablePath};
+    use crate::test_utils::build_cluster_arc;
 
     #[test]
     fn leader_for_returns_server() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let cluster = build_cluster(&table_path, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Metadata::new_for_test(cluster);
         let leader = metadata
             .leader_for(&TableBucket::new(1, 0))
@@ -226,7 +172,7 @@ mod tests {
     #[test]
     fn invalidate_server_removes_leader() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let cluster = build_cluster(&table_path, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Metadata::new_for_test(cluster);
         metadata.invalidate_server(&1, vec![1]);
         let cluster = metadata.get_cluster();
