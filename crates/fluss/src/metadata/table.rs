@@ -23,6 +23,7 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use crate::metadata::DataLakeFormat;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
@@ -725,6 +726,13 @@ impl TableConfig {
 
     pub fn get_arrow_compression_info(&self) -> Result<ArrowCompressionInfo> {
         ArrowCompressionInfo::from_conf(&self.properties)
+    }
+
+    pub fn get_datalake_format(&self) -> Result<Option<DataLakeFormat>> {
+        self.properties
+            .get("table.datalake.format")
+            .map(|f| f.parse().map_err(Error::from))
+            .transpose()
     }
 }
 
