@@ -20,6 +20,7 @@ use crate::*;
 use arrow::array::RecordBatch;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use fluss::client::EARLIEST_OFFSET;
+use fluss::record::to_arrow_schema;
 use fluss::rpc::message::OffsetSpec;
 use pyo3::types::IntoPyDict;
 use pyo3_async_runtimes::tokio::future_into_py;
@@ -1004,6 +1005,59 @@ impl LogScanner {
         // Convert Arrow Table to Pandas DataFrame using pyarrow
         let df = arrow_table.call_method0(py, "to_pandas")?;
         Ok(df)
+    }
+
+    /// Poll for new records with the specified timeout
+    ///
+    /// Args:
+    ///     timeout_ms: Timeout in milliseconds to wait for records
+    ///
+    /// Returns:
+    ///     PyArrow Table containing the polled records
+    ///
+    /// Note:
+    ///     - Returns an empty table (with correct schema) if no records are available
+    ///     - When timeout expires, returns an empty table (NOT an error)
+    fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
+        use std::time::Duration;
+
+        if timeout_ms < 0 {
+            return Err(FlussError::new_err(format!(
+                "timeout_ms must be non-negative, got: {timeout_ms}"
+            )));
+        }
+
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        let scan_records = py
+            .detach(|| TOKIO_RUNTIME.block_on(async { self.inner.poll(timeout).await }))
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+
+        // Convert records to Arrow batches per bucket
+        let mut arrow_batches = Vec::new();
+        for (_bucket, records) in scan_records.into_records_by_buckets() {
+            let mut batches = Utils::convert_scan_records_to_arrow(records);
+            arrow_batches.append(&mut batches);
+        }
+        if arrow_batches.is_empty() {
+            return self.create_empty_table(py);
+        }
+
+        Utils::combine_batches_to_table(py, arrow_batches)
+    }
+
+    /// Create an empty PyArrow table with the correct schema
+    fn create_empty_table(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let arrow_schema = to_arrow_schema(self.table_info.get_row_type());
+        let py_schema = arrow_schema
+            .to_pyarrow(py)
+            .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
+
+        let pyarrow = py.import("pyarrow")?;
+        let empty_table = pyarrow
+            .getattr("Table")?
+            .call_method1("from_batches", (vec![] as Vec<Py<PyAny>>, py_schema))?;
+
+        Ok(empty_table.into())
     }
 
     fn __repr__(&self) -> String {
