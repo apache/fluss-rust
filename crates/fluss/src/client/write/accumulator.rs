@@ -31,6 +31,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicI64, Ordering};
 use tokio::sync::Mutex;
 
+// Type alias to simplify complex nested types
+type BucketBatches = Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>;
+
 #[allow(dead_code)]
 pub struct RecordAccumulator {
     config: Config,
@@ -172,7 +175,7 @@ impl RecordAccumulator {
 
     pub async fn ready(&self, cluster: &Arc<Cluster>) -> ReadyCheckResult {
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
-        let entries: Vec<(TablePath, Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>)> = self
+        let entries: Vec<(TablePath, BucketBatches)> = self
             .write_batches
             .iter()
             .map(|entry| {
@@ -214,7 +217,7 @@ impl RecordAccumulator {
     async fn bucket_ready(
         &self,
         table_path: &TablePath,
-        bucket_batches: Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>,
+        bucket_batches: BucketBatches,
         ready_nodes: &mut HashSet<ServerNode>,
         unknown_leader_tables: &mut HashSet<TablePath>,
         cluster: &Cluster,
@@ -309,6 +312,7 @@ impl RecordAccumulator {
         };
 
         let mut current_index = start;
+        // Assigned at the start of each loop iteration (line 323), used after loop (line 376)
         let mut last_processed_index;
 
         loop {
