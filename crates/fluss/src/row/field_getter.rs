@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::DataType;
+use crate::metadata::{DataType, RowType};
 use crate::row::{Datum, InternalRow};
 
+#[derive(Clone)]
 pub enum FieldGetter {
     Nullable(InnerFieldGetter),
     NonNullable(InnerFieldGetter),
@@ -34,6 +35,12 @@ impl FieldGetter {
             }
             FieldGetter::NonNullable(getter) => getter.get_field(row),
         }
+    }
+
+    pub fn create_field_getters(row_type: &RowType) -> Box<[FieldGetter]> {
+        row_type.fields().iter().enumerate().map(|(pos, field)| {
+            Self::create(field.data_type(), pos)
+        }).collect()
     }
 
     pub fn create(data_type: &DataType, pos: usize) -> FieldGetter {
@@ -66,6 +73,7 @@ impl FieldGetter {
     }
 }
 
+#[derive(Clone)]
 pub enum InnerFieldGetter {
     Char { pos: usize, len: usize },
     String { pos: usize },
