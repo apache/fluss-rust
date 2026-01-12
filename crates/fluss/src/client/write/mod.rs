@@ -31,8 +31,10 @@ mod bucket_assigner;
 
 mod sender;
 mod writer_client;
+mod write_format;
 
 pub use writer_client::WriterClient;
+pub use write_format::WriteFormat;
 
 pub struct WriteRecord<'a> {
     pub row: Record<'a>,
