@@ -458,7 +458,6 @@ struct LogFetcher {
     credentials_cache: Arc<CredentialsCache>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
-    table_path: TablePath,
 }
 
 impl LogFetcher {
@@ -476,7 +475,7 @@ impl LogFetcher {
             Self::create_read_context(full_arrow_schema, projected_fields.clone(), true)?;
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
-        let table_path = table_info.table_path.clone();
+        let log_fetch_buffer = Arc::new(LogFetchBuffer::new(read_context.clone()));
 
         Ok(LogFetcher {
             conns: conns.clone(),
@@ -486,9 +485,8 @@ impl LogFetcher {
             remote_read_context,
             remote_log_downloader: Arc::new(RemoteLogDownloader::new(tmp_dir)?),
             credentials_cache: Arc::new(CredentialsCache::new(conns.clone(), metadata.clone())),
-            log_fetch_buffer: Arc::new(LogFetchBuffer::new(read_context.clone())),
+            log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
-            table_path,
         })
     }
 
@@ -1373,26 +1371,11 @@ mod tests {
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
-    use crate::metadata::{DataField, DataTypes, Schema, TableDescriptor, TableInfo, TablePath};
+    use crate::metadata::{TableInfo, TablePath};
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-
-    fn build_table_info(table_path: TablePath, table_id: i64) -> TableInfo {
-        let row_type = DataTypes::row(vec![DataField::new(
-            "id".to_string(),
-            DataTypes::int(),
-            None,
-        )]);
-        let mut schema_builder = Schema::builder().with_row_type(&row_type);
-        let schema = schema_builder.build().expect("schema build");
-        let table_descriptor = TableDescriptor::builder()
-            .schema(schema)
-            .distributed_by(Some(1), vec![])
-            .build()
-            .expect("descriptor build");
-        TableInfo::of(table_path, table_id, 1, table_descriptor, 0, 0)
-    }
+    use crate::test_utils::build_table_info;
 
     fn build_cluster(table_path: &TablePath, table_id: i64) -> Arc<Cluster> {
         let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
@@ -1418,7 +1401,7 @@ mod tests {
         let mut table_info_by_path = HashMap::new();
         table_info_by_path.insert(
             table_path.clone(),
-            build_table_info(table_path.clone(), table_id),
+            build_table_info(table_path.clone(), table_id, 1),
         );
 
         Arc::new(Cluster::new(
@@ -1454,7 +1437,7 @@ mod tests {
     #[tokio::test]
     async fn collect_fetches_updates_offset() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = build_table_info(table_path.clone(), 1);
+        let table_info = build_table_info(table_path.clone(), 1, 1);
         let cluster = build_cluster(&table_path, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
@@ -1491,7 +1474,7 @@ mod tests {
     #[test]
     fn fetch_records_from_fetch_drains_unassigned_bucket() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = build_table_info(table_path.clone(), 1);
+        let table_info = build_table_info(table_path.clone(), 1, 1);
         let cluster = build_cluster(&table_path, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
@@ -1525,7 +1508,7 @@ mod tests {
     #[tokio::test]
     async fn prepare_fetch_log_requests_skips_pending() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = build_table_info(table_path.clone(), 1);
+        let table_info = build_table_info(table_path.clone(), 1, 1);
         let cluster = build_cluster(&table_path, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
@@ -1548,7 +1531,7 @@ mod tests {
     #[tokio::test]
     async fn handle_fetch_response_sets_error() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = build_table_info(table_path.clone(), 1);
+        let table_info = build_table_info(table_path.clone(), 1, 1);
         let cluster = build_cluster(&table_path, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());

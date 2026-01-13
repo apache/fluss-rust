@@ -668,7 +668,7 @@ mod tests {
             DataTypes::int(),
             None,
         )]);
-        ReadContext::new(to_arrow_schema(row_type), false)
+        ReadContext::new(to_arrow_schema(&row_type), false)
     }
 
     struct ErrorPendingFetch {
