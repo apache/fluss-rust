@@ -32,7 +32,8 @@ use crate::client::connection::FlussConnection;
 use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
 use crate::client::table::log_fetch_buffer::{
-    CompletedFetch, DefaultCompletedFetch, LogFetchBuffer,
+    CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext,
+    FetchErrorLogLevel, LogFetchBuffer,
 };
 use crate::client::table::remote_log::{
     RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
@@ -621,6 +622,69 @@ impl LogFetcher {
         }
     }
 
+    fn describe_fetch_error(
+        error: FlussError,
+        table_bucket: &TableBucket,
+        fetch_offset: i64,
+        error_message: &str,
+    ) -> FetchErrorContext {
+        match error {
+            FlussError::NotLeaderOrFollower
+            | FlussError::LogStorageException
+            | FlussError::KvStorageException
+            | FlussError::StorageException
+            | FlussError::FencedLeaderEpochException => FetchErrorContext {
+                action: FetchErrorAction::MetadataRefresh,
+                log_level: FetchErrorLogLevel::Debug,
+                log_message: format!(
+                    "Error in fetch for bucket {table_bucket}: {error:?}: {error_message}"
+                ),
+            },
+            FlussError::UnknownTableOrBucketException => FetchErrorContext {
+                action: FetchErrorAction::MetadataRefresh,
+                log_level: FetchErrorLogLevel::Warn,
+                log_message: format!(
+                    "Received unknown table or bucket error in fetch for bucket {table_bucket}"
+                ),
+            },
+            FlussError::LogOffsetOutOfRangeException => FetchErrorContext {
+                action: FetchErrorAction::LogOffsetOutOfRange,
+                log_level: FetchErrorLogLevel::Debug,
+                log_message: format!(
+                    "The fetching offset {fetch_offset} is out of range for bucket {table_bucket}: {error_message}"
+                ),
+            },
+            FlussError::AuthorizationException => FetchErrorContext {
+                action: FetchErrorAction::Authorization,
+                log_level: FetchErrorLogLevel::Debug,
+                log_message: format!(
+                    "Authorization error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
+                ),
+            },
+            FlussError::UnknownServerError => FetchErrorContext {
+                action: FetchErrorAction::Ignore,
+                log_level: FetchErrorLogLevel::Warn,
+                log_message: format!(
+                    "Unknown server error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
+                ),
+            },
+            FlussError::CorruptMessage => FetchErrorContext {
+                action: FetchErrorAction::CorruptMessage,
+                log_level: FetchErrorLogLevel::Debug,
+                log_message: format!(
+                    "Encountered corrupt message when fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
+                ),
+            },
+            _ => FetchErrorContext {
+                action: FetchErrorAction::Unexpected,
+                log_level: FetchErrorLogLevel::Debug,
+                log_message: format!(
+                    "Unexpected error code {error:?} while fetching at offset {fetch_offset} from bucket {table_bucket}: {error_message}"
+                ),
+            },
+        }
+    }
+
     async fn check_and_update_metadata(&self) -> Result<()> {
         let need_update = self
             .fetchable_buckets()
@@ -815,56 +879,29 @@ impl LogFetcher {
                         .unwrap_or_else(|| error.message().to_string());
 
                     log_scanner_status.move_bucket_to_end(table_bucket.clone());
+                    let error_context = Self::describe_fetch_error(
+                        error,
+                        &table_bucket,
+                        fetch_offset,
+                        &error_message,
+                    );
+                    match error_context.log_level {
+                        FetchErrorLogLevel::Debug => {
+                            debug!("{}", error_context.log_message);
+                        }
+                        FetchErrorLogLevel::Warn => {
+                            warn!("{}", error_context.log_message);
+                        }
+                    }
                     log_fetch_buffer.add_api_error(
                         table_bucket.clone(),
                         ApiError {
                             code: error_code,
                             message: error_message.clone(),
                         },
+                        error_context,
                         fetch_offset,
                     );
-
-                    match error {
-                        FlussError::NotLeaderOrFollower
-                        | FlussError::LogStorageException
-                        | FlussError::KvStorageException
-                        | FlussError::StorageException
-                        | FlussError::FencedLeaderEpochException => {
-                            debug!(
-                                "Error in fetch for bucket {table_bucket}: {error:?}: {error_message}"
-                            );
-                        }
-                        FlussError::UnknownTableOrBucketException => {
-                            warn!(
-                                "Received unknown table or bucket error in fetch for bucket {table_bucket}"
-                            );
-                        }
-                        FlussError::LogOffsetOutOfRangeException => {
-                            debug!(
-                                "The fetching offset {fetch_offset} is out of range for bucket {table_bucket}: {error_message}"
-                            );
-                        }
-                        FlussError::AuthorizationException => {
-                            debug!(
-                                "Authorization error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
-                            );
-                        }
-                        FlussError::UnknownServerError => {
-                            warn!(
-                                "Unknown server error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
-                            );
-                        }
-                        FlussError::CorruptMessage => {
-                            debug!(
-                                "Encountered corrupt message when fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
-                            );
-                        }
-                        _ => {
-                            debug!(
-                                "Unexpected error code {error:?} while fetching at offset {fetch_offset} from bucket {table_bucket}: {error_message}"
-                            );
-                        }
-                    }
                     continue;
                 }
 
@@ -1067,24 +1104,19 @@ impl LogFetcher {
             let error_message = api_error.message.as_str();
             self.log_scanner_status
                 .move_bucket_to_end(table_bucket.clone());
-            match error {
-                FlussError::NotLeaderOrFollower
-                | FlussError::LogStorageException
-                | FlussError::KvStorageException
-                | FlussError::StorageException
-                | FlussError::FencedLeaderEpochException => {
-                    debug!("Error in fetch for bucket {table_bucket}: {error:?}: {error_message}");
+            let action = completed_fetch
+                .fetch_error_context()
+                .map(|context| context.action)
+                .unwrap_or(FetchErrorAction::Unexpected);
+            match action {
+                FetchErrorAction::MetadataRefresh => {
                     self.schedule_metadata_update(error);
                     return Ok(None);
                 }
-                FlussError::UnknownTableOrBucketException => {
-                    warn!(
-                        "Received unknown table or bucket error in fetch for bucket {table_bucket}"
-                    );
-                    self.schedule_metadata_update(error);
+                FetchErrorAction::Ignore => {
                     return Ok(None);
                 }
-                FlussError::LogOffsetOutOfRangeException => {
+                FetchErrorAction::LogOffsetOutOfRange => {
                     return Err(Error::UnexpectedError {
                         message: format!(
                             "The fetching offset {fetch_offset} is out of range: {error_message}"
@@ -1092,7 +1124,7 @@ impl LogFetcher {
                         source: None,
                     });
                 }
-                FlussError::AuthorizationException => {
+                FetchErrorAction::Authorization => {
                     return Err(Error::FlussAPIError {
                         api_error: ApiError {
                             code: api_error.code,
@@ -1100,13 +1132,7 @@ impl LogFetcher {
                         },
                     });
                 }
-                FlussError::UnknownServerError => {
-                    warn!(
-                        "Unknown server error while fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
-                    );
-                    return Ok(None);
-                }
-                FlussError::CorruptMessage => {
+                FetchErrorAction::CorruptMessage => {
                     return Err(Error::UnexpectedError {
                         message: format!(
                             "Encountered corrupt message when fetching offset {fetch_offset} for bucket {table_bucket}: {error_message}"
@@ -1114,7 +1140,7 @@ impl LogFetcher {
                         source: None,
                     });
                 }
-                _ => {
+                FetchErrorAction::Unexpected => {
                     return Err(Error::UnexpectedError {
                         message: format!(
                             "Unexpected error code {error:?} while fetching at offset {fetch_offset} from bucket {table_bucket}: {error_message}"

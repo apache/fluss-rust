@@ -29,10 +29,34 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FetchErrorAction {
+    MetadataRefresh,
+    Ignore,
+    LogOffsetOutOfRange,
+    Authorization,
+    CorruptMessage,
+    Unexpected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FetchErrorLogLevel {
+    Debug,
+    Warn,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FetchErrorContext {
+    pub(crate) action: FetchErrorAction,
+    pub(crate) log_level: FetchErrorLogLevel,
+    pub(crate) log_message: String,
+}
+
 /// Represents a completed fetch that can be consumed
 pub trait CompletedFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn api_error(&self) -> Option<&ApiError>;
+    fn fetch_error_context(&self) -> Option<&FetchErrorContext>;
     fn take_error(&mut self) -> Option<Error>;
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>>;
     fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<RecordBatch>>;
@@ -136,10 +160,15 @@ impl LogFetchBuffer {
         &self,
         table_bucket: TableBucket,
         api_error: ApiError,
+        fetch_error_context: FetchErrorContext,
         fetch_offset: i64,
     ) {
-        let error_fetch =
-            ErrorCompletedFetch::from_api_error(table_bucket, api_error, fetch_offset);
+        let error_fetch = ErrorCompletedFetch::from_api_error(
+            table_bucket,
+            api_error,
+            fetch_error_context,
+            fetch_offset,
+        );
         self.completed_fetches
             .lock()
             .push_back(Box::new(error_fetch));
@@ -297,6 +326,7 @@ impl PendingFetch for CompletedPendingFetch {
 struct ErrorCompletedFetch {
     table_bucket: TableBucket,
     api_error: Option<ApiError>,
+    fetch_error_context: Option<FetchErrorContext>,
     error: Option<Error>,
     next_fetch_offset: i64,
     consumed: bool,
@@ -308,6 +338,7 @@ impl ErrorCompletedFetch {
         Self {
             table_bucket,
             api_error: None,
+            fetch_error_context: None,
             error: Some(error),
             next_fetch_offset: fetch_offset,
             consumed: false,
@@ -315,10 +346,16 @@ impl ErrorCompletedFetch {
         }
     }
 
-    fn from_api_error(table_bucket: TableBucket, api_error: ApiError, fetch_offset: i64) -> Self {
+    fn from_api_error(
+        table_bucket: TableBucket,
+        api_error: ApiError,
+        fetch_error_context: FetchErrorContext,
+        fetch_offset: i64,
+    ) -> Self {
         Self {
             table_bucket,
             api_error: Some(api_error),
+            fetch_error_context: Some(fetch_error_context),
             error: None,
             next_fetch_offset: fetch_offset,
             consumed: false,
@@ -334,6 +371,10 @@ impl CompletedFetch for ErrorCompletedFetch {
 
     fn api_error(&self) -> Option<&ApiError> {
         self.api_error.as_ref()
+    }
+
+    fn fetch_error_context(&self) -> Option<&FetchErrorContext> {
+        self.fetch_error_context.as_ref()
     }
 
     fn take_error(&mut self) -> Option<Error> {
@@ -385,6 +426,7 @@ impl CompletedFetch for ErrorCompletedFetch {
     fn drain(&mut self) {
         self.consumed = true;
         self.api_error = None;
+        self.fetch_error_context = None;
         self.error = None;
     }
 
@@ -530,6 +572,10 @@ impl CompletedFetch for DefaultCompletedFetch {
     }
 
     fn api_error(&self) -> Option<&ApiError> {
+        None
+    }
+
+    fn fetch_error_context(&self) -> Option<&FetchErrorContext> {
         None
     }
 
