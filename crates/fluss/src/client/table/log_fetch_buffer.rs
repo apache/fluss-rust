@@ -117,7 +117,7 @@ impl LogFetchBuffer {
             // Check if woken up
             if self.woken_up.swap(false, Ordering::Acquire) {
                 return Err(Error::WakeupError {
-                    message: "The await is wakeup.".to_string(),
+                    message: "The await operation was interrupted by wakeup.".to_string(),
                 });
             }
 
