@@ -78,6 +78,7 @@ pub trait PendingFetch: Send + Sync {
 
 /// Thread-safe buffer for completed fetches
 pub struct LogFetchBuffer {
+    read_context: ReadContext,
     completed_fetches: Mutex<VecDeque<Box<dyn CompletedFetch>>>,
     pending_fetches: Mutex<HashMap<TableBucket, VecDeque<Box<dyn PendingFetch>>>>,
     next_in_line_fetch: Mutex<Option<Box<dyn CompletedFetch>>>,
@@ -86,8 +87,9 @@ pub struct LogFetchBuffer {
 }
 
 impl LogFetchBuffer {
-    pub fn new() -> Self {
+    pub fn new(read_context: ReadContext) -> Self {
         Self {
+            read_context,
             completed_fetches: Mutex::new(VecDeque::new()),
             pending_fetches: Mutex::new(HashMap::new()),
             next_in_line_fetch: Mutex::new(None),
@@ -148,7 +150,12 @@ impl LogFetchBuffer {
     }
 
     pub(crate) fn set_error(&self, table_bucket: TableBucket, error: Error, fetch_offset: i64) {
-        let error_fetch = ErrorCompletedFetch::from_error(table_bucket, error, fetch_offset);
+        let error_fetch = DefaultCompletedFetch::from_error(
+            table_bucket,
+            error,
+            fetch_offset,
+            self.read_context.clone(),
+        );
         self.completed_fetches
             .lock()
             .push_back(Box::new(error_fetch));
@@ -162,11 +169,12 @@ impl LogFetchBuffer {
         fetch_error_context: FetchErrorContext,
         fetch_offset: i64,
     ) {
-        let error_fetch = ErrorCompletedFetch::from_api_error(
+        let error_fetch = DefaultCompletedFetch::from_api_error(
             table_bucket,
             api_error,
             fetch_error_context,
             fetch_offset,
+            self.read_context.clone(),
         );
         self.completed_fetches
             .lock()
@@ -220,7 +228,12 @@ impl LogFetchBuffer {
         }
 
         if let Some(error) = pending_error {
-            let error_fetch = ErrorCompletedFetch::from_error(table_bucket.clone(), error, -1);
+            let error_fetch = DefaultCompletedFetch::from_error(
+                table_bucket.clone(),
+                error,
+                -1,
+                self.read_context.clone(),
+            );
             completed_to_push.push(Box::new(error_fetch));
         }
 
@@ -291,12 +304,6 @@ impl LogFetchBuffer {
     }
 }
 
-impl Default for LogFetchBuffer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// A wrapper that makes a completed fetch look like a pending fetch
 struct CompletedPendingFetch {
     completed_fetch: Box<dyn CompletedFetch>,
@@ -322,137 +329,12 @@ impl PendingFetch for CompletedPendingFetch {
     }
 }
 
-struct ErrorCompletedFetch {
+/// Default implementation of CompletedFetch for in-memory log records
+pub struct DefaultCompletedFetch {
     table_bucket: TableBucket,
     api_error: Option<ApiError>,
     fetch_error_context: Option<FetchErrorContext>,
     error: Option<Error>,
-    next_fetch_offset: i64,
-    consumed: bool,
-    initialized: bool,
-}
-
-impl ErrorCompletedFetch {
-    fn from_error(table_bucket: TableBucket, error: Error, fetch_offset: i64) -> Self {
-        Self {
-            table_bucket,
-            api_error: None,
-            fetch_error_context: None,
-            error: Some(error),
-            next_fetch_offset: fetch_offset,
-            consumed: false,
-            initialized: false,
-        }
-    }
-
-    fn from_api_error(
-        table_bucket: TableBucket,
-        api_error: ApiError,
-        fetch_error_context: FetchErrorContext,
-        fetch_offset: i64,
-    ) -> Self {
-        Self {
-            table_bucket,
-            api_error: Some(api_error),
-            fetch_error_context: Some(fetch_error_context),
-            error: None,
-            next_fetch_offset: fetch_offset,
-            consumed: false,
-            initialized: false,
-        }
-    }
-}
-
-impl CompletedFetch for ErrorCompletedFetch {
-    fn table_bucket(&self) -> &TableBucket {
-        &self.table_bucket
-    }
-
-    fn api_error(&self) -> Option<&ApiError> {
-        self.api_error.as_ref()
-    }
-
-    fn fetch_error_context(&self) -> Option<&FetchErrorContext> {
-        self.fetch_error_context.as_ref()
-    }
-
-    fn take_error(&mut self) -> Option<Error> {
-        self.error.take()
-    }
-
-    fn fetch_records(&mut self, _max_records: usize) -> Result<Vec<ScanRecord>> {
-        if let Some(error) = self.error.take() {
-            return Err(error);
-        }
-
-        if let Some(api_error) = self.api_error.as_ref() {
-            return Err(Error::FlussAPIError {
-                api_error: ApiError {
-                    code: api_error.code,
-                    message: api_error.message.clone(),
-                },
-            });
-        }
-
-        Ok(Vec::new())
-    }
-
-    fn fetch_batches(&mut self, _max_batches: usize) -> Result<Vec<RecordBatch>> {
-        if let Some(error) = self.error.take() {
-            return Err(error);
-        }
-
-        if let Some(api_error) = self.api_error.as_ref() {
-            return Err(Error::FlussAPIError {
-                api_error: ApiError {
-                    code: api_error.code,
-                    message: api_error.message.clone(),
-                },
-            });
-        }
-
-        Ok(Vec::new())
-    }
-
-    fn is_consumed(&self) -> bool {
-        self.consumed
-    }
-
-    fn records_read(&self) -> usize {
-        0
-    }
-
-    fn drain(&mut self) {
-        self.consumed = true;
-        self.api_error = None;
-        self.fetch_error_context = None;
-        self.error = None;
-    }
-
-    fn size_in_bytes(&self) -> usize {
-        0
-    }
-
-    fn high_watermark(&self) -> i64 {
-        -1
-    }
-
-    fn is_initialized(&self) -> bool {
-        self.initialized
-    }
-
-    fn set_initialized(&mut self) {
-        self.initialized = true;
-    }
-
-    fn next_fetch_offset(&self) -> i64 {
-        self.next_fetch_offset
-    }
-}
-
-/// Default implementation of CompletedFetch for in-memory log records
-pub struct DefaultCompletedFetch {
-    table_bucket: TableBucket,
     log_record_batch: LogRecordsBatches,
     read_context: ReadContext,
     next_fetch_offset: i64,
@@ -479,6 +361,9 @@ impl DefaultCompletedFetch {
     ) -> Result<Self> {
         Ok(Self {
             table_bucket,
+            api_error: None,
+            fetch_error_context: None,
+            error: None,
             log_record_batch,
             read_context,
             next_fetch_offset: fetch_offset,
@@ -493,6 +378,61 @@ impl DefaultCompletedFetch {
             cached_record_error: None,
             corrupt_last_record: false,
         })
+    }
+
+    pub(crate) fn from_error(
+        table_bucket: TableBucket,
+        error: Error,
+        fetch_offset: i64,
+        read_context: ReadContext,
+    ) -> Self {
+        Self {
+            table_bucket,
+            api_error: None,
+            fetch_error_context: None,
+            error: Some(error),
+            log_record_batch: LogRecordsBatches::new(Vec::new()),
+            read_context,
+            next_fetch_offset: fetch_offset,
+            high_watermark: -1,
+            size_in_bytes: 0,
+            consumed: false,
+            initialized: false,
+            records_read: 0,
+            current_record_iterator: None,
+            current_record_batch: None,
+            last_record: None,
+            cached_record_error: None,
+            corrupt_last_record: false,
+        }
+    }
+
+    pub(crate) fn from_api_error(
+        table_bucket: TableBucket,
+        api_error: ApiError,
+        fetch_error_context: FetchErrorContext,
+        fetch_offset: i64,
+        read_context: ReadContext,
+    ) -> Self {
+        Self {
+            table_bucket,
+            api_error: Some(api_error),
+            fetch_error_context: Some(fetch_error_context),
+            error: None,
+            log_record_batch: LogRecordsBatches::new(Vec::new()),
+            read_context,
+            next_fetch_offset: fetch_offset,
+            high_watermark: -1,
+            size_in_bytes: 0,
+            consumed: false,
+            initialized: false,
+            records_read: 0,
+            current_record_iterator: None,
+            current_record_batch: None,
+            last_record: None,
+            cached_record_error: None,
+            corrupt_last_record: false,
+        }
     }
 
     /// Get the next fetched record, handling batch iteration and record skipping
@@ -571,18 +511,31 @@ impl CompletedFetch for DefaultCompletedFetch {
     }
 
     fn api_error(&self) -> Option<&ApiError> {
-        None
+        self.api_error.as_ref()
     }
 
     fn fetch_error_context(&self) -> Option<&FetchErrorContext> {
-        None
+        self.fetch_error_context.as_ref()
     }
 
     fn take_error(&mut self) -> Option<Error> {
-        None
+        self.error.take()
     }
 
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>> {
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
+
+        if let Some(api_error) = self.api_error.as_ref() {
+            return Err(Error::FlussAPIError {
+                api_error: ApiError {
+                    code: api_error.code,
+                    message: api_error.message.clone(),
+                },
+            });
+        }
+
         if self.corrupt_last_record {
             return Err(self.fetch_error());
         }
@@ -628,6 +581,19 @@ impl CompletedFetch for DefaultCompletedFetch {
     }
 
     fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<RecordBatch>> {
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
+
+        if let Some(api_error) = self.api_error.as_ref() {
+            return Err(Error::FlussAPIError {
+                api_error: ApiError {
+                    code: api_error.code,
+                    message: api_error.message.clone(),
+                },
+            });
+        }
+
         if self.consumed {
             return Ok(Vec::new());
         }
@@ -654,6 +620,9 @@ impl CompletedFetch for DefaultCompletedFetch {
 
     fn drain(&mut self) {
         self.consumed = true;
+        self.api_error = None;
+        self.fetch_error_context = None;
+        self.error = None;
         self.cached_record_error = None;
         self.corrupt_last_record = false;
         self.last_record = None;
@@ -688,10 +657,19 @@ mod tests {
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{DataField, DataTypes, TablePath};
-    use crate::record::{MemoryLogRecordsArrowBuilder, to_arrow_schema};
+    use crate::record::{MemoryLogRecordsArrowBuilder, ReadContext, to_arrow_schema};
     use crate::row::GenericRow;
     use std::sync::Arc;
     use std::time::Duration;
+
+    fn test_read_context() -> ReadContext {
+        let row_type = DataTypes::row(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        ReadContext::new(to_arrow_schema(row_type), false)
+    }
 
     struct ErrorPendingFetch {
         table_bucket: TableBucket,
@@ -716,7 +694,7 @@ mod tests {
 
     #[tokio::test]
     async fn await_not_empty_returns_wakeup_error() {
-        let buffer = LogFetchBuffer::new();
+        let buffer = LogFetchBuffer::new(test_read_context());
         buffer.wakeup();
 
         let result = buffer.await_not_empty(Duration::from_millis(10)).await;
@@ -725,7 +703,7 @@ mod tests {
 
     #[tokio::test]
     async fn await_not_empty_returns_pending_error() {
-        let buffer = LogFetchBuffer::new();
+        let buffer = LogFetchBuffer::new(test_read_context());
         let table_bucket = TableBucket::new(1, 0);
         buffer.pend(Box::new(ErrorPendingFetch {
             table_bucket: table_bucket.clone(),
