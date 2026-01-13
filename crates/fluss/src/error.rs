@@ -159,6 +159,8 @@ impl From<ApiError> for Error {
 
 impl From<ParseError> for Error {
     fn from(value: ParseError) -> Self {
-        Error::IllegalArgument { message: value.to_string() }
+        Error::IllegalArgument {
+            message: value.to_string(),
+        }
     }
 }

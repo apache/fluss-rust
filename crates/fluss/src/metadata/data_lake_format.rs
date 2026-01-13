@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use strum_macros::{EnumString, Display};
+use strum_macros::{Display, EnumString};
 
 /// Identifies the logical format of a data lake table supported by Fluss.
 ///

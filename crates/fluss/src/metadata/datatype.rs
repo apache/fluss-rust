@@ -862,7 +862,13 @@ impl RowType {
     }
 
     pub fn project(&self, project_field_positions: &[usize]) -> RowType {
-        RowType::with_nullable(self.nullable, project_field_positions.iter().map(|pos| self.fields.get(*pos).unwrap().clone()).collect())
+        RowType::with_nullable(
+            self.nullable,
+            project_field_positions
+                .iter()
+                .map(|pos| self.fields.get(*pos).unwrap().clone())
+                .collect(),
+        )
     }
 
     #[cfg(test)]

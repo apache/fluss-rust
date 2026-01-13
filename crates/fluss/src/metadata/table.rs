@@ -18,13 +18,13 @@
 use crate::compression::ArrowCompressionInfo;
 use crate::error::Error::InvalidTableError;
 use crate::error::{Error, Result};
+use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{DataField, DataType, RowType};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use strum_macros::EnumString;
-use crate::metadata::DataLakeFormat;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
@@ -740,10 +740,7 @@ impl TableConfig {
         // TODO: Consolidate configurations logic, constants, defaults in a single place
 
         let default = &"COMPACTED".to_string();
-        let value = self
-            .properties
-            .get("table.kv.format")
-            .unwrap_or(default);
+        let value = self.properties.get("table.kv.format").unwrap_or(default);
 
         Ok(Some(value.parse()?))
     }

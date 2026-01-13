@@ -37,10 +37,14 @@ impl FieldGetter {
         }
     }
 
+    #[allow(dead_code)]
     pub fn create_field_getters(row_type: &RowType) -> Box<[FieldGetter]> {
-        row_type.fields().iter().enumerate().map(|(pos, field)| {
-            Self::create(field.data_type(), pos)
-        }).collect()
+        row_type
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(pos, field)| Self::create(field.data_type(), pos))
+            .collect()
     }
 
     pub fn create(data_type: &DataType, pos: usize) -> FieldGetter {
