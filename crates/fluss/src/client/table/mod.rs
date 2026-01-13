@@ -30,6 +30,7 @@ mod log_fetch_buffer;
 mod remote_log;
 mod scanner;
 mod writer;
+mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};

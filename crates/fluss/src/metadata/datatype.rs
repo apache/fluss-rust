@@ -857,6 +857,14 @@ impl RowType {
         self.fields.iter().position(|f| f.name == field_name)
     }
 
+    pub fn get_field_names(&self) -> Vec<&str> {
+        self.fields.iter().map(|f| f.name.as_str()).collect()
+    }
+
+    pub fn project(&self, project_field_positions: &[usize]) -> RowType {
+        RowType::with_nullable(self.nullable, project_field_positions.iter().map(|pos| self.fields.get(*pos).unwrap().clone()).collect())
+    }
+
     #[cfg(test)]
     pub fn with_data_types(data_types: Vec<DataType>) -> Self {
         let mut fields: Vec<DataField> = Vec::new();

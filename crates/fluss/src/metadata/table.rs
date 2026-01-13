@@ -23,6 +23,7 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use strum_macros::EnumString;
 use crate::metadata::DataLakeFormat;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -604,7 +605,7 @@ impl LogFormat {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, EnumString)]
 pub enum KvFormat {
     INDEXED,
     COMPACTED,
@@ -733,6 +734,18 @@ impl TableConfig {
             .get("table.datalake.format")
             .map(|f| f.parse().map_err(Error::from))
             .transpose()
+    }
+
+    pub fn get_kv_format(&self) -> Result<Option<KvFormat>> {
+        // TODO: Consolidate configurations logic, constants, defaults in a single place
+
+        let default = &"COMPACTED".to_string();
+        let value = self
+            .properties
+            .get("table.kv.format")
+            .unwrap_or(default);
+
+        Ok(Some(value.parse()?))
     }
 }
 
