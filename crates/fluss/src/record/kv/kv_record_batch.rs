@@ -105,10 +105,9 @@ impl KvRecordBatch {
 
     /// Check if this batch is valid by verifying the checksum.
     pub fn is_valid(&self) -> bool {
-        let size = match self.size_in_bytes() {
-            Ok(s) if s >= RECORD_BATCH_HEADER_SIZE => s,
-            _ => return false,
-        };
+        if !matches!(self.size_in_bytes(), Ok(s) if s >= RECORD_BATCH_HEADER_SIZE) {
+            return false;
+        }
 
         match (self.checksum(), self.compute_checksum()) {
             (Ok(stored), Ok(computed)) => stored == computed,
