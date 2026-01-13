@@ -39,7 +39,7 @@ We recommend [RustRover](https://www.jetbrains.com/rust/) IDE to work with fluss
 Source files are organized in the following manner
 
 1. `crates/fluss` - fluss rust client crate source
-2. `crates/example` - fluss rust client example
+2. `crates/examples` - fluss rust client examples
 3. `bindings` - bindings to other languages e.g. C++ under `bindings/cpp` and Python under `bindings/python`
 
 ## Building & Testing
