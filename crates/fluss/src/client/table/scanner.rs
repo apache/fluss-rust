@@ -748,22 +748,15 @@ impl LogFetcher {
                     let size_in_bytes = records.len();
                     let log_record_batch = LogRecordsBatches::new(records);
 
-                    match DefaultCompletedFetch::new(
+                    let completed_fetch = DefaultCompletedFetch::new(
                         table_bucket.clone(),
                         log_record_batch,
                         size_in_bytes,
                         read_context.clone(),
                         fetch_offset,
                         high_watermark,
-                    ) {
-                        Ok(completed_fetch) => {
-                            log_fetch_buffer.add(Box::new(completed_fetch));
-                        }
-                        Err(e) => {
-                            warn!("Failed to create completed fetch: {e:?}");
-                            log_fetch_buffer.set_error(table_bucket.clone(), e, fetch_offset);
-                        }
-                    }
+                    );
+                    log_fetch_buffer.add(Box::new(completed_fetch));
                 }
             }
         }
@@ -822,84 +815,90 @@ impl LogFetcher {
         let mut result: HashMap<TableBucket, Vec<ScanRecord>> = HashMap::new();
         let mut records_remaining = MAX_POLL_RECORDS;
 
-        while records_remaining > 0 {
-            // Get the next in line fetch, or get a new one from buffer
-            let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
+        let collect_result: Result<()> = {
+            while records_remaining > 0 {
+                // Get the next in line fetch, or get a new one from buffer
+                let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
 
-            if next_in_line.is_none() || next_in_line.as_ref().unwrap().is_consumed() {
-                // Get a new fetch from buffer
-                if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
-                    // Initialize the fetch if not already initialized
-                    if !completed_fetch.is_initialized() {
-                        let size_in_bytes = completed_fetch.size_in_bytes();
-                        match self.initialize_fetch(completed_fetch) {
-                            Ok(initialized) => {
-                                self.log_fetch_buffer.set_next_in_line_fetch(initialized);
-                                continue;
-                            }
-                            Err(e) => {
-                                // Remove a completedFetch upon a parse with exception if
-                                // (1) it contains no records, and
-                                // (2) there are no fetched records with actual content preceding this
-                                // exception.
-                                if result.is_empty() && size_in_bytes == 0 {
-                                    // todo: do we need to consider it like java ?
-                                    // self.log_fetch_buffer.poll();
+                if next_in_line.is_none() || next_in_line.as_ref().unwrap().is_consumed() {
+                    // Get a new fetch from buffer
+                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                        // Initialize the fetch if not already initialized
+                        if !completed_fetch.is_initialized() {
+                            let size_in_bytes = completed_fetch.size_in_bytes();
+                            match self.initialize_fetch(completed_fetch) {
+                                Ok(initialized) => {
+                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                    continue;
                                 }
-                                if result.is_empty() {
+                                Err(e) => {
+                                    // Remove a completedFetch upon a parse with exception if
+                                    // (1) it contains no records, and
+                                    // (2) there are no fetched records with actual content preceding this
+                                    // exception.
+                                    if result.is_empty() && size_in_bytes == 0 {
+                                        // todo: do we need to consider it like java ?
+                                        // self.log_fetch_buffer.poll();
+                                    }
                                     return Err(e);
                                 }
-                                break;
                             }
+                        } else {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(completed_fetch));
                         }
+                        // Note: poll() already removed the fetch from buffer, so no need to call poll()
                     } else {
-                        self.log_fetch_buffer
-                            .set_next_in_line_fetch(Some(completed_fetch));
+                        // No more fetches available
+                        break;
                     }
-                    // Note: poll() already removed the fetch from buffer, so no need to call poll()
                 } else {
-                    // No more fetches available
-                    break;
-                }
-            } else {
-                // Fetch records from next_in_line
-                if let Some(mut next_fetch) = next_in_line {
-                    let records =
-                        match self.fetch_records_from_fetch(&mut next_fetch, records_remaining) {
-                            Ok(records) => records,
-                            Err(e) => {
-                                if result.is_empty() {
+                    // Fetch records from next_in_line
+                    if let Some(mut next_fetch) = next_in_line {
+                        let records =
+                            match self.fetch_records_from_fetch(&mut next_fetch, records_remaining) {
+                                Ok(records) => records,
+                                Err(e) => {
+                                    if !next_fetch.is_consumed() {
+                                        self.log_fetch_buffer
+                                            .set_next_in_line_fetch(Some(next_fetch));
+                                    }
                                     return Err(e);
                                 }
-                                if !next_fetch.is_consumed() {
-                                    self.log_fetch_buffer
-                                        .set_next_in_line_fetch(Some(next_fetch));
-                                }
-                                break;
-                            }
-                        };
+                            };
 
-                    if !records.is_empty() {
-                        let table_bucket = next_fetch.table_bucket().clone();
-                        // Merge with existing records for this bucket
-                        let existing = result.entry(table_bucket).or_default();
-                        let records_count = records.len();
-                        existing.extend(records);
+                        if !records.is_empty() {
+                            let table_bucket = next_fetch.table_bucket().clone();
+                            // Merge with existing records for this bucket
+                            let existing = result.entry(table_bucket).or_default();
+                            let records_count = records.len();
+                            existing.extend(records);
 
-                        records_remaining = records_remaining.saturating_sub(records_count);
+                            records_remaining = records_remaining.saturating_sub(records_count);
+                        }
+
+                        // If the fetch is not fully consumed, put it back for the next round
+                        if !next_fetch.is_consumed() {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(next_fetch));
+                        }
+                        // If consumed, next_fetch will be dropped here (which is correct)
                     }
+                }
+            }
+            Ok(())
+        };
 
-                    // If the fetch is not fully consumed, put it back for the next round
-                    if !next_fetch.is_consumed() {
-                        self.log_fetch_buffer
-                            .set_next_in_line_fetch(Some(next_fetch));
-                    }
-                    // If consumed, next_fetch will be dropped here (which is correct)
+        match collect_result {
+            Ok(()) => Ok(result),
+            Err(e) => {
+                if result.is_empty() {
+                    Err(e)
+                } else {
+                    Ok(result)
                 }
             }
         }
-
-        Ok(result)
     }
 
     /// Initialize a completed fetch, checking offset match and updating high watermark
@@ -1045,58 +1044,70 @@ impl LogFetcher {
         let mut batches_remaining = MAX_BATCHES;
         let mut bytes_consumed: usize = 0;
 
-        while batches_remaining > 0 && bytes_consumed < MAX_BYTES {
-            let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
+        let collect_result: Result<()> = {
+            while batches_remaining > 0 && bytes_consumed < MAX_BYTES {
+                let next_in_line = self.log_fetch_buffer.next_in_line_fetch();
 
-            match next_in_line {
-                Some(mut next_fetch) if !next_fetch.is_consumed() => {
-                    let batches =
-                        self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
-                    let batch_count = batches.len();
+                match next_in_line {
+                    Some(mut next_fetch) if !next_fetch.is_consumed() => {
+                        let batches =
+                            self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
+                        let batch_count = batches.len();
 
-                    if !batches.is_empty() {
-                        // Track bytes consumed (soft cap - may exceed by one fetch)
-                        let batch_bytes: usize =
-                            batches.iter().map(|b| b.get_array_memory_size()).sum();
-                        bytes_consumed += batch_bytes;
+                        if !batches.is_empty() {
+                            // Track bytes consumed (soft cap - may exceed by one fetch)
+                            let batch_bytes: usize =
+                                batches.iter().map(|b| b.get_array_memory_size()).sum();
+                            bytes_consumed += batch_bytes;
 
-                        result.extend(batches);
-                        batches_remaining = batches_remaining.saturating_sub(batch_count);
+                            result.extend(batches);
+                            batches_remaining = batches_remaining.saturating_sub(batch_count);
+                        }
+
+                        if !next_fetch.is_consumed() {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(next_fetch));
+                        }
                     }
-
-                    if !next_fetch.is_consumed() {
-                        self.log_fetch_buffer
-                            .set_next_in_line_fetch(Some(next_fetch));
-                    }
-                }
-                _ => {
-                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
-                        if !completed_fetch.is_initialized() {
-                            let size_in_bytes = completed_fetch.size_in_bytes();
-                            match self.initialize_fetch(completed_fetch) {
-                                Ok(initialized) => {
-                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
-                                    continue;
-                                }
-                                Err(e) => {
-                                    if result.is_empty() && size_in_bytes == 0 {
+                    _ => {
+                        if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                            if !completed_fetch.is_initialized() {
+                                let size_in_bytes = completed_fetch.size_in_bytes();
+                                match self.initialize_fetch(completed_fetch) {
+                                    Ok(initialized) => {
+                                        self.log_fetch_buffer.set_next_in_line_fetch(initialized);
                                         continue;
                                     }
-                                    return Err(e);
+                                    Err(e) => {
+                                        if result.is_empty() && size_in_bytes == 0 {
+                                            continue;
+                                        }
+                                        return Err(e);
+                                    }
                                 }
+                            } else {
+                                self.log_fetch_buffer
+                                    .set_next_in_line_fetch(Some(completed_fetch));
                             }
                         } else {
-                            self.log_fetch_buffer
-                                .set_next_in_line_fetch(Some(completed_fetch));
+                            break;
                         }
-                    } else {
-                        break;
                     }
                 }
             }
-        }
+            Ok(())
+        };
 
-        Ok(result)
+        match collect_result {
+            Ok(()) => Ok(result),
+            Err(e) => {
+                if result.is_empty() {
+                    Err(e)
+                } else {
+                    Ok(result)
+                }
+            }
+        }
     }
 
     fn fetch_batches_from_fetch(
@@ -1367,7 +1378,6 @@ mod tests {
     use super::*;
     use crate::client::WriteRecord;
     use crate::client::metadata::Metadata;
-    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
@@ -1375,44 +1385,7 @@ mod tests {
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::test_utils::build_table_info;
-
-    fn build_cluster(table_path: &TablePath, table_id: i64) -> Arc<Cluster> {
-        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
-        let table_bucket = TableBucket::new(table_id, 0);
-        let bucket_location = BucketLocation::new(
-            table_bucket.clone(),
-            Some(server.clone()),
-            table_path.clone(),
-        );
-
-        let mut servers = HashMap::new();
-        servers.insert(server.id(), server);
-
-        let mut locations_by_path = HashMap::new();
-        locations_by_path.insert(table_path.clone(), vec![bucket_location.clone()]);
-
-        let mut locations_by_bucket = HashMap::new();
-        locations_by_bucket.insert(table_bucket, bucket_location);
-
-        let mut table_id_by_path = HashMap::new();
-        table_id_by_path.insert(table_path.clone(), table_id);
-
-        let mut table_info_by_path = HashMap::new();
-        table_info_by_path.insert(
-            table_path.clone(),
-            build_table_info(table_path.clone(), table_id, 1),
-        );
-
-        Arc::new(Cluster::new(
-            None,
-            servers,
-            locations_by_path,
-            locations_by_bucket,
-            table_id_by_path,
-            table_info_by_path,
-        ))
-    }
+    use crate::test_utils::{build_cluster_arc, build_table_info};
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
@@ -1438,7 +1411,7 @@ mod tests {
     async fn collect_fetches_updates_offset() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = build_table_info(table_path.clone(), 1, 1);
-        let cluster = build_cluster(&table_path, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
         let fetcher = LogFetcher::new(
@@ -1462,7 +1435,7 @@ mod tests {
             read_context,
             0,
             0,
-        )?;
+        );
         fetcher.log_fetch_buffer.add(Box::new(completed));
 
         let fetched = fetcher.collect_fetches()?;
@@ -1475,7 +1448,7 @@ mod tests {
     fn fetch_records_from_fetch_drains_unassigned_bucket() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = build_table_info(table_path.clone(), 1, 1);
-        let cluster = build_cluster(&table_path, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
         let fetcher = LogFetcher::new(
@@ -1497,7 +1470,7 @@ mod tests {
             read_context,
             0,
             0,
-        )?);
+        ));
 
         let records = fetcher.fetch_records_from_fetch(&mut completed, 10)?;
         assert!(records.is_empty());
@@ -1509,7 +1482,7 @@ mod tests {
     async fn prepare_fetch_log_requests_skips_pending() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = build_table_info(table_path.clone(), 1, 1);
-        let cluster = build_cluster(&table_path, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
         status.assign_scan_bucket(TableBucket::new(1, 0), 0);
@@ -1532,7 +1505,7 @@ mod tests {
     async fn handle_fetch_response_sets_error() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = build_table_info(table_path.clone(), 1, 1);
-        let cluster = build_cluster(&table_path, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
         status.assign_scan_bucket(TableBucket::new(1, 0), 5);

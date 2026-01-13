@@ -149,19 +149,6 @@ impl LogFetchBuffer {
         self.not_empty_notify.notify_waiters();
     }
 
-    pub(crate) fn set_error(&self, table_bucket: TableBucket, error: Error, fetch_offset: i64) {
-        let error_fetch = DefaultCompletedFetch::from_error(
-            table_bucket,
-            error,
-            fetch_offset,
-            self.read_context.clone(),
-        );
-        self.completed_fetches
-            .lock()
-            .push_back(Box::new(error_fetch));
-        self.not_empty_notify.notify_waiters();
-    }
-
     pub(crate) fn add_api_error(
         &self,
         table_bucket: TableBucket,
@@ -358,8 +345,8 @@ impl DefaultCompletedFetch {
         read_context: ReadContext,
         fetch_offset: i64,
         high_watermark: i64,
-    ) -> Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             table_bucket,
             api_error: None,
             fetch_error_context: None,
@@ -377,7 +364,7 @@ impl DefaultCompletedFetch {
             last_record: None,
             cached_record_error: None,
             corrupt_last_record: false,
-        })
+        }
     }
 
     pub(crate) fn from_error(
@@ -751,7 +738,7 @@ mod tests {
             read_context,
             0,
             0,
-        )?;
+        );
 
         let records = fetch.fetch_records(10)?;
         assert_eq!(records.len(), 1);
