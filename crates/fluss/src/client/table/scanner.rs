@@ -20,13 +20,10 @@ use arrow_schema::SchemaRef;
 use log::{debug, error, warn};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
-use std::pin::Pin;
 use std::slice::from_ref;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
-use tokio::time::{Instant, sleep};
 
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::CredentialsCache;
@@ -50,7 +47,6 @@ const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 const LOG_FETCH_MAX_BYTES_FOR_BUCKET: i32 = 1024;
 const LOG_FETCH_MIN_BYTES: i32 = 1;
 const LOG_FETCH_WAIT_MAX_TIME: i32 = 500;
-const METADATA_REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct TableScan<'a> {
     conn: &'a FlussConnection,
@@ -450,100 +446,6 @@ impl RecordBatchLogScanner {
     }
 }
 
-type RefreshFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
-type RefreshFn = Arc<dyn Fn() -> RefreshFuture + Send + Sync>;
-
-struct MetadataRefreshScheduler {
-    refresh: RefreshFn,
-    min_interval: Duration,
-    table_path: TablePath,
-    state: Arc<Mutex<RefreshState>>,
-}
-
-struct RefreshState {
-    running: bool,
-    pending: bool,
-    last_refresh: Option<Instant>,
-    last_error: Option<FlussError>,
-}
-
-impl MetadataRefreshScheduler {
-    fn new(table_path: TablePath, refresh: RefreshFn, min_interval: Duration) -> Self {
-        Self {
-            refresh,
-            min_interval,
-            table_path,
-            state: Arc::new(Mutex::new(RefreshState {
-                running: false,
-                pending: false,
-                last_refresh: None,
-                last_error: None,
-            })),
-        }
-    }
-
-    fn schedule(&self, error: FlussError) {
-        let state = Arc::clone(&self.state);
-        let refresh = self.refresh.clone();
-        let table_path = self.table_path.clone();
-        let min_interval = self.min_interval;
-
-        {
-            let mut guard = state.lock();
-            guard.pending = true;
-            guard.last_error = Some(error);
-            if guard.running {
-                return;
-            }
-            guard.running = true;
-        }
-
-        tokio::spawn(async move {
-            loop {
-                let (delay, error_for_log) = {
-                    let mut guard = state.lock();
-                    if !guard.pending {
-                        guard.running = false;
-                        return;
-                    }
-                    guard.pending = false;
-
-                    let now = Instant::now();
-                    let delay = match guard.last_refresh {
-                        Some(last) => {
-                            let earliest = last + min_interval;
-                            if now < earliest {
-                                earliest - now
-                            } else {
-                                Duration::from_millis(0)
-                            }
-                        }
-                        None => Duration::from_millis(0),
-                    };
-                    (delay, guard.last_error.take())
-                };
-
-                if !delay.is_zero() {
-                    sleep(delay).await;
-                }
-
-                if let Err(e) = (refresh)().await {
-                    if let Some(error) = error_for_log {
-                        warn!(
-                            "Failed to update metadata for {table_path} after fetch error {error:?}: {e:?}"
-                        );
-                    } else {
-                        warn!("Failed to update metadata for {table_path}: {e:?}");
-                    }
-                }
-
-                let mut guard = state.lock();
-                guard.last_refresh = Some(Instant::now());
-            }
-        });
-    }
-}
-
 struct LogFetcher {
     conns: Arc<RpcClient>,
     metadata: Arc<Metadata>,
@@ -558,7 +460,6 @@ struct LogFetcher {
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
     table_path: TablePath,
     is_partitioned: bool,
-    metadata_refresh: MetadataRefreshScheduler,
 }
 
 impl LogFetcher {
@@ -577,21 +478,6 @@ impl LogFetcher {
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
         let table_path = table_info.table_path.clone();
-        let refresh_table_path = table_path.clone();
-        let refresh_metadata = metadata.clone();
-        let metadata_refresh = MetadataRefreshScheduler::new(
-            table_path.clone(),
-            Arc::new(move || {
-                let metadata = refresh_metadata.clone();
-                let table_path = refresh_table_path.clone();
-                Box::pin(async move {
-                    metadata
-                        .update_tables_metadata(&HashSet::from([&table_path]))
-                        .await
-                })
-            }),
-            METADATA_REFRESH_MIN_INTERVAL,
-        );
 
         Ok(LogFetcher {
             conns: conns.clone(),
@@ -605,7 +491,6 @@ impl LogFetcher {
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
             table_path,
             is_partitioned: table_info.is_partitioned(),
-            metadata_refresh,
         })
     }
 
@@ -634,14 +519,14 @@ impl LogFetcher {
             | FlussError::KvStorageException
             | FlussError::StorageException
             | FlussError::FencedLeaderEpochException => FetchErrorContext {
-                action: FetchErrorAction::MetadataRefresh,
+                action: FetchErrorAction::Ignore,
                 log_level: FetchErrorLogLevel::Debug,
                 log_message: format!(
                     "Error in fetch for bucket {table_bucket}: {error:?}: {error_message}"
                 ),
             },
             FlussError::UnknownTableOrBucketException => FetchErrorContext {
-                action: FetchErrorAction::MetadataRefresh,
+                action: FetchErrorAction::Ignore,
                 log_level: FetchErrorLogLevel::Warn,
                 log_message: format!(
                     "Received unknown table or bucket error in fetch for bucket {table_bucket}"
@@ -1109,10 +994,6 @@ impl LogFetcher {
                 .map(|context| context.action)
                 .unwrap_or(FetchErrorAction::Unexpected);
             match action {
-                FetchErrorAction::MetadataRefresh => {
-                    self.schedule_metadata_update(error);
-                    return Ok(None);
-                }
                 FetchErrorAction::Ignore => {
                     return Ok(None);
                 }
@@ -1224,9 +1105,6 @@ impl LogFetcher {
         }
     }
 
-    fn schedule_metadata_update(&self, error: FlussError) {
-        self.metadata_refresh.schedule(error);
-    }
     /// Collect completed fetches as RecordBatches
     fn collect_batches(&self) -> Result<Vec<RecordBatch>> {
         // Limit memory usage with both batch count and byte size constraints.
@@ -1567,9 +1445,6 @@ mod tests {
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::task::yield_now;
-    use tokio::time::sleep;
 
     fn build_table_info(table_path: TablePath, table_id: i64) -> TableInfo {
         let row_type = DataTypes::row(vec![DataField::new(
@@ -1787,40 +1662,4 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn metadata_refresh_scheduler_coalesces_requests() -> Result<()> {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_ref = counter.clone();
-        let refresh: RefreshFn = Arc::new(move || {
-            let counter = counter_ref.clone();
-            Box::pin(async move {
-                counter.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            })
-        });
-
-        let scheduler = MetadataRefreshScheduler::new(
-            TablePath::new("db".to_string(), "tbl".to_string()),
-            refresh,
-            Duration::from_millis(50),
-        );
-
-        scheduler.schedule(FlussError::NotLeaderOrFollower);
-        scheduler.schedule(FlussError::NotLeaderOrFollower);
-        yield_now().await;
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        scheduler.schedule(FlussError::NotLeaderOrFollower);
-        scheduler.schedule(FlussError::NotLeaderOrFollower);
-        yield_now().await;
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        sleep(Duration::from_millis(10)).await;
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        sleep(Duration::from_millis(60)).await;
-        yield_now().await;
-        assert_eq!(counter.load(Ordering::SeqCst), 2);
-        Ok(())
-    }
 }

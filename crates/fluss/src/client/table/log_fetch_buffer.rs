@@ -31,7 +31,6 @@ use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FetchErrorAction {
-    MetadataRefresh,
     Ignore,
     LogOffsetOutOfRange,
     Authorization,
