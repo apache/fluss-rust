@@ -18,6 +18,7 @@
 use bytes::{Bytes, BytesMut};
 use std::cmp;
 
+use crate::row::BinaryRow;
 use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
 use crate::util::varint::{write_unsigned_varint_to_slice, write_unsigned_varint_u64_to_slice};
 
@@ -144,5 +145,11 @@ impl CompactedRowWriter {
 
     pub fn write_double(&mut self, value: f64) {
         self.write_raw(&value.to_ne_bytes());
+    }
+}
+
+impl BinaryRow for CompactedRowWriter {
+    fn as_bytes(&self) -> &[u8] {
+        self.buffer()
     }
 }

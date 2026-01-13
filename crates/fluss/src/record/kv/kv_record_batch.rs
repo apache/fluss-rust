@@ -41,7 +41,7 @@ pub const MAGIC_LENGTH: usize = 1;
 pub const CRC_LENGTH: usize = 4;
 pub const SCHEMA_ID_LENGTH: usize = 2;
 pub const ATTRIBUTE_LENGTH: usize = 1;
-pub const WRITER_ID_LENGTH: usize = 8;
+pub const WRITE_CLIENT_ID_LENGTH: usize = 8;
 pub const BATCH_SEQUENCE_LENGTH: usize = 4;
 pub const RECORDS_COUNT_LENGTH: usize = 4;
 
@@ -51,8 +51,8 @@ pub const MAGIC_OFFSET: usize = LENGTH_OFFSET + LENGTH_LENGTH;
 pub const CRC_OFFSET: usize = MAGIC_OFFSET + MAGIC_LENGTH;
 pub const SCHEMA_ID_OFFSET: usize = CRC_OFFSET + CRC_LENGTH;
 pub const ATTRIBUTES_OFFSET: usize = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
-pub const WRITER_ID_OFFSET: usize = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
-pub const BATCH_SEQUENCE_OFFSET: usize = WRITER_ID_OFFSET + WRITER_ID_LENGTH;
+pub const WRITE_CLIENT_ID_OFFSET: usize = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+pub const BATCH_SEQUENCE_OFFSET: usize = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
 pub const RECORDS_COUNT_OFFSET: usize = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
 pub const RECORDS_OFFSET: usize = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
 
@@ -77,12 +77,14 @@ impl KvRecordBatch {
     }
 
     /// Get the size in bytes of this batch.
-    /// Returns 0 if the batch is invalid or length is negative.
-    pub fn size_in_bytes(&self) -> usize {
+    pub fn size_in_bytes(&self) -> io::Result<usize> {
         if self.data.len() < self.position.saturating_add(LENGTH_LENGTH) {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to read batch length",
+            ));
         }
-        let length_i32 = i32::from_be_bytes([
+        let length_i32 = i32::from_le_bytes([
             self.data[self.position],
             self.data[self.position + 1],
             self.data[self.position + 2],
@@ -90,159 +92,167 @@ impl KvRecordBatch {
         ]);
 
         if length_i32 < 0 {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid batch length: {}", length_i32),
+            ));
         }
 
         let length = length_i32 as usize;
 
-        length.saturating_add(LENGTH_LENGTH)
+        Ok(length.saturating_add(LENGTH_LENGTH))
     }
 
     /// Check if this batch is valid by verifying the checksum.
     pub fn is_valid(&self) -> bool {
-        if self.size_in_bytes() < RECORD_BATCH_HEADER_SIZE {
-            return false;
-        }
-        if self.data.len() < self.position.saturating_add(RECORD_BATCH_HEADER_SIZE) {
-            return false;
-        }
+        let size = match self.size_in_bytes() {
+            Ok(s) if s >= RECORD_BATCH_HEADER_SIZE => s,
+            _ => return false,
+        };
 
-        if self.record_count() < 0 {
-            return false;
+        match (self.checksum(), self.compute_checksum()) {
+            (Ok(stored), Ok(computed)) => stored == computed,
+            _ => false,
         }
-        self.checksum() == self.compute_checksum()
     }
 
     /// Get the magic byte.
-    /// Returns 0 if the batch is too short to contain a valid header.
-    pub fn magic(&self) -> u8 {
+    pub fn magic(&self) -> io::Result<u8> {
         if self.data.len() < self.position.saturating_add(MAGIC_OFFSET).saturating_add(1) {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to read magic byte",
+            ));
         }
-        self.data[self.position + MAGIC_OFFSET]
+        Ok(self.data[self.position + MAGIC_OFFSET])
     }
 
     /// Get the checksum.
-    /// Returns 0 if the batch is too short to contain a valid header.
-    pub fn checksum(&self) -> u32 {
+    pub fn checksum(&self) -> io::Result<u32> {
         if self.data.len() < self.position.saturating_add(CRC_OFFSET).saturating_add(4) {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to read checksum",
+            ));
         }
-        u32::from_be_bytes([
+        Ok(u32::from_le_bytes([
             self.data[self.position + CRC_OFFSET],
             self.data[self.position + CRC_OFFSET + 1],
             self.data[self.position + CRC_OFFSET + 2],
             self.data[self.position + CRC_OFFSET + 3],
-        ])
+        ]))
     }
 
     /// Compute the checksum of this batch.
-    pub fn compute_checksum(&self) -> u32 {
-        let size = self.size_in_bytes();
+    pub fn compute_checksum(&self) -> io::Result<u32> {
+        let size = self.size_in_bytes()?;
         if size < RECORD_BATCH_HEADER_SIZE {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Batch size {} is less than header size {}",
+                    size, RECORD_BATCH_HEADER_SIZE
+                ),
+            ));
         }
 
         let start = self.position.saturating_add(SCHEMA_ID_OFFSET);
         let end = self.position.saturating_add(size);
 
         if end > self.data.len() || start >= end {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to compute checksum",
+            ));
         }
 
-        crc32c::crc32c(&self.data[start..end])
+        Ok(crc32c::crc32c(&self.data[start..end]))
     }
 
     /// Get the schema ID.
-    /// Returns 0 if the batch is too short to contain a valid header.
-    pub fn schema_id(&self) -> i16 {
+    pub fn schema_id(&self) -> io::Result<i16> {
         if self.data.len()
             < self
                 .position
                 .saturating_add(SCHEMA_ID_OFFSET)
                 .saturating_add(2)
         {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to read schema ID",
+            ));
         }
-        i16::from_be_bytes([
+        Ok(i16::from_le_bytes([
             self.data[self.position + SCHEMA_ID_OFFSET],
             self.data[self.position + SCHEMA_ID_OFFSET + 1],
-        ])
-    }
-
-    /// Get the attributes byte.
-    /// Returns 0 if the batch is too short to contain a valid header.
-    pub fn attributes(&self) -> u8 {
-        if self.data.len()
-            < self
-                .position
-                .saturating_add(ATTRIBUTES_OFFSET)
-                .saturating_add(1)
-        {
-            return 0;
-        }
-        self.data[self.position + ATTRIBUTES_OFFSET]
+        ]))
     }
 
     /// Get the writer ID.
-    /// Returns 0 if the batch is too short to contain a valid header.
-    pub fn writer_id(&self) -> i64 {
+    pub fn writer_id(&self) -> io::Result<i64> {
         if self.data.len()
             < self
                 .position
-                .saturating_add(WRITER_ID_OFFSET)
+                .saturating_add(WRITE_CLIENT_ID_OFFSET)
                 .saturating_add(8)
         {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to read writer ID",
+            ));
         }
-        i64::from_be_bytes([
-            self.data[self.position + WRITER_ID_OFFSET],
-            self.data[self.position + WRITER_ID_OFFSET + 1],
-            self.data[self.position + WRITER_ID_OFFSET + 2],
-            self.data[self.position + WRITER_ID_OFFSET + 3],
-            self.data[self.position + WRITER_ID_OFFSET + 4],
-            self.data[self.position + WRITER_ID_OFFSET + 5],
-            self.data[self.position + WRITER_ID_OFFSET + 6],
-            self.data[self.position + WRITER_ID_OFFSET + 7],
-        ])
+        Ok(i64::from_le_bytes([
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET],
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET + 1],
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET + 2],
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET + 3],
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET + 4],
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET + 5],
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET + 6],
+            self.data[self.position + WRITE_CLIENT_ID_OFFSET + 7],
+        ]))
     }
 
     /// Get the batch sequence.
-    /// Returns 0 if the batch is too short to contain a valid header.
-    pub fn batch_sequence(&self) -> i32 {
+    pub fn batch_sequence(&self) -> io::Result<i32> {
         if self.data.len()
             < self
                 .position
                 .saturating_add(BATCH_SEQUENCE_OFFSET)
                 .saturating_add(4)
         {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to read batch sequence",
+            ));
         }
-        i32::from_be_bytes([
+        Ok(i32::from_le_bytes([
             self.data[self.position + BATCH_SEQUENCE_OFFSET],
             self.data[self.position + BATCH_SEQUENCE_OFFSET + 1],
             self.data[self.position + BATCH_SEQUENCE_OFFSET + 2],
             self.data[self.position + BATCH_SEQUENCE_OFFSET + 3],
-        ])
+        ]))
     }
 
     /// Get the number of records in this batch.
-    /// Returns 0 if the batch is too short to contain a valid header.
-    pub fn record_count(&self) -> i32 {
+    pub fn record_count(&self) -> io::Result<i32> {
         if self.data.len()
             < self
                 .position
                 .saturating_add(RECORDS_COUNT_OFFSET)
                 .saturating_add(4)
         {
-            return 0;
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Not enough bytes to read record count",
+            ));
         }
-        i32::from_be_bytes([
+        Ok(i32::from_le_bytes([
             self.data[self.position + RECORDS_COUNT_OFFSET],
             self.data[self.position + RECORDS_COUNT_OFFSET + 1],
             self.data[self.position + RECORDS_COUNT_OFFSET + 2],
             self.data[self.position + RECORDS_COUNT_OFFSET + 3],
-        ])
+        ]))
     }
 
     /// Create an iterator over the records in this batch.
@@ -255,17 +265,25 @@ impl KvRecordBatch {
                 "Invalid batch checksum",
             ));
         }
-        Ok(self.records_unchecked())
+        self.records_unchecked()
     }
 
     /// Create an iterator over the records in this batch without validating the checksum
-    pub fn records_unchecked(&self) -> KvRecordIterator {
-        KvRecordIterator {
+    pub fn records_unchecked(&self) -> io::Result<KvRecordIterator> {
+        let size = self.size_in_bytes()?;
+        let count = self.record_count()?;
+        if count < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid record count: {}", count),
+            ));
+        }
+        Ok(KvRecordIterator {
             data: self.data.clone(),
             position: self.position + RECORDS_OFFSET,
-            end: self.position + self.size_in_bytes(),
-            remaining_count: self.record_count(),
-        }
+            end: self.position + size,
+            remaining_count: count,
+        })
     }
 }
 
@@ -310,22 +328,22 @@ mod tests {
     fn test_invalid_batch_lengths() {
         // Test negative length
         let mut buf = BytesMut::new();
-        buf.put_i32(-1);
+        buf.put_i32_le(-1);
         let bytes = buf.freeze();
         let batch = KvRecordBatch::new(bytes, 0);
-        assert_eq!(batch.size_in_bytes(), 0); // Should return 0 for invalid
+        assert!(batch.size_in_bytes().is_err()); // Should error for invalid
         assert!(!batch.is_valid());
 
         // Test overflow length
         let mut buf = BytesMut::new();
-        buf.put_i32(i32::MAX);
+        buf.put_i32_le(i32::MAX);
         let bytes = buf.freeze();
         let batch = KvRecordBatch::new(bytes, 0);
         assert!(!batch.is_valid());
 
         // Test too-short buffer
         let mut buf = BytesMut::new();
-        buf.put_i32(100); // Claims 100 bytes but buffer is tiny
+        buf.put_i32_le(100); // Claims 100 bytes but buffer is tiny
         let bytes = buf.freeze();
         let batch = KvRecordBatch::new(bytes, 0);
         assert!(!batch.is_valid());
@@ -333,6 +351,8 @@ mod tests {
 
     #[test]
     fn test_kv_record_batch_build_and_read() {
+        use crate::row::compacted::CompactedRowWriter;
+
         let schema_id = 42;
         let write_limit = 4096;
 
@@ -340,28 +360,31 @@ mod tests {
         builder.set_writer_state(100, 5);
 
         let key1 = b"key1";
-        let value1 = vec![1, 2, 3, 4, 5];
-        builder.append(key1, Some(&value1)).unwrap();
+        let mut value1_writer = CompactedRowWriter::new(1);
+        value1_writer.write_bytes(&[1, 2, 3, 4, 5]);
+        builder.append_row(key1, Some(&value1_writer)).unwrap();
 
         let key2 = b"key2";
-        builder.append(key2, None).unwrap();
+        builder
+            .append_row::<CompactedRowWriter>(key2, None)
+            .unwrap();
 
         let bytes = builder.build().unwrap();
 
         let batch = KvRecordBatch::new(bytes.clone(), 0);
         assert!(batch.is_valid());
-        assert_eq!(batch.magic(), CURRENT_KV_MAGIC_VALUE);
-        assert_eq!(batch.schema_id(), schema_id as i16);
-        assert_eq!(batch.writer_id(), 100);
-        assert_eq!(batch.batch_sequence(), 5);
-        assert_eq!(batch.record_count(), 2);
+        assert_eq!(batch.magic().unwrap(), CURRENT_KV_MAGIC_VALUE);
+        assert_eq!(batch.schema_id().unwrap(), schema_id as i16);
+        assert_eq!(batch.writer_id().unwrap(), 100);
+        assert_eq!(batch.batch_sequence().unwrap(), 5);
+        assert_eq!(batch.record_count().unwrap(), 2);
 
         let records: Vec<_> = batch.records().unwrap().collect();
         assert_eq!(records.len(), 2);
 
         let record1 = records[0].as_ref().unwrap();
         assert_eq!(record1.key().as_ref(), key1);
-        assert_eq!(record1.value().unwrap().as_ref(), &value1[..]);
+        assert_eq!(record1.value().unwrap().as_ref(), value1_writer.buffer());
 
         let record2 = records[1].as_ref().unwrap();
         assert_eq!(record2.key().as_ref(), key2);

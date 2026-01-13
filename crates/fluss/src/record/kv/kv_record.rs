@@ -81,11 +81,14 @@ impl KvRecord {
         match value {
             Some(v) => {
                 let value_len_size = size_of_unsigned_varint(v.len() as u32);
-                key_len_size + key_len + value_len_size + v.len()
+                key_len_size
+                    .saturating_add(key_len)
+                    .saturating_add(value_len_size)
+                    .saturating_add(v.len())
             }
             None => {
                 // Deletion: no value length varint or value bytes
-                key_len_size + key_len
+                key_len_size.saturating_add(key_len)
             }
         }
     }
@@ -106,7 +109,7 @@ impl KvRecord {
                 format!("Record size {} exceeds i32::MAX", size_in_bytes),
             )
         })?;
-        writer.write_all(&size_i32.to_be_bytes())?;
+        writer.write_all(&size_i32.to_le_bytes())?;
 
         let key_len = key.len() as u32;
         write_unsigned_varint(key_len, writer)?;
@@ -135,7 +138,7 @@ impl KvRecord {
                 format!("Record size {} exceeds i32::MAX", size_in_bytes),
             )
         })?;
-        buf.put_i32(size_i32);
+        buf.put_i32_le(size_i32);
 
         // Write key length as unsigned varint
         let key_len = key.len() as u32;
@@ -165,7 +168,7 @@ impl KvRecord {
             ));
         }
 
-        let size_in_bytes_i32 = i32::from_be_bytes([
+        let size_in_bytes_i32 = i32::from_le_bytes([
             bytes[position],
             bytes[position + 1],
             bytes[position + 2],
@@ -191,15 +194,13 @@ impl KvRecord {
             )
         })?;
 
-        // Check against available bytes with checked arithmetic
         let available = bytes.len().saturating_sub(position);
         if available < total_size {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 format!(
                     "Not enough bytes to read record: expected {}, available {}",
-                    total_size,
-                    bytes.len() - position
+                    total_size, available
                 ),
             ));
         }
@@ -255,7 +256,8 @@ impl KvRecord {
 
             Some(value_bytes)
         } else {
-            // No remaining bytes: this is a deletion
+            // No remaining bytes: this is a deletion record
+            // Note: current_offset == record_end is guaranteed here since remaining_bytes == 0
             None
         };
 
@@ -376,7 +378,7 @@ mod tests {
 
         // Write INCORRECT length that includes trailing bytes
         let incorrect_size = correct_size + 10; // Add 10 trailing bytes
-        buf.put_i32(incorrect_size as i32);
+        buf.put_i32_le(incorrect_size as i32);
 
         write_unsigned_varint_buf(key.len() as u32, &mut buf);
         buf.put_slice(key);
@@ -413,7 +415,7 @@ mod tests {
     #[test]
     fn test_invalid_record_lengths() {
         let mut buf = BytesMut::new();
-        buf.put_i32(-1); // Negative length
+        buf.put_i32_le(-1); // Negative length
         buf.put_u8(1); // Some dummy data
         buf.put_slice(b"key");
         let bytes = buf.freeze();
@@ -423,7 +425,7 @@ mod tests {
 
         // Test overflow length
         let mut buf = BytesMut::new();
-        buf.put_i32(i32::MAX); // Very large length
+        buf.put_i32_le(i32::MAX); // Very large length
         buf.put_u8(1); // Some dummy data
         let bytes = buf.freeze();
         let result = KvRecord::read_from(&bytes, 0);
@@ -431,7 +433,7 @@ mod tests {
 
         // Test impossibly large but non-negative length
         let mut buf = BytesMut::new();
-        buf.put_i32(1_000_000);
+        buf.put_i32_le(1_000_000);
         let bytes = buf.freeze();
         let result = KvRecord::read_from(&bytes, 0);
         assert!(result.is_err());

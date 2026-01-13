@@ -95,10 +95,7 @@ pub fn read_unsigned_varint<R: Read>(reader: &mut R) -> io::Result<u32> {
                 if byte < 0 {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!(
-                            "VarInt is too long, the most significant bit in the 5th byte is set, converted value: {:#x}",
-                            result
-                        ),
+                        "Invalid u32 varint encoding: too many bytes (most significant bit in the 5th byte is set)",
                     ));
                 }
             }
@@ -178,10 +175,7 @@ pub fn read_unsigned_varint_bytes(bytes: &[u8]) -> io::Result<(u32, usize)> {
                 if byte < 0 {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!(
-                            "VarInt is too long, the most significant bit in the 5th byte is set, converted value: {:#x}",
-                            result
-                        ),
+                        "Invalid u32 varint encoding: too many bytes (most significant bit in the 5th byte is set)",
                     ));
                 }
             }
@@ -191,11 +185,38 @@ pub fn read_unsigned_varint_bytes(bytes: &[u8]) -> io::Result<(u32, usize)> {
     Ok((result, index))
 }
 
-/// Calculate the number of bytes needed to encode an unsigned integer in variable-length format.
+/// Calculate the number of bytes needed to encode a u32 in variable-length format.
+///
+/// Varint encoding uses 7 bits per byte, so we need `ceil(bits_used / 7)` bytes.
+/// This function computes that efficiently using the formula:
+///
+/// size = ((38 - leading_zeros) * 74899) >> 19  +  (leading_zeros >> 5)
+///
+/// Where:
+/// - `38 = 32 + 6` (6 accounts for ceiling in division)
+/// - `74899 = 2^19 / 7` (enables division by 7 via multiply + shift)
+/// - `leading_zeros >> 5` adds 1 when value is 0 (minimum 1 byte)
 pub fn size_of_unsigned_varint(value: u32) -> usize {
     let leading_zeros = value.leading_zeros();
     let leading_zeros_below_38_divided_by_7 = ((38 - leading_zeros) * 0b10010010010010011) >> 19;
     (leading_zeros_below_38_divided_by_7 + (leading_zeros >> 5)) as usize
+}
+
+/// Calculate the number of bytes needed to encode a u64 in variable-length format.
+///
+/// Varint encoding uses 7 bits per byte, so we need `ceil(bits_used / 7)` bytes.
+/// This function computes that efficiently using the formula:
+///
+/// size = ((70 - leading_zeros) * 74899) >> 19  +  (leading_zeros >> 6)
+///
+/// - `70 = 64 + 6` (6 accounts for ceiling in division)
+/// - `74899 = 2^19 / 7` (enables division by 7 via multiply + shift)
+/// - `leading_zeros >> 6` adds 1 when value is 0 (minimum 1 byte)
+#[allow(dead_code)]
+pub fn size_of_unsigned_varint_u64(value: u64) -> usize {
+    let leading_zeros = value.leading_zeros();
+    let leading_zeros_below_70_divided_by_7 = ((70 - leading_zeros) * 0b10010010010010011) >> 19;
+    (leading_zeros_below_70_divided_by_7 + (leading_zeros >> 6)) as usize
 }
 
 /// Write an unsigned 64-bit integer in variable-length format to a buffer.
@@ -211,6 +232,11 @@ pub fn write_unsigned_varint_u64_buf(value: u64, buf: &mut impl BufMut) {
 
 /// Write directly to a mutable byte slice, returning the number of bytes written.
 /// Used by CompactedRowWriter which manages its own position.
+///
+/// # Panics
+/// Panics if the slice is too small to hold the encoded varint.
+/// The slice must have at least 5 bytes available (the maximum size for a u32 varint).
+/// Use [`size_of_unsigned_varint`] to calculate the required size beforehand.
 pub fn write_unsigned_varint_to_slice(value: u32, slice: &mut [u8]) -> usize {
     let mut v = value;
     let mut written = 0;
@@ -225,6 +251,10 @@ pub fn write_unsigned_varint_to_slice(value: u32, slice: &mut [u8]) -> usize {
 }
 
 /// Write unsigned 64-bit varint directly to a mutable byte slice.
+///
+/// # Panics
+/// Panics if the slice is too small to hold the encoded varint.
+/// The slice must have at least 10 bytes available (the maximum size for a u64 varint).
 pub fn write_unsigned_varint_u64_to_slice(value: u64, slice: &mut [u8]) -> usize {
     let mut v = value;
     let mut written = 0;
@@ -383,6 +413,31 @@ mod tests {
         assert_eq!(size_of_unsigned_varint(268435455), 4);
         assert_eq!(size_of_unsigned_varint(268435456), 5);
         assert_eq!(size_of_unsigned_varint(u32::MAX), 5);
+    }
+
+    #[test]
+    fn test_size_of_unsigned_varint_u64() {
+        assert_eq!(size_of_unsigned_varint_u64(0), 1);
+        assert_eq!(size_of_unsigned_varint_u64(127), 1);
+        assert_eq!(size_of_unsigned_varint_u64(128), 2);
+        assert_eq!(size_of_unsigned_varint_u64(16383), 2);
+        assert_eq!(size_of_unsigned_varint_u64(16384), 3);
+        assert_eq!(size_of_unsigned_varint_u64(2097151), 3);
+        assert_eq!(size_of_unsigned_varint_u64(2097152), 4);
+        assert_eq!(size_of_unsigned_varint_u64(268435455), 4);
+        assert_eq!(size_of_unsigned_varint_u64(268435456), 5);
+        assert_eq!(size_of_unsigned_varint_u64(u32::MAX as u64), 5);
+        assert_eq!(size_of_unsigned_varint_u64(34359738367), 5);
+        assert_eq!(size_of_unsigned_varint_u64(34359738368), 6);
+        assert_eq!(size_of_unsigned_varint_u64(4398046511103), 6);
+        assert_eq!(size_of_unsigned_varint_u64(4398046511104), 7);
+        assert_eq!(size_of_unsigned_varint_u64(562949953421311), 7);
+        assert_eq!(size_of_unsigned_varint_u64(562949953421312), 8);
+        assert_eq!(size_of_unsigned_varint_u64(72057594037927935), 8);
+        assert_eq!(size_of_unsigned_varint_u64(72057594037927936), 9);
+        assert_eq!(size_of_unsigned_varint_u64(9223372036854775807), 9);
+        assert_eq!(size_of_unsigned_varint_u64(9223372036854775808), 10);
+        assert_eq!(size_of_unsigned_varint_u64(u64::MAX), 10);
     }
 
     #[test]
