@@ -17,7 +17,7 @@
 
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
-use log::{debug, error, warn};
+use log::{debug, warn};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::slice::from_ref;
@@ -635,7 +635,7 @@ impl LogFetcher {
                     }
                 };
 
-                if let Err(e) = Self::handle_fetch_response(
+                Self::handle_fetch_response(
                     fetch_response,
                     &log_fetch_buffer,
                     &log_scanner_status,
@@ -644,25 +644,7 @@ impl LogFetcher {
                     &remote_log_downloader,
                     &creds_cache,
                 )
-                .await
-                {
-                    error!("Fail to handle fetch response: {e:?}");
-                    let message = format!("Failed to handle fetch response: {e}");
-                    for table_req in &fetch_request.tables_req {
-                        let table_id = table_req.table_id;
-                        for bucket_req in &table_req.buckets_req {
-                            let table_bucket = TableBucket::new(table_id, bucket_req.bucket_id);
-                            log_fetch_buffer.set_error(
-                                table_bucket,
-                                Error::UnexpectedError {
-                                    message: message.clone(),
-                                    source: None,
-                                },
-                                bucket_req.fetch_offset,
-                            );
-                        }
-                    }
-                }
+                .await;
             });
         }
 
@@ -687,7 +669,7 @@ impl LogFetcher {
         remote_read_context: &ReadContext,
         remote_log_downloader: &Arc<RemoteLogDownloader>,
         credentials_cache: &Arc<CredentialsCache>,
-    ) -> Result<()> {
+    ) {
         for pb_fetch_log_resp in fetch_response.tables_resp {
             let table_id = pb_fetch_log_resp.table_id;
             let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
@@ -745,7 +727,7 @@ impl LogFetcher {
                 if let Some(ref remote_log_fetch_info) = fetch_log_for_bucket.remote_log_fetch_info
                 {
                     // set remote fs props
-                    let remote_fs_props = credentials_cache.get_or_refresh().await?;
+                    let remote_fs_props = credentials_cache.get_or_refresh().await.unwrap();
                     remote_log_downloader.set_remote_fs_props(remote_fs_props);
 
                     let remote_fetch_info =
@@ -787,7 +769,6 @@ impl LogFetcher {
                 }
             }
         }
-        Ok(())
     }
 
     fn pending_remote_fetches(
@@ -1605,7 +1586,7 @@ mod tests {
             &fetcher.remote_log_downloader,
             &fetcher.credentials_cache,
         )
-        .await?;
+        .await;
 
         let completed = fetcher.log_fetch_buffer.poll().expect("completed fetch");
         let api_error = completed.api_error().expect("api error");
