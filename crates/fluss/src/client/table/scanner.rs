@@ -37,7 +37,7 @@ use crate::client::table::remote_log::{
 };
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
-use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
+use crate::proto::{ErrorResponse, FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::{RpcClient, message};
 use crate::util::FairBucketStatusMap;
@@ -684,23 +684,23 @@ impl LogFetcher {
                     continue;
                 };
 
-                let error_code = fetch_log_for_bucket
-                    .error_code
-                    .unwrap_or(FlussError::None.code());
-                if error_code != FlussError::None.code() {
-                    let error = FlussError::for_code(error_code);
-                    let error_message = fetch_log_for_bucket
-                        .error_message
-                        .clone()
-                        .unwrap_or_else(|| error.message().to_string());
+                if let Some(error_code) = fetch_log_for_bucket.error_code
+                    && error_code != FlussError::None.code()
+                {
+                    let api_error: ApiError = ErrorResponse {
+                        error_code,
+                        error_message: fetch_log_for_bucket.error_message.clone(),
+                    }
+                    .into();
 
-                    log_scanner_status.move_bucket_to_end(table_bucket.clone());
+                    let error = FlussError::for_code(error_code);
                     let error_context = Self::describe_fetch_error(
                         error,
                         &table_bucket,
                         fetch_offset,
-                        &error_message,
+                        api_error.message.as_str(),
                     );
+                    log_scanner_status.move_bucket_to_end(table_bucket.clone());
                     match error_context.log_level {
                         FetchErrorLogLevel::Debug => {
                             debug!("{}", error_context.log_message);
@@ -711,10 +711,7 @@ impl LogFetcher {
                     }
                     log_fetch_buffer.add_api_error(
                         table_bucket.clone(),
-                        ApiError {
-                            code: error_code,
-                            message: error_message.clone(),
-                        },
+                        api_error,
                         error_context,
                         fetch_offset,
                     );

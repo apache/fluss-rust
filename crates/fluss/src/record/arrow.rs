@@ -881,10 +881,6 @@ impl ReadContext {
             .map(|p| p.ordered_fields.as_slice())
     }
 
-    pub fn is_projection_pushdowned(&self) -> bool {
-        !self.is_from_remote && self.projection.is_some()
-    }
-
     pub fn record_batch(&self, data: &[u8]) -> Result<RecordBatch> {
         let (batch_metadata, body_buffer, version) = parse_ipc_message(data)?;
 
