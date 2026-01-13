@@ -97,7 +97,7 @@ Running all unit tests for fluss rust client:
 cargo test --workspace
 ```
 
-Running all integration test casesL
+Running all integration test cases:
 
 ```bash
 cargo test --features integration_tests --workspace
