@@ -869,9 +869,12 @@ impl RowType {
             project_field_positions
                 .iter()
                 .map(|pos| {
-                    self.fields.get(*pos).cloned().ok_or(IllegalArgument {
-                        message: format!("invalid field position: {}", *pos),
-                    })
+                    self.fields
+                        .get(*pos)
+                        .cloned()
+                        .ok_or_else(|| IllegalArgument {
+                            message: format!("invalid field position: {}", *pos),
+                        })
                 })
                 .collect::<Result<Vec<_>>>()?,
         ))

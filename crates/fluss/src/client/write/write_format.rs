@@ -29,14 +29,8 @@ pub enum WriteFormat {
 }
 
 impl WriteFormat {
-    pub fn is_log(&self) -> bool {
-        match self {
-            WriteFormat::ArrowLog => true,
-            WriteFormat::IndexedLog => true,
-            WriteFormat::CompactedLog => true,
-            WriteFormat::IndexedKv => false,
-            WriteFormat::CompactedKv => false,
-        }
+    pub const fn is_log(&self) -> bool {
+        matches!(self, Self::ArrowLog | Self::IndexedLog | Self::CompactedLog)
     }
 
     pub fn is_kv(&self) -> bool {
