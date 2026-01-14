@@ -38,28 +38,24 @@ pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
 #[allow(dead_code)]
 impl<'a> CompactedRow<'a> {
     pub fn from_bytes(data_types: &'a [DataType], data: &'a [u8]) -> Self {
-        let arity = data_types.len();
-        let size = data.len();
-        Self {
-            arity,
-            size_in_bytes: size,
-            decoded_row: OnceLock::new(),
-            deserializer: Arc::new(CompactedRowDeserializer::new(data_types)),
-            reader: CompactedRowReader::new(arity, data, 0, size),
-        }
+        Self::deserialize(
+            Arc::new(CompactedRowDeserializer::new(data_types)),
+            data_types.len(),
+            data,
+        )
     }
 
     pub fn deserialize(
         deserializer: Arc<CompactedRowDeserializer<'a>>,
         arity: usize,
-        bytes: &'a [u8],
+        data: &'a [u8],
     ) -> Self {
         Self {
             arity,
-            size_in_bytes: bytes.len(),
+            size_in_bytes: data.len(),
             decoded_row: OnceLock::new(),
-            deserializer: deserializer.clone(),
-            reader: CompactedRowReader::new(arity, bytes, 0, bytes.len()),
+            deserializer: Arc::clone(&deserializer),
+            reader: CompactedRowReader::new(arity, data, 0, data.len()),
         }
     }
 

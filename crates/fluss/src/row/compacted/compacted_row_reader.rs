@@ -32,7 +32,7 @@ pub struct CompactedRowDeserializer<'a> {
 
 #[allow(dead_code)]
 impl<'a> CompactedRowDeserializer<'a> {
-    pub fn new(schema: &'a[DataType]) -> Self {
+    pub fn new(schema: &'a [DataType]) -> Self {
         Self {
             schema: Cow::Borrowed(schema),
         }
@@ -40,7 +40,7 @@ impl<'a> CompactedRowDeserializer<'a> {
 
     pub fn new_from_owned(schema: Vec<DataType>) -> Self {
         Self {
-            schema: Cow::Owned(schema)
+            schema: Cow::Owned(schema),
         }
     }
 

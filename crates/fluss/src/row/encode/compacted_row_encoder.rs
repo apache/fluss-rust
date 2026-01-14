@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Error::{IllegalArgument, RowConvertError};
+use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::Datum;
@@ -43,7 +43,9 @@ impl<'a> CompactedRowEncoder<'a> {
             arity: field_data_types.len(),
             writer: CompactedRowWriter::new(field_data_types.len()),
             field_writers,
-            compacted_row_deserializer: Arc::new(CompactedRowDeserializer::new_from_owned(field_data_types)),
+            compacted_row_deserializer: Arc::new(CompactedRowDeserializer::new_from_owned(
+                field_data_types,
+            )),
         })
     }
 }
@@ -58,7 +60,10 @@ impl RowEncoder for CompactedRowEncoder<'_> {
         self.field_writers
             .get(pos)
             .ok_or(IllegalArgument {
-                message: format!("invalid position {} when attempting to encode value {}", pos, value),
+                message: format!(
+                    "invalid position {} when attempting to encode value {}",
+                    pos, value
+                ),
             })?
             .write_value(&mut self.writer, pos, &value)
     }
