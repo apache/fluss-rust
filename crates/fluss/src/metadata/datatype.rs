@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -861,14 +863,18 @@ impl RowType {
         self.fields.iter().map(|f| f.name.as_str()).collect()
     }
 
-    pub fn project(&self, project_field_positions: &[usize]) -> RowType {
-        RowType::with_nullable(
+    pub fn project(&self, project_field_positions: &[usize]) -> Result<RowType> {
+        Ok(RowType::with_nullable(
             self.nullable,
             project_field_positions
                 .iter()
-                .map(|pos| self.fields.get(*pos).unwrap().clone())
-                .collect(),
-        )
+                .map(|pos| {
+                    self.fields.get(*pos).cloned().ok_or(IllegalArgument {
+                        message: format!("invalid field position: {}", *pos),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ))
     }
 
     #[cfg(test)]
