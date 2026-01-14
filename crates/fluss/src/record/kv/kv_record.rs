@@ -25,11 +25,10 @@
 //! - Row => BinaryRow (optional, if null then this is a deletion record)
 
 use bytes::{BufMut, Bytes, BytesMut};
-use std::io::{self, Write};
+use std::io;
 
 use crate::util::varint::{
-    read_unsigned_varint_bytes, size_of_unsigned_varint, write_unsigned_varint,
-    write_unsigned_varint_buf,
+    read_unsigned_varint_bytes, size_of_unsigned_varint, write_unsigned_varint_buf,
 };
 
 /// Length field size in bytes
@@ -41,21 +40,25 @@ pub const LENGTH_LENGTH: usize = 4;
 /// - Length => Int32
 /// - KeyLength => Unsigned VarInt
 /// - Key => bytes
-/// - ValueLength => Unsigned VarInt (only present if value exists, even for empty values)
-/// - Value => bytes (if ValueLength > 0)
+/// - Value => bytes (BinaryRow, written directly without length prefix)
 ///
-/// When the value is None (deletion), no ValueLength or Value bytes are present.
-/// When the value is Some(&[]) (empty value), ValueLength is present with value 0.
+/// When the value is None (deletion), no Value bytes are present.
 #[derive(Debug, Clone)]
 pub struct KvRecord {
     key: Bytes,
     value: Option<Bytes>,
+    size_in_bytes: usize,
 }
 
 impl KvRecord {
     /// Create a new KvRecord with the given key and optional value.
     pub fn new(key: Bytes, value: Option<Bytes>) -> Self {
-        Self { key, value }
+        let size_in_bytes = Self::size_of(&key, value.as_deref());
+        Self {
+            key,
+            value,
+            size_in_bytes,
+        }
     }
 
     /// Get the key bytes.
@@ -79,51 +82,12 @@ impl KvRecord {
         let key_len_size = size_of_unsigned_varint(key_len as u32);
 
         match value {
-            Some(v) => {
-                let value_len_size = size_of_unsigned_varint(v.len() as u32);
-                key_len_size
-                    .saturating_add(key_len)
-                    .saturating_add(value_len_size)
-                    .saturating_add(v.len())
-            }
+            Some(v) => key_len_size.saturating_add(key_len).saturating_add(v.len()),
             None => {
-                // Deletion: no value length varint or value bytes
+                // Deletion: no value bytes
                 key_len_size.saturating_add(key_len)
             }
         }
-    }
-
-    /// Write a KV record to a writer.
-    ///
-    /// Returns the number of bytes written.
-    pub fn write_to<W: Write>(
-        writer: &mut W,
-        key: &[u8],
-        value: Option<&[u8]>,
-    ) -> io::Result<usize> {
-        let size_in_bytes = Self::size_without_length(key, value);
-
-        let size_i32 = i32::try_from(size_in_bytes).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Record size {} exceeds i32::MAX", size_in_bytes),
-            )
-        })?;
-        writer.write_all(&size_i32.to_le_bytes())?;
-
-        let key_len = key.len() as u32;
-        write_unsigned_varint(key_len, writer)?;
-
-        writer.write_all(key)?;
-
-        if let Some(v) = value {
-            let value_len = v.len() as u32;
-            write_unsigned_varint(value_len, writer)?;
-            writer.write_all(v)?;
-        }
-        // For None (deletion), don't write value length or value bytes
-
-        Ok(size_in_bytes + LENGTH_LENGTH)
     }
 
     /// Write a KV record to a buffer.
@@ -139,20 +103,15 @@ impl KvRecord {
             )
         })?;
         buf.put_i32_le(size_i32);
-
-        // Write key length as unsigned varint
         let key_len = key.len() as u32;
         write_unsigned_varint_buf(key_len, buf);
 
         buf.put_slice(key);
 
-        // Write the value length and bytes if present (even for empty values)
         if let Some(v) = value {
-            let value_len = v.len() as u32;
-            write_unsigned_varint_buf(value_len, buf);
             buf.put_slice(v);
         }
-        // For None (deletion), don't write value length or value bytes
+        // For None (deletion), don't write any value bytes
 
         Ok(size_in_bytes + LENGTH_LENGTH)
     }
@@ -160,6 +119,8 @@ impl KvRecord {
     /// Read a KV record from bytes at the given position.
     ///
     /// Returns the KvRecord and the number of bytes consumed.
+    ///
+    /// TODO: Connect KvReadContext and return CompactedRow records.
     pub fn read_from(bytes: &Bytes, position: usize) -> io::Result<(Self, usize)> {
         if bytes.len() < position.saturating_add(LENGTH_LENGTH) {
             return Err(io::Error::new(
@@ -205,7 +166,6 @@ impl KvRecord {
             ));
         }
 
-        // Start reading from after the length field
         let mut current_offset = position + LENGTH_LENGTH;
         let record_end = position + total_size;
 
@@ -225,48 +185,29 @@ impl KvRecord {
         let key = bytes.slice(current_offset..key_end);
         current_offset = key_end;
 
-        let remaining_bytes = (position + total_size) - current_offset;
-
-        let value = if remaining_bytes > 0 {
-            // Value is present: read value length varint
-            let (value_len, varint_size) =
-                read_unsigned_varint_bytes(&bytes[current_offset..record_end])?;
-            current_offset += varint_size;
-
-            // Read value bytes
-            let value_end = current_offset + value_len as usize;
-            if value_end > record_end {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Value length exceeds record size",
-                ));
-            }
-
-            // Use slice for both empty and non-empty values (zero-copy)
-            let value_bytes = bytes.slice(current_offset..value_end);
-            current_offset = value_end;
-
-            // Verify no trailing bytes remain
-            if current_offset != record_end {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Record has trailing bytes after value",
-                ));
-            }
-
+        // Read value bytes directly
+        let value = if current_offset < record_end {
+            // Value is present: all remaining bytes are the value
+            let value_bytes = bytes.slice(current_offset..record_end);
             Some(value_bytes)
         } else {
             // No remaining bytes: this is a deletion record
-            // Note: current_offset == record_end is guaranteed here since remaining_bytes == 0
             None
         };
 
-        Ok((Self { key, value }, total_size))
+        Ok((
+            Self {
+                key,
+                value,
+                size_in_bytes: total_size,
+            },
+            total_size,
+        ))
     }
 
     /// Get the total size in bytes of this record.
     pub fn get_size_in_bytes(&self) -> usize {
-        Self::size_of(&self.key, self.value.as_deref())
+        self.size_in_bytes
     }
 }
 
@@ -279,15 +220,11 @@ mod tests {
         let key = b"test_key";
         let value = b"test_value";
 
-        // With value (includes value length varint)
+        // With value (no value length varint)
         let size_with_value = KvRecord::size_of(key, Some(value));
         assert_eq!(
             size_with_value,
-            LENGTH_LENGTH
-                + size_of_unsigned_varint(key.len() as u32)
-                + key.len()
-                + size_of_unsigned_varint(value.len() as u32)
-                + value.len()
+            LENGTH_LENGTH + size_of_unsigned_varint(key.len() as u32) + key.len() + value.len()
         );
 
         // Without value
@@ -329,71 +266,6 @@ mod tests {
         assert_eq!(written, read_size);
         assert_eq!(record.key().as_ref(), key);
         assert!(record.value().is_none());
-    }
-
-    #[test]
-    fn test_empty_value_vs_deletion() {
-        let key = b"test_key";
-
-        // Write empty value (Some(&[]))
-        let mut buf1 = BytesMut::new();
-        let written1 = KvRecord::write_to_buf(&mut buf1, key, Some(&[])).unwrap();
-        let bytes1 = buf1.freeze();
-        let (record1, _) = KvRecord::read_from(&bytes1, 0).unwrap();
-
-        // Write deletion (None)
-        let mut buf2 = BytesMut::new();
-        let written2 = KvRecord::write_to_buf(&mut buf2, key, None).unwrap();
-        let bytes2 = buf2.freeze();
-        let (record2, _) = KvRecord::read_from(&bytes2, 0).unwrap();
-
-        assert!(record1.value().is_some(), "Empty value should be Some");
-        assert_eq!(
-            record1.value().unwrap().len(),
-            0,
-            "Empty value should have length 0"
-        );
-
-        assert!(record2.value().is_none(), "Deletion should be None");
-
-        assert_ne!(
-            written1, written2,
-            "Empty value and deletion should have different sizes"
-        );
-    }
-
-    #[test]
-    fn test_record_with_trailing_bytes() {
-        use bytes::BufMut;
-
-        let key = b"key";
-        let value = b"val";
-
-        let mut buf = BytesMut::new();
-
-        // Calculate correct size
-        let key_len_varint_size = size_of_unsigned_varint(key.len() as u32);
-        let value_len_varint_size = size_of_unsigned_varint(value.len() as u32);
-        let correct_size = key_len_varint_size + key.len() + value_len_varint_size + value.len();
-
-        // Write INCORRECT length that includes trailing bytes
-        let incorrect_size = correct_size + 10; // Add 10 trailing bytes
-        buf.put_i32_le(incorrect_size as i32);
-
-        write_unsigned_varint_buf(key.len() as u32, &mut buf);
-        buf.put_slice(key);
-
-        write_unsigned_varint_buf(value.len() as u32, &mut buf);
-        buf.put_slice(value);
-
-        // Add 10 bytes of trailing garbage
-        buf.put_slice(&[0xFF; 10]);
-
-        let bytes = buf.freeze();
-
-        let result = KvRecord::read_from(&bytes, 0);
-        assert!(result.is_err(), "Should reject record with trailing bytes");
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

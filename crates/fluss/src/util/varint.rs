@@ -28,6 +28,7 @@ use std::io::{self, Read, Write};
 ///
 /// The encoding uses 7 bits per byte with the MSB set to 1 if more bytes follow.
 /// This matches the encoding used in Google Protocol Buffers.
+#[allow(dead_code)]
 pub fn write_unsigned_varint<W: Write>(value: u32, writer: &mut W) -> io::Result<usize> {
     let mut v = value;
     let mut bytes_written = 0;
