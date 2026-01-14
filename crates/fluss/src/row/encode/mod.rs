@@ -89,7 +89,10 @@ pub trait RowEncoder {
     /// * Ok(()) if successful
     fn encode_field(&mut self, pos: usize, value: Datum) -> Result<()>;
 
-    /// Finish write the row, return the written row.
+    /// Finish write the row, returns the written row.
+    ///
+    /// Note that returned row borrows from [`RowEncoder`]'s internal buffer which is reused for subsequent rows
+    /// [`RowEncoder::start_new_row()`] should only be called after the returned row goes out of scope.
     ///
     /// # Returns
     /// * the written row
