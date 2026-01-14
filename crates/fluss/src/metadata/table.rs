@@ -736,13 +736,15 @@ impl TableConfig {
             .transpose()
     }
 
-    pub fn get_kv_format(&self) -> Result<Option<KvFormat>> {
+    pub fn get_kv_format(&self) -> Result<KvFormat> {
         // TODO: Consolidate configurations logic, constants, defaults in a single place
-
-        let default = &"COMPACTED".to_string();
-        let value = self.properties.get("table.kv.format").unwrap_or(default);
-
-        Ok(Some(value.parse()?))
+        const DEFAULT_KV_FORMAT: &str = "COMPACTED";
+        let kv_format = self
+            .properties
+            .get("table.kv.format")
+            .map(String::as_str)
+            .unwrap_or(DEFAULT_KV_FORMAT);
+        kv_format.parse().map_err(Into::into)
     }
 }
 
