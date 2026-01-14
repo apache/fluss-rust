@@ -17,10 +17,11 @@
 
 use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
-use crate::metadata::{TableInfo, TablePath};
+use crate::error::{Error, Result};
+use crate::metadata::{TableBucket, TableInfo, TablePath};
+use crate::rpc::ApiError;
+use crate::rpc::message::LookupRequest;
 use std::sync::Arc;
-
-use crate::error::Result;
 
 pub const EARLIEST_OFFSET: i64 = -2;
 
@@ -84,6 +85,88 @@ impl<'a> FlussTable<'a> {
 
     pub fn has_primary_key(&self) -> bool {
         self.has_primary_key
+    }
+
+    /// Lookup values by primary key in a key-value table.
+    ///
+    /// This method performs a direct lookup to retrieve the value associated with the given key
+    /// in the specified bucket. The table must have a primary key (be a primary key table).
+    ///
+    /// # Arguments
+    /// * `bucket_id` - The bucket ID to look up the key in
+    /// * `key` - The encoded primary key bytes to look up
+    ///
+    /// # Returns
+    /// * `Ok(Some(Vec<u8>))` - The value bytes if the key exists
+    /// * `Ok(None)` - If the key does not exist
+    /// * `Err(Error)` - If the lookup fails or the table doesn't have a primary key
+    ///
+    /// # Example
+    /// ```ignore
+    /// let table = conn.get_table(&table_path).await?;
+    /// let key = /* encoded key bytes */;
+    /// if let Some(value) = table.lookup(0, key).await? {
+    ///     println!("Found value: {:?}", value);
+    /// }
+    /// ```
+    pub async fn lookup(&self, bucket_id: i32, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
+        if !self.has_primary_key {
+            return Err(Error::UnsupportedOperation {
+                message: "Lookup is only supported for primary key tables".to_string(),
+            });
+        }
+
+        let table_id = self.table_info.get_table_id();
+        let table_bucket = TableBucket::new(table_id, bucket_id);
+
+        // Find the leader for this bucket
+        let cluster = self.metadata.get_cluster();
+        let leader =
+            cluster
+                .leader_for(&table_bucket)
+                .ok_or_else(|| Error::LeaderNotAvailable {
+                    message: format!("No leader found for table bucket: {table_bucket}"),
+                })?;
+
+        // Get connection to the tablet server
+        let tablet_server =
+            cluster
+                .get_tablet_server(leader.id())
+                .ok_or_else(|| Error::LeaderNotAvailable {
+                    message: format!(
+                        "Tablet server {} is not found in metadata cache",
+                        leader.id()
+                    ),
+                })?;
+
+        let connections = self.conn.get_connections();
+        let connection = connections.get_connection(tablet_server).await?;
+
+        // Send lookup request
+        let request = LookupRequest::new(table_id, None, bucket_id, vec![key]);
+        let response = connection.request(request).await?;
+
+        // Extract the value from response
+        if let Some(bucket_resp) = response.buckets_resp.into_iter().next() {
+            // Check for errors
+            if let Some(error_code) = bucket_resp.error_code {
+                if error_code != 0 {
+                    return Err(Error::FlussAPIError {
+                        api_error: ApiError {
+                            code: error_code,
+                            message: bucket_resp.error_message.unwrap_or_default(),
+                        },
+                    });
+                }
+            }
+
+            // Get the first value (we only requested one key)
+            if let Some(pb_value) = bucket_resp.values.into_iter().next() {
+                return Ok(pb_value.values);
+            }
+        }
+
+        Ok(None)
     }
 }
 
