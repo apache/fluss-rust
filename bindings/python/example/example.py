@@ -181,17 +181,17 @@ async def main():
     # Demo: Column projection
     print("\n--- Testing Column Projection ---")
     try:
-        # Project specific columns by index (C++ parity)
+        # Project specific columns by index
         print("\n1. Projection by index [0, 1] (id, name):")
-        scanner_index = await table.new_log_scanner_with_projection([0, 1])
+        scanner_index = await table.new_log_scanner(project=[0, 1])
         scanner_index.subscribe(None, None)
         df_projected = scanner_index.to_pandas()
         print(df_projected.head())
         print(f"   Projected {df_projected.shape[1]} columns: {list(df_projected.columns)}")
 
-        # Project specific columns by name (Python-specific, more idiomatic!)
+        # Project specific columns by name (Pythonic!)
         print("\n2. Projection by name ['name', 'score'] (Pythonic):")
-        scanner_names = await table.new_log_scanner_with_column_names(["name", "score"])
+        scanner_names = await table.new_log_scanner(columns=["name", "score"])
         scanner_names.subscribe(None, None)
         df_named = scanner_names.to_pandas()
         print(df_named.head())

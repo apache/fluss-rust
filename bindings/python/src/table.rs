@@ -34,6 +34,12 @@ pub struct FlussTable {
     has_primary_key: bool,
 }
 
+/// Internal enum to represent different projection types
+enum ProjectionType {
+    Indices(Vec<usize>),
+    Names(Vec<String>),
+}
+
 #[pymethods]
 impl FlussTable {
     /// Create a new append writer for the table
@@ -57,135 +63,64 @@ impl FlussTable {
         })
     }
 
-    /// Create a new log scanner for the table
-    fn new_log_scanner<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
-
-        future_into_py(py, async move {
-            let fluss_table =
-                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
-
-            let table_scan = fluss_table.new_scan();
-
-            let rust_scanner = table_scan.create_log_scanner().map_err(|e| {
-                FlussError::new_err(format!("Failed to create log scanner: {e}"))
-            })?;
-
-            let admin = conn
-                .get_admin()
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            let py_scanner = LogScanner::from_core(rust_scanner, admin, table_info.clone());
-            Python::attach(|py| Py::new(py, py_scanner))
-        })
-    }
-
-    /// Create a new log scanner with column projection (by index).
+    /// Create a new log scanner for the table.
     ///
     /// Args:
-    ///     column_indices: List of column indices to include in the scan (0-based)
+    ///     project: Optional list of column indices (0-based) to include in the scan.
+    ///              Empty list means all columns.
+    ///     columns: Optional list of column names to include in the scan.
+    ///              Empty list means all columns.
     ///
     /// Returns:
-    ///     LogScanner with projection applied
+    ///     LogScanner, optionally with projection applied
     ///
-    /// Example:
-    ///     >>> scanner = await table.new_log_scanner_with_projection([0, 2, 4])
-    pub fn new_log_scanner_with_projection<'py>(
+    /// Note:
+    ///     Specify only one of 'project' or 'columns'.
+    ///     If neither is specified, all columns are included.
+    ///
+    /// Examples:
+    ///     >>> # Scan all columns
+    ///     >>> scanner = await table.new_log_scanner()
+    ///
+    ///     >>> # Scan specific columns by index
+    ///     >>> scanner = await table.new_log_scanner(project=[0, 2, 4])
+    ///
+    ///     >>> # Scan specific columns by name (more Pythonic)
+    ///     >>> scanner = await table.new_log_scanner(columns=["id", "name", "email"])
+    #[pyo3(signature = (project=None, columns=None))]
+    pub fn new_log_scanner<'py>(
         &self,
         py: Python<'py>,
-        column_indices: Vec<usize>,
+        project: Option<Vec<usize>>,
+        columns: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // Validate early with Python-friendly error
-        if column_indices.is_empty() {
-            return Err(FlussError::new_err(
-                "column_indices cannot be empty".to_string(),
-            ));
-        }
+        // Validate mutually exclusive parameters and normalize empty lists
+        let projection = match (project, columns) {
+            (Some(_), Some(_)) => {
+                return Err(FlussError::new_err(
+                    "Specify only one of 'project' or 'columns'".to_string(),
+                ));
+            }
+            (Some(indices), None) => {
+                if indices.is_empty() {
+                    None // Empty list = all columns
+                } else {
+                    let deduped = self.validate_and_dedupe_indices(&indices)?;
+                    Some(ProjectionType::Indices(deduped))
+                }
+            }
+            (None, Some(names)) => {
+                if names.is_empty() {
+                    None // Empty list = all columns
+                } else {
+                    let deduped = self.validate_and_dedupe_names(&names)?;
+                    Some(ProjectionType::Names(deduped))
+                }
+            }
+            (None, None) => None, // No projection - all columns
+        };
 
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
-
-        future_into_py(py, async move {
-            let fluss_table =
-                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
-
-            let table_scan = fluss_table.new_scan();
-            let table_scan = table_scan
-                .project(&column_indices)
-                .map_err(|e| FlussError::new_err(format!("Failed to project columns: {e}")))?;
-
-            let rust_scanner = table_scan.create_log_scanner().map_err(|e| {
-                FlussError::new_err(format!("Failed to create log scanner: {e}"))
-            })?;
-
-            let admin = conn
-                .get_admin()
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            let py_scanner = LogScanner::from_core(rust_scanner, admin, table_info.clone());
-            Python::attach(|py| Py::new(py, py_scanner))
-        })
-    }
-
-    /// Create a new log scanner with column projection (by name).
-    ///
-    /// This is the more Pythonic way to specify projections using column names
-    /// instead of indices.
-    ///
-    /// Args:
-    ///     column_names: List of column names to include in the scan
-    ///
-    /// Returns:
-    ///     LogScanner with projection applied
-    ///
-    /// Example:
-    ///     >>> scanner = await table.new_log_scanner_with_column_names(["id", "name", "email"])
-    pub fn new_log_scanner_with_column_names<'py>(
-        &self,
-        py: Python<'py>,
-        column_names: Vec<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        // Validate early with Python-friendly error
-        if column_names.is_empty() {
-            return Err(FlussError::new_err(
-                "column_names cannot be empty".to_string(),
-            ));
-        }
-
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
-
-        future_into_py(py, async move {
-            let fluss_table =
-                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
-
-            // Convert Vec<String> to Vec<&str> for the API
-            // Safe: project_by_name validates names immediately, doesn't store refs
-            let column_name_refs: Vec<&str> = column_names.iter().map(|s| s.as_str()).collect();
-
-            let table_scan = fluss_table.new_scan();
-            let table_scan = table_scan
-                .project_by_name(&column_name_refs)
-                .map_err(|e| FlussError::new_err(format!("Failed to project columns: {e}")))?;
-
-            let rust_scanner = table_scan.create_log_scanner().map_err(|e| {
-                FlussError::new_err(format!("Failed to create log scanner: {e}"))
-            })?;
-
-            let admin = conn
-                .get_admin()
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            let py_scanner = LogScanner::from_core(rust_scanner, admin, table_info.clone());
-            Python::attach(|py| Py::new(py, py_scanner))
-        })
+        self.create_log_scanner_internal(py, projection)
     }
 
     /// Get table information
@@ -228,6 +163,102 @@ impl FlussTable {
             table_path,
             has_primary_key,
         }
+    }
+
+    /// Validate and deduplicate column indices (preserving order)
+    fn validate_and_dedupe_indices(&self, indices: &[usize]) -> PyResult<Vec<usize>> {
+        use std::collections::HashSet;
+
+        let field_count = self.table_info.row_type().fields().len();
+        let mut seen = HashSet::new();
+        let mut deduped = Vec::with_capacity(indices.len());
+
+        for &idx in indices {
+            if idx >= field_count {
+                return Err(FlussError::new_err(format!(
+                    "Column index {idx} out of range (field count: {field_count})"
+                )));
+            }
+            if seen.insert(idx) {
+                deduped.push(idx);
+            }
+        }
+
+        Ok(deduped)
+    }
+
+    /// Validate and deduplicate column names (preserving order)
+    fn validate_and_dedupe_names(&self, names: &[String]) -> PyResult<Vec<String>> {
+        use std::collections::HashSet;
+
+        let fields = self.table_info.row_type().fields();
+        let valid_names: HashSet<&str> = fields.iter().map(|f| f.name()).collect();
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut deduped = Vec::with_capacity(names.len());
+
+        for name in names {
+            if !valid_names.contains(name.as_str()) {
+                return Err(FlussError::new_err(format!(
+                    "Column '{}' not found in table schema",
+                    name
+                )));
+            }
+            if seen.insert(name.clone()) {
+                deduped.push(name.clone());
+            }
+        }
+
+        Ok(deduped)
+    }
+
+    /// Internal helper to create log scanner with optional projection
+    fn create_log_scanner_internal<'py>(
+        &self,
+        py: Python<'py>,
+        projection: Option<ProjectionType>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let conn = self.connection.clone();
+        let metadata = self.metadata.clone();
+        let table_info = self.table_info.clone();
+
+        future_into_py(py, async move {
+            let fluss_table =
+                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
+
+            let mut table_scan = fluss_table.new_scan();
+
+            // Apply projection if specified
+            if let Some(proj) = projection {
+                table_scan = match proj {
+                    ProjectionType::Indices(indices) => {
+                        table_scan.project(&indices).map_err(|e| {
+                            FlussError::new_err(format!("Failed to project columns: {e}"))
+                        })?
+                    }
+                    ProjectionType::Names(names) => {
+                        // Convert Vec<String> to Vec<&str> for the API
+                        let column_name_refs: Vec<&str> =
+                            names.iter().map(|s| s.as_str()).collect();
+                        table_scan.project_by_name(&column_name_refs).map_err(|e| {
+                            FlussError::new_err(format!("Failed to project columns: {e}"))
+                        })?
+                    }
+                };
+            }
+
+            let rust_scanner = table_scan
+                .create_log_scanner()
+                .map_err(|e| FlussError::new_err(format!("Failed to create log scanner: {e}")))?;
+
+            let admin = conn
+                .get_admin()
+                .await
+                .map_err(|e| FlussError::new_err(e.to_string()))?;
+
+            let py_scanner = LogScanner::from_core(rust_scanner, admin, table_info.clone());
+            Python::attach(|py| Py::new(py, py_scanner))
+        })
     }
 }
 
