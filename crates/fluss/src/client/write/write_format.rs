@@ -22,15 +22,13 @@ use std::fmt::Display;
 
 pub enum WriteFormat {
     ArrowLog,
-    IndexedLog,
     CompactedLog,
-    IndexedKv,
     CompactedKv,
 }
 
 impl WriteFormat {
     pub const fn is_log(&self) -> bool {
-        matches!(self, Self::ArrowLog | Self::IndexedLog | Self::CompactedLog)
+        matches!(self, Self::ArrowLog | Self::CompactedLog)
     }
 
     pub fn is_kv(&self) -> bool {
@@ -39,7 +37,6 @@ impl WriteFormat {
 
     pub fn to_kv_format(&self) -> Result<KvFormat> {
         match self {
-            WriteFormat::IndexedKv => Ok(KvFormat::INDEXED),
             WriteFormat::CompactedKv => Ok(KvFormat::COMPACTED),
             other => Err(IllegalArgument {
                 message: format!("WriteFormat `{}` is not a KvFormat", other),
@@ -49,8 +46,10 @@ impl WriteFormat {
 
     pub fn from_kv_format(kv_format: &KvFormat) -> Result<Self> {
         match kv_format {
-            KvFormat::INDEXED => Ok(WriteFormat::IndexedKv),
             KvFormat::COMPACTED => Ok(WriteFormat::CompactedKv),
+            other => Err(IllegalArgument {
+                message: format!("Unknown KvFormat: `{}`", other),
+            }),
         }
     }
 }
@@ -59,9 +58,7 @@ impl Display for WriteFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WriteFormat::ArrowLog => f.write_str("ArrowLog"),
-            WriteFormat::IndexedLog => f.write_str("IndexedLog"),
             WriteFormat::CompactedLog => f.write_str("CompactedLog"),
-            WriteFormat::IndexedKv => f.write_str("IndexedKv"),
             WriteFormat::CompactedKv => f.write_str("CompactedKv"),
         }
     }
