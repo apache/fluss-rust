@@ -18,11 +18,13 @@
 use crate::compression::ArrowCompressionInfo;
 use crate::error::Error::InvalidTableError;
 use crate::error::{Error, Result};
+use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{DataField, DataType, RowType};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
@@ -603,7 +605,7 @@ impl LogFormat {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, EnumString)]
 pub enum KvFormat {
     INDEXED,
     COMPACTED,
@@ -725,6 +727,24 @@ impl TableConfig {
 
     pub fn get_arrow_compression_info(&self) -> Result<ArrowCompressionInfo> {
         ArrowCompressionInfo::from_conf(&self.properties)
+    }
+
+    pub fn get_datalake_format(&self) -> Result<Option<DataLakeFormat>> {
+        self.properties
+            .get("table.datalake.format")
+            .map(|f| f.parse().map_err(Error::from))
+            .transpose()
+    }
+
+    pub fn get_kv_format(&self) -> Result<KvFormat> {
+        // TODO: Consolidate configurations logic, constants, defaults in a single place
+        const DEFAULT_KV_FORMAT: &str = "COMPACTED";
+        let kv_format = self
+            .properties
+            .get("table.kv.format")
+            .map(String::as_str)
+            .unwrap_or(DEFAULT_KV_FORMAT);
+        kv_format.parse().map_err(Into::into)
     }
 }
 

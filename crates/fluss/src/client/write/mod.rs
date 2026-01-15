@@ -30,8 +30,10 @@ pub(crate) mod broadcast;
 mod bucket_assigner;
 
 mod sender;
+mod write_format;
 mod writer_client;
 
+pub use write_format::WriteFormat;
 pub use writer_client::WriterClient;
 
 pub struct WriteRecord<'a> {

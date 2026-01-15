@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use strum_macros::{Display, EnumString};
+
 /// Identifies the logical format of a data lake table supported by Fluss.
 ///
 /// This enum is typically used in metadata and configuration to distinguish
 /// between different table formats so that the appropriate integration and
 /// semantics can be applied.
+#[derive(Debug, EnumString, Display, PartialEq)]
 pub enum DataLakeFormat {
     /// Apache Paimon data lake table format.
     Paimon,

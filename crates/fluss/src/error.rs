@@ -21,6 +21,7 @@ pub use crate::rpc::{ApiError, FlussError};
 use arrow_schema::ArrowError;
 use snafu::Snafu;
 use std::{io, result};
+use strum::ParseError;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -153,5 +154,13 @@ impl From<opendal::Error> for Error {
 impl From<ApiError> for Error {
     fn from(value: ApiError) -> Self {
         Error::FlussAPIError { api_error: value }
+    }
+}
+
+impl From<ParseError> for Error {
+    fn from(value: ParseError) -> Self {
+        Error::IllegalArgument {
+            message: value.to_string(),
+        }
     }
 }
