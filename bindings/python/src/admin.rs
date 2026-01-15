@@ -38,7 +38,7 @@ impl FlussAdmin {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ignore = ignore_if_exists.unwrap_or(false);
 
-        let core_table_path = table_path.to_core().clone();
+        let core_table_path = table_path.to_core();
         let core_descriptor = table_descriptor.to_core().clone();
         let admin = self.__admin.clone();
 
@@ -58,7 +58,7 @@ impl FlussAdmin {
         py: Python<'py>,
         table_path: &TablePath,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let core_table_path = table_path.to_core().clone();
+        let core_table_path = table_path.to_core();
         let admin = self.__admin.clone();
 
         future_into_py(py, async move {
@@ -80,7 +80,7 @@ impl FlussAdmin {
         py: Python<'py>,
         table_path: &TablePath,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let core_table_path = table_path.to_core().clone();
+        let core_table_path = table_path.to_core();
         let admin = self.__admin.clone();
 
         future_into_py(py, async move {
@@ -174,7 +174,7 @@ impl FlussAdmin {
                 return Err(FlussError::new_err(format!(
                     "Invalid offset_type: '{}'. Must be 'earliest', 'latest', or 'timestamp'",
                     offset_type
-                )))
+                )));
             }
         };
 
