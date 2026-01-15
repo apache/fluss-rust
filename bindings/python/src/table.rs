@@ -67,9 +67,9 @@ impl FlussTable {
     ///
     /// Args:
     ///     project: Optional list of column indices (0-based) to include in the scan.
-    ///              Empty list means all columns.
+    ///              Must be non-empty if specified.
     ///     columns: Optional list of column names to include in the scan.
-    ///              Empty list means all columns.
+    ///              Must be non-empty if specified.
     ///
     /// Returns:
     ///     LogScanner, optionally with projection applied
@@ -78,15 +78,6 @@ impl FlussTable {
     ///     Specify only one of 'project' or 'columns'.
     ///     If neither is specified, all columns are included.
     ///
-    /// Examples:
-    ///     >>> # Scan all columns
-    ///     >>> scanner = await table.new_log_scanner()
-    ///
-    ///     >>> # Scan specific columns by index
-    ///     >>> scanner = await table.new_log_scanner(project=[0, 2, 4])
-    ///
-    ///     >>> # Scan specific columns by name (more Pythonic)
-    ///     >>> scanner = await table.new_log_scanner(columns=["id", "name", "email"])
     #[pyo3(signature = (project=None, columns=None))]
     pub fn new_log_scanner<'py>(
         &self,
@@ -94,7 +85,7 @@ impl FlussTable {
         project: Option<Vec<usize>>,
         columns: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // Validate mutually exclusive parameters and normalize empty lists
+        // Validate mutually exclusive parameters
         let projection = match (project, columns) {
             (Some(_), Some(_)) => {
                 return Err(FlussError::new_err(
@@ -103,19 +94,21 @@ impl FlussTable {
             }
             (Some(indices), None) => {
                 if indices.is_empty() {
-                    None // Empty list = all columns
-                } else {
-                    let deduped = self.validate_and_dedupe_indices(&indices)?;
-                    Some(ProjectionType::Indices(deduped))
+                    return Err(FlussError::new_err(
+                        "project list cannot be empty".to_string(),
+                    ));
                 }
+                let deduped = self.validate_and_dedupe_indices(&indices)?;
+                Some(ProjectionType::Indices(deduped))
             }
             (None, Some(names)) => {
                 if names.is_empty() {
-                    None // Empty list = all columns
-                } else {
-                    let deduped = self.validate_and_dedupe_names(&names)?;
-                    Some(ProjectionType::Names(deduped))
+                    return Err(FlussError::new_err(
+                        "columns list cannot be empty".to_string(),
+                    ));
                 }
+                let deduped = self.validate_and_dedupe_names(&names)?;
+                Some(ProjectionType::Names(deduped))
             }
             (None, None) => None, // No projection - all columns
         };
