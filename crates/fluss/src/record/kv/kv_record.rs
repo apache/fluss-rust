@@ -43,6 +43,8 @@ pub const LENGTH_LENGTH: usize = 4;
 /// - Value => bytes (BinaryRow, written directly without length prefix)
 ///
 /// When the value is None (deletion), no Value bytes are present.
+// Reference implementation:
+// https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/record/KvRecord.java
 #[derive(Debug, Clone)]
 pub struct KvRecord {
     key: Bytes,

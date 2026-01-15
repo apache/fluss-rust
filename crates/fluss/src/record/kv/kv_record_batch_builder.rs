@@ -36,6 +36,8 @@ use crate::row::BinaryRow;
 ///
 /// This builder accumulates KV records and produces a serialized batch with proper
 /// header information and checksums.
+// Reference implementation:
+// https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/record/KvRecordBatchBuilder.java
 pub struct KvRecordBatchBuilder {
     schema_id: i32,
     magic: u8,

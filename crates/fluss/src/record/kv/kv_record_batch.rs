@@ -65,6 +65,8 @@ pub const KV_OVERHEAD: usize = LENGTH_OFFSET + LENGTH_LENGTH;
 /// A KV record batch.
 ///
 /// This struct provides read access to a serialized KV record batch.
+// Reference implementation:
+// https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/record/KvRecordBatch.java
 pub struct KvRecordBatch {
     data: Bytes,
     position: usize,
@@ -100,7 +102,7 @@ impl KvRecordBatch {
 
         let length = length_i32 as usize;
 
-        Ok(length.saturating_add(LENGTH_LENGTH))
+        Ok(length.saturating_add(KV_OVERHEAD))
     }
 
     /// Check if this batch is valid by verifying the checksum.
