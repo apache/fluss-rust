@@ -859,11 +859,8 @@ impl RowType {
         self.fields.iter().position(|f| f.name == field_name)
     }
 
-    pub fn get_children(&self) -> Vec<DataType> {
-        self.fields
-            .iter()
-            .map(|field| field.data_type.clone())
-            .collect()
+    pub fn field_types(&self) -> impl Iterator<Item = &DataType> + '_ {
+        self.fields.iter().map(|f| &f.data_type)
     }
 
     pub fn get_field_names(&self) -> Vec<&str> {

@@ -59,7 +59,7 @@ impl RowEncoder for CompactedRowEncoder<'_> {
     fn encode_field(&mut self, pos: usize, value: Datum) -> Result<()> {
         self.field_writers
             .get(pos)
-            .ok_or(IllegalArgument {
+            .ok_or_else(|| IllegalArgument {
                 message: format!(
                     "invalid position {} when attempting to encode value {}",
                     pos, value

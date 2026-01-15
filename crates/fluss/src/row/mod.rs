@@ -27,7 +27,7 @@ mod field_getter;
 pub use column::*;
 pub use datum::*;
 
-pub trait BinaryRow {
+pub trait BinaryRow: InternalRow {
     /// Returns the binary representation of this row as a byte slice.
     fn as_bytes(&self) -> &[u8];
 }

@@ -110,8 +110,8 @@ pub struct RowEncoderFactory {}
 
 #[allow(dead_code)]
 impl RowEncoderFactory {
-    pub fn create(kv_format: KvFormat, row_type: RowType) -> Result<impl RowEncoder> {
-        Self::create_for_field_types(kv_format, row_type.get_children())
+    pub fn create(kv_format: KvFormat, row_type: &RowType) -> Result<impl RowEncoder> {
+        Self::create_for_field_types(kv_format, row_type.field_types().cloned().collect())
     }
 
     pub fn create_for_field_types(
