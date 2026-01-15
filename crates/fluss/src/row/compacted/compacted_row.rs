@@ -17,7 +17,7 @@
 
 use crate::metadata::DataType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
-use crate::row::{GenericRow, InternalRow};
+use crate::row::{BinaryRow, GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
 
 // Reference implementation:
@@ -29,6 +29,7 @@ pub struct CompactedRow<'a> {
     decoded_row: OnceLock<GenericRow<'a>>,
     deserializer: Arc<CompactedRowDeserializer<'a>>,
     reader: CompactedRowReader<'a>,
+    data: &'a [u8],
 }
 
 pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
@@ -56,6 +57,7 @@ impl<'a> CompactedRow<'a> {
             decoded_row: OnceLock::new(),
             deserializer: Arc::clone(&deserializer),
             reader: CompactedRowReader::new(arity, data, 0, data.len()),
+            data,
         }
     }
 
@@ -66,6 +68,12 @@ impl<'a> CompactedRow<'a> {
     fn decoded_row(&self) -> &GenericRow<'_> {
         self.decoded_row
             .get_or_init(|| self.deserializer.deserialize(&self.reader))
+    }
+}
+
+impl BinaryRow for CompactedRow<'_> {
+    fn as_bytes(&self) -> &[u8] {
+        self.data
     }
 }
 

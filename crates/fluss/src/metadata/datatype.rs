@@ -682,11 +682,11 @@ impl Default for BytesType {
 }
 
 impl BytesType {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self::with_nullable(true)
     }
 
-    pub fn with_nullable(nullable: bool) -> Self {
+    pub const fn with_nullable(nullable: bool) -> Self {
         Self { nullable }
     }
 
@@ -938,7 +938,7 @@ impl DataTypes {
         DataType::Binary(BinaryType::new(length))
     }
 
-    pub fn bytes() -> DataType {
+    pub const fn bytes() -> DataType {
         DataType::Bytes(BytesType::new())
     }
 
