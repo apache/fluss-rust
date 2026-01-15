@@ -859,6 +859,13 @@ impl RowType {
         self.fields.iter().position(|f| f.name == field_name)
     }
 
+    pub fn get_children(&self) -> Vec<DataType> {
+        self.fields
+            .iter()
+            .map(|field| field.data_type.clone())
+            .collect()
+    }
+
     pub fn get_field_names(&self) -> Vec<&str> {
         self.fields.iter().map(|f| f.name.as_str()).collect()
     }

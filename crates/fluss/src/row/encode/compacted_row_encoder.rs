@@ -1,0 +1,78 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::error::Error::{IllegalArgument, RowConvertError};
+use crate::error::Result;
+use crate::metadata::DataType;
+use crate::row::Datum;
+use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
+use crate::row::compacted::{CompactedRow, CompactedRowDeserializer, CompactedRowWriter};
+use crate::row::encode::{BinaryRow, RowEncoder};
+use std::sync::Arc;
+
+#[allow(dead_code)]
+pub struct CompactedRowEncoder<'a> {
+    arity: usize,
+    writer: CompactedRowWriter,
+    field_writers: Vec<ValueWriter>,
+    compacted_row_deserializer: Arc<CompactedRowDeserializer<'a>>,
+}
+
+impl<'a> CompactedRowEncoder<'a> {
+    pub fn new(field_data_types: Vec<DataType>) -> Result<Self> {
+        let field_writers = field_data_types
+            .iter()
+            .map(|d| ValueWriter::create_value_writer(d, Some(&BinaryRowFormat::Compacted)))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            arity: field_data_types.len(),
+            writer: CompactedRowWriter::new(field_data_types.len()),
+            field_writers,
+            compacted_row_deserializer: Arc::new(CompactedRowDeserializer::new_from_owned(field_data_types)),
+        })
+    }
+}
+
+impl RowEncoder for CompactedRowEncoder<'_> {
+    fn start_new_row(&mut self) -> Result<()> {
+        self.writer.reset();
+        Ok(())
+    }
+
+    fn encode_field(&mut self, pos: usize, value: Datum) -> Result<()> {
+        self.field_writers
+            .get(pos)
+            .ok_or(IllegalArgument {
+                message: format!("invalid position {} when attempting to encode value {}", pos, value),
+            })?
+            .write_value(&mut self.writer, pos, &value)
+    }
+
+    fn finish_row(&mut self) -> Result<impl BinaryRow> {
+        Ok(CompactedRow::deserialize(
+            Arc::clone(&self.compacted_row_deserializer),
+            self.arity,
+            self.writer.buffer(),
+        ))
+    }
+
+    fn close(&mut self) -> Result<()> {
+        // do nothing
+        Ok(())
+    }
+}
