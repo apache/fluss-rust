@@ -317,13 +317,14 @@ impl Drop for KvRecordBatchBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::row::compacted::CompactedRowWriter;
+    use crate::metadata::{DataType, DataTypes};
+    use crate::row::binary::BinaryWriter;
+    use crate::row::compacted::{CompactedRow, CompactedRowWriter};
 
     // Helper function to create a CompactedRowWriter with a single bytes field for testing
-    fn create_test_row(data: &[u8]) -> CompactedRowWriter {
-        let mut writer = CompactedRowWriter::new(1);
-        writer.write_bytes(data);
-        writer
+    fn create_test_row(data: &[u8]) -> CompactedRow<'_> {
+        const DATA_TYPE: &[DataType] = &[DataTypes::bytes()];
+        CompactedRow::from_bytes(DATA_TYPE, data)
     }
 
     #[test]
@@ -349,10 +350,8 @@ mod tests {
         builder.append_row(key1, Some(&value1)).unwrap();
 
         let key2 = b"key2";
-        assert!(builder.has_room_for_row::<CompactedRowWriter>(key2, None));
-        builder
-            .append_row::<CompactedRowWriter>(key2, None)
-            .unwrap();
+        assert!(builder.has_room_for_row::<CompactedRow>(key2, None));
+        builder.append_row::<CompactedRow>(key2, None).unwrap();
 
         // Test close and build
         builder.close().unwrap();
@@ -373,11 +372,7 @@ mod tests {
         let value = create_test_row(b"value");
         builder.append_row(b"key", Some(&value)).unwrap();
         builder.abort();
-        assert!(
-            builder
-                .append_row::<CompactedRowWriter>(b"key2", None)
-                .is_err()
-        );
+        assert!(builder.append_row::<CompactedRow>(b"key2", None).is_err());
         assert!(builder.build().is_err());
         assert!(builder.close().is_err());
 
@@ -386,11 +381,7 @@ mod tests {
         let value = create_test_row(b"value");
         builder.append_row(b"key", Some(&value)).unwrap();
         builder.close().unwrap();
-        assert!(
-            builder
-                .append_row::<CompactedRowWriter>(b"key2", None)
-                .is_err()
-        ); // Can't append after close
+        assert!(builder.append_row::<CompactedRow>(b"key2", None).is_err()); // Can't append after close
         assert!(builder.build().is_ok()); // But can still build
     }
 
@@ -510,23 +501,26 @@ mod tests {
         row_writer1.write_int(42);
         row_writer1.write_string("hello");
 
+        let data_types = &[DataTypes::int(), DataTypes::string()];
+        let row1 = &CompactedRow::from_bytes(data_types, row_writer1.buffer());
+
         let key1 = b"key1";
-        assert!(builder.has_room_for_row(key1, Some(&row_writer1)));
-        builder.append_row(key1, Some(&row_writer1)).unwrap();
+        assert!(builder.has_room_for_row(key1, Some(row1)));
+        builder.append_row(key1, Some(row1)).unwrap();
 
         // Create and append second record
         let mut row_writer2 = CompactedRowWriter::new(2);
         row_writer2.write_int(100);
         row_writer2.write_string("world");
 
+        let row2 = &CompactedRow::from_bytes(data_types, row_writer2.buffer());
+
         let key2 = b"key2";
-        builder.append_row(key2, Some(&row_writer2)).unwrap();
+        builder.append_row(key2, Some(row2)).unwrap();
 
         // Append a deletion record
         let key3 = b"key3";
-        builder
-            .append_row::<CompactedRowWriter>(key3, None)
-            .unwrap();
+        builder.append_row::<CompactedRow>(key3, None).unwrap();
 
         // Build and verify
         builder.close().unwrap();
@@ -567,15 +561,18 @@ mod tests {
         let mut row_writer = CompactedRowWriter::new(1);
         row_writer.write_int(42);
 
+        let data_types = &[DataTypes::int()];
+        let row = &CompactedRow::from_bytes(data_types, row_writer.buffer());
+
         // INDEXED format should reject append_row
         let mut indexed_builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::INDEXED);
-        let result = indexed_builder.append_row(b"key", Some(&row_writer));
+        let result = indexed_builder.append_row(b"key", Some(row));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
 
         // COMPACTED format should accept append_row
         let mut compacted_builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::COMPACTED);
-        let result = compacted_builder.append_row(b"key", Some(&row_writer));
+        let result = compacted_builder.append_row(b"key", Some(row));
         assert!(result.is_ok());
     }
 }

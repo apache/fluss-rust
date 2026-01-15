@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::OnceLock;
-
 use crate::metadata::DataType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
-use crate::row::{GenericRow, InternalRow};
+use crate::row::{BinaryRow, GenericRow, InternalRow};
+use std::sync::{Arc, OnceLock};
 
 // Reference implementation:
 // https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRow.java
@@ -28,9 +27,9 @@ pub struct CompactedRow<'a> {
     arity: usize,
     size_in_bytes: usize,
     decoded_row: OnceLock<GenericRow<'a>>,
-    deserializer: CompactedRowDeserializer<'a>,
+    deserializer: Arc<CompactedRowDeserializer<'a>>,
     reader: CompactedRowReader<'a>,
-    data_types: &'a [DataType],
+    data: &'a [u8],
 }
 
 pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
@@ -40,15 +39,25 @@ pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
 #[allow(dead_code)]
 impl<'a> CompactedRow<'a> {
     pub fn from_bytes(data_types: &'a [DataType], data: &'a [u8]) -> Self {
-        let arity = data_types.len();
-        let size = data.len();
+        Self::deserialize(
+            Arc::new(CompactedRowDeserializer::new(data_types)),
+            data_types.len(),
+            data,
+        )
+    }
+
+    pub fn deserialize(
+        deserializer: Arc<CompactedRowDeserializer<'a>>,
+        arity: usize,
+        data: &'a [u8],
+    ) -> Self {
         Self {
             arity,
-            size_in_bytes: size,
+            size_in_bytes: data.len(),
             decoded_row: OnceLock::new(),
-            deserializer: CompactedRowDeserializer::new(data_types),
-            reader: CompactedRowReader::new(arity, data, 0, size),
-            data_types,
+            deserializer: Arc::clone(&deserializer),
+            reader: CompactedRowReader::new(arity, data, 0, data.len()),
+            data,
         }
     }
 
@@ -62,6 +71,12 @@ impl<'a> CompactedRow<'a> {
     }
 }
 
+impl BinaryRow for CompactedRow<'_> {
+    fn as_bytes(&self) -> &[u8] {
+        self.data
+    }
+}
+
 #[allow(dead_code)]
 impl<'a> InternalRow for CompactedRow<'a> {
     fn get_field_count(&self) -> usize {
@@ -69,7 +84,7 @@ impl<'a> InternalRow for CompactedRow<'a> {
     }
 
     fn is_null_at(&self, pos: usize) -> bool {
-        self.data_types[pos].is_nullable() && self.reader.is_null_at(pos)
+        self.deserializer.get_data_types()[pos].is_nullable() && self.reader.is_null_at(pos)
     }
 
     fn get_boolean(&self, pos: usize) -> bool {
@@ -120,6 +135,8 @@ impl<'a> InternalRow for CompactedRow<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::row::binary::BinaryWriter;
+
     use crate::metadata::{
         BigIntType, BooleanType, BytesType, DoubleType, FloatType, IntType, SmallIntType,
         StringType, TinyIntType,

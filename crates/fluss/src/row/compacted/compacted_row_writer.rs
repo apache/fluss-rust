@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use bytes::{Bytes, BytesMut};
-use std::cmp;
-
-use crate::row::BinaryRow;
+use crate::row::binary::BinaryWriter;
 use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
 use crate::util::varint::{write_unsigned_varint_to_slice, write_unsigned_varint_u64_to_slice};
+use bytes::{Bytes, BytesMut};
+use std::cmp;
 
 // Writer for CompactedRow
 // Reference implementation:
@@ -51,11 +50,6 @@ impl CompactedRowWriter {
         }
     }
 
-    pub fn reset(&mut self) {
-        self.position = self.header_size_in_bytes;
-        self.buffer[..self.header_size_in_bytes].fill(0);
-    }
-
     pub fn position(&self) -> usize {
         self.position
     }
@@ -81,75 +75,78 @@ impl CompactedRowWriter {
         self.buffer[self.position..end].copy_from_slice(src);
         self.position = end;
     }
+}
+impl BinaryWriter for CompactedRowWriter {
+    fn reset(&mut self) {
+        self.position = self.header_size_in_bytes;
+        self.buffer[..self.header_size_in_bytes].fill(0);
+    }
 
-    pub fn set_null_at(&mut self, pos: usize) {
+    fn set_null_at(&mut self, pos: usize) {
         let byte_index = pos >> 3;
         let bit = pos & 7;
         debug_assert!(byte_index < self.header_size_in_bytes);
         self.buffer[byte_index] |= 1u8 << bit;
     }
 
-    pub fn write_boolean(&mut self, value: bool) {
+    fn write_boolean(&mut self, value: bool) {
         let b = if value { 1u8 } else { 0u8 };
         self.write_raw(&[b]);
     }
 
-    pub fn write_byte(&mut self, value: u8) {
+    fn write_byte(&mut self, value: u8) {
         self.write_raw(&[value]);
     }
 
-    pub fn write_binary(&mut self, bytes: &[u8], length: usize) {
-        // TODO: currently, we encoding BINARY(length) as the same with BYTES, the length info can
-        //  be omitted and the bytes length should be enforced in the future.
-        self.write_bytes(&bytes[..length.min(bytes.len())]);
-    }
-
-    pub fn write_bytes(&mut self, value: &[u8]) {
+    fn write_bytes(&mut self, value: &[u8]) {
         let len_i32 =
             i32::try_from(value.len()).expect("byte slice too large to encode length as i32");
         self.write_int(len_i32);
         self.write_raw(value);
     }
 
-    pub fn write_char(&mut self, value: &str, _length: usize) {
+    fn write_char(&mut self, value: &str, _length: usize) {
         // TODO: currently, we encoding CHAR(length) as the same with STRING, the length info can be
         //  omitted and the bytes length should be enforced in the future.
         self.write_string(value);
     }
 
-    pub fn write_string(&mut self, value: &str) {
+    fn write_string(&mut self, value: &str) {
         self.write_bytes(value.as_ref());
     }
 
-    pub fn write_short(&mut self, value: i16) {
+    fn write_short(&mut self, value: i16) {
         self.write_raw(&value.to_ne_bytes());
     }
 
-    pub fn write_int(&mut self, value: i32) {
+    fn write_int(&mut self, value: i32) {
         self.ensure_capacity(Self::MAX_INT_SIZE);
         let bytes_written =
             write_unsigned_varint_to_slice(value as u32, &mut self.buffer[self.position..]);
         self.position += bytes_written;
     }
 
-    pub fn write_long(&mut self, value: i64) {
+    fn write_long(&mut self, value: i64) {
         self.ensure_capacity(Self::MAX_LONG_SIZE);
         let bytes_written =
             write_unsigned_varint_u64_to_slice(value as u64, &mut self.buffer[self.position..]);
         self.position += bytes_written;
     }
-
-    pub fn write_float(&mut self, value: f32) {
+    fn write_float(&mut self, value: f32) {
         self.write_raw(&value.to_ne_bytes());
     }
 
-    pub fn write_double(&mut self, value: f64) {
+    fn write_double(&mut self, value: f64) {
         self.write_raw(&value.to_ne_bytes());
     }
-}
 
-impl BinaryRow for CompactedRowWriter {
-    fn as_bytes(&self) -> &[u8] {
-        self.buffer()
+    fn write_binary(&mut self, bytes: &[u8], length: usize) {
+        // TODO: currently, we encoding BINARY(length) as the same with BYTES, the length info can
+        //  be omitted and the bytes length should be enforced in the future.
+        self.write_bytes(&bytes[..length.min(bytes.len())]);
+    }
+
+    fn complete(&mut self) {
+        // do nothing
     }
 }

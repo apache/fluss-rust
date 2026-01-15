@@ -21,17 +21,31 @@ use crate::{
     row::{Datum, GenericRow, compacted::compacted_row_writer::CompactedRowWriter},
     util::varint::{read_unsigned_varint_at, read_unsigned_varint_u64_at},
 };
+use std::borrow::Cow;
 use std::str::from_utf8;
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct CompactedRowDeserializer<'a> {
-    schema: &'a [DataType],
+    schema: Cow<'a, [DataType]>,
 }
 
 #[allow(dead_code)]
 impl<'a> CompactedRowDeserializer<'a> {
     pub fn new(schema: &'a [DataType]) -> Self {
-        Self { schema }
+        Self {
+            schema: Cow::Borrowed(schema),
+        }
+    }
+
+    pub fn new_from_owned(schema: Vec<DataType>) -> Self {
+        Self {
+            schema: Cow::Owned(schema),
+        }
+    }
+
+    pub fn get_data_types(&self) -> &[DataType] {
+        self.schema.as_ref()
     }
 
     pub fn deserialize(&self, reader: &CompactedRowReader<'a>) -> GenericRow<'a> {

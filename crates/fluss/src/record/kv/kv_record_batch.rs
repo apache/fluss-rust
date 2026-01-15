@@ -321,8 +321,10 @@ impl Iterator for KvRecordIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::KvFormat;
+    use crate::metadata::{DataTypes, KvFormat};
     use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, KvRecordBatchBuilder};
+    use crate::row::binary::BinaryWriter;
+    use crate::row::compacted::CompactedRow;
     use bytes::{BufMut, BytesMut};
 
     #[test]
@@ -363,12 +365,13 @@ mod tests {
         let key1 = b"key1";
         let mut value1_writer = CompactedRowWriter::new(1);
         value1_writer.write_bytes(&[1, 2, 3, 4, 5]);
-        builder.append_row(key1, Some(&value1_writer)).unwrap();
+
+        let data_types = &[DataTypes::bytes()];
+        let row = &CompactedRow::from_bytes(data_types, value1_writer.buffer());
+        builder.append_row(key1, Some(row)).unwrap();
 
         let key2 = b"key2";
-        builder
-            .append_row::<CompactedRowWriter>(key2, None)
-            .unwrap();
+        builder.append_row::<CompactedRow>(key2, None).unwrap();
 
         let bytes = builder.build().unwrap();
 
