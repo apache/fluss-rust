@@ -20,12 +20,17 @@ mod column;
 mod datum;
 
 mod binary;
-mod compacted;
+pub mod compacted;
 mod encode;
 mod field_getter;
 
 pub use column::*;
 pub use datum::*;
+
+pub trait BinaryRow {
+    /// Returns the binary representation of this row as a byte slice.
+    fn as_bytes(&self) -> &[u8];
+}
 
 // TODO make functions return Result<?> for better error handling
 pub trait InternalRow {

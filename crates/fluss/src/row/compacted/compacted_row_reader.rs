@@ -19,6 +19,7 @@ use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
 use crate::{
     metadata::DataType,
     row::{Datum, GenericRow, compacted::compacted_row_writer::CompactedRowWriter},
+    util::varint::{read_unsigned_varint_at, read_unsigned_varint_u64_at},
 };
 use std::str::from_utf8;
 
@@ -150,36 +151,18 @@ impl<'a> CompactedRowReader<'a> {
         (val, next_pos)
     }
 
-    pub fn read_int(&self, mut pos: usize) -> (i32, usize) {
-        let mut result: u32 = 0;
-        let mut shift = 0;
-
-        for _ in 0..CompactedRowWriter::MAX_INT_SIZE {
-            let (b, next_pos) = self.read_byte(pos);
-            pos = next_pos;
-            result |= ((b & 0x7F) as u32) << shift;
-            if (b & 0x80) == 0 {
-                return (result as i32, pos);
-            }
-            shift += 7;
+    pub fn read_int(&self, pos: usize) -> (i32, usize) {
+        match read_unsigned_varint_at(self.segment, pos, CompactedRowWriter::MAX_INT_SIZE) {
+            Ok((value, next_pos)) => (value as i32, next_pos),
+            Err(_) => panic!("Invalid VarInt32 input stream."),
         }
-        panic!("Invalid VarInt32 input stream.");
     }
 
-    pub fn read_long(&self, mut pos: usize) -> (i64, usize) {
-        let mut result: u64 = 0;
-        let mut shift = 0;
-
-        for _ in 0..CompactedRowWriter::MAX_LONG_SIZE {
-            let (b, next_pos) = self.read_byte(pos);
-            pos = next_pos;
-            result |= ((b & 0x7F) as u64) << shift;
-            if (b & 0x80) == 0 {
-                return (result as i64, pos);
-            }
-            shift += 7;
+    pub fn read_long(&self, pos: usize) -> (i64, usize) {
+        match read_unsigned_varint_u64_at(self.segment, pos, CompactedRowWriter::MAX_LONG_SIZE) {
+            Ok((value, next_pos)) => (value as i64, next_pos),
+            Err(_) => panic!("Invalid VarInt64 input stream."),
         }
-        panic!("Invalid VarInt64 input stream.");
     }
 
     pub fn read_float(&self, pos: usize) -> (f32, usize) {

@@ -22,6 +22,7 @@ use std::collections::HashMap;
 
 mod arrow;
 mod error;
+pub mod kv;
 
 pub use arrow::*;
 
