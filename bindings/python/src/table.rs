@@ -225,6 +225,34 @@ enum RowInput<'py> {
     List(Bound<'py, pyo3::types::PyList>),
 }
 
+/// Helper function to process sequence types (list/tuple) into datums
+fn process_sequence_to_datums<'a, I>(
+    values: I,
+    len: usize,
+    fields: &[fcore::metadata::DataField],
+) -> PyResult<Vec<fcore::row::Datum<'static>>>
+where
+    I: Iterator<Item = Bound<'a, PyAny>>,
+{
+    if len != fields.len() {
+        return Err(FlussError::new_err(format!(
+            "Expected {} values, got {}",
+            fields.len(),
+            len
+        )));
+    }
+
+    let mut datums = Vec::with_capacity(fields.len());
+    for (i, (field, value)) in fields.iter().zip(values).enumerate() {
+        datums.push(
+            python_value_to_datum(&value, field.data_type()).map_err(|e| {
+                FlussError::new_err(format!("Field '{}' (index {}): {}", field.name(), i, e))
+            })?,
+        );
+    }
+    Ok(datums)
+}
+
 /// Convert Python row (dict/list/tuple) to GenericRow based on schema
 fn python_to_generic_row(
     row: &Bound<PyAny>,
@@ -244,9 +272,8 @@ fn python_to_generic_row(
     })?;
     let schema = table_info.row_type();
     let fields = schema.fields();
-    let mut datums = Vec::with_capacity(fields.len());
 
-    match row_input {
+    let datums = match row_input {
         RowInput::Dict(dict) => {
             // Strict: reject unknown keys (and also reject non-str keys nicely)
             for (k, _) in dict.iter() {
@@ -272,6 +299,7 @@ fn python_to_generic_row(
                 }
             }
 
+            let mut datums = Vec::with_capacity(fields.len());
             for field in fields {
                 let value = dict.get_item(field.name())?.ok_or_else(|| {
                     FlussError::new_err(format!("Missing field: {}", field.name()))
@@ -282,54 +310,13 @@ fn python_to_generic_row(
                     })?,
                 );
             }
+            datums
         }
 
-        RowInput::List(list) => {
-            if list.len() != fields.len() {
-                return Err(FlussError::new_err(format!(
-                    "Expected {} values, got {}",
-                    fields.len(),
-                    list.len()
-                )));
-            }
+        RowInput::List(list) => process_sequence_to_datums(list.iter(), list.len(), fields)?,
 
-            for (i, (field, value)) in fields.iter().zip(list.iter()).enumerate() {
-                datums.push(
-                    python_value_to_datum(&value, field.data_type()).map_err(|e| {
-                        FlussError::new_err(format!(
-                            "Field '{}' (index {}): {}",
-                            field.name(),
-                            i,
-                            e
-                        ))
-                    })?,
-                );
-            }
-        }
-
-        RowInput::Tuple(tuple) => {
-            if tuple.len() != fields.len() {
-                return Err(FlussError::new_err(format!(
-                    "Expected {} values, got {}",
-                    fields.len(),
-                    tuple.len()
-                )));
-            }
-
-            for (i, (field, value)) in fields.iter().zip(tuple.iter()).enumerate() {
-                datums.push(
-                    python_value_to_datum(&value, field.data_type()).map_err(|e| {
-                        FlussError::new_err(format!(
-                            "Field '{}' (index {}): {}",
-                            field.name(),
-                            i,
-                            e
-                        ))
-                    })?,
-                );
-            }
-        }
-    }
+        RowInput::Tuple(tuple) => process_sequence_to_datums(tuple.iter(), tuple.len(), fields)?,
+    };
 
     Ok(fcore::row::GenericRow { values: datums })
 }
@@ -401,8 +388,8 @@ fn python_value_to_datum(
             Ok(v.into())
         }
         fcore::metadata::DataType::Bytes(_) | fcore::metadata::DataType::Binary(_) => {
-            // Efficient extraction: downcast to specific type and use bulk copy
-            // PyBytes::as_bytes() and PyByteArray::to_vec() are O(n) bulk copies,
+            // Efficient extraction: downcast to specific type and use bulk copy.
+            // PyBytes::as_bytes() and PyByteArray::to_vec() are O(n) bulk copies of the underlying data.
             if let Ok(bytes) = value.downcast::<pyo3::types::PyBytes>() {
                 Ok(bytes.as_bytes().to_vec().into())
             } else if let Ok(bytearray) = value.downcast::<pyo3::types::PyByteArray>() {
