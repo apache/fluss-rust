@@ -131,14 +131,14 @@ impl FlussTable {
 /// Writer for appending data to a Fluss table
 #[pyclass]
 pub struct AppendWriter {
-    inner: fcore::client::AppendWriter,
+    inner: Arc<fcore::client::AppendWriter>,
     table_info: fcore::metadata::TableInfo,
 }
 
 #[pymethods]
 impl AppendWriter {
     /// Write Arrow table data
-    pub fn write_arrow(&mut self, py: Python, table: Py<PyAny>) -> PyResult<()> {
+    pub fn write_arrow(&self, py: Python, table: Py<PyAny>) -> PyResult<()> {
         // Convert Arrow Table to batches and write each batch
         let batches = table.call_method0(py, "to_batches")?;
         let batch_list: Vec<Py<PyAny>> = batches.extract(py)?;
@@ -150,32 +150,36 @@ impl AppendWriter {
     }
 
     /// Write Arrow batch data
-    pub fn write_arrow_batch(&mut self, py: Python, batch: Py<PyAny>) -> PyResult<()> {
+    pub fn write_arrow_batch(&self, py: Python, batch: Py<PyAny>) -> PyResult<()> {
         // This shares the underlying Arrow buffers without copying data
         let batch_bound = batch.bind(py);
         let rust_batch: RecordBatch = FromPyArrow::from_pyarrow_bound(batch_bound)
             .map_err(|e| FlussError::new_err(format!("Failed to convert RecordBatch: {e}")))?;
 
+        let inner = self.inner.clone();
         // Release the GIL before blocking on async operation
         let result = py.detach(|| {
-            TOKIO_RUNTIME.block_on(async { self.inner.append_arrow_batch(rust_batch).await })
+            TOKIO_RUNTIME.block_on(async { inner.append_arrow_batch(rust_batch).await })
         });
 
         result.map_err(|e| FlussError::new_err(e.to_string()))
     }
 
     /// Append a single row to the table
-    pub fn append<'py>(&mut self, py: Python<'py>, row: &Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn append<'py>(&self, py: Python<'py>, row: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let generic_row = python_to_generic_row(row, &self.table_info)?;
+        let inner = self.inner.clone();
 
-        let result =
-            py.detach(|| TOKIO_RUNTIME.block_on(async { self.inner.append(generic_row).await }));
-
-        result.map_err(|e| FlussError::new_err(e.to_string()))
+        future_into_py(py, async move {
+            inner
+                .append(generic_row)
+                .await
+                .map_err(|e| FlussError::new_err(e.to_string()))
+        })
     }
 
     /// Write Pandas DataFrame data
-    pub fn write_pandas(&mut self, py: Python, df: Py<PyAny>) -> PyResult<()> {
+    pub fn write_pandas(&self, py: Python, df: Py<PyAny>) -> PyResult<()> {
         // Import pyarrow module
         let pyarrow = py.import("pyarrow")?;
 
@@ -190,12 +194,16 @@ impl AppendWriter {
     }
 
     /// Flush any pending data
-    pub fn flush(&mut self) -> PyResult<()> {
-        TOKIO_RUNTIME.block_on(async {
-            self.inner
-                .flush()
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))
+    pub fn flush(&self, py: Python) -> PyResult<()> {
+        let inner = self.inner.clone();
+        // Release the GIL before blocking on I/O
+        py.detach(|| {
+            TOKIO_RUNTIME.block_on(async {
+                inner
+                    .flush()
+                    .await
+                    .map_err(|e| FlussError::new_err(e.to_string()))
+            })
         })
     }
 
@@ -211,7 +219,7 @@ impl AppendWriter {
         table_info: fcore::metadata::TableInfo,
     ) -> Self {
         Self {
-            inner: append,
+            inner: Arc::new(append),
             table_info,
         }
     }

@@ -121,11 +121,11 @@ async def main():
         # Test 3: Append single rows
         print("\n--- Testing single row append ---")
         # Dict input
-        append_writer.append({"id": 8, "name": "Helen", "score": 93.5, "age": 26})
+        await append_writer.append({"id": 8, "name": "Helen", "score": 93.5, "age": 26})
         print("Successfully appended row (dict)")
 
         # List input
-        append_writer.append([9, "Ivan", 90.0, 31])
+        await append_writer.append([9, "Ivan", 90.0, 31])
         print("Successfully appended row (list)")
 
         # Test 4: Write Pandas DataFrame

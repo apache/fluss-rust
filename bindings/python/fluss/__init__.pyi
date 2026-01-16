@@ -68,7 +68,7 @@ class FlussTable:
     def __repr__(self) -> str: ...
 
 class AppendWriter:
-    def append(self, row: dict | list | tuple) -> None:
+    async def append(self, row: dict | list | tuple) -> None:
         """Append a single row to the table.
 
         Args:
@@ -86,15 +86,12 @@ class AppendWriter:
             Temporal types (Date, Timestamp, Decimal) are not yet supported.
 
         Example:
-            # Dict input
-            writer.append({'id': 1, 'name': 'Alice', 'score': 95.5})
-
-            # List input
-            writer.append([1, 'Alice', 95.5])
+            await writer.append({'id': 1, 'name': 'Alice', 'score': 95.5})
+            await writer.append([1, 'Alice', 95.5])
 
         Note:
             For high-throughput bulk loading, prefer write_arrow_batch().
-            Use append() for streaming, CDC, or real-time single-record ingestion.
+            Use flush() to ensure all queued records are sent and acknowledged.
         """
         ...
     def write_arrow(self, table: pa.Table) -> None: ...
