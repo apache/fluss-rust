@@ -101,7 +101,7 @@ impl KvRecord {
         let size_i32 = i32::try_from(size_in_bytes).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("Record size {} exceeds i32::MAX", size_in_bytes),
+                format!("Record size {size_in_bytes} exceeds i32::MAX"),
             )
         })?;
         buf.put_i32_le(size_i32);
@@ -141,7 +141,7 @@ impl KvRecord {
         if size_in_bytes_i32 < 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid record length: {}", size_in_bytes_i32),
+                format!("Invalid record length: {size_in_bytes_i32}"),
             ));
         }
 
@@ -150,10 +150,7 @@ impl KvRecord {
         let total_size = size_in_bytes.checked_add(LENGTH_LENGTH).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "Record size overflow: {} + {}",
-                    size_in_bytes, LENGTH_LENGTH
-                ),
+                format!("Record size overflow: {size_in_bytes} + {LENGTH_LENGTH}"),
             )
         })?;
 
@@ -162,8 +159,7 @@ impl KvRecord {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 format!(
-                    "Not enough bytes to read record: expected {}, available {}",
-                    total_size, available
+                    "Not enough bytes to read record: expected {total_size}, available {available}"
                 ),
             ));
         }

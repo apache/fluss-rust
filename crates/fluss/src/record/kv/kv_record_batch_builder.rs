@@ -248,7 +248,7 @@ impl KvRecordBatchBuilder {
         let total_size = i32::try_from(size_without_length).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("Batch size {} exceeds i32::MAX", size_without_length),
+                format!("Batch size {size_without_length} exceeds i32::MAX"),
             )
         })?;
 
@@ -317,14 +317,16 @@ impl Drop for KvRecordBatchBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataType, DataTypes};
+    use crate::metadata::{DataTypes, RowType};
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::{CompactedRow, CompactedRowWriter};
+    use std::sync::LazyLock;
+    static TEST_ROW_TYPE: LazyLock<RowType> =
+        LazyLock::new(|| RowType::with_data_types(vec![DataTypes::bytes()]));
 
     // Helper function to create a CompactedRowWriter with a single bytes field for testing
     fn create_test_row(data: &[u8]) -> CompactedRow<'_> {
-        const DATA_TYPE: &[DataType] = &[DataTypes::bytes()];
-        CompactedRow::from_bytes(DATA_TYPE, data)
+        CompactedRow::from_bytes(&TEST_ROW_TYPE, data)
     }
 
     #[test]
@@ -491,10 +493,10 @@ mod tests {
         let mut builder = KvRecordBatchBuilder::new(1, 100000, KvFormat::COMPACTED);
         builder.set_writer_state(100, 5);
 
-        let types = vec![
+        let row_type = RowType::with_data_types(vec![
             DataType::Int(IntType::new()),
             DataType::String(StringType::new()),
-        ];
+        ]);
 
         // Create and append first record with CompactedRowWriter
         let mut row_writer1 = CompactedRowWriter::new(2);
@@ -502,7 +504,7 @@ mod tests {
         row_writer1.write_string("hello");
 
         let data_types = &[DataTypes::int(), DataTypes::string()];
-        let row1 = &CompactedRow::from_bytes(data_types, row_writer1.buffer());
+        let row1 = &CompactedRow::from_bytes(&row_type, row_writer1.buffer());
 
         let key1 = b"key1";
         assert!(builder.has_room_for_row(key1, Some(row1)));
@@ -513,7 +515,7 @@ mod tests {
         row_writer2.write_int(100);
         row_writer2.write_string("world");
 
-        let row2 = &CompactedRow::from_bytes(data_types, row_writer2.buffer());
+        let row2 = &CompactedRow::from_bytes(&row_type, row_writer2.buffer());
 
         let key2 = b"key2";
         builder.append_row(key2, Some(row2)).unwrap();
@@ -539,14 +541,14 @@ mod tests {
         // Verify first record
         let record1 = records[0].as_ref().unwrap();
         assert_eq!(record1.key().as_ref(), key1);
-        let row1 = CompactedRow::from_bytes(&types, record1.value().unwrap());
+        let row1 = CompactedRow::from_bytes(&row_type, record1.value().unwrap());
         assert_eq!(row1.get_int(0), 42);
         assert_eq!(row1.get_string(1), "hello");
 
         // Verify second record
         let record2 = records[1].as_ref().unwrap();
         assert_eq!(record2.key().as_ref(), key2);
-        let row2 = CompactedRow::from_bytes(&types, record2.value().unwrap());
+        let row2 = CompactedRow::from_bytes(&row_type, record2.value().unwrap());
         assert_eq!(row2.get_int(0), 100);
         assert_eq!(row2.get_string(1), "world");
 
@@ -561,8 +563,8 @@ mod tests {
         let mut row_writer = CompactedRowWriter::new(1);
         row_writer.write_int(42);
 
-        let data_types = &[DataTypes::int()];
-        let row = &CompactedRow::from_bytes(data_types, row_writer.buffer());
+        let row_type = RowType::with_data_types([DataTypes::int()].to_vec());
+        let row = &CompactedRow::from_bytes(&row_type, row_writer.buffer());
 
         // INDEXED format should reject append_row
         let mut indexed_builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::INDEXED);

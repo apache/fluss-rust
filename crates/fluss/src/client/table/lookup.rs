@@ -19,7 +19,7 @@ use crate::bucketing::BucketingFunction;
 use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, Result};
-use crate::metadata::{TableBucket, TableInfo};
+use crate::metadata::{RowType, TableBucket, TableInfo};
 use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
 use crate::row::encode::KeyEncoder;
@@ -32,60 +32,51 @@ use std::sync::Arc;
 /// Contains the rows returned from a lookup. For primary key lookups,
 /// this will contain at most one row. For prefix key lookups (future),
 /// this may contain multiple rows.
-pub struct LookupResult {
+pub struct LookupResult<'a> {
     rows: Vec<Vec<u8>>,
+    row_type: &'a RowType,
 }
 
-impl LookupResult {
+impl<'a> LookupResult<'a> {
     /// Creates a new LookupResult from a list of row bytes.
-    fn new(rows: Vec<Vec<u8>>) -> Self {
-        Self { rows }
+    fn new(rows: Vec<Vec<u8>>, row_type: &'a RowType) -> Self {
+        Self { rows, row_type }
     }
 
     /// Creates an empty LookupResult.
-    fn empty() -> Self {
-        Self { rows: Vec::new() }
+    fn empty(row_type: &'a RowType) -> Self {
+        Self {
+            rows: Vec::new(),
+            row_type,
+        }
     }
 
-    /// Returns true if the lookup found no matching rows.
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
-
-    /// Returns the number of rows in the result.
-    pub fn len(&self) -> usize {
-        self.rows.len()
-    }
-
-    /// Returns the raw bytes of all rows.
-    /// Use `get_row()` or `get_rows()` for decoded access.
-    pub fn raw_rows(&self) -> &[Vec<u8>] {
-        &self.rows
-    }
-
-    /// Returns the single row as a CompactedRow, or None if empty.
+    /// Returns the only row in the result set as a [`CompactedRow`].
     ///
-    /// # Panics
-    /// Panics if there are multiple rows. Use `get_rows()` for multi-row results.
-    pub fn get_row<'a>(
-        &'a self,
-        row_type: &'a [crate::metadata::DataType],
-    ) -> Option<CompactedRow<'a>> {
+    /// This method provides a zero-copy view of the row data, which means the returned
+    /// `CompactedRow` borrows from this result set and cannot outlive it.
+    ///
+    /// # Returns
+    /// - `Ok(Some(row))`: If exactly one row exists.
+    /// - `Ok(None)`: If the result set is empty.
+    /// - `Err(Error::UnexpectedError)`: If the result set contains more than one row.
+    ///
+    pub fn get_single_row(&self) -> Result<Option<CompactedRow<'_>>> {
         match self.rows.len() {
-            0 => None,
-            1 => Some(CompactedRow::from_bytes(row_type, &self.rows[0])),
-            _ => panic!("LookupResult contains multiple rows, use get_rows() instead"),
+            0 => Ok(None),
+            1 => Ok(Some(CompactedRow::from_bytes(self.row_type, &self.rows[0]))),
+            _ => Err(Error::UnexpectedError {
+                message: "LookupResult contains multiple rows, use get_rows() instead".to_string(),
+                source: None,
+            }),
         }
     }
 
     /// Returns all rows as CompactedRows.
-    pub fn get_rows<'a>(
-        &'a self,
-        row_type: &'a [crate::metadata::DataType],
-    ) -> Vec<CompactedRow<'a>> {
+    pub fn get_rows(&self) -> Vec<CompactedRow<'_>> {
         self.rows
             .iter()
-            .map(|bytes| CompactedRow::from_bytes(row_type, bytes))
+            .map(|bytes| CompactedRow::from_bytes(self.row_type, bytes))
             .collect()
     }
 }
@@ -101,7 +92,7 @@ impl LookupResult {
 /// let table = conn.get_table(&table_path).await?;
 /// let lookuper = table.new_lookup()?.create_lookuper()?;
 /// let result = lookuper.lookup(&row).await?;
-/// if let Some(value) = result.get_row(table.table_info().row_type().fields_as_data_types()) {
+/// if let Some(value) = result.get_single_row() {
 ///     println!("Found: {:?}", value);
 /// }
 /// ```
@@ -134,10 +125,7 @@ impl<'a> TableLookup<'a> {
         let num_buckets = self.table_info.get_num_buckets();
 
         // Get data lake format from table config for bucketing function
-        let data_lake_format = self
-            .table_info
-            .get_table_config()
-            .get_datalake_format()?;
+        let data_lake_format = self.table_info.get_table_config().get_datalake_format()?;
         let bucketing_function = <dyn BucketingFunction>::of(data_lake_format.as_ref());
 
         // Create key encoder for the primary key fields
@@ -250,10 +238,10 @@ impl<'a> Lookuper<'a> {
                 .filter_map(|pb_value| pb_value.values)
                 .collect();
 
-            return Ok(LookupResult::new(rows));
+            return Ok(LookupResult::new(rows, self.table_info.row_type()));
         }
 
-        Ok(LookupResult::empty())
+        Ok(LookupResult::empty(self.table_info.row_type()))
     }
 
     /// Returns a reference to the table info.

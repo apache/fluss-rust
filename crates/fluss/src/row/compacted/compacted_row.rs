@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::DataType;
+use crate::metadata::RowType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
 use crate::row::{BinaryRow, GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
@@ -38,10 +38,10 @@ pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
 
 #[allow(dead_code)]
 impl<'a> CompactedRow<'a> {
-    pub fn from_bytes(data_types: &'a [DataType], data: &'a [u8]) -> Self {
+    pub fn from_bytes(row_type: &'a RowType, data: &'a [u8]) -> Self {
         Self::deserialize(
-            Arc::new(CompactedRowDeserializer::new(data_types)),
-            data_types.len(),
+            Arc::new(CompactedRowDeserializer::new(row_type)),
+            row_type.fields().len(),
             data,
         )
     }
@@ -84,7 +84,10 @@ impl<'a> InternalRow for CompactedRow<'a> {
     }
 
     fn is_null_at(&self, pos: usize) -> bool {
-        self.deserializer.get_data_types()[pos].is_nullable() && self.reader.is_null_at(pos)
+        self.deserializer.get_row_type().fields().as_slice()[pos]
+            .data_type
+            .is_nullable()
+            && self.reader.is_null_at(pos)
     }
 
     fn get_boolean(&self, pos: usize) -> bool {
@@ -138,7 +141,7 @@ mod tests {
     use crate::row::binary::BinaryWriter;
 
     use crate::metadata::{
-        BigIntType, BooleanType, BytesType, DoubleType, FloatType, IntType, SmallIntType,
+        BigIntType, BooleanType, BytesType, DataType, DoubleType, FloatType, IntType, SmallIntType,
         StringType, TinyIntType,
     };
     use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
@@ -146,7 +149,7 @@ mod tests {
     #[test]
     fn test_compacted_row() {
         // Test all primitive types
-        let types = vec![
+        let row_type = RowType::with_data_types(vec![
             DataType::Boolean(BooleanType::new()),
             DataType::TinyInt(TinyIntType::new()),
             DataType::SmallInt(SmallIntType::new()),
@@ -156,9 +159,9 @@ mod tests {
             DataType::Double(DoubleType::new()),
             DataType::String(StringType::new()),
             DataType::Bytes(BytesType::new()),
-        ];
+        ]);
 
-        let mut writer = CompactedRowWriter::new(types.len());
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
 
         writer.write_boolean(true);
         writer.write_byte(1);
@@ -171,7 +174,7 @@ mod tests {
         writer.write_bytes(&[1, 2, 3, 4, 5]);
 
         let bytes = writer.to_bytes();
-        let mut row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
+        let mut row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         assert_eq!(row.get_field_count(), 9);
         assert!(row.get_boolean(0));
@@ -185,7 +188,7 @@ mod tests {
         assert_eq!(row.get_bytes(8), &[1, 2, 3, 4, 5]);
 
         // Test with nulls
-        let types = vec![
+        let types = [
             DataType::Int(IntType::new()),
             DataType::String(StringType::new()),
             DataType::Double(DoubleType::new()),
@@ -198,7 +201,7 @@ mod tests {
         writer.write_double(2.71);
 
         let bytes = writer.to_bytes();
-        row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
+        row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         assert!(!row.is_null_at(0));
         assert!(row.is_null_at(1));
@@ -211,17 +214,17 @@ mod tests {
         assert_eq!(row.get_int(0), 100);
 
         // Test from_bytes
-        let types = vec![
+        let row_type = RowType::with_data_types(vec![
             DataType::Int(IntType::new()),
             DataType::String(StringType::new()),
-        ];
+        ]);
 
-        let mut writer = CompactedRowWriter::new(types.len());
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
         writer.write_int(-1);
         writer.write_string("test");
 
         let bytes = writer.to_bytes();
-        let mut row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
+        let mut row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         assert_eq!(row.get_int(0), -1);
         assert_eq!(row.get_string(1), "test");
@@ -239,7 +242,7 @@ mod tests {
         }
 
         let bytes = writer.to_bytes();
-        row = CompactedRow::from_bytes(types.as_slice(), bytes.as_ref());
+        row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         for i in 0..num_fields {
             assert_eq!(row.get_int(i), (i * 10) as i32);
