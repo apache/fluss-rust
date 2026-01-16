@@ -67,9 +67,7 @@ impl FlussTable {
     ///
     /// Args:
     ///     project: Optional list of column indices (0-based) to include in the scan.
-    ///              Must be non-empty if specified.
     ///     columns: Optional list of column names to include in the scan.
-    ///              Must be non-empty if specified.
     ///
     /// Returns:
     ///     LogScanner, optionally with projection applied
@@ -77,6 +75,7 @@ impl FlussTable {
     /// Note:
     ///     Specify only one of 'project' or 'columns'.
     ///     If neither is specified, all columns are included.
+    ///     Rust side will validate the projection parameters.
     ///
     #[pyo3(signature = (project=None, columns=None))]
     pub fn new_log_scanner<'py>(
@@ -85,32 +84,15 @@ impl FlussTable {
         project: Option<Vec<usize>>,
         columns: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // Validate mutually exclusive parameters
         let projection = match (project, columns) {
             (Some(_), Some(_)) => {
                 return Err(FlussError::new_err(
                     "Specify only one of 'project' or 'columns'".to_string(),
                 ));
             }
-            (Some(indices), None) => {
-                if indices.is_empty() {
-                    return Err(FlussError::new_err(
-                        "project list cannot be empty".to_string(),
-                    ));
-                }
-                let deduped = self.validate_and_dedupe_indices(&indices)?;
-                Some(ProjectionType::Indices(deduped))
-            }
-            (None, Some(names)) => {
-                if names.is_empty() {
-                    return Err(FlussError::new_err(
-                        "columns list cannot be empty".to_string(),
-                    ));
-                }
-                let deduped = self.validate_and_dedupe_names(&names)?;
-                Some(ProjectionType::Names(deduped))
-            }
-            (None, None) => None, // No projection - all columns
+            (Some(indices), None) => Some(ProjectionType::Indices(indices)),
+            (None, Some(names)) => Some(ProjectionType::Names(names)),
+            (None, None) => None,
         };
 
         self.create_log_scanner_internal(py, projection)
@@ -156,53 +138,6 @@ impl FlussTable {
             table_path,
             has_primary_key,
         }
-    }
-
-    /// Validate and deduplicate column indices (preserving order)
-    fn validate_and_dedupe_indices(&self, indices: &[usize]) -> PyResult<Vec<usize>> {
-        use std::collections::HashSet;
-
-        let field_count = self.table_info.row_type().fields().len();
-        let mut seen = HashSet::new();
-        let mut deduped = Vec::with_capacity(indices.len());
-
-        for &idx in indices {
-            if idx >= field_count {
-                return Err(FlussError::new_err(format!(
-                    "Column index {idx} out of range (field count: {field_count})"
-                )));
-            }
-            if seen.insert(idx) {
-                deduped.push(idx);
-            }
-        }
-
-        Ok(deduped)
-    }
-
-    /// Validate and deduplicate column names (preserving order)
-    fn validate_and_dedupe_names(&self, names: &[String]) -> PyResult<Vec<String>> {
-        use std::collections::HashSet;
-
-        let fields = self.table_info.row_type().fields();
-        let valid_names: HashSet<&str> = fields.iter().map(|f| f.name()).collect();
-
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut deduped = Vec::with_capacity(names.len());
-
-        for name in names {
-            if !valid_names.contains(name.as_str()) {
-                return Err(FlussError::new_err(format!(
-                    "Column '{}' not found in table schema",
-                    name
-                )));
-            }
-            if seen.insert(name.clone()) {
-                deduped.push(name.clone());
-            }
-        }
-
-        Ok(deduped)
     }
 
     /// Internal helper to create log scanner with optional projection
