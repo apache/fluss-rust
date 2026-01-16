@@ -32,7 +32,7 @@ mod scanner;
 mod writer;
 
 pub use append::{AppendWriter, TableAppend};
-pub use lookup::{Lookuper, TableLookup};
+pub use lookup::{LookupResult, Lookuper, TableLookup};
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
 
 #[allow(dead_code)]

@@ -20,9 +20,75 @@ use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TableInfo};
+use crate::row::InternalRow;
+use crate::row::compacted::CompactedRow;
+use crate::row::encode::KeyEncoder;
 use crate::rpc::ApiError;
 use crate::rpc::message::LookupRequest;
 use std::sync::Arc;
+
+/// The result of a lookup operation.
+///
+/// Contains the rows returned from a lookup. For primary key lookups,
+/// this will contain at most one row. For prefix key lookups (future),
+/// this may contain multiple rows.
+pub struct LookupResult {
+    rows: Vec<Vec<u8>>,
+}
+
+impl LookupResult {
+    /// Creates a new LookupResult from a list of row bytes.
+    fn new(rows: Vec<Vec<u8>>) -> Self {
+        Self { rows }
+    }
+
+    /// Creates an empty LookupResult.
+    fn empty() -> Self {
+        Self { rows: Vec::new() }
+    }
+
+    /// Returns true if the lookup found no matching rows.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Returns the number of rows in the result.
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Returns the raw bytes of all rows.
+    /// Use `get_row()` or `get_rows()` for decoded access.
+    pub fn raw_rows(&self) -> &[Vec<u8>] {
+        &self.rows
+    }
+
+    /// Returns the single row as a CompactedRow, or None if empty.
+    ///
+    /// # Panics
+    /// Panics if there are multiple rows. Use `get_rows()` for multi-row results.
+    pub fn get_row<'a>(
+        &'a self,
+        row_type: &'a [crate::metadata::DataType],
+    ) -> Option<CompactedRow<'a>> {
+        match self.rows.len() {
+            0 => None,
+            1 => Some(CompactedRow::from_bytes(row_type, &self.rows[0])),
+            _ => panic!("LookupResult contains multiple rows, use get_rows() instead"),
+        }
+    }
+
+    /// Returns all rows as CompactedRows.
+    pub fn get_rows<'a>(
+        &'a self,
+        row_type: &'a [crate::metadata::DataType],
+    ) -> Vec<CompactedRow<'a>> {
+        self.rows
+            .iter()
+            .map(|bytes| CompactedRow::from_bytes(row_type, bytes))
+            .collect()
+    }
+}
 
 /// Configuration and factory struct for creating lookup operations.
 ///
@@ -34,7 +100,10 @@ use std::sync::Arc;
 /// ```ignore
 /// let table = conn.get_table(&table_path).await?;
 /// let lookuper = table.new_lookup()?.create_lookuper()?;
-/// let value = lookuper.lookup(encoded_key).await?;
+/// let result = lookuper.lookup(&row).await?;
+/// if let Some(value) = result.get_row(table.table_info().row_type().fields_as_data_types()) {
+///     println!("Found: {:?}", value);
+/// }
 /// ```
 // TODO: Add lookup_by(column_names) for prefix key lookups (PrefixKeyLookuper)
 // TODO: Add create_typed_lookuper<T>() for typed lookups with POJO mapping
@@ -59,17 +128,29 @@ impl<'a> TableLookup<'a> {
 
     /// Creates a `Lookuper` for performing key-based lookups.
     ///
-    /// The lookuper will automatically compute the bucket for each key
-    /// using the appropriate bucketing function.
+    /// The lookuper will automatically encode the key and compute the bucket
+    /// for each lookup using the appropriate bucketing function.
     pub fn create_lookuper(self) -> Result<Lookuper<'a>> {
         let num_buckets = self.table_info.get_num_buckets();
-        let bucketing_function = <dyn BucketingFunction>::of(None);
+
+        // Get data lake format from table config for bucketing function
+        let data_lake_format = self
+            .table_info
+            .get_table_config()
+            .get_datalake_format()?;
+        let bucketing_function = <dyn BucketingFunction>::of(data_lake_format.as_ref());
+
+        // Create key encoder for the primary key fields
+        let pk_fields = self.table_info.get_physical_primary_keys().to_vec();
+        let key_encoder =
+            <dyn KeyEncoder>::of(self.table_info.row_type(), pk_fields, data_lake_format)?;
 
         Ok(Lookuper {
             conn: self.conn,
             table_info: self.table_info,
             metadata: self.metadata,
             bucketing_function,
+            key_encoder,
             num_buckets,
         })
     }
@@ -77,43 +158,46 @@ impl<'a> TableLookup<'a> {
 
 /// Performs key-based lookups against a primary key table.
 ///
-/// The `Lookuper` automatically computes the target bucket from the key,
-/// finds the appropriate tablet server, and retrieves the value.
+/// The `Lookuper` automatically encodes the lookup key, computes the target
+/// bucket, finds the appropriate tablet server, and retrieves the value.
 ///
 /// # Example
 /// ```ignore
 /// let lookuper = table.new_lookup()?.create_lookuper()?;
-/// let key = vec![1, 2, 3]; // encoded primary key bytes
-/// if let Some(value) = lookuper.lookup(key).await? {
-///     println!("Found value: {:?}", value);
-/// }
+/// let row = GenericRow::new(vec![Datum::Int32(42)]); // lookup key
+/// let result = lookuper.lookup(&row).await?;
 /// ```
 // TODO: Support partitioned tables (extract partition from key)
-// TODO: Detect data lake format from table config for bucketing function
 pub struct Lookuper<'a> {
     conn: &'a FlussConnection,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
     bucketing_function: Box<dyn BucketingFunction>,
+    key_encoder: Box<dyn KeyEncoder>,
     num_buckets: i32,
 }
 
 impl<'a> Lookuper<'a> {
     /// Looks up a value by its primary key.
     ///
-    /// The bucket is automatically computed from the key using the table's
-    /// bucketing function.
+    /// The key is encoded and the bucket is automatically computed using
+    /// the table's bucketing function.
     ///
     /// # Arguments
-    /// * `key` - The encoded primary key bytes
+    /// * `row` - The row containing the primary key field values
     ///
     /// # Returns
-    /// * `Ok(Some(Vec<u8>))` - The value bytes if the key exists
-    /// * `Ok(None)` - If the key does not exist
+    /// * `Ok(LookupResult)` - The lookup result (may be empty if key not found)
     /// * `Err(Error)` - If the lookup fails
-    pub async fn lookup(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        // Compute bucket from key
-        let bucket_id = self.bucketing_function.bucketing(&key, self.num_buckets)?;
+    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
+        // Encode the key from the row
+        let encoded_key = self.key_encoder.encode_key(row)?;
+        let key_bytes = encoded_key.to_vec();
+
+        // Compute bucket from encoded key
+        let bucket_id = self
+            .bucketing_function
+            .bucketing(&key_bytes, self.num_buckets)?;
 
         let table_id = self.table_info.get_table_id();
         let table_bucket = TableBucket::new(table_id, bucket_id);
@@ -142,10 +226,10 @@ impl<'a> Lookuper<'a> {
         let connection = connections.get_connection(tablet_server).await?;
 
         // Send lookup request
-        let request = LookupRequest::new(table_id, None, bucket_id, vec![key]);
+        let request = LookupRequest::new(table_id, None, bucket_id, vec![key_bytes]);
         let response = connection.request(request).await?;
 
-        // Extract the value from response
+        // Extract the values from response
         if let Some(bucket_resp) = response.buckets_resp.into_iter().next() {
             // Check for errors
             if let Some(error_code) = bucket_resp.error_code {
@@ -159,12 +243,21 @@ impl<'a> Lookuper<'a> {
                 }
             }
 
-            // Get the first value (we only requested one key)
-            if let Some(pb_value) = bucket_resp.values.into_iter().next() {
-                return Ok(pb_value.values);
-            }
+            // Collect all values
+            let rows: Vec<Vec<u8>> = bucket_resp
+                .values
+                .into_iter()
+                .filter_map(|pb_value| pb_value.values)
+                .collect();
+
+            return Ok(LookupResult::new(rows));
         }
 
-        Ok(None)
+        Ok(LookupResult::empty())
+    }
+
+    /// Returns a reference to the table info.
+    pub fn table_info(&self) -> &TableInfo {
+        &self.table_info
     }
 }

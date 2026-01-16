@@ -729,6 +729,7 @@ impl TableConfig {
         ArrowCompressionInfo::from_conf(&self.properties)
     }
 
+    /// Returns the data lake format if configured, or None if not set.
     pub fn get_datalake_format(&self) -> Result<Option<DataLakeFormat>> {
         self.properties
             .get("table.datalake.format")
