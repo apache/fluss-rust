@@ -29,8 +29,8 @@ use crate::client::connection::FlussConnection;
 use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
 use crate::client::table::log_fetch_buffer::{
-    CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext,
-    FetchErrorLogLevel, LogFetchBuffer,
+    CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
+    LogFetchBuffer,
 };
 use crate::client::table::remote_log::{
     RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
@@ -852,17 +852,18 @@ impl LogFetcher {
                 } else {
                     // Fetch records from next_in_line
                     if let Some(mut next_fetch) = next_in_line {
-                        let records =
-                            match self.fetch_records_from_fetch(&mut next_fetch, records_remaining) {
-                                Ok(records) => records,
-                                Err(e) => {
-                                    if !next_fetch.is_consumed() {
-                                        self.log_fetch_buffer
-                                            .set_next_in_line_fetch(Some(next_fetch));
-                                    }
-                                    return Err(e);
+                        let records = match self
+                            .fetch_records_from_fetch(&mut next_fetch, records_remaining)
+                        {
+                            Ok(records) => records,
+                            Err(e) => {
+                                if !next_fetch.is_consumed() {
+                                    self.log_fetch_buffer
+                                        .set_next_in_line_fetch(Some(next_fetch));
                                 }
-                            };
+                                return Err(e);
+                            }
+                        };
 
                         if !records.is_empty() {
                             let table_bucket = next_fetch.table_bucket().clone();
@@ -1425,14 +1426,8 @@ mod tests {
         let data = build_records(&table_info, Arc::new(table_path))?;
         let log_records = LogRecordsBatches::new(data.clone());
         let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type()), false);
-        let completed = DefaultCompletedFetch::new(
-            bucket.clone(),
-            log_records,
-            data.len(),
-            read_context,
-            0,
-            0,
-        );
+        let completed =
+            DefaultCompletedFetch::new(bucket.clone(), log_records, data.len(), read_context, 0, 0);
         fetcher.log_fetch_buffer.add(Box::new(completed));
 
         let fetched = fetcher.collect_fetches()?;
@@ -1546,5 +1541,4 @@ mod tests {
         assert_eq!(api_error.code, FlussError::AuthorizationException.code());
         Ok(())
     }
-
 }

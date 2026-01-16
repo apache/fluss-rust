@@ -108,14 +108,15 @@ impl ListOffsetsResponse {
         self.buckets_resp
             .iter()
             .map(|resp| {
-                if let Some(error_code) = resp.error_code && error_code != FlussError::None.code() {
+                if let Some(error_code) = resp.error_code
+                    && error_code != FlussError::None.code()
+                {
                     let api_error = ErrorResponse {
                         error_code,
                         error_message: resp.error_message.clone(),
-                    }.into();
-                    return Err(Error::FlussAPIError {
-                        api_error
-                    });
+                    }
+                    .into();
+                    return Err(Error::FlussAPIError { api_error });
                 }
                 // if no error msg, offset must exists
                 resp.offset
