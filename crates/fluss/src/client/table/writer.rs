@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use crate::error::Result;
 use crate::metadata::{TableInfo, TablePath};
+use crate::row::compacted::CompactedRow;
 
 #[allow(dead_code)]
 pub trait TableWriter {
@@ -34,8 +35,8 @@ pub trait AppendWriter: TableWriter {
 
 #[allow(dead_code)]
 pub trait UpsertWriter: TableWriter {
-    async fn upsert(&self, row: GenericRow) -> Result<()>;
-    async fn delete(&self, row: GenericRow) -> Result<()>;
+    async fn upsert(&mut self, row: CompactedRow) -> Result<()>;
+    async fn delete(&mut self, row: CompactedRow) -> Result<()>;
 }
 
 #[allow(dead_code)]

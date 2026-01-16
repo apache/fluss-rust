@@ -71,6 +71,7 @@ pub trait BinaryWriter {
     fn complete(&mut self);
 }
 
+#[derive(Clone)]
 pub enum ValueWriter {
     Nullable(InnerValueWriter),
     NonNullable(InnerValueWriter),
@@ -112,7 +113,7 @@ impl ValueWriter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InnerValueWriter {
     Char,
     String,

@@ -21,8 +21,8 @@ mod datum;
 
 pub mod binary;
 pub mod compacted;
-mod encode;
-mod field_getter;
+pub mod encode;
+pub mod field_getter;
 
 pub use column::*;
 pub use datum::*;

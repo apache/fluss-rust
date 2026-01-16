@@ -18,7 +18,7 @@
 use crate::client::{Record, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::Result;
-use crate::metadata::DataType;
+use crate::metadata::{DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
 use arrow::array::{
@@ -48,7 +48,9 @@ use std::{
     sync::Arc,
 };
 
+use crate::error::Error::IllegalArgument;
 use arrow::ipc::writer::IpcWriteOptions;
+
 /// const for record batch
 pub const BASE_OFFSET_LENGTH: usize = 8;
 pub const LENGTH_LENGTH: usize = 4;
@@ -169,7 +171,7 @@ pub struct RowAppendRecordBatchBuilder {
 }
 
 impl RowAppendRecordBatchBuilder {
-    pub fn new(row_type: &DataType) -> Self {
+    pub fn new(row_type: &RowType) -> Self {
         let schema_ref = to_arrow_schema(row_type);
         let builders = Mutex::new(
             schema_ref
@@ -249,7 +251,7 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
 impl MemoryLogRecordsArrowBuilder {
     pub fn new(
         schema_id: i32,
-        row_type: &DataType,
+        row_type: &RowType,
         to_append_record_batch: bool,
         arrow_compression_info: ArrowCompressionInfo,
     ) -> Self {
@@ -278,6 +280,9 @@ impl MemoryLogRecordsArrowBuilder {
             Record::RecordBatch(record_batch) => Ok(self
                 .arrow_record_batch_builder
                 .append_batch(record_batch.clone())?),
+            Record::KvRow(_) => Err(IllegalArgument {
+                message: "KvRow WriteRecord is not supported for memory log".to_string(),
+            }),
         }
         // todo: consider write other change type
     }
@@ -633,27 +638,20 @@ fn parse_ipc_message(
     Ok((batch_metadata, body_buffer, message.version()))
 }
 
-pub fn to_arrow_schema(fluss_schema: &DataType) -> SchemaRef {
-    match &fluss_schema {
-        DataType::Row(row_type) => {
-            let fields: Vec<Field> = row_type
-                .fields()
-                .iter()
-                .map(|f| {
-                    Field::new(
-                        f.name(),
-                        to_arrow_type(f.data_type()),
-                        f.data_type().is_nullable(),
-                    )
-                })
-                .collect();
+pub fn to_arrow_schema(fluss_schema: &RowType) -> SchemaRef {
+    let fields: Vec<Field> = fluss_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            Field::new(
+                f.name(),
+                to_arrow_type(f.data_type()),
+                f.data_type().is_nullable(),
+            )
+        })
+        .collect();
 
-            SchemaRef::new(arrow_schema::Schema::new(fields))
-        }
-        _ => {
-            panic!("must be row data type.")
-        }
-    }
+    SchemaRef::new(arrow_schema::Schema::new(fields))
 }
 
 pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {

@@ -25,6 +25,7 @@ use std::cmp;
 // Reference implementation:
 // https://github.com/apache/fluss/blob/d4a72fad240d4b81563aaf83fa3b09b5058674ed/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRowWriter.java#L71
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct CompactedRowWriter {
     header_size_in_bytes: usize,
     position: usize,
