@@ -27,5 +27,9 @@ mod server_connection;
 pub use server_connection::*;
 mod convert;
 mod transport;
+#[cfg(test)]
+pub(crate) use api_key::ApiKey;
+#[cfg(test)]
+pub(crate) use transport::Transport;
 
 pub use convert::*;

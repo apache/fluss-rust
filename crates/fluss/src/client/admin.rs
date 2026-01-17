@@ -324,3 +324,225 @@ impl FlussAdmin {
         Ok(tasks)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::{ServerNode, ServerType};
+    use crate::metadata::{
+        DataField, DataTypes, DatabaseDescriptor, JsonSerde, Schema, TableDescriptor, TablePath,
+    };
+    use crate::proto::{
+        CreateDatabaseResponse, CreateTableResponse, DatabaseExistsResponse, DropDatabaseResponse,
+        DropTableResponse, GetDatabaseInfoResponse, GetLatestLakeSnapshotResponse,
+        GetTableInfoResponse, ListDatabasesResponse, ListOffsetsResponse, ListTablesResponse,
+        PbLakeSnapshotForBucket, PbListOffsetsRespForBucket, TableExistsResponse,
+    };
+    use crate::test_utils::{build_cluster_with_coordinator_arc, build_mock_connection};
+    use prost::Message;
+    use std::sync::Arc;
+
+    const API_CREATE_DATABASE: i16 = 1001;
+    const API_DROP_DATABASE: i16 = 1002;
+    const API_LIST_DATABASES: i16 = 1003;
+    const API_DATABASE_EXISTS: i16 = 1004;
+    const API_CREATE_TABLE: i16 = 1005;
+    const API_DROP_TABLE: i16 = 1006;
+    const API_GET_TABLE: i16 = 1007;
+    const API_LIST_TABLES: i16 = 1008;
+    const API_TABLE_EXISTS: i16 = 1010;
+    const API_LIST_OFFSETS: i16 = 1021;
+    const API_GET_LAKE_SNAPSHOT: i16 = 1032;
+    const API_GET_DATABASE_INFO: i16 = 1035;
+
+    fn build_table_descriptor() -> TableDescriptor {
+        let row_type = DataTypes::row(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let mut schema_builder = Schema::builder().with_row_type(&row_type);
+        let schema = schema_builder.build().expect("schema");
+        TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![])
+            .build()
+            .expect("descriptor")
+    }
+
+    #[tokio::test]
+    async fn admin_requests_round_trip() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_id = 42;
+        let table_descriptor = build_table_descriptor();
+        let table_json =
+            serde_json::to_vec(&table_descriptor.serialize_json().expect("table json")).unwrap();
+
+        let db_descriptor = DatabaseDescriptor::builder()
+            .comment("test")
+            .custom_property("k", "v")
+            .build();
+        let db_json =
+            serde_json::to_vec(&db_descriptor.serialize_json().expect("db json")).unwrap();
+
+        let (admin_connection, admin_handle) =
+            build_mock_connection(move |api_key: crate::rpc::ApiKey, _, _| {
+                match i16::from(api_key) {
+                    API_CREATE_DATABASE => CreateDatabaseResponse::default().encode_to_vec(),
+                    API_CREATE_TABLE => CreateTableResponse::default().encode_to_vec(),
+                    API_DROP_TABLE => DropTableResponse::default().encode_to_vec(),
+                    API_DROP_DATABASE => DropDatabaseResponse::default().encode_to_vec(),
+                    API_LIST_TABLES => ListTablesResponse {
+                        table_name: vec!["tbl".to_string()],
+                    }
+                    .encode_to_vec(),
+                    API_TABLE_EXISTS => TableExistsResponse { exists: true }.encode_to_vec(),
+                    API_LIST_DATABASES => ListDatabasesResponse {
+                        database_name: vec!["db".to_string(), "db2".to_string()],
+                    }
+                    .encode_to_vec(),
+                    API_DATABASE_EXISTS => DatabaseExistsResponse { exists: false }.encode_to_vec(),
+                    API_GET_TABLE => GetTableInfoResponse {
+                        table_id,
+                        schema_id: 1,
+                        table_json: table_json.clone(),
+                        created_time: 10,
+                        modified_time: 20,
+                    }
+                    .encode_to_vec(),
+                    API_GET_DATABASE_INFO => GetDatabaseInfoResponse {
+                        database_json: db_json.clone(),
+                        created_time: 5,
+                        modified_time: 6,
+                    }
+                    .encode_to_vec(),
+                    API_GET_LAKE_SNAPSHOT => GetLatestLakeSnapshotResponse {
+                        table_id,
+                        snapshot_id: 99,
+                        bucket_snapshots: vec![PbLakeSnapshotForBucket {
+                            partition_id: None,
+                            bucket_id: 0,
+                            log_offset: Some(123),
+                        }],
+                    }
+                    .encode_to_vec(),
+                    _ => vec![],
+                }
+            })
+            .await;
+
+        let (tablet_connection, tablet_handle) = build_mock_connection(
+            |api_key: crate::rpc::ApiKey, _, _| match i16::from(api_key) {
+                API_LIST_OFFSETS => ListOffsetsResponse {
+                    buckets_resp: vec![PbListOffsetsRespForBucket {
+                        bucket_id: 0,
+                        error_code: None,
+                        error_message: None,
+                        offset: Some(7),
+                    }],
+                }
+                .encode_to_vec(),
+                _ => vec![],
+            },
+        )
+        .await;
+
+        let coordinator = ServerNode::new(
+            100,
+            "127.0.0.1".to_string(),
+            9999,
+            ServerType::CoordinatorServer,
+        );
+        let tablet = ServerNode::new(1, "127.0.0.1".to_string(), 9998, ServerType::TabletServer);
+        let cluster = build_cluster_with_coordinator_arc(
+            &table_path,
+            table_id,
+            coordinator.clone(),
+            tablet.clone(),
+        );
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let rpc_client = Arc::new(RpcClient::new());
+        rpc_client.insert_connection_for_test(&coordinator, admin_connection);
+        rpc_client.insert_connection_for_test(&tablet, tablet_connection);
+
+        let admin = FlussAdmin::new(rpc_client.clone(), metadata.clone()).await?;
+
+        admin
+            .create_database("db", true, Some(&db_descriptor))
+            .await?;
+        admin
+            .create_table(&table_path, &table_descriptor, true)
+            .await?;
+        admin.drop_table(&table_path, true).await?;
+
+        let tables = admin.list_tables("db").await?;
+        assert_eq!(tables, vec!["tbl".to_string()]);
+
+        let exists = admin.table_exists(&table_path).await?;
+        assert!(exists);
+
+        let dbs = admin.list_databases().await?;
+        assert_eq!(dbs.len(), 2);
+
+        let db_exists = admin.database_exists("db").await?;
+        assert!(!db_exists);
+
+        let table_info = admin.get_table(&table_path).await?;
+        assert_eq!(table_info.table_id, table_id);
+
+        let db_info = admin.get_database_info("db").await?;
+        assert_eq!(db_info.database_name(), "db");
+
+        let snapshot = admin.get_latest_lake_snapshot(&table_path).await?;
+        assert_eq!(snapshot.snapshot_id(), 99);
+        assert_eq!(
+            snapshot
+                .table_buckets_offset()
+                .get(&TableBucket::new(table_id, 0)),
+            Some(&123)
+        );
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0], OffsetSpec::Earliest)
+            .await?;
+        assert_eq!(offsets.get(&0), Some(&7));
+
+        admin_handle.abort();
+        tablet_handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_offsets_empty_buckets_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let (admin_connection, admin_handle) = build_mock_connection(
+            |api_key: crate::rpc::ApiKey, _, _| match i16::from(api_key) {
+                API_CREATE_DATABASE => CreateDatabaseResponse::default().encode_to_vec(),
+                _ => vec![],
+            },
+        )
+        .await;
+        let coordinator = ServerNode::new(
+            10,
+            "127.0.0.1".to_string(),
+            9999,
+            ServerType::CoordinatorServer,
+        );
+        let tablet = ServerNode::new(11, "127.0.0.1".to_string(), 8081, ServerType::TabletServer);
+        let cluster = build_cluster_with_coordinator_arc(&table_path, 1, coordinator, tablet);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let rpc_client = Arc::new(RpcClient::new());
+        rpc_client.insert_connection_for_test(
+            metadata.get_cluster().get_coordinator_server().unwrap(),
+            admin_connection,
+        );
+
+        let admin = FlussAdmin::new(rpc_client, metadata).await?;
+
+        let result = admin
+            .list_offsets(&table_path, &[], OffsetSpec::Earliest)
+            .await;
+        assert!(matches!(result, Err(Error::UnexpectedError { .. })));
+        admin_handle.abort();
+        Ok(())
+    }
+}

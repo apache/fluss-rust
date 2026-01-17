@@ -161,7 +161,23 @@ impl CredentialsCache {
 mod tests {
     use super::*;
     use crate::client::metadata::Metadata;
-    use crate::cluster::Cluster;
+    use crate::cluster::{Cluster, ServerNode, ServerType};
+    use crate::proto::{GetFileSystemSecurityTokenResponse, PbKeyValue};
+    use crate::test_utils::build_mock_connection;
+    use prost::Message;
+
+    const API_GET_SECURITY_TOKEN: i16 = 1025;
+
+    fn build_cluster(server: ServerNode) -> Arc<Cluster> {
+        Arc::new(Cluster::new(
+            None,
+            HashMap::from([(server.id(), server)]),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        ))
+    }
 
     #[test]
     fn convert_hadoop_key_to_opendal_maps_known_keys() {
@@ -204,6 +220,80 @@ mod tests {
             props.get("enable_virtual_host_style"),
             Some(&"false".to_string())
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_from_server_returns_empty_when_token_missing() -> Result<()> {
+        let (connection, handle) =
+            build_mock_connection(
+                |api_key: crate::rpc::ApiKey, _, _| match i16::from(api_key) {
+                    API_GET_SECURITY_TOKEN => GetFileSystemSecurityTokenResponse {
+                        schema: "s3".to_string(),
+                        token: Vec::new(),
+                        expiration_time: None,
+                        addition_info: vec![],
+                    }
+                    .encode_to_vec(),
+                    _ => vec![],
+                },
+            )
+            .await;
+
+        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9999, ServerType::TabletServer);
+        let rpc_client = Arc::new(RpcClient::new());
+        rpc_client.insert_connection_for_test(&server, connection);
+        let cache = CredentialsCache::new(
+            rpc_client,
+            Arc::new(Metadata::new_for_test(build_cluster(server))),
+        );
+
+        let props = cache.get_or_refresh().await?;
+        assert!(props.is_empty());
+        handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_from_server_parses_token() -> Result<()> {
+        let token_json = serde_json::json!({
+            "access_key_id": "ak",
+            "access_key_secret": "sk",
+            "security_token": "st"
+        });
+        let token_bytes = serde_json::to_vec(&token_json).unwrap();
+        let (connection, handle) =
+            build_mock_connection(move |api_key: crate::rpc::ApiKey, _, _| {
+                match i16::from(api_key) {
+                    API_GET_SECURITY_TOKEN => GetFileSystemSecurityTokenResponse {
+                        schema: "s3".to_string(),
+                        token: token_bytes.clone(),
+                        expiration_time: Some(100),
+                        addition_info: vec![PbKeyValue {
+                            key: "fs.s3a.endpoint".to_string(),
+                            value: "localhost".to_string(),
+                        }],
+                    }
+                    .encode_to_vec(),
+                    _ => vec![],
+                }
+            })
+            .await;
+
+        let server = ServerNode::new(1, "127.0.0.1".to_string(), 9999, ServerType::TabletServer);
+        let rpc_client = Arc::new(RpcClient::new());
+        rpc_client.insert_connection_for_test(&server, connection);
+        let cache = CredentialsCache::new(
+            rpc_client,
+            Arc::new(Metadata::new_for_test(build_cluster(server))),
+        );
+
+        let props = cache.get_or_refresh().await?;
+        assert_eq!(props.get("access_key_id"), Some(&"ak".to_string()));
+        assert_eq!(props.get("secret_access_key"), Some(&"sk".to_string()));
+        assert_eq!(props.get("security_token"), Some(&"st".to_string()));
+        assert_eq!(props.get("endpoint"), Some(&"localhost".to_string()));
+        handle.abort();
         Ok(())
     }
 }

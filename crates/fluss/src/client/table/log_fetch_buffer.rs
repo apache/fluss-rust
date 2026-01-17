@@ -652,8 +652,16 @@ mod tests {
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{DataField, DataTypes, TablePath};
-    use crate::record::{MemoryLogRecordsArrowBuilder, ReadContext, to_arrow_schema};
-    use crate::row::GenericRow;
+    use crate::record::{
+        LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD, MemoryLogRecordsArrowBuilder,
+        RECORDS_COUNT_LENGTH, RECORDS_COUNT_OFFSET, RECORDS_OFFSET, ReadContext, ScanRecord,
+        to_arrow_schema,
+    };
+    use crate::row::{ColumnarRow, GenericRow};
+    use arrow::array::Int32Array;
+    use arrow_schema::{DataType, Field, Schema};
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -664,6 +672,14 @@ mod tests {
             None,
         )]);
         ReadContext::new(to_arrow_schema(&row_type), false)
+    }
+
+    fn test_scan_record() -> ScanRecord {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
+            .expect("record batch");
+        let row = ColumnarRow::new(Arc::new(batch));
+        ScanRecord::new_default(row)
     }
 
     struct ErrorPendingFetch {
@@ -687,6 +703,81 @@ mod tests {
         }
     }
 
+    struct TestCompletedFetch {
+        table_bucket: TableBucket,
+        consumed: AtomicBool,
+        initialized: AtomicBool,
+        next_fetch_offset: i64,
+    }
+
+    impl TestCompletedFetch {
+        fn new(table_bucket: TableBucket) -> Self {
+            Self {
+                table_bucket,
+                consumed: AtomicBool::new(false),
+                initialized: AtomicBool::new(true),
+                next_fetch_offset: 0,
+            }
+        }
+    }
+
+    impl CompletedFetch for TestCompletedFetch {
+        fn table_bucket(&self) -> &TableBucket {
+            &self.table_bucket
+        }
+
+        fn api_error(&self) -> Option<&ApiError> {
+            None
+        }
+
+        fn fetch_error_context(&self) -> Option<&FetchErrorContext> {
+            None
+        }
+
+        fn take_error(&mut self) -> Option<Error> {
+            None
+        }
+
+        fn fetch_records(&mut self, _max_records: usize) -> Result<Vec<ScanRecord>> {
+            Ok(Vec::new())
+        }
+
+        fn fetch_batches(&mut self, _max_batches: usize) -> Result<Vec<RecordBatch>> {
+            Ok(Vec::new())
+        }
+
+        fn is_consumed(&self) -> bool {
+            self.consumed.load(Ordering::Acquire)
+        }
+
+        fn records_read(&self) -> usize {
+            0
+        }
+
+        fn drain(&mut self) {
+            self.consumed.store(true, Ordering::Release);
+        }
+
+        fn size_in_bytes(&self) -> usize {
+            0
+        }
+
+        fn high_watermark(&self) -> i64 {
+            0
+        }
+
+        fn is_initialized(&self) -> bool {
+            self.initialized.load(Ordering::Acquire)
+        }
+
+        fn set_initialized(&mut self) {
+            self.initialized.store(true, Ordering::Release);
+        }
+
+        fn next_fetch_offset(&self) -> i64 {
+            self.next_fetch_offset
+        }
+    }
     #[tokio::test]
     async fn await_not_empty_returns_wakeup_error() {
         let buffer = LogFetchBuffer::new(test_read_context());
@@ -710,6 +801,83 @@ mod tests {
 
         let mut completed = buffer.poll().expect("completed fetch");
         assert!(completed.take_error().is_some());
+    }
+
+    #[test]
+    fn buffered_buckets_include_pending_and_next_in_line() {
+        let buffer = LogFetchBuffer::new(test_read_context());
+        let bucket_pending = TableBucket::new(1, 0);
+        let bucket_next = TableBucket::new(1, 1);
+        let bucket_completed = TableBucket::new(1, 2);
+
+        buffer.pend(Box::new(ErrorPendingFetch {
+            table_bucket: bucket_pending.clone(),
+        }));
+        buffer.set_next_in_line_fetch(Some(Box::new(TestCompletedFetch::new(bucket_next.clone()))));
+        buffer.add(Box::new(TestCompletedFetch::new(bucket_completed.clone())));
+
+        let buckets: HashSet<TableBucket> = buffer.buffered_buckets().into_iter().collect();
+        assert!(buckets.contains(&bucket_pending));
+        assert!(buckets.contains(&bucket_next));
+        assert!(buckets.contains(&bucket_completed));
+    }
+
+    #[test]
+    fn pended_buckets_only_returns_pending() {
+        let buffer = LogFetchBuffer::new(test_read_context());
+        let bucket_pending = TableBucket::new(1, 0);
+        buffer.pend(Box::new(ErrorPendingFetch {
+            table_bucket: bucket_pending.clone(),
+        }));
+        buffer.add(Box::new(TestCompletedFetch::new(TableBucket::new(1, 1))));
+
+        let pending: HashSet<TableBucket> = buffer.pending_fetches.lock().keys().cloned().collect();
+        assert_eq!(pending, HashSet::from([bucket_pending]));
+    }
+
+    #[test]
+    fn add_with_pending_keeps_buffer_empty_until_completed() {
+        struct PendingGate {
+            table_bucket: TableBucket,
+            completed: Arc<AtomicBool>,
+        }
+
+        impl PendingFetch for PendingGate {
+            fn table_bucket(&self) -> &TableBucket {
+                &self.table_bucket
+            }
+
+            fn is_completed(&self) -> bool {
+                self.completed.load(Ordering::Acquire)
+            }
+
+            fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
+                Ok(Box::new(TestCompletedFetch::new(self.table_bucket.clone())))
+            }
+        }
+
+        let buffer = LogFetchBuffer::new(test_read_context());
+        let bucket = TableBucket::new(1, 0);
+        let completed = Arc::new(AtomicBool::new(false));
+        let pending = PendingGate {
+            table_bucket: bucket.clone(),
+            completed: completed.clone(),
+        };
+        buffer.pend(Box::new(pending));
+
+        buffer.add(Box::new(TestCompletedFetch::new(bucket.clone())));
+        assert!(buffer.is_empty());
+
+        {
+            let pending = buffer.pending_fetches.lock();
+            let entry = pending.get(&bucket).expect("pending");
+            assert_eq!(entry.len(), 2);
+        }
+
+        completed.store(true, Ordering::Release);
+
+        buffer.try_complete(&bucket);
+        assert!(!buffer.is_empty());
     }
 
     #[test]
@@ -756,5 +924,189 @@ mod tests {
         assert!(empty.is_empty());
 
         Ok(())
+    }
+
+    #[test]
+    fn default_completed_fetch_propagates_error_for_records() {
+        let read_context = test_read_context();
+        let mut fetch = DefaultCompletedFetch::from_error(
+            TableBucket::new(1, 0),
+            Error::UnexpectedError {
+                message: "fetch failed".to_string(),
+                source: None,
+            },
+            0,
+            read_context,
+        );
+
+        let err = match fetch.fetch_records(1) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::UnexpectedError { .. }));
+    }
+
+    #[test]
+    fn default_completed_fetch_propagates_error_for_batches() {
+        let read_context = test_read_context();
+        let mut fetch = DefaultCompletedFetch::from_error(
+            TableBucket::new(1, 0),
+            Error::UnexpectedError {
+                message: "fetch failed".to_string(),
+                source: None,
+            },
+            0,
+            read_context,
+        );
+
+        let err = fetch.fetch_batches(1).expect_err("expected error");
+        assert!(matches!(err, Error::UnexpectedError { .. }));
+    }
+
+    #[test]
+    fn default_completed_fetch_propagates_api_error_for_records() {
+        let read_context = test_read_context();
+        let fetch_error_context = FetchErrorContext {
+            action: FetchErrorAction::Authorization,
+            log_level: FetchErrorLogLevel::Warn,
+            log_message: "authorization failed".to_string(),
+        };
+        let mut fetch = DefaultCompletedFetch::from_api_error(
+            TableBucket::new(1, 0),
+            ApiError {
+                code: 7,
+                message: "auth failed".to_string(),
+            },
+            fetch_error_context,
+            0,
+            read_context,
+        );
+
+        let err = match fetch.fetch_records(1) {
+            Ok(_) => panic!("expected api error"),
+            Err(err) => err,
+        };
+        match err {
+            Error::FlussAPIError { api_error } => {
+                assert_eq!(api_error.code, 7);
+                assert_eq!(api_error.message, "auth failed");
+            }
+            _ => panic!("unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn default_completed_fetch_propagates_api_error_for_batches() {
+        let read_context = test_read_context();
+        let fetch_error_context = FetchErrorContext {
+            action: FetchErrorAction::Authorization,
+            log_level: FetchErrorLogLevel::Warn,
+            log_message: "authorization failed".to_string(),
+        };
+        let mut fetch = DefaultCompletedFetch::from_api_error(
+            TableBucket::new(1, 0),
+            ApiError {
+                code: 7,
+                message: "auth failed".to_string(),
+            },
+            fetch_error_context,
+            0,
+            read_context,
+        );
+
+        let err = fetch.fetch_batches(1).expect_err("expected api error");
+        match err {
+            Error::FlussAPIError { api_error } => {
+                assert_eq!(api_error.code, 7);
+                assert_eq!(api_error.message, "auth failed");
+            }
+            _ => panic!("unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn default_completed_fetch_returns_error_on_corrupt_last_record() {
+        let read_context = test_read_context();
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(Vec::new()),
+            0,
+            read_context,
+            0,
+            0,
+        );
+        fetch.corrupt_last_record = true;
+
+        let err = match fetch.fetch_records(1) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::UnexpectedError { .. }));
+    }
+
+    #[test]
+    fn default_completed_fetch_returns_error_when_cached_error_without_records() {
+        let read_context = test_read_context();
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(Vec::new()),
+            0,
+            read_context,
+            0,
+            0,
+        );
+        fetch.cached_record_error = Some("decode failure".to_string());
+
+        let err = match fetch.fetch_records(1) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        match err {
+            Error::UnexpectedError { message, .. } => {
+                assert!(message.contains("decode failure"));
+            }
+            _ => panic!("unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn default_completed_fetch_returns_partial_records_when_cached_error_after_record() {
+        let read_context = test_read_context();
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(Vec::new()),
+            0,
+            read_context,
+            0,
+            0,
+        );
+        fetch.cached_record_error = Some("decode failure".to_string());
+        fetch.last_record = Some(test_scan_record());
+
+        let records = fetch.fetch_records(1).expect("records");
+        assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn default_completed_fetch_returns_error_on_invalid_batch_payload() {
+        let read_context = test_read_context();
+        let total_len = RECORDS_OFFSET;
+        let batch_len = total_len - LOG_OVERHEAD;
+        let mut data = vec![0_u8; total_len];
+        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
+            .copy_from_slice(&(batch_len as i32).to_le_bytes());
+        data[RECORDS_COUNT_OFFSET..RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH]
+            .copy_from_slice(&1_i32.to_le_bytes());
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data),
+            total_len,
+            read_context,
+            0,
+            0,
+        );
+
+        let err = fetch.fetch_batches(1).expect_err("expected error");
+        assert!(matches!(err, Error::ArrowError { .. }));
     }
 }

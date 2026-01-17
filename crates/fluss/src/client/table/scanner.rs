@@ -1425,16 +1425,27 @@ impl BucketScanStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::FlussConnection;
     use crate::client::WriteRecord;
     use crate::client::metadata::Metadata;
+    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
+    use crate::config::Config;
     use crate::metadata::{TableInfo, TablePath};
+    use crate::proto::{FetchLogResponse, PbFetchLogRespForBucket, PbFetchLogRespForTable};
     use crate::record::MemoryLogRecordsArrowBuilder;
-    use crate::row::{Datum, GenericRow};
+    use crate::row::{ColumnarRow, Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::test_utils::{build_cluster_arc, build_table_info};
+    use crate::test_utils::{build_cluster_arc, build_mock_connection, build_table_info};
+    use arrow::array::Int32Array;
+    use arrow_schema::{DataType, Field, Schema};
+    use prost::Message;
+    use std::collections::HashMap;
+    use std::time::Duration;
+    use tokio::io::BufStream;
+    use tokio::time::timeout;
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
@@ -1454,6 +1465,366 @@ mod tests {
         );
         builder.append(&record)?;
         builder.build()
+    }
+
+    fn test_scan_record() -> ScanRecord {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
+            .expect("record batch");
+        let row = ColumnarRow::new(Arc::new(batch));
+        ScanRecord::new_default(row)
+    }
+
+    struct TestCompletedFetch {
+        table_bucket: TableBucket,
+        records: Vec<ScanRecord>,
+        batches: Vec<RecordBatch>,
+        error_on_records: bool,
+        error_on_batches: bool,
+        consumed: bool,
+        initialized: bool,
+        next_fetch_offset: i64,
+        records_read: usize,
+    }
+
+    impl TestCompletedFetch {
+        fn record_ok(table_bucket: TableBucket) -> Self {
+            Self {
+                table_bucket,
+                records: vec![test_scan_record()],
+                batches: Vec::new(),
+                error_on_records: false,
+                error_on_batches: false,
+                consumed: false,
+                initialized: true,
+                next_fetch_offset: 0,
+                records_read: 0,
+            }
+        }
+
+        fn record_err(table_bucket: TableBucket) -> Self {
+            Self {
+                table_bucket,
+                records: Vec::new(),
+                batches: Vec::new(),
+                error_on_records: true,
+                error_on_batches: false,
+                consumed: false,
+                initialized: true,
+                next_fetch_offset: 0,
+                records_read: 0,
+            }
+        }
+
+        fn batch_ok(table_bucket: TableBucket) -> Self {
+            let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+            let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
+                .expect("record batch");
+            Self {
+                table_bucket,
+                records: Vec::new(),
+                batches: vec![batch],
+                error_on_records: false,
+                error_on_batches: false,
+                consumed: false,
+                initialized: true,
+                next_fetch_offset: 0,
+                records_read: 0,
+            }
+        }
+
+        fn batch_err(table_bucket: TableBucket) -> Self {
+            Self {
+                table_bucket,
+                records: Vec::new(),
+                batches: Vec::new(),
+                error_on_records: false,
+                error_on_batches: true,
+                consumed: false,
+                initialized: true,
+                next_fetch_offset: 0,
+                records_read: 0,
+            }
+        }
+    }
+
+    impl CompletedFetch for TestCompletedFetch {
+        fn table_bucket(&self) -> &TableBucket {
+            &self.table_bucket
+        }
+
+        fn api_error(&self) -> Option<&ApiError> {
+            None
+        }
+
+        fn fetch_error_context(&self) -> Option<&FetchErrorContext> {
+            None
+        }
+
+        fn take_error(&mut self) -> Option<Error> {
+            None
+        }
+
+        fn fetch_records(&mut self, _max_records: usize) -> Result<Vec<ScanRecord>> {
+            if self.error_on_records {
+                self.consumed = true;
+                return Err(Error::UnexpectedError {
+                    message: "fetch error".to_string(),
+                    source: None,
+                });
+            }
+            if self.consumed {
+                return Ok(Vec::new());
+            }
+            let records = std::mem::take(&mut self.records);
+            if !records.is_empty() {
+                self.records_read += records.len();
+                self.next_fetch_offset += records.len() as i64;
+                self.consumed = true;
+            }
+            Ok(records)
+        }
+
+        fn fetch_batches(&mut self, _max_batches: usize) -> Result<Vec<RecordBatch>> {
+            if self.error_on_batches {
+                self.consumed = true;
+                return Err(Error::UnexpectedError {
+                    message: "fetch error".to_string(),
+                    source: None,
+                });
+            }
+            if self.consumed {
+                return Ok(Vec::new());
+            }
+            let batches = std::mem::take(&mut self.batches);
+            if !batches.is_empty() {
+                self.records_read += batches.iter().map(|b| b.num_rows()).sum::<usize>();
+                self.next_fetch_offset += 1;
+                self.consumed = true;
+            }
+            Ok(batches)
+        }
+
+        fn is_consumed(&self) -> bool {
+            self.consumed
+        }
+
+        fn records_read(&self) -> usize {
+            self.records_read
+        }
+
+        fn drain(&mut self) {
+            self.consumed = true;
+        }
+
+        fn size_in_bytes(&self) -> usize {
+            0
+        }
+
+        fn high_watermark(&self) -> i64 {
+            0
+        }
+
+        fn is_initialized(&self) -> bool {
+            self.initialized
+        }
+
+        fn set_initialized(&mut self) {
+            self.initialized = true;
+        }
+
+        fn next_fetch_offset(&self) -> i64 {
+            self.next_fetch_offset
+        }
+    }
+
+    fn build_cluster_with_leader(
+        table_info: &TableInfo,
+        leader: Option<ServerNode>,
+        include_server: bool,
+    ) -> Arc<Cluster> {
+        let table_bucket = TableBucket::new(table_info.table_id, 0);
+        let mut servers = HashMap::new();
+        if include_server {
+            if let Some(server) = leader.clone() {
+                servers.insert(server.id(), server);
+            }
+        }
+        let location =
+            BucketLocation::new(table_bucket.clone(), leader, table_info.table_path.clone());
+        let locations_by_path =
+            HashMap::from([(table_info.table_path.clone(), vec![location.clone()])]);
+        let locations_by_bucket = HashMap::from([(table_bucket, location)]);
+        let table_id_by_path =
+            HashMap::from([(table_info.table_path.clone(), table_info.table_id)]);
+        let table_info_by_path =
+            HashMap::from([(table_info.table_path.clone(), table_info.clone())]);
+        Arc::new(Cluster::new(
+            None,
+            servers,
+            locations_by_path,
+            locations_by_bucket,
+            table_id_by_path,
+            table_info_by_path,
+        ))
+    }
+
+    async fn collect_result_for_error(
+        error: FlussError,
+    ) -> Result<std::result::Result<HashMap<TableBucket, Vec<ScanRecord>>, Error>> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            None,
+        )?;
+
+        let response = FetchLogResponse {
+            tables_resp: vec![PbFetchLogRespForTable {
+                table_id: 1,
+                buckets_resp: vec![PbFetchLogRespForBucket {
+                    partition_id: None,
+                    bucket_id: 0,
+                    error_code: Some(error.code()),
+                    error_message: Some("err".to_string()),
+                    high_watermark: None,
+                    log_start_offset: None,
+                    remote_log_fetch_info: None,
+                    records: None,
+                }],
+            }],
+        };
+
+        LogFetcher::handle_fetch_response(
+            response,
+            &fetcher.log_fetch_buffer,
+            &fetcher.log_scanner_status,
+            &fetcher.read_context,
+            &fetcher.remote_read_context,
+            &fetcher.remote_log_downloader,
+            &fetcher.credentials_cache,
+        )
+        .await;
+
+        Ok(fetcher.collect_fetches())
+    }
+
+    #[test]
+    fn project_rejects_empty_indices() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let conn = FlussConnection::new_for_test(
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            Config::default(),
+        );
+
+        let builder = TableScan::new(&conn, table_info, metadata);
+        let result = builder.project(&[]);
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_rejects_out_of_range_index() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let conn = FlussConnection::new_for_test(
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            Config::default(),
+        );
+
+        let builder = TableScan::new(&conn, table_info, metadata);
+        let result = builder.project(&[1]);
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_by_name_rejects_empty() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let conn = FlussConnection::new_for_test(
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            Config::default(),
+        );
+
+        let builder = TableScan::new(&conn, table_info, metadata);
+        let result = builder.project_by_name(&[]);
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_by_name_rejects_missing_column() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let conn = FlussConnection::new_for_test(
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            Config::default(),
+        );
+
+        let builder = TableScan::new(&conn, table_info, metadata);
+        let result = builder.project_by_name(&["missing"]);
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn log_fetcher_rejects_invalid_projection() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+
+        let result = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            Some(vec![1]),
+        );
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        Ok(())
+    }
+
+    async fn wait_for_leader_removal(
+        metadata: &Metadata,
+        table_bucket: &TableBucket,
+    ) -> Result<()> {
+        timeout(Duration::from_millis(500), async {
+            loop {
+                if metadata.get_cluster().leader_for(table_bucket).is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| Error::UnexpectedError {
+            message: "Timeout waiting for leader removal".to_string(),
+            source: None,
+        })?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -1545,6 +1916,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_fetch_log_requests_skips_without_leader() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_with_leader(&table_info, None, false);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            None,
+        )?;
+
+        let requests = fetcher.prepare_fetch_log_requests().await;
+        assert!(requests.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_fetch_log_requests_sets_projection() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            Some(vec![0]),
+        )?;
+
+        let requests = fetcher.prepare_fetch_log_requests().await;
+        let request = requests.get(&1).expect("fetch request");
+        let table_req = request.tables_req.first().expect("table request");
+        assert!(table_req.projection_pushdown_enabled);
+        assert_eq!(table_req.projected_fields, vec![0]);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn handle_fetch_response_sets_error() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = build_table_info(table_path.clone(), 1, 1);
@@ -1590,6 +2006,698 @@ mod tests {
         let completed = fetcher.log_fetch_buffer.poll().expect("completed fetch");
         let api_error = completed.api_error().expect("api error");
         assert_eq!(api_error.code, FlussError::AuthorizationException.code());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_fetches_ignores_retriable_errors() -> Result<()> {
+        let ignore_errors = [
+            FlussError::NotLeaderOrFollower,
+            FlussError::LogStorageException,
+            FlussError::KvStorageException,
+            FlussError::StorageException,
+            FlussError::FencedLeaderEpochException,
+            FlussError::UnknownTableOrBucketException,
+            FlussError::UnknownServerError,
+        ];
+
+        for error in ignore_errors {
+            let result = collect_result_for_error(error).await?;
+            assert!(
+                matches!(result, Ok(records) if records.is_empty()),
+                "unexpected result for {error:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_fetches_returns_error_for_corrupt_or_unexpected() -> Result<()> {
+        let error_cases = [
+            FlussError::CorruptMessage,
+            FlussError::InvalidTableException,
+        ];
+
+        for error in error_cases {
+            let result = collect_result_for_error(error).await?;
+            assert!(
+                matches!(result, Err(Error::UnexpectedError { .. })),
+                "unexpected result for {error:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_fetches_invalidates_missing_server() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let leader = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
+        let cluster = build_cluster_with_leader(&table_info, Some(leader), false);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status,
+            None,
+        )?;
+
+        fetcher.send_fetches().await?;
+        wait_for_leader_removal(&metadata, &bucket).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_fetches_invalidates_on_request_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let leader = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
+        let cluster = build_cluster_with_leader(&table_info, Some(leader.clone()), true);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let rpc_client = Arc::new(RpcClient::new());
+
+        let (client, server) = tokio::io::duplex(1024);
+        drop(server);
+        let transport = crate::rpc::Transport::Test { inner: client };
+        let connection = Arc::new(crate::rpc::ServerConnectionInner::new(
+            BufStream::new(transport),
+            usize::MAX,
+            Arc::from(""),
+        ));
+        rpc_client.insert_connection_for_test(&leader, connection);
+
+        let fetcher = LogFetcher::new(table_info, rpc_client, metadata.clone(), status, None)?;
+        fetcher.send_fetches().await?;
+        wait_for_leader_removal(&metadata, &bucket).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_fetches_invalidates_on_connection_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let leader = ServerNode::new(1, "127.0.0.1".to_string(), 1, ServerType::TabletServer);
+        let cluster = build_cluster_with_leader(&table_info, Some(leader.clone()), true);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status,
+            None,
+        )?;
+
+        fetcher.send_fetches().await?;
+        wait_for_leader_removal(&metadata, &bucket).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_fetch_response_records_are_collected() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let records = build_records(&table_info, Arc::new(table_path))?;
+        let response = FetchLogResponse {
+            tables_resp: vec![PbFetchLogRespForTable {
+                table_id: 1,
+                buckets_resp: vec![PbFetchLogRespForBucket {
+                    partition_id: None,
+                    bucket_id: 0,
+                    error_code: None,
+                    error_message: None,
+                    high_watermark: Some(5),
+                    log_start_offset: Some(0),
+                    remote_log_fetch_info: None,
+                    records: Some(records),
+                }],
+            }],
+        };
+
+        LogFetcher::handle_fetch_response(
+            response,
+            &fetcher.log_fetch_buffer,
+            &fetcher.log_scanner_status,
+            &fetcher.read_context,
+            &fetcher.remote_read_context,
+            &fetcher.remote_log_downloader,
+            &fetcher.credentials_cache,
+        )
+        .await;
+
+        let fetched = fetcher.collect_fetches()?;
+        assert_eq!(fetched.get(&TableBucket::new(1, 0)).unwrap().len(), 1);
+        assert_eq!(status.get_bucket_offset(&TableBucket::new(1, 0)), Some(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_fetches_enqueues_completed_fetch() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let rpc_client = Arc::new(RpcClient::new());
+
+        let records = build_records(&table_info, Arc::new(table_path))?;
+        let response = FetchLogResponse {
+            tables_resp: vec![PbFetchLogRespForTable {
+                table_id: 1,
+                buckets_resp: vec![PbFetchLogRespForBucket {
+                    partition_id: None,
+                    bucket_id: 0,
+                    error_code: None,
+                    error_message: None,
+                    high_watermark: Some(1),
+                    log_start_offset: Some(0),
+                    remote_log_fetch_info: None,
+                    records: Some(records.clone()),
+                }],
+            }],
+        };
+
+        let (connection, handle) =
+            build_mock_connection(move |_api_key: crate::rpc::ApiKey, _, _| {
+                response.encode_to_vec()
+            })
+            .await;
+        let server_node = metadata
+            .get_cluster()
+            .get_tablet_server(1)
+            .expect("server")
+            .clone();
+        rpc_client.insert_connection_for_test(&server_node, connection);
+
+        let fetcher = LogFetcher::new(table_info, rpc_client, metadata, status.clone(), None)?;
+
+        fetcher.send_fetches().await?;
+        let has_data = fetcher
+            .log_fetch_buffer
+            .await_not_empty(Duration::from_millis(200))
+            .await?;
+        assert!(has_data);
+
+        let fetched = fetcher.collect_fetches()?;
+        assert_eq!(fetched.get(&TableBucket::new(1, 0)).unwrap().len(), 1);
+        handle.abort();
+        Ok(())
+    }
+
+    #[test]
+    fn collect_batches_returns_batches_and_updates_offset() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+
+        let data = build_records(&table_info, Arc::new(table_path))?;
+        let log_records = LogRecordsBatches::new(data.clone());
+        let mut completed = DefaultCompletedFetch::new(
+            bucket.clone(),
+            log_records,
+            data.len(),
+            fetcher.read_context.clone(),
+            0,
+            0,
+        );
+        completed.set_initialized();
+        fetcher
+            .log_fetch_buffer
+            .set_next_in_line_fetch(Some(Box::new(completed)));
+
+        let batches = fetcher.collect_batches()?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(status.get_bucket_offset(&bucket), Some(1));
+        Ok(())
+    }
+
+    #[test]
+    fn collect_batches_returns_partial_on_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+
+        let completed = TestCompletedFetch::batch_ok(bucket.clone());
+        fetcher
+            .log_fetch_buffer
+            .set_next_in_line_fetch(Some(Box::new(completed)));
+
+        let error_fetch = TestCompletedFetch::batch_err(bucket.clone());
+        fetcher.log_fetch_buffer.add(Box::new(error_fetch));
+
+        let batches = fetcher.collect_batches()?;
+        assert_eq!(batches.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_batches_from_fetch_drains_unassigned_bucket() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        let data = build_records(&table_info, Arc::new(table_path))?;
+        let log_records = LogRecordsBatches::new(data.clone());
+        let mut completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::new(
+            bucket,
+            log_records,
+            data.len(),
+            fetcher.read_context.clone(),
+            0,
+            0,
+        ));
+
+        let batches = fetcher.fetch_batches_from_fetch(&mut completed, 10)?;
+        assert!(batches.is_empty());
+        assert!(completed.is_consumed());
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_batches_from_fetch_returns_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let mut completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::from_error(
+            bucket,
+            Error::UnexpectedError {
+                message: "fetch error".to_string(),
+                source: None,
+            },
+            0,
+            fetcher.read_context.clone(),
+        ));
+
+        let result = fetcher.fetch_batches_from_fetch(&mut completed, 10);
+        assert!(matches!(result, Err(Error::UnexpectedError { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_batches_from_fetch_ignores_out_of_order_offset() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 5);
+        let data = build_records(&table_info, Arc::new(table_path))?;
+        let log_records = LogRecordsBatches::new(data.clone());
+        let mut completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::new(
+            bucket,
+            log_records,
+            data.len(),
+            fetcher.read_context.clone(),
+            0,
+            0,
+        ));
+
+        let batches = fetcher.fetch_batches_from_fetch(&mut completed, 10)?;
+        assert!(batches.is_empty());
+        assert!(completed.is_consumed());
+        Ok(())
+    }
+
+    #[test]
+    fn collect_batches_skips_error_when_empty_and_size_zero() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            None,
+        )?;
+
+        let error_fetch = DefaultCompletedFetch::from_error(
+            TableBucket::new(1, 0),
+            Error::UnexpectedError {
+                message: "fetch error".to_string(),
+                source: None,
+            },
+            0,
+            fetcher.read_context.clone(),
+        );
+        fetcher.log_fetch_buffer.add(Box::new(error_fetch));
+
+        let batches = fetcher.collect_batches()?;
+        assert!(batches.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_records_from_fetch_ignores_out_of_order_offset() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 5);
+        let data = build_records(&table_info, Arc::new(table_path))?;
+        let log_records = LogRecordsBatches::new(data.clone());
+        let mut completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::new(
+            bucket,
+            log_records,
+            data.len(),
+            fetcher.read_context.clone(),
+            0,
+            0,
+        ));
+
+        let records = fetcher.fetch_records_from_fetch(&mut completed, 10)?;
+        assert!(records.is_empty());
+        assert!(completed.is_consumed());
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_records_from_fetch_returns_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let mut completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::from_error(
+            bucket,
+            Error::UnexpectedError {
+                message: "fetch error".to_string(),
+                source: None,
+            },
+            0,
+            fetcher.read_context.clone(),
+        ));
+
+        let result = fetcher.fetch_records_from_fetch(&mut completed, 10);
+        assert!(matches!(result, Err(Error::UnexpectedError { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn collect_fetches_returns_partial_on_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let completed = TestCompletedFetch::record_ok(bucket.clone());
+        fetcher
+            .log_fetch_buffer
+            .set_next_in_line_fetch(Some(Box::new(completed)));
+
+        let error_fetch = TestCompletedFetch::record_err(bucket.clone());
+        fetcher.log_fetch_buffer.add(Box::new(error_fetch));
+
+        let result = fetcher.collect_fetches()?;
+        let records = result.get(&bucket).expect("records");
+        assert_eq!(records.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscribe_batch_rejects_empty() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let inner = LogScannerInner::new(&table_info, metadata, Arc::new(RpcClient::new()), None)?;
+
+        let result = inner.subscribe_batch(&HashMap::new()).await;
+        assert!(matches!(result, Err(Error::UnexpectedError { .. })));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_fetch_response_out_of_range_sets_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 5);
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status.clone(),
+            None,
+        )?;
+
+        let response = crate::proto::FetchLogResponse {
+            tables_resp: vec![crate::proto::PbFetchLogRespForTable {
+                table_id: 1,
+                buckets_resp: vec![crate::proto::PbFetchLogRespForBucket {
+                    partition_id: None,
+                    bucket_id: 0,
+                    error_code: Some(FlussError::LogOffsetOutOfRangeException.code()),
+                    error_message: Some("out of range".to_string()),
+                    high_watermark: None,
+                    log_start_offset: None,
+                    remote_log_fetch_info: None,
+                    records: None,
+                }],
+            }],
+        };
+
+        LogFetcher::handle_fetch_response(
+            response,
+            &fetcher.log_fetch_buffer,
+            &fetcher.log_scanner_status,
+            &fetcher.read_context,
+            &fetcher.remote_read_context,
+            &fetcher.remote_log_downloader,
+            &fetcher.credentials_cache,
+        )
+        .await;
+
+        let completed = fetcher.log_fetch_buffer.poll().expect("completed fetch");
+        let result = fetcher.initialize_fetch(completed);
+        assert!(matches!(result, Err(Error::UnexpectedError { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_fetch_returns_authorization_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            None,
+        )?;
+
+        let error_context = LogFetcher::describe_fetch_error(
+            FlussError::AuthorizationException,
+            &bucket,
+            0,
+            "denied",
+        );
+        let completed = DefaultCompletedFetch::from_api_error(
+            bucket,
+            ApiError {
+                code: FlussError::AuthorizationException.code(),
+                message: "denied".to_string(),
+            },
+            error_context,
+            0,
+            fetcher.read_context.clone(),
+        );
+
+        let result = fetcher.initialize_fetch(Box::new(completed));
+        assert!(matches!(result, Err(Error::FlussAPIError { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_fetch_discards_stale_offset() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 5);
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            None,
+        )?;
+
+        let data = build_records(&table_info, Arc::new(table_path))?;
+        let log_records = LogRecordsBatches::new(data.clone());
+        let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type()), false);
+        let completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            log_records,
+            data.len(),
+            read_context,
+            0,
+            0,
+        ));
+
+        let result = fetcher.initialize_fetch(completed)?;
+        assert!(result.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn poll_without_subscription_returns_empty() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let inner = LogScannerInner::new(&table_info, metadata, Arc::new(RpcClient::new()), None)?;
+        let scanner = LogScanner {
+            inner: Arc::new(inner),
+        };
+
+        let result = scanner.poll(Duration::from_millis(1)).await?;
+        assert!(result.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn poll_records_propagates_wakeup_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let inner = LogScannerInner::new(&table_info, metadata, Arc::new(RpcClient::new()), None)?;
+
+        inner.log_fetcher.log_fetch_buffer.wakeup();
+        let result = inner.poll_records(Duration::from_millis(10)).await;
+        assert!(matches!(result, Err(Error::WakeupError { .. })));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn poll_batches_propagates_wakeup_error() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let inner = LogScannerInner::new(&table_info, metadata, Arc::new(RpcClient::new()), None)?;
+
+        inner.log_fetcher.log_fetch_buffer.wakeup();
+        let result = inner.poll_batches(Duration::from_millis(10)).await;
+        assert!(matches!(result, Err(Error::WakeupError { .. })));
         Ok(())
     }
 }

@@ -276,3 +276,150 @@ impl Cluster {
         self.table_info_by_path.get(table_path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::{
+        DataField, DataTypes, JsonSerde, Schema, TableBucket, TableDescriptor, TablePath,
+    };
+    use crate::proto::{
+        MetadataResponse, PbBucketMetadata, PbServerNode, PbTableMetadata, PbTablePath,
+    };
+    use std::collections::HashMap;
+
+    fn build_table_descriptor() -> TableDescriptor {
+        let row_type = DataTypes::row(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let mut schema_builder = Schema::builder().with_row_type(&row_type);
+        let schema = schema_builder.build().expect("schema build");
+        TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(2), vec![])
+            .build()
+            .expect("descriptor")
+    }
+
+    fn build_metadata_response() -> MetadataResponse {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_descriptor = build_table_descriptor();
+        let table_json =
+            serde_json::to_vec(&table_descriptor.serialize_json().expect("table json")).unwrap();
+
+        MetadataResponse {
+            coordinator_server: Some(PbServerNode {
+                node_id: 10,
+                host: "127.0.0.1".to_string(),
+                port: 9999,
+                listeners: None,
+            }),
+            tablet_servers: vec![
+                PbServerNode {
+                    node_id: 1,
+                    host: "127.0.0.1".to_string(),
+                    port: 9092,
+                    listeners: None,
+                },
+                PbServerNode {
+                    node_id: 2,
+                    host: "127.0.0.1".to_string(),
+                    port: 9093,
+                    listeners: None,
+                },
+            ],
+            table_metadata: vec![PbTableMetadata {
+                table_path: PbTablePath {
+                    database_name: table_path.database().to_string(),
+                    table_name: table_path.table().to_string(),
+                },
+                table_id: 5,
+                schema_id: 1,
+                table_json,
+                bucket_metadata: vec![
+                    PbBucketMetadata {
+                        bucket_id: 0,
+                        leader_id: Some(1),
+                        replica_id: vec![1],
+                    },
+                    PbBucketMetadata {
+                        bucket_id: 1,
+                        leader_id: Some(2),
+                        replica_id: vec![2],
+                    },
+                ],
+                created_time: 10,
+                modified_time: 20,
+            }],
+            partition_metadata: vec![],
+        }
+    }
+
+    #[test]
+    fn cluster_from_metadata_response_populates_servers_and_locations() -> Result<()> {
+        let response = build_metadata_response();
+        let cluster = Cluster::from_metadata_response(response, None)?;
+
+        assert!(cluster.get_coordinator_server().is_some());
+        assert!(cluster.get_tablet_server(1).is_some());
+        assert!(cluster.get_tablet_server(2).is_some());
+        assert_eq!(cluster.table_id_by_path.len(), 1);
+
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        assert!(cluster.opt_get_table(&table_path).is_some());
+        assert_eq!(cluster.get_bucket_count(&table_path), 2);
+
+        let bucket0 = TableBucket::new(5, 0);
+        let bucket1 = TableBucket::new(5, 1);
+        assert_eq!(cluster.leader_for(&bucket0).unwrap().id(), 1);
+        assert_eq!(cluster.leader_for(&bucket1).unwrap().id(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn invalidate_server_removes_locations_for_tables() {
+        let response = build_metadata_response();
+        let cluster = Cluster::from_metadata_response(response, None).expect("cluster");
+
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let updated = cluster.invalidate_server(&1, vec![5]);
+        assert!(updated.get_tablet_server(1).is_none());
+        assert!(updated.opt_get_table(&table_path).is_some());
+        assert!(updated.leader_for(&TableBucket::new(5, 0)).is_none());
+    }
+
+    #[test]
+    fn update_replaces_state() -> Result<()> {
+        let response = build_metadata_response();
+        let mut cluster = Cluster::default();
+        let next = Cluster::from_metadata_response(response, None)?;
+        cluster.update(next);
+        assert!(cluster.get_tablet_server(1).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn leader_for_respects_available_locations() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let mut servers = HashMap::new();
+        servers.insert(
+            1,
+            ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer),
+        );
+        let bucket = TableBucket::new(1, 0);
+        let location = BucketLocation::new(bucket.clone(), None, table_path.clone());
+
+        let cluster = Cluster::new(
+            None,
+            servers,
+            HashMap::from([(table_path.clone(), vec![location])]),
+            HashMap::new(),
+            HashMap::from([(table_path, 1)]),
+            HashMap::new(),
+        );
+        assert!(cluster.leader_for(&bucket).is_none());
+        Ok(())
+    }
+}
