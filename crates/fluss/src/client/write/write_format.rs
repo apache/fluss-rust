@@ -39,7 +39,7 @@ impl WriteFormat {
         match self {
             WriteFormat::CompactedKv => Ok(KvFormat::COMPACTED),
             other => Err(IllegalArgument {
-                message: format!("WriteFormat `{}` is not a KvFormat", other),
+                message: format!("WriteFormat `{other}` is not a KvFormat"),
             }),
         }
     }
@@ -48,7 +48,7 @@ impl WriteFormat {
         match kv_format {
             KvFormat::COMPACTED => Ok(WriteFormat::CompactedKv),
             other => Err(IllegalArgument {
-                message: format!("Unknown KvFormat: `{}`", other),
+                message: format!("Unknown KvFormat: `{other}`"),
             }),
         }
     }

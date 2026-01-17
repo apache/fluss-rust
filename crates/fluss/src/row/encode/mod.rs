@@ -19,7 +19,7 @@ mod compacted_key_encoder;
 mod compacted_row_encoder;
 
 use crate::error::Result;
-use crate::metadata::{DataLakeFormat, DataType, KvFormat, RowType};
+use crate::metadata::{DataLakeFormat, KvFormat, RowType};
 use crate::row::encode::compacted_key_encoder::CompactedKeyEncoder;
 use crate::row::encode::compacted_row_encoder::CompactedRowEncoder;
 use crate::row::{BinaryRow, Datum, InternalRow};
@@ -111,18 +111,18 @@ pub struct RowEncoderFactory {}
 #[allow(dead_code)]
 impl RowEncoderFactory {
     pub fn create(kv_format: KvFormat, row_type: &RowType) -> Result<impl RowEncoder> {
-        Self::create_for_field_types(kv_format, row_type.field_types().cloned().collect())
+        Self::create_for_field_types(kv_format, row_type.clone())
     }
 
     pub fn create_for_field_types(
         kv_format: KvFormat,
-        field_data_types: Vec<DataType>,
+        row_type: RowType,
     ) -> Result<impl RowEncoder> {
         match kv_format {
             KvFormat::INDEXED => {
                 todo!()
             }
-            KvFormat::COMPACTED => CompactedRowEncoder::new(field_data_types),
+            KvFormat::COMPACTED => CompactedRowEncoder::new(row_type),
         }
     }
 }

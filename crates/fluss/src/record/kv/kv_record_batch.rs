@@ -96,7 +96,7 @@ impl KvRecordBatch {
         if length_i32 < 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid batch length: {}", length_i32),
+                format!("Invalid batch length: {length_i32}"),
             ));
         }
 
@@ -150,10 +150,7 @@ impl KvRecordBatch {
         if size < RECORD_BATCH_HEADER_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "Batch size {} is less than header size {}",
-                    size, RECORD_BATCH_HEADER_SIZE
-                ),
+                format!("Batch size {size} is less than header size {RECORD_BATCH_HEADER_SIZE}"),
             ));
         }
 
@@ -276,7 +273,7 @@ impl KvRecordBatch {
         if count < 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid record count: {}", count),
+                format!("Invalid record count: {count}"),
             ));
         }
         Ok(KvRecordIterator {
@@ -321,7 +318,7 @@ impl Iterator for KvRecordIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataTypes, KvFormat};
+    use crate::metadata::{DataTypes, KvFormat, RowType};
     use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, KvRecordBatchBuilder};
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRow;
@@ -366,8 +363,8 @@ mod tests {
         let mut value1_writer = CompactedRowWriter::new(1);
         value1_writer.write_bytes(&[1, 2, 3, 4, 5]);
 
-        let data_types = &[DataTypes::bytes()];
-        let row = &CompactedRow::from_bytes(data_types, value1_writer.buffer());
+        let row_type = RowType::with_data_types([DataTypes::bytes()].to_vec());
+        let row = &CompactedRow::from_bytes(&row_type, value1_writer.buffer());
         builder.append_row(key1, Some(row)).unwrap();
 
         let key2 = b"key2";

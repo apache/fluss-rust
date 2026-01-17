@@ -17,14 +17,14 @@
 
 use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
+use crate::error::{Error, Result};
 use crate::metadata::{TableInfo, TablePath};
 use std::sync::Arc;
-
-use crate::error::Result;
 
 pub const EARLIEST_OFFSET: i64 = -2;
 
 mod append;
+mod lookup;
 
 mod log_fetch_buffer;
 mod remote_log;
@@ -32,6 +32,7 @@ mod scanner;
 mod writer;
 
 pub use append::{AppendWriter, TableAppend};
+pub use lookup::{LookupResult, Lookuper, TableLookup};
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
 
 #[allow(dead_code)]
@@ -84,6 +85,39 @@ impl<'a> FlussTable<'a> {
 
     pub fn has_primary_key(&self) -> bool {
         self.has_primary_key
+    }
+
+    /// Creates a new `TableLookup` for configuring lookup operations.
+    ///
+    /// This follows the same pattern as `new_scan()` and `new_append()`,
+    /// returning a configuration object that can be used to create a `Lookuper`.
+    ///
+    /// The table must have a primary key (be a primary key table).
+    ///
+    /// # Returns
+    /// * `Ok(TableLookup)` - A lookup configuration object
+    /// * `Err(Error)` - If the table doesn't have a primary key
+    ///
+    /// # Example
+    /// ```ignore
+    /// let table = conn.get_table(&table_path).await?;
+    /// let lookuper = table.new_lookup()?.create_lookuper()?;
+    /// let key = vec![1, 2, 3]; // encoded primary key bytes
+    /// if let Some(value) = lookuper.lookup(key).await? {
+    ///     println!("Found value: {:?}", value);
+    /// }
+    /// ```
+    pub fn new_lookup(&self) -> Result<TableLookup<'_>> {
+        if !self.has_primary_key {
+            return Err(Error::UnsupportedOperation {
+                message: "Lookup is only supported for primary key tables".to_string(),
+            });
+        }
+        Ok(TableLookup::new(
+            self.conn,
+            self.table_info.clone(),
+            self.metadata.clone(),
+        ))
     }
 }
 
