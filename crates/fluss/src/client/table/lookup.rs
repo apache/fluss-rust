@@ -177,7 +177,8 @@ impl<'a> Lookuper<'a> {
     /// # Returns
     /// * `Ok(LookupResult)` - The lookup result (may be empty if key not found)
     /// * `Err(Error)` - If the lookup fails
-    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
+    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult<'_>> {
+        // todo: support batch lookup
         // Encode the key from the row
         let encoded_key = self.key_encoder.encode_key(row)?;
         let key_bytes = encoded_key.to_vec();

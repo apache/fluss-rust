@@ -188,13 +188,16 @@ mod tests {
         assert_eq!(row.get_bytes(8), &[1, 2, 3, 4, 5]);
 
         // Test with nulls
-        let types = [
-            DataType::Int(IntType::new()),
-            DataType::String(StringType::new()),
-            DataType::Double(DoubleType::new()),
-        ];
+        let row_type = RowType::with_data_types(
+            [
+                DataType::Int(IntType::new()),
+                DataType::String(StringType::new()),
+                DataType::Double(DoubleType::new()),
+            ]
+            .to_vec(),
+        );
 
-        let mut writer = CompactedRowWriter::new(types.len());
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
 
         writer.write_int(100);
         writer.set_null_at(1);
@@ -231,9 +234,11 @@ mod tests {
 
         // Test large row
         let num_fields = 100;
-        let types: Vec<DataType> = (0..num_fields)
-            .map(|_| DataType::Int(IntType::new()))
-            .collect();
+        let row_type = RowType::with_data_types(
+            (0..num_fields)
+                .map(|_| DataType::Int(IntType::new()))
+                .collect(),
+        );
 
         let mut writer = CompactedRowWriter::new(num_fields);
 

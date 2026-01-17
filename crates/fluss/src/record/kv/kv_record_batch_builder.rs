@@ -485,7 +485,6 @@ mod tests {
 
     #[test]
     fn test_builder_with_compacted_row_writer() {
-        use crate::metadata::{DataType, IntType, StringType};
         use crate::record::kv::KvRecordBatch;
         use crate::row::InternalRow;
         use crate::row::compacted::CompactedRow;
@@ -493,17 +492,12 @@ mod tests {
         let mut builder = KvRecordBatchBuilder::new(1, 100000, KvFormat::COMPACTED);
         builder.set_writer_state(100, 5);
 
-        let row_type = RowType::with_data_types(vec![
-            DataType::Int(IntType::new()),
-            DataType::String(StringType::new()),
-        ]);
-
         // Create and append first record with CompactedRowWriter
         let mut row_writer1 = CompactedRowWriter::new(2);
         row_writer1.write_int(42);
         row_writer1.write_string("hello");
 
-        let data_types = &[DataTypes::int(), DataTypes::string()];
+        let row_type = RowType::with_data_types([DataTypes::int(), DataTypes::string()].to_vec());
         let row1 = &CompactedRow::from_bytes(&row_type, row_writer1.buffer());
 
         let key1 = b"key1";
