@@ -528,7 +528,7 @@ mod table_test {
         use arrow::array::Int32Array;
         let batches = scanner.poll(Duration::from_secs(10)).await.unwrap();
         let mut all_ids: Vec<i32> = batches
-            .iter()
+            .values().iter()
             .flat_map(|b| {
                 (0..b.num_rows()).map(|i| {
                     b.column(0)
@@ -553,8 +553,8 @@ mod table_test {
 
         let more = scanner.poll(Duration::from_secs(10)).await.unwrap();
         let new_ids: Vec<i32> = more
-            .iter()
-            .flat_map(|b| {
+            .values()
+            .iter().flat_map(|b| {
                 (0..b.num_rows()).map(|i| {
                     b.column(0)
                         .as_any()
@@ -574,8 +574,8 @@ mod table_test {
         trunc_scanner.subscribe(0, 3).await.unwrap();
         let trunc_batches = trunc_scanner.poll(Duration::from_secs(10)).await.unwrap();
         let trunc_ids: Vec<i32> = trunc_batches
-            .iter()
-            .flat_map(|b| {
+            .values()
+            .iter().flat_map(|b| {
                 (0..b.num_rows()).map(|i| {
                     b.column(0)
                         .as_any()
@@ -600,6 +600,6 @@ mod table_test {
         let proj_batches = proj.poll(Duration::from_secs(10)).await.unwrap();
 
         // Projected batch should have 1 column (id), not 2 (id, name)
-        assert_eq!(proj_batches[0].num_columns(), 1);
+        assert_eq!(proj_batches.values()[0].num_columns(), 1);
     }
 }

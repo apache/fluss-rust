@@ -19,6 +19,7 @@ use crate::metadata::TableBucket;
 use crate::row::ColumnarRow;
 use core::fmt;
 use std::collections::HashMap;
+use ::arrow::array::RecordBatch;
 
 mod arrow;
 mod error;
@@ -135,6 +136,31 @@ impl ScanRecord {
 
 pub struct ScanRecords {
     records: HashMap<TableBucket, Vec<ScanRecord>>,
+}
+
+pub struct ScanRecordBatches {
+    pub record_batches: HashMap<TableBucket, Vec<RecordBatch>>,
+}
+
+
+impl ScanRecordBatches {
+    pub fn new() -> Self {
+        Self {
+            record_batches: HashMap::new(),
+        }
+    }
+    
+    pub fn insert(&mut self, table_bucket: TableBucket, records: Vec<RecordBatch>) {
+        self.record_batches.entry(table_bucket).or_default().extend(records);
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.record_batches.is_empty()
+    }
+    
+    pub fn values(&self) -> Vec<&RecordBatch> {
+        self.record_batches.values().flatten().collect()
+    }
 }
 
 impl ScanRecords {

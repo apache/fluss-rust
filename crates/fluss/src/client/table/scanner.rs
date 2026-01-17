@@ -37,7 +37,7 @@ use crate::client::table::remote_log::{
 use crate::error::{Error, Result, RpcError};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
-use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
+use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema, ScanRecordBatches};
 use crate::rpc::{RpcClient, message};
 use crate::util::FairBucketStatusMap;
 
@@ -339,6 +339,13 @@ impl LogScannerInner {
         Ok(())
     }
 
+    async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+        let table_bucket = TableBucket::new(self.table_id, bucket);
+        self.log_scanner_status
+            .unassign_scan_buckets( &[table_bucket]);
+        Ok(())
+    }
+
     async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
@@ -374,7 +381,7 @@ impl LogScannerInner {
         self.log_fetcher.collect_fetches()
     }
 
-    async fn poll_batches(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+    async fn poll_batches(&self, timeout: Duration) -> Result<ScanRecordBatches> {
         let start = std::time::Instant::now();
         let deadline = start + timeout;
 
@@ -388,7 +395,7 @@ impl LogScannerInner {
 
             let now = std::time::Instant::now();
             if now >= deadline {
-                return Ok(Vec::new());
+                return Ok(ScanRecordBatches::new());
             }
 
             let remaining = deadline - now;
@@ -399,12 +406,12 @@ impl LogScannerInner {
                 .await;
 
             if !has_data {
-                return Ok(Vec::new());
+                return Ok(ScanRecordBatches::new());
             }
         }
     }
 
-    async fn poll_for_batches(&self) -> Result<Vec<RecordBatch>> {
+    async fn poll_for_batches(&self) -> Result<ScanRecordBatches> {
         let result = self.log_fetcher.collect_batches()?;
         if !result.is_empty() {
             return Ok(result);
@@ -432,7 +439,7 @@ impl LogScanner {
 
 // Implementation for RecordBatchLogScanner (batches mode)
 impl RecordBatchLogScanner {
-    pub async fn poll(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+    pub async fn poll(&self, timeout: Duration) -> Result<ScanRecordBatches> {
         self.inner.poll_batches(timeout).await
     }
 
@@ -442,6 +449,10 @@ impl RecordBatchLogScanner {
 
     pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.inner.subscribe_batch(bucket_offsets).await
+    }
+
+    pub async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+       self.inner.unsubscribe(bucket).await
     }
 }
 
@@ -906,12 +917,12 @@ impl LogFetcher {
     }
 
     /// Collect completed fetches as RecordBatches
-    fn collect_batches(&self) -> Result<Vec<RecordBatch>> {
+    fn collect_batches(&self) -> Result<ScanRecordBatches> {
         // Limit memory usage with both batch count and byte size constraints.
         // Max 100 batches per poll, but also check total bytes (soft cap ~64MB).
         const MAX_BATCHES: usize = 100;
         const MAX_BYTES: usize = 64 * 1024 * 1024; // 64MB soft cap
-        let mut result: Vec<RecordBatch> = Vec::new();
+        let mut result: ScanRecordBatches = ScanRecordBatches::new();
         let mut batches_remaining = MAX_BATCHES;
         let mut bytes_consumed: usize = 0;
 
@@ -930,7 +941,7 @@ impl LogFetcher {
                             batches.iter().map(|b| b.get_array_memory_size()).sum();
                         bytes_consumed += batch_bytes;
 
-                        result.extend(batches);
+                        result.insert(next_fetch.table_bucket().clone(), batches);
                         batches_remaining = batches_remaining.saturating_sub(batch_count);
                     }
 
