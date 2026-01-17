@@ -32,8 +32,10 @@
 
 use bytes::Bytes;
 use std::io;
+use std::sync::Arc;
 
-use crate::record::kv::KvRecord;
+use crate::record::kv::{KvRecord, ReadContext};
+use crate::row::RowDecoder;
 
 // Field lengths in bytes
 pub const LENGTH_LENGTH: usize = 4;
@@ -253,35 +255,84 @@ impl KvRecordBatch {
         ]))
     }
 
-    /// Create an iterator over the records in this batch.
-    /// This validates the batch checksum before returning the iterator.
+    /// Create an iterable collection of records in this batch.
+    ///
+    /// This validates the batch checksum before returning the records.
     /// For trusted data paths, use `records_unchecked()` to skip validation.
-    pub fn records(&self) -> io::Result<KvRecordIterator> {
+    ///
+    /// Mirrors: KvRecordBatch.records(ReadContext)
+    pub fn records(&self, read_context: &dyn ReadContext) -> io::Result<KvRecords> {
         if !self.is_valid() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid batch checksum",
             ));
         }
-        self.records_unchecked()
+        self.records_unchecked(read_context)
     }
 
-    /// Create an iterator over the records in this batch without validating the checksum
-    pub fn records_unchecked(&self) -> io::Result<KvRecordIterator> {
+    /// Create an iterable collection of records in this batch without validating the checksum.
+    pub fn records_unchecked(&self, read_context: &dyn ReadContext) -> io::Result<KvRecords> {
         let size = self.size_in_bytes()?;
         let count = self.record_count()?;
+        let schema_id = self.schema_id()?;
+
         if count < 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Invalid record count: {count}"),
             ));
         }
-        Ok(KvRecordIterator {
-            data: self.data.clone(),
-            position: self.position + RECORDS_OFFSET,
-            end: self.position + size,
-            remaining_count: count,
+
+        // Get row decoder for this schema from context (cached)
+        let row_decoder = read_context.get_row_decoder(schema_id)?;
+
+        Ok(KvRecords {
+            iter: KvRecordIterator {
+                data: self.data.clone(),
+                position: self.position + RECORDS_OFFSET,
+                end: self.position + size,
+                remaining_count: count,
+            },
+            row_decoder,
         })
+    }
+}
+
+/// Iterable collection of KV records with associated decoder.
+///
+/// This wrapper provides both iteration capability and access to the row decoder
+/// needed to decode record values into typed rows.
+pub struct KvRecords {
+    iter: KvRecordIterator,
+    row_decoder: Arc<dyn RowDecoder>,
+}
+
+impl KvRecords {
+    /// Get a reference to the row decoder for decoding record values.
+    ///
+    /// Returns a reference tied to the lifetime of `&self`.
+    /// Use this when iterating by reference.
+    pub fn decoder(&self) -> &dyn RowDecoder {
+        &*self.row_decoder
+    }
+
+    /// Get an owned Arc to the row decoder.
+    ///
+    /// Returns a cloned Arc that can outlive the KvRecords,
+    /// allowing you to grab it before consuming the iterator.
+    /// Useful if you must keep the decoder beyond the iterable’s lifetime(collect then decode style)
+    pub fn decoder_arc(&self) -> Arc<dyn RowDecoder> {
+        Arc::clone(&self.row_decoder)
+    }
+}
+
+impl IntoIterator for KvRecords {
+    type Item = io::Result<KvRecord>;
+    type IntoIter = KvRecordIterator;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter
     }
 }
 
@@ -320,6 +371,7 @@ mod tests {
     use super::*;
     use crate::metadata::{DataTypes, KvFormat, RowType};
     use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, KvRecordBatchBuilder};
+    use crate::row::InternalRow;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRow;
     use bytes::{BufMut, BytesMut};
@@ -380,15 +432,25 @@ mod tests {
         assert_eq!(batch.batch_sequence().unwrap(), 5);
         assert_eq!(batch.record_count().unwrap(), 2);
 
-        let records: Vec<_> = batch.records().unwrap().collect();
-        assert_eq!(records.len(), 2);
+        // Create ReadContext for reading
+        let read_context =
+            crate::record::kv::test_utils::TestReadContext::compacted(vec![DataTypes::bytes()]);
 
-        let record1 = records[0].as_ref().unwrap();
+        // Iterate and verify records using typed API
+        let records = batch.records(&read_context).unwrap();
+        let decoder = records.decoder_arc(); // Get Arc before consuming
+
+        let mut iter = records.into_iter();
+        let record1 = iter.next().unwrap().unwrap();
         assert_eq!(record1.key().as_ref(), key1);
-        assert_eq!(record1.value().unwrap().as_ref(), value1_writer.buffer());
+        assert!(!record1.is_deletion());
+        let row1 = record1.row(&*decoder).unwrap();
+        assert_eq!(row1.get_bytes(0), &[1, 2, 3, 4, 5]);
 
-        let record2 = records[1].as_ref().unwrap();
+        let record2 = iter.next().unwrap().unwrap();
         assert_eq!(record2.key().as_ref(), key2);
-        assert!(record2.value().is_none());
+        assert!(record2.is_deletion());
+
+        assert!(iter.next().is_none());
     }
 }

@@ -23,11 +23,13 @@ pub mod binary;
 pub mod compacted;
 pub mod encode;
 mod field_getter;
+mod row_decoder;
 
 pub use column::*;
 pub use compacted::CompactedRow;
 pub use datum::*;
 pub use encode::KeyEncoder;
+pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
 
 pub trait BinaryRow: InternalRow {
     /// Returns the binary representation of this row as a byte slice.
