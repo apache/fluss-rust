@@ -17,7 +17,7 @@
 
 use crate::client::{Record, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::DataType;
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
@@ -446,7 +446,7 @@ impl LogRecordBatch {
     }
 
     pub fn ensure_valid(&self) -> Result<()> {
-        // todo
+        // TODO enable validation once checksum handling is corrected.
         Ok(())
     }
 
@@ -780,8 +780,10 @@ impl ReadContext {
         arrow_schema: SchemaRef,
         projected_fields: Vec<usize>,
         is_from_remote: bool,
-    ) -> ReadContext {
-        let target_schema = Self::project_schema(arrow_schema.clone(), projected_fields.as_slice());
+    ) -> Result<ReadContext> {
+        Self::validate_projection(&arrow_schema, projected_fields.as_slice())?;
+        let target_schema =
+            Self::project_schema(arrow_schema.clone(), projected_fields.as_slice())?;
         // the logic is little bit of hard to understand, to refactor it to follow
         // java side
         let (need_do_reorder, sorted_fields) = {
@@ -804,16 +806,20 @@ impl ReadContext {
                 // Calculate reordering indexes to transform from sorted order to user-requested order
                 let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
                 for &original_idx in &projected_fields {
-                    let pos = sorted_fields
-                        .binary_search(&original_idx)
-                        .expect("projection index should exist in sorted list");
+                    let pos = sorted_fields.binary_search(&original_idx).map_err(|_| {
+                        Error::IllegalArgument {
+                            message: format!(
+                                "Projection index {original_idx} is invalid for the current schema."
+                            ),
+                        }
+                    })?;
                     reordering_indexes.push(pos);
                 }
                 Projection {
                     ordered_schema: Self::project_schema(
                         arrow_schema.clone(),
                         sorted_fields.as_slice(),
-                    ),
+                    )?,
                     projected_fields,
                     ordered_fields: sorted_fields,
                     reordering_indexes,
@@ -824,7 +830,7 @@ impl ReadContext {
                     ordered_schema: Self::project_schema(
                         arrow_schema.clone(),
                         projected_fields.as_slice(),
-                    ),
+                    )?,
                     ordered_fields: projected_fields.clone(),
                     projected_fields,
                     reordering_indexes: vec![],
@@ -833,21 +839,34 @@ impl ReadContext {
             }
         };
 
-        ReadContext {
+        Ok(ReadContext {
             target_schema,
             full_schema: arrow_schema,
             projection: Some(project),
             is_from_remote,
-        }
+        })
     }
 
-    pub fn project_schema(schema: SchemaRef, projected_fields: &[usize]) -> SchemaRef {
-        // todo: handle the exception
-        SchemaRef::new(
-            schema
-                .project(projected_fields)
-                .expect("can't project schema"),
-        )
+    fn validate_projection(schema: &SchemaRef, projected_fields: &[usize]) -> Result<()> {
+        let field_count = schema.fields().len();
+        for &index in projected_fields {
+            if index >= field_count {
+                return Err(Error::IllegalArgument {
+                    message: format!(
+                        "Projection index {index} is out of bounds for schema with {field_count} fields."
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn project_schema(schema: SchemaRef, projected_fields: &[usize]) -> Result<SchemaRef> {
+        Ok(SchemaRef::new(schema.project(projected_fields).map_err(
+            |e| Error::IllegalArgument {
+                message: format!("Invalid projection: {e}"),
+            },
+        )?))
     }
 
     pub fn project_fields(&self) -> Option<&[usize]> {
@@ -1035,6 +1054,8 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
+    use crate::metadata::DataField;
     use crate::metadata::DataTypes;
 
     #[test]
@@ -1205,6 +1226,18 @@ mod tests {
                 "Fluss hitting Arrow error Parser error: Not a record batch: ParseError(\"Not a record batch\")."
             )
         );
+    }
+
+    #[test]
+    fn projection_rejects_out_of_bounds_index() {
+        let row_type = DataTypes::row(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let schema = to_arrow_schema(&row_type);
+        let result = ReadContext::with_projection_pushdown(schema, vec![0, 2], false);
+
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
     }
 
     fn le_bytes(vals: &[u32]) -> Vec<u8> {

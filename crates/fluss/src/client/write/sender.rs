@@ -455,7 +455,7 @@ mod tests {
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
     use crate::test_utils::build_cluster_arc;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     async fn build_ready_batch(
         accumulator: &RecordAccumulator,
