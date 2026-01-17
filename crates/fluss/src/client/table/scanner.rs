@@ -39,7 +39,7 @@ use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{TableBucket, TableInfo, TablePath};
 use crate::proto::{ErrorResponse, FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
-use crate::rpc::{RpcClient, message};
+use crate::rpc::{RpcClient, RpcError, message};
 use crate::util::FairBucketStatusMap;
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
@@ -449,6 +449,8 @@ impl RecordBatchLogScanner {
 struct LogFetcher {
     conns: Arc<RpcClient>,
     metadata: Arc<Metadata>,
+    table_path: TablePath,
+    is_partitioned: bool,
     log_scanner_status: Arc<LogScannerStatus>,
     read_context: ReadContext,
     remote_read_context: ReadContext,
@@ -480,6 +482,8 @@ impl LogFetcher {
         Ok(LogFetcher {
             conns: conns.clone(),
             metadata: metadata.clone(),
+            table_path: table_info.table_path.clone(),
+            is_partitioned: table_info.is_partitioned(),
             log_scanner_status,
             read_context,
             remote_read_context,
@@ -566,8 +570,55 @@ impl LogFetcher {
         }
     }
 
+    async fn check_and_update_metadata(&self) -> Result<()> {
+        let need_update = self
+            .fetchable_buckets()
+            .iter()
+            .any(|bucket| self.get_table_bucket_leader(bucket).is_none());
+
+        if !need_update {
+            return Ok(());
+        }
+
+        if self.is_partitioned {
+            // Fallback to full table metadata refresh until partition-aware updates are available.
+            self.metadata
+                .update_tables_metadata(&HashSet::from([&self.table_path]))
+                .await
+                .or_else(|e| {
+                    if let Error::RpcError { source, .. } = &e
+                        && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
+                    {
+                        warn!(
+                            "Retrying after encountering error while updating table metadata: {e}"
+                        );
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                })?;
+            return Ok(());
+        }
+
+        // TODO: Handle PartitionNotExist error
+        self.metadata
+            .update_tables_metadata(&HashSet::from([&self.table_path]))
+            .await
+            .or_else(|e| {
+                if let Error::RpcError { source, .. } = &e
+                    && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
+                {
+                    warn!("Retrying after encountering error while updating table metadata: {e}");
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+    }
+
     /// Send fetch requests asynchronously without waiting for responses
     async fn send_fetches(&self) -> Result<()> {
+        self.check_and_update_metadata().await?;
         let fetch_request = self.prepare_fetch_log_requests().await;
 
         for (leader, fetch_request) in fetch_request {
