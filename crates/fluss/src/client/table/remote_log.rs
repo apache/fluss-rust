@@ -377,6 +377,254 @@ impl RemotePendingFetch {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::WriteRecord;
+    use crate::compression::{
+        ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+    };
+    use crate::metadata::{DataField, DataTypes, TablePath};
+    use crate::record::{MemoryLogRecordsArrowBuilder, to_arrow_schema};
+    use crate::row::{Datum, GenericRow};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::time::{Duration, timeout};
+
+    fn build_log_bytes() -> Result<Vec<u8>> {
+        let row_type = DataTypes::row(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            1,
+            &row_type,
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+        );
+        let record = WriteRecord::new(
+            table_path,
+            GenericRow {
+                values: vec![Datum::Int32(1)],
+            },
+        );
+        builder.append(&record)?;
+        builder.build()
+    }
+
+    #[test]
+    fn remote_log_segment_local_file_name() {
+        let bucket = TableBucket::new(1, 0);
+        let segment = RemoteLogSegment {
+            segment_id: "seg".to_string(),
+            start_offset: 12,
+            end_offset: 20,
+            size_in_bytes: 0,
+            table_bucket: bucket,
+        };
+        assert_eq!(segment.local_file_name(), "seg_00000000000000000012.log");
+    }
+
+    #[test]
+    fn remote_log_fetch_info_from_proto_defaults_start_pos() {
+        let bucket = TableBucket::new(1, 0);
+        let proto_segment = PbRemoteLogSegment {
+            remote_log_segment_id: "seg".to_string(),
+            remote_log_start_offset: 0,
+            remote_log_end_offset: 10,
+            segment_size_in_bytes: 1,
+        };
+        let proto_info = PbRemoteLogFetchInfo {
+            remote_log_tablet_dir: "/tmp/remote".to_string(),
+            partition_name: None,
+            remote_log_segments: vec![proto_segment],
+            first_start_pos: None,
+        };
+        let info = RemoteLogFetchInfo::from_proto(&proto_info, bucket.clone());
+        assert_eq!(info.first_start_pos, 0);
+        assert_eq!(info.remote_log_segments.len(), 1);
+        assert_eq!(info.remote_log_segments[0].table_bucket, bucket);
+    }
+
+    #[tokio::test]
+    async fn download_future_callbacks_fire() -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        let future = RemoteLogDownloadFuture::new(rx);
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = fired.clone();
+        future.on_complete(move || {
+            fired_clone.store(true, Ordering::Release);
+        });
+        tx.send(Ok(vec![1, 2, 3])).unwrap();
+
+        let _ = timeout(Duration::from_millis(50), async {
+            while !future.is_done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+
+        assert!(fired.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn download_future_get_bytes_errors() -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        let future = RemoteLogDownloadFuture::new(rx);
+        assert!(matches!(
+            future.get_remote_log_bytes(),
+            Err(Error::IoUnexpectedError { .. })
+        ));
+        tx.send(Err(Error::UnexpectedError {
+            message: "boom".to_string(),
+            source: None,
+        }))
+        .unwrap();
+
+        let _ = timeout(Duration::from_millis(50), async {
+            while !future.is_done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+
+        let err = future.get_remote_log_bytes().unwrap_err();
+        assert!(matches!(err, Error::IoUnexpectedError { .. }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn download_future_canceled_returns_error() -> Result<()> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<u8>>>();
+        drop(tx);
+        let future = RemoteLogDownloadFuture::new(rx);
+        let _ = timeout(Duration::from_millis(50), async {
+            while !future.is_done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+
+        let err = future.get_remote_log_bytes().unwrap_err();
+        assert!(matches!(err, Error::IoUnexpectedError { .. }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn download_file_rejects_invalid_url() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let local_path = temp_dir.path().join("local.log");
+        let result = RemoteLogDownloader::download_file(
+            "://",
+            "/tmp/missing.log",
+            &local_path,
+            &HashMap::new(),
+        )
+        .await;
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn download_file_missing_remote_path_returns_error() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let remote_dir = temp_dir.path();
+        let local_path = temp_dir.path().join("local.log");
+        let remote_path = remote_dir.join("missing.log");
+        let result = RemoteLogDownloader::download_file(
+            remote_dir.to_str().unwrap(),
+            remote_path.to_str().unwrap(),
+            &local_path,
+            &HashMap::new(),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(Error::RemoteStorageUnexpectedError { .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_remote_log_reads_local_file() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let remote_dir = temp_dir.path().join("remote");
+        tokio::fs::create_dir_all(&remote_dir).await?;
+
+        let bucket = TableBucket::new(1, 0);
+        let segment = RemoteLogSegment {
+            segment_id: "seg".to_string(),
+            start_offset: 0,
+            end_offset: 0,
+            size_in_bytes: 0,
+            table_bucket: bucket,
+        };
+
+        let downloader = RemoteLogDownloader::new(TempDir::new()?)?;
+        let remote_path = downloader.build_remote_path(remote_dir.to_str().unwrap(), &segment);
+        let remote_file = PathBuf::from(&remote_path);
+        if let Some(parent) = remote_file.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&remote_file, b"data").await?;
+
+        let future = downloader.request_remote_log(remote_dir.to_str().unwrap(), &segment);
+        let _ = timeout(Duration::from_millis(200), async {
+            while !future.is_done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+
+        let bytes = future.get_remote_log_bytes()?;
+        assert_eq!(bytes, b"data");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_pending_fetch_to_completed_fetch() -> Result<()> {
+        let bytes = build_log_bytes()?;
+        let (tx, rx) = oneshot::channel();
+        tx.send(Ok(bytes)).unwrap();
+        let future = RemoteLogDownloadFuture::new(rx);
+        let _ = timeout(Duration::from_millis(50), async {
+            while !future.is_done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+
+        let row_type = DataTypes::row(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let read_context = ReadContext::new(to_arrow_schema(&row_type), false);
+
+        let bucket = TableBucket::new(1, 0);
+        let segment = RemoteLogSegment {
+            segment_id: "seg".to_string(),
+            start_offset: 0,
+            end_offset: 0,
+            size_in_bytes: 0,
+            table_bucket: bucket.clone(),
+        };
+
+        let pending = RemotePendingFetch::new(segment, future, 0, 0, 0, read_context);
+        let mut completed = Box::new(pending).to_completed_fetch()?;
+        let records = completed.fetch_records(10)?;
+        assert_eq!(records.len(), 1);
+        Ok(())
+    }
+}
+
 impl PendingFetch for RemotePendingFetch {
     fn table_bucket(&self) -> &TableBucket {
         &self.segment.table_bucket

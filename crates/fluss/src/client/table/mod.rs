@@ -26,7 +26,7 @@ pub const EARLIEST_OFFSET: i64 = -2;
 mod append;
 mod lookup;
 
-mod log_fetch_buffer;
+pub(crate) mod log_fetch_buffer;
 mod remote_log;
 mod scanner;
 mod writer;
