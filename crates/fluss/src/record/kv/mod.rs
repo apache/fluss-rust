@@ -23,6 +23,9 @@ mod kv_record_batch_builder;
 mod kv_record_read_context;
 mod read_context;
 
+#[cfg(test)]
+mod test_util;
+
 pub use kv_record::{KvRecord, LENGTH_LENGTH as KV_RECORD_LENGTH_LENGTH};
 pub use kv_record_batch::*;
 pub use kv_record_batch_builder::*;
@@ -37,43 +40,3 @@ pub const NO_WRITER_ID: i64 = -1;
 
 /// No batch sequence constant
 pub const NO_BATCH_SEQUENCE: i32 = -1;
-
-/// Test utilities for KV record reading.
-#[cfg(test)]
-pub mod test_utils {
-    use super::*;
-    use crate::metadata::{DataType, KvFormat};
-    use crate::row::{RowDecoder, RowDecoderFactory};
-    use std::io;
-    use std::sync::Arc;
-
-    /// Simple test-only ReadContext that creates decoders directly from data types.
-    ///
-    /// This bypasses the production Schema/SchemaGetter machinery for simpler tests.
-    pub struct TestReadContext {
-        kv_format: KvFormat,
-        data_types: Vec<DataType>,
-    }
-
-    impl TestReadContext {
-        /// Create a new test context with the given format and data types.
-        pub fn new(kv_format: KvFormat, data_types: Vec<DataType>) -> Self {
-            Self {
-                kv_format,
-                data_types,
-            }
-        }
-
-        /// Create a test context for COMPACTED format (most common case).
-        pub fn compacted(data_types: Vec<DataType>) -> Self {
-            Self::new(KvFormat::COMPACTED, data_types)
-        }
-    }
-
-    impl ReadContext for TestReadContext {
-        fn get_row_decoder(&self, _schema_id: i16) -> io::Result<Arc<dyn RowDecoder>> {
-            // Directly create decoder from data types - no Schema needed!
-            RowDecoderFactory::create(self.kv_format.clone(), self.data_types.clone())
-        }
-    }
-}

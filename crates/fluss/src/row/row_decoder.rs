@@ -19,7 +19,8 @@
 //!
 //! Mirrors the Java org.apache.fluss.row.decode package.
 
-use crate::metadata::{DataField, DataType, KvFormat, RowType};
+use crate::error::{Error, Result};
+use crate::metadata::{KvFormat, RowType};
 use crate::row::compacted::{CompactedRow, CompactedRowDeserializer};
 use std::sync::Arc;
 
@@ -49,16 +50,9 @@ pub struct CompactedRowDecoder {
 }
 
 impl CompactedRowDecoder {
-    /// Create a new CompactedRowDecoder with the given field data types.
-    pub fn new(data_types: Vec<DataType>) -> Self {
-        let field_count = data_types.len();
-        // Convert Vec<DataType> to RowType by wrapping each in DataField
-        let fields: Vec<DataField> = data_types
-            .into_iter()
-            .enumerate()
-            .map(|(idx, data_type)| DataField::new(format!("f{idx}"), data_type, None))
-            .collect();
-        let row_type = RowType::new(fields);
+    /// Create a new CompactedRowDecoder with the given row type.
+    pub fn new(row_type: RowType) -> Self {
+        let field_count = row_type.fields().len();
         let deserializer = Arc::new(CompactedRowDeserializer::new_from_owned(row_type));
 
         Self {
@@ -81,17 +75,13 @@ impl RowDecoder for CompactedRowDecoder {
 pub struct RowDecoderFactory;
 
 impl RowDecoderFactory {
-    /// Create a RowDecoder for the given format and field types.
-    pub fn create(
-        kv_format: KvFormat,
-        data_types: Vec<DataType>,
-    ) -> std::io::Result<Arc<dyn RowDecoder>> {
+    /// Create a RowDecoder for the given format and row type.
+    pub fn create(kv_format: KvFormat, row_type: RowType) -> Result<Arc<dyn RowDecoder>> {
         match kv_format {
-            KvFormat::COMPACTED => Ok(Arc::new(CompactedRowDecoder::new(data_types))),
-            KvFormat::INDEXED => Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "INDEXED format is not yet supported",
-            )),
+            KvFormat::COMPACTED => Ok(Arc::new(CompactedRowDecoder::new(row_type))),
+            KvFormat::INDEXED => Err(Error::UnsupportedOperation {
+                message: "INDEXED format is not yet supported".to_string(),
+            }),
         }
     }
 }
@@ -113,8 +103,9 @@ mod tests {
 
         let data = writer.to_bytes();
 
-        // Create decoder
-        let decoder = CompactedRowDecoder::new(vec![DataTypes::int(), DataTypes::string()]);
+        // Create decoder with RowType
+        let row_type = RowType::with_data_types(vec![DataTypes::int(), DataTypes::string()]);
+        let decoder = CompactedRowDecoder::new(row_type);
 
         // Decode
         let row = decoder.decode(&data);
@@ -127,8 +118,8 @@ mod tests {
 
     #[test]
     fn test_row_decoder_factory() {
-        let data_types = vec![DataTypes::int(), DataTypes::string()];
-        let decoder = RowDecoderFactory::create(KvFormat::COMPACTED, data_types).unwrap();
+        let row_type = RowType::with_data_types(vec![DataTypes::int(), DataTypes::string()]);
+        let decoder = RowDecoderFactory::create(KvFormat::COMPACTED, row_type).unwrap();
 
         // Write a row
         let mut writer = CompactedRowWriter::new(2);

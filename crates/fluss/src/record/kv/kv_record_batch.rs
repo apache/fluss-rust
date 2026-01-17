@@ -34,6 +34,7 @@ use bytes::Bytes;
 use std::io;
 use std::sync::Arc;
 
+use crate::error::Result;
 use crate::record::kv::{KvRecord, ReadContext};
 use crate::row::RowDecoder;
 
@@ -261,27 +262,27 @@ impl KvRecordBatch {
     /// For trusted data paths, use `records_unchecked()` to skip validation.
     ///
     /// Mirrors: KvRecordBatch.records(ReadContext)
-    pub fn records(&self, read_context: &dyn ReadContext) -> io::Result<KvRecords> {
+    pub fn records(&self, read_context: &dyn ReadContext) -> Result<KvRecords> {
         if !self.is_valid() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid batch checksum",
-            ));
+            return Err(crate::error::Error::IoUnexpectedError {
+                message: "Invalid batch checksum".to_string(),
+                source: io::Error::new(io::ErrorKind::InvalidData, "Invalid batch checksum"),
+            });
         }
         self.records_unchecked(read_context)
     }
 
     /// Create an iterable collection of records in this batch without validating the checksum.
-    pub fn records_unchecked(&self, read_context: &dyn ReadContext) -> io::Result<KvRecords> {
+    pub fn records_unchecked(&self, read_context: &dyn ReadContext) -> Result<KvRecords> {
         let size = self.size_in_bytes()?;
         let count = self.record_count()?;
         let schema_id = self.schema_id()?;
 
         if count < 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Invalid record count: {count}"),
-            ));
+            return Err(crate::error::Error::IoUnexpectedError {
+                message: format!("Invalid record count: {count}"),
+                source: io::Error::new(io::ErrorKind::InvalidData, "Invalid record count"),
+            });
         }
 
         // Get row decoder for this schema from context (cached)
@@ -370,6 +371,7 @@ impl Iterator for KvRecordIterator {
 mod tests {
     use super::*;
     use crate::metadata::{DataTypes, KvFormat, RowType};
+    use crate::record::kv::test_util::TestReadContext;
     use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, KvRecordBatchBuilder};
     use crate::row::InternalRow;
     use crate::row::binary::BinaryWriter;
@@ -433,8 +435,7 @@ mod tests {
         assert_eq!(batch.record_count().unwrap(), 2);
 
         // Create ReadContext for reading
-        let read_context =
-            crate::record::kv::test_utils::TestReadContext::compacted(vec![DataTypes::bytes()]);
+        let read_context = TestReadContext::compacted(vec![DataTypes::bytes()]);
 
         // Iterate and verify records using typed API
         let records = batch.records(&read_context).unwrap();

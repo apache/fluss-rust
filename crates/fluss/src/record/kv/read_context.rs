@@ -19,8 +19,8 @@
 //!
 //! Provides schema and decoder information needed for typed record reading.
 
+use crate::error::Result;
 use crate::row::RowDecoder;
-use std::io;
 use std::sync::Arc;
 
 /// Context for reading KV records with type information.
@@ -41,5 +41,5 @@ pub trait ReadContext: Send + Sync {
     /// # Returns
     /// An Arc-wrapped RowDecoder for the specified schema, or an error if
     /// the schema is invalid or cannot be retrieved
-    fn get_row_decoder(&self, schema_id: i16) -> io::Result<Arc<dyn RowDecoder>>;
+    fn get_row_decoder(&self, schema_id: i16) -> Result<Arc<dyn RowDecoder>>;
 }

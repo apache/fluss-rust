@@ -18,10 +18,10 @@
 //! Default implementation of ReadContext with decoder caching.
 
 use super::ReadContext;
+use crate::error::{Error, Result};
 use crate::metadata::{KvFormat, Schema};
 use crate::row::{RowDecoder, RowDecoderFactory};
 use std::collections::HashMap;
-use std::io;
 use std::sync::{Arc, Mutex};
 
 /// Trait for fetching schemas by ID.
@@ -37,7 +37,7 @@ pub trait SchemaGetter: Send + Sync {
     /// # Returns
     /// An Arc-wrapped Schema for the specified ID, or an error if the schema
     /// cannot be fetched (missing ID, network error, etc.)
-    fn get_schema(&self, schema_id: i16) -> io::Result<Arc<Schema>>;
+    fn get_schema(&self, schema_id: i16) -> Result<Arc<Schema>>;
 }
 
 /// Default implementation of ReadContext with decoder caching.
@@ -71,7 +71,7 @@ impl KvRecordReadContext {
 }
 
 impl ReadContext for KvRecordReadContext {
-    fn get_row_decoder(&self, schema_id: i16) -> io::Result<Arc<dyn RowDecoder>> {
+    fn get_row_decoder(&self, schema_id: i16) -> Result<Arc<dyn RowDecoder>> {
         // First check: fast path
         {
             let cache = self
@@ -85,25 +85,24 @@ impl ReadContext for KvRecordReadContext {
 
         // Build decoder outside the lock to avoid blocking other threads
         let schema = self.schema_getter.get_schema(schema_id)?;
-        let data_types: Vec<_> = match schema.row_type() {
-            crate::metadata::DataType::Row(row_type) => row_type
-                .fields()
-                .iter()
-                .map(|f| f.data_type.clone())
-                .collect(),
+        let row_type = match schema.row_type() {
+            crate::metadata::DataType::Row(row_type) => row_type.clone(),
             other => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
+                return Err(Error::IoUnexpectedError {
+                    message: format!(
                         "Schema {} has invalid row type: expected Row, got {:?}",
                         schema_id, other
                     ),
-                ));
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid row type",
+                    ),
+                });
             }
         };
 
         // Create decoder outside lock
-        let decoder = RowDecoderFactory::create(self.kv_format.clone(), data_types)?;
+        let decoder = RowDecoderFactory::create(self.kv_format.clone(), row_type)?;
 
         // Second check: insert only if another thread didn't beat us to it
         {
@@ -146,7 +145,7 @@ mod tests {
     }
 
     impl SchemaGetter for MockSchemaGetter {
-        fn get_schema(&self, _schema_id: i16) -> io::Result<Arc<Schema>> {
+        fn get_schema(&self, _schema_id: i16) -> Result<Arc<Schema>> {
             Ok(Arc::clone(&self.schema))
         }
     }

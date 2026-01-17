@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_with_compacted_row_writer() -> io::Result<()> {
+    fn test_builder_with_compacted_row_writer() -> crate::error::Result<()> {
         use crate::record::kv::KvRecordBatch;
         use crate::row::InternalRow;
         use crate::row::compacted::CompactedRow;
@@ -534,7 +534,7 @@ mod tests {
 
         // Create ReadContext for reading typed rows
         let types = vec![DataTypes::int(), DataTypes::string()];
-        let read_context = crate::record::kv::test_utils::TestReadContext::compacted(types);
+        let read_context = crate::record::kv::test_util::TestReadContext::compacted(types);
 
         // Read back and verify records using idiomatic for-loop
         let records = batch.records(&read_context)?;
