@@ -68,6 +68,32 @@ class FlussTable:
     def __repr__(self) -> str: ...
 
 class AppendWriter:
+    async def append(self, row: dict | list | tuple) -> None:
+        """Append a single row to the table.
+
+        Args:
+            row: Dictionary mapping field names to values, or
+                 list/tuple of values in schema order
+
+        Supported Types:
+            Currently supports primitive types only:
+            - Boolean, TinyInt, SmallInt, Int, BigInt (integers)
+            - Float, Double (floating point)
+            - String, Char (text)
+            - Bytes, Binary (binary data)
+            - Null values
+
+            Temporal types (Date, Timestamp, Decimal) are not yet supported.
+
+        Example:
+            await writer.append({'id': 1, 'name': 'Alice', 'score': 95.5})
+            await writer.append([1, 'Alice', 95.5])
+
+        Note:
+            For high-throughput bulk loading, prefer write_arrow_batch().
+            Use flush() to ensure all queued records are sent and acknowledged.
+        """
+        ...
     def write_arrow(self, table: pa.Table) -> None: ...
     def write_arrow_batch(self, batch: pa.RecordBatch) -> None: ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...

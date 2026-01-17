@@ -118,11 +118,21 @@ async def main():
         append_writer.write_arrow_batch(pa_record_batch)
         print("Successfully wrote PyArrow RecordBatch")
 
-        # Test 3: Write Pandas DataFrame
+        # Test 3: Append single rows
+        print("\n--- Testing single row append ---")
+        # Dict input
+        await append_writer.append({"id": 8, "name": "Helen", "score": 93.5, "age": 26})
+        print("Successfully appended row (dict)")
+
+        # List input
+        await append_writer.append([9, "Ivan", 90.0, 31])
+        print("Successfully appended row (list)")
+
+        # Test 4: Write Pandas DataFrame
         print("\n--- Testing Pandas DataFrame write ---")
         df = pd.DataFrame(
             {
-                "id": [6, 7],
+                "id": [10, 11],
                 "name": ["Frank", "Grace"],
                 "score": [89.3, 94.7],
                 "age": [29, 27],
