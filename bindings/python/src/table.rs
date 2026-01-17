@@ -166,7 +166,11 @@ impl AppendWriter {
     }
 
     /// Append a single row to the table
-    pub fn append<'py>(&self, py: Python<'py>, row: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    pub fn append<'py>(
+        &self,
+        py: Python<'py>,
+        row: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let generic_row = python_to_generic_row(row, &self.table_info)?;
         let inner = self.inner.clone();
 
