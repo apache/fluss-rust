@@ -114,10 +114,10 @@ impl<'a> WriteRecord<'a> {
         bucket_key: Option<Bytes>,
         key: Bytes,
         target_columns: Option<Arc<[usize]>>,
-        row: CompactedRow<'a>,
+        row: Option<CompactedRow<'a>>,
     ) -> Self {
         Self {
-            record: Record::Kv(KvWriteRecord::new(key, target_columns, Some(row))),
+            record: Record::Kv(KvWriteRecord::new(key, target_columns, row)),
             table_path,
             bucket_key,
             schema_id,

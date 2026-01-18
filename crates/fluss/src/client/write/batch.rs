@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::BucketId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
 use crate::metadata::{KvFormat, RowType, TablePath};
-use crate::record::kv::KvRecordBatchBuilder;
 use crate::record::MemoryLogRecordsArrowBuilder;
-use crate::BucketId;
+use crate::record::kv::KvRecordBatchBuilder;
 use bytes::Bytes;
 use std::cmp::max;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};

@@ -27,6 +27,8 @@ use crate::row::{BinaryRow, InternalRow};
 use std::sync::Arc;
 
 use bitvec::prelude::bitvec;
+use bytes::Bytes;
+
 #[allow(dead_code)]
 pub struct TableUpsert {
     table_path: TablePath,
@@ -250,7 +252,31 @@ impl UpsertWriterFactory {
     }
 }
 
-impl<RE: RowEncoder> UpsertWriterImpl<RE> {}
+#[allow(dead_code)]
+impl<RE: RowEncoder> UpsertWriterImpl<RE> {
+    fn check_field_count<R: BinaryRow + InternalRow>(&self, row: &R) -> Result<()> {
+        let expected = self.table_info.get_row_type().fields().len();
+        if row.get_field_count() != expected {
+            return Err(IllegalArgument {
+                message: format!(
+                    "The field count of the row does not match the table schema. Expected: {}, Actual: {}",
+                    expected,
+                    row.get_field_count()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn get_keys(&mut self, row: &dyn InternalRow) -> Result<(Bytes, Option<Bytes>)> {
+        let key = self.primary_key_encoder.encode_key(row)?;
+        let bucket_key = match &mut self.bucket_key_encoder {
+            Some(bucket_key_encoder) => Some(bucket_key_encoder.encode_key(row)?),
+            None => None,
+        };
+        Ok((key, bucket_key))
+    }
+}
 
 impl<RE: RowEncoder> TableWriter for UpsertWriterImpl<RE> {
     /// Flush data written that have not yet been sent to the server, forcing the client to send the
@@ -274,11 +300,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     async fn upsert(&mut self, row: CompactedRow<'_>) -> Result<()> {
         self.check_field_count(&row)?;
 
-        let key = self.primary_key_encoder.encode_key(&row)?;
-        let bucket_key = match &mut self.bucket_key_encoder {
-            Some(bucket_key_encoder) => Some(bucket_key_encoder.encode_key(&row)?),
-            None => None,
-        };
+        let (key, bucket_key) = self.get_keys(&row)?;
 
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_path),
@@ -286,7 +308,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
             bucket_key,
             key,
             self.target_columns.clone(),
-            row,
+            Some(row),
         );
 
         self.writer_client.send(&write_record).await?;
@@ -305,29 +327,19 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     async fn delete(&mut self, row: CompactedRow<'_>) -> Result<()> {
         self.check_field_count(&row)?;
 
-        let _key = self.primary_key_encoder.encode_key(&row)?;
-        let _bucket_key = match &mut self.bucket_key_encoder {
-            Some(bucket_key_encoder) => Some(bucket_key_encoder.encode_key(&row)?),
-            None => None,
-        };
+        let (key, bucket_key) = self.get_keys(&row)?;
 
-        todo!()
-    }
-}
+        let write_record = WriteRecord::for_upsert(
+            Arc::clone(&self.table_path),
+            self.table_info.schema_id,
+            bucket_key,
+            key,
+            self.target_columns.clone(),
+            None,
+        );
 
-impl<RE: RowEncoder> UpsertWriterImpl<RE> {
-    #[allow(dead_code)]
-    fn check_field_count<R: BinaryRow + InternalRow>(&self, row: &R) -> Result<()> {
-        let expected = self.table_info.get_row_type().fields().len();
-        if row.get_field_count() != expected {
-            return Err(IllegalArgument {
-                message: format!(
-                    "The field count of the row does not match the table schema. Expected: {}, Actual: {}",
-                    expected,
-                    row.get_field_count()
-                ),
-            });
-        }
+        self.writer_client.send(&write_record).await?;
+
         Ok(())
     }
 }
