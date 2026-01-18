@@ -112,11 +112,11 @@ impl<'a> WriteRecord<'a> {
         schema_id: i32,
         bucket_key: &'a [u8],
         key: &'a [u8],
-        target_columns: &'a [usize],
+        target_columns: Option<&'a [usize]>,
         row: CompactedRow<'a>,
     ) -> Self {
         Self {
-            record: Record::Kv(KvWriteRecord::new(key, Some(target_columns), Some(row))),
+            record: Record::Kv(KvWriteRecord::new(key, target_columns, Some(row))),
             table_path,
             bucket_key: Some(bucket_key),
             schema_id,
