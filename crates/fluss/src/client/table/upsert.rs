@@ -106,8 +106,8 @@ where
 {
     table_path: Arc<TablePath>,
     writer_client: Arc<WriterClient>,
-    // partition_field_getter: Option<PKE>,
-    // TODO thread safety
+    // TODO: Partitioning
+    // partition_field_getter: Option<Box<dyn KeyEncoder>>,
     primary_key_encoder: Box<dyn KeyEncoder>,
     target_columns: Option<Arc<[usize]>>,
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
