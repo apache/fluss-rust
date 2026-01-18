@@ -275,11 +275,14 @@ impl MemoryLogRecordsArrowBuilder {
     }
 
     pub fn append(&mut self, record: &WriteRecord) -> Result<bool> {
-        match &record.row {
-            Record::Row(row) => Ok(self.arrow_record_batch_builder.append(row)?),
+        match &record.record() {
+            Record::Generic(row) => Ok(self.arrow_record_batch_builder.append(row)?),
             Record::RecordBatch(record_batch) => Ok(self
                 .arrow_record_batch_builder
                 .append_batch(record_batch.clone())?),
+            _ => Err(Error::UnsupportedOperation {
+                message: "Only GenericRow and RecordBatch is supported to append".to_string(),
+            }),
         }
         // todo: consider write other change type
     }

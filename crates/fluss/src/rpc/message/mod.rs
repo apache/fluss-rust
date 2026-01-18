@@ -36,6 +36,7 @@ mod list_offsets;
 mod list_tables;
 mod lookup;
 mod produce_log;
+mod put_kv;
 mod table_exists;
 mod update_metadata;
 

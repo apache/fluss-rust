@@ -37,7 +37,7 @@ impl ProduceLogRequest {
         table_id: i64,
         ack: i16,
         max_request_timeout_ms: i32,
-        ready_batches: &[&ReadyWriteBatch],
+        ready_batches: &mut [ReadyWriteBatch],
     ) -> FlussResult<Self> {
         let mut request = proto::ProduceLogRequest {
             table_id,

@@ -21,7 +21,7 @@ mod batch;
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
 use crate::metadata::TablePath;
-use crate::row::GenericRow;
+use crate::row::{CompactedRow, GenericRow};
 pub use accumulator::*;
 use arrow::array::RecordBatch;
 use std::sync::Arc;
@@ -33,31 +33,80 @@ mod sender;
 mod write_format;
 mod writer_client;
 
+use crate::client::Record::Compacted;
 pub use write_format::WriteFormat;
 pub use writer_client::WriterClient;
 
+#[allow(dead_code)]
 pub struct WriteRecord<'a> {
-    pub row: Record<'a>,
-    pub table_path: Arc<TablePath>,
-}
+    record: Record<'a>,
+    table_path: Arc<TablePath>,
+    bucket_key: Option<&'a [u8]>,
+    schema_id: i32,
+    write_format: WriteFormat,
 
-pub enum Record<'a> {
-    Row(GenericRow<'a>),
-    RecordBatch(Arc<RecordBatch>),
+    // only valid for primary key table
+    key: Option<&'a [u8]>,
+    target_columns: Option<&'a [usize]>,
 }
 
 impl<'a> WriteRecord<'a> {
-    pub fn new(table_path: Arc<TablePath>, row: GenericRow<'a>) -> Self {
+    pub fn record(&self) -> &Record<'a> {
+        &self.record
+    }
+}
+
+pub enum Record<'a> {
+    Generic(GenericRow<'a>),
+    RecordBatch(Arc<RecordBatch>),
+    Compacted(Option<CompactedRow<'a>>),
+}
+
+impl<'a> WriteRecord<'a> {
+    pub fn for_append(table_path: Arc<TablePath>, schema_id: i32, row: GenericRow<'a>) -> Self {
         Self {
-            row: Record::Row(row),
+            record: Record::Generic(row),
             table_path,
+            key: None,
+            bucket_key: None,
+            target_columns: None,
+            schema_id,
+            write_format: WriteFormat::ArrowLog,
         }
     }
 
-    pub fn new_record_batch(table_path: Arc<TablePath>, row: RecordBatch) -> Self {
+    pub fn for_append_record_batch(
+        table_path: Arc<TablePath>,
+        schema_id: i32,
+        row: RecordBatch,
+    ) -> Self {
         Self {
-            row: Record::RecordBatch(Arc::new(row)),
+            record: Record::RecordBatch(Arc::new(row)),
             table_path,
+            key: None,
+            target_columns: None,
+            bucket_key: None,
+            schema_id,
+            write_format: WriteFormat::ArrowLog,
+        }
+    }
+
+    pub fn for_upsert(
+        table_path: Arc<TablePath>,
+        schema_id: i32,
+        bucket_key: &'a [u8],
+        key: &'a [u8],
+        target_columns: &'a [usize],
+        row: CompactedRow<'a>,
+    ) -> Self {
+        Self {
+            record: Compacted(Some(row)),
+            table_path,
+            bucket_key: Some(bucket_key),
+            schema_id,
+            write_format: WriteFormat::CompactedKv,
+            key: Some(key),
+            target_columns: Some(target_columns),
         }
     }
 }
