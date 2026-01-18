@@ -296,7 +296,7 @@ impl KvWriteBatch {
             });
         };
 
-        if self.target_columns.as_deref() != kv_write_record.target_columns.as_deref() {
+        if self.target_columns.as_ref() != kv_write_record.target_columns.as_deref() {
             return Err(Error::UnexpectedError {
                 message: format!(
                     "target columns {:?} of the write record to append are not the same as the current target columns {:?} in the batch.",

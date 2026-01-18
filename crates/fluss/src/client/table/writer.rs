@@ -23,7 +23,7 @@ use crate::error::Result;
 use crate::metadata::{TableInfo, TablePath};
 use crate::row::compacted::CompactedRow;
 
-#[allow(dead_code)]
+#[allow(dead_code, async_fn_in_trait)]
 pub trait TableWriter {
     async fn flush(&self) -> Result<()>;
 }
@@ -33,7 +33,7 @@ pub trait AppendWriter: TableWriter {
     async fn append(&self, row: GenericRow) -> Result<()>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, async_fn_in_trait)]
 pub trait UpsertWriter: TableWriter {
     async fn upsert(&mut self, row: CompactedRow) -> Result<()>;
     async fn delete(&mut self, row: CompactedRow) -> Result<()>;

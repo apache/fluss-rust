@@ -109,8 +109,8 @@ pub struct RowEncoderFactory {}
 
 #[allow(dead_code)]
 impl RowEncoderFactory {
-    pub fn create(kv_format: KvFormat, row_type: &RowType) -> Result<impl RowEncoder> {
-        Self::create_for_field_types(kv_format, row_type.clone())
+    pub fn create(kv_format: KvFormat, row_type: RowType) -> Result<impl RowEncoder> {
+        Self::create_for_field_types(kv_format, row_type)
     }
 
     pub fn create_for_field_types(

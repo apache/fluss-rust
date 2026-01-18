@@ -65,14 +65,14 @@ pub enum LogWriteRecord<'a> {
 pub struct KvWriteRecord<'a> {
     // only valid for primary key table
     key: Bytes,
-    target_columns: Option<Arc<[usize]>>,
+    target_columns: Option<Arc<Vec<usize>>>,
     compacted_row: Option<CompactedRow<'a>>,
 }
 
 impl<'a> KvWriteRecord<'a> {
     fn new(
         key: Bytes,
-        target_columns: Option<Arc<[usize]>>,
+        target_columns: Option<Arc<Vec<usize>>>,
         compacted_row: Option<CompactedRow<'a>>,
     ) -> Self {
         KvWriteRecord {
@@ -113,7 +113,7 @@ impl<'a> WriteRecord<'a> {
         schema_id: i32,
         bucket_key: Option<Bytes>,
         key: Bytes,
-        target_columns: Option<Arc<[usize]>>,
+        target_columns: Option<Arc<Vec<usize>>>,
         row: Option<CompactedRow<'a>>,
     ) -> Self {
         Self {

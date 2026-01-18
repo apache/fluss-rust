@@ -34,7 +34,7 @@ pub struct TableUpsert {
     table_path: TablePath,
     table_info: TableInfo,
     writer_client: Arc<WriterClient>,
-    target_columns: Option<Vec<usize>>,
+    target_columns: Option<Arc<Vec<usize>>>,
 }
 
 #[allow(dead_code)]
@@ -70,7 +70,7 @@ impl TableUpsert {
             table_path: self.table_path.clone(),
             table_info: self.table_info.clone(),
             writer_client: self.writer_client.clone(),
-            target_columns: target_columns.clone(),
+            target_columns: target_columns.map(Arc::new),
         })
     }
 
@@ -97,6 +97,15 @@ impl TableUpsert {
 
         self.partial_update(Some(valid_col_indices))
     }
+
+    pub fn create_writer(&self) -> Result<impl UpsertWriter> {
+        UpsertWriterFactory::create(
+            Arc::new(self.table_path.clone()),
+            Arc::new(self.table_info.clone()),
+            self.target_columns.clone(),
+            Arc::clone(&self.writer_client),
+        )
+    }
 }
 
 #[allow(dead_code)]
@@ -109,13 +118,13 @@ where
     // TODO: Partitioning
     // partition_field_getter: Option<Box<dyn KeyEncoder>>,
     primary_key_encoder: Box<dyn KeyEncoder>,
-    target_columns: Option<Arc<[usize]>>,
+    target_columns: Option<Arc<Vec<usize>>>,
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
     kv_format: KvFormat,
     write_format: WriteFormat,
     row_encoder: RE,
     field_getters: Box<[FieldGetter]>,
-    table_info: TableInfo,
+    table_info: Arc<TableInfo>,
 }
 
 #[allow(dead_code)]
@@ -124,10 +133,10 @@ struct UpsertWriterFactory;
 #[allow(dead_code)]
 impl UpsertWriterFactory {
     pub fn create(
-        table_path: &Arc<TablePath>,
-        table_info: &TableInfo,
-        partial_update_columns: Option<&Arc<[usize]>>,
-        writer_client: &Arc<WriterClient>,
+        table_path: Arc<TablePath>,
+        table_info: Arc<TableInfo>,
+        partial_update_columns: Option<Arc<Vec<usize>>>,
+        writer_client: Arc<WriterClient>,
     ) -> Result<impl UpsertWriter> {
         let data_lake_format = &table_info.table_config.get_datalake_format()?;
         let row_type = table_info.row_type();
@@ -139,7 +148,7 @@ impl UpsertWriterFactory {
             row_type,
             &table_info.primary_keys,
             names,
-            partial_update_columns,
+            &partial_update_columns,
         )?;
 
         let primary_key_encoder = KeyEncoderFactory::of(row_type, physical_pks, data_lake_format)?;
@@ -159,14 +168,14 @@ impl UpsertWriterFactory {
         let field_getters = FieldGetter::create_field_getters(row_type);
 
         Ok(UpsertWriterImpl {
-            table_path: Arc::clone(table_path),
-            writer_client: Arc::clone(writer_client),
+            table_path,
+            writer_client,
             primary_key_encoder,
-            target_columns: partial_update_columns.map(Arc::clone),
+            target_columns: partial_update_columns,
             bucket_key_encoder,
             kv_format: kv_format.clone(),
             write_format,
-            row_encoder: RowEncoderFactory::create(kv_format, row_type)?,
+            row_encoder: RowEncoderFactory::create(kv_format, row_type.clone())?,
             field_getters,
             table_info: table_info.clone(),
         })
@@ -177,23 +186,27 @@ impl UpsertWriterFactory {
         row_type: &RowType,
         primary_keys: &Vec<String>,
         auto_increment_col_names: &Vec<String>,
-        target_columns: Option<&Arc<[usize]>>,
+        target_columns: &Option<Arc<Vec<usize>>>,
     ) -> Result<()> {
-        if target_columns.is_none() && auto_increment_col_names.is_empty() {
-            return Err(IllegalArgument {
-                message: format!(
-                    "This table has auto increment column {}. Explicitly specifying values for an auto increment column is not allowed. Please Specify non-auto-increment columns as target columns using partialUpdate first.",
-                    auto_increment_col_names.join(", ")
-                ),
-            });
+        if target_columns.is_none() {
+            if auto_increment_col_names.is_empty() {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "This table has auto increment column {}. Explicitly specifying values for an auto increment column is not allowed. Please Specify non-auto-increment columns as target columns using partialUpdate first.",
+                        auto_increment_col_names.join(", ")
+                    ),
+                });
+            }
+            return Ok(());
         }
 
         let field_count = row_type.fields().len();
-        let target_columns = target_columns.unwrap();
 
         let mut target_column_set = bitvec![0; field_count];
 
-        for &target_index in target_columns.as_ref() {
+        let columns = target_columns.as_ref().unwrap().as_ref();
+
+        for &target_index in columns {
             target_column_set.insert(target_index, true);
         }
 
@@ -204,17 +217,22 @@ impl UpsertWriterFactory {
             let pk_index = row_type.get_field_index(primary_key.as_str());
             match pk_index {
                 Some(pk_index) => {
+                    if !target_column_set[pk_index] {
+                        return Err(IllegalArgument {
+                            message: format!(
+                                "The target write columns {} must contain the primary key columns {}",
+                                row_type.project(columns)?.get_field_names().join(", "),
+                                primary_keys.join(", ")
+                            ),
+                        });
+                    }
                     pk_column_set.insert(pk_index, true);
                 }
                 None => {
                     return Err(IllegalArgument {
                         message: format!(
-                            "The target write columns {} must contain the primary key columns {}",
-                            row_type
-                                .project(target_columns)?
-                                .get_field_names()
-                                .join(", "),
-                            primary_keys.join(", ")
+                            "The specified primary key {} is not in row type {}",
+                            primary_key, row_type
                         ),
                     });
                 }
