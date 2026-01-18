@@ -19,7 +19,10 @@ use std::io::Result;
 
 fn main() -> Result<()> {
     let mut config = prost_build::Config::new();
-    config.bytes([".proto.PbProduceLogReqForBucket.records"]);
+    config.bytes([
+        ".proto.PbProduceLogReqForBucket.records",
+        ".proto.PbPutKvReqForBucket.records",
+    ]);
     config.compile_protos(&["src/proto/fluss_api.proto"], &["src/proto"])?;
     Ok(())
 }

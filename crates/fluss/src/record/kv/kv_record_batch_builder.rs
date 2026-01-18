@@ -19,9 +19,7 @@
 //!
 //! This module provides the KvRecordBatchBuilder for building batches of KV records.
 
-use bytes::{Bytes, BytesMut};
-use std::io;
-
+use crate::error::{Error, Result};
 use crate::metadata::KvFormat;
 use crate::record::kv::kv_record::KvRecord;
 use crate::record::kv::kv_record_batch::{
@@ -31,6 +29,8 @@ use crate::record::kv::kv_record_batch::{
 };
 use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::row::BinaryRow;
+use bytes::{Bytes, BytesMut};
+use std::io;
 
 /// Builder for KvRecordBatch.
 ///
@@ -185,11 +185,12 @@ impl KvRecordBatchBuilder {
     /// built bytes may change if mutations occur between builds.
     ///
     /// Note: [`close`](Self::close) prevents further appends but does not prevent writer state modifications.
-    pub fn build(&mut self) -> io::Result<Bytes> {
+    pub fn build(&mut self) -> Result<Bytes> {
         if self.aborted {
-            return Err(io::Error::other(
-                "Attempting to build an aborted record batch",
-            ));
+            return Err(Error::UnexpectedError {
+                message: "Attempting to build an aborted record batch".to_string(),
+                source: None,
+            });
         }
 
         if let Some(ref cached) = self.built_buffer {
@@ -225,11 +226,13 @@ impl KvRecordBatchBuilder {
 
     /// Close the builder.
     /// After closing, no more records can be appended, but the batch can still be built.
-    pub fn close(&mut self) -> io::Result<()> {
+    pub fn close(&mut self) -> Result<()> {
         if self.aborted {
-            return Err(io::Error::other(
-                "Cannot close KvRecordBatchBuilder as it has already been aborted",
-            ));
+            return Err(Error::UnexpectedError {
+                message: "Cannot close KvRecordBatchBuilder as it has already been aborted"
+                    .to_string(),
+                source: None,
+            });
         }
         self.is_closed = true;
         Ok(())

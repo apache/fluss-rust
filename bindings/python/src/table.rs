@@ -340,8 +340,7 @@ fn python_to_generic_row(
             .map(|n| n.to_string())
             .unwrap_or_else(|_| "unknown".to_string());
         FlussError::new_err(format!(
-            "Row must be a dict, list, or tuple; got {}",
-            type_name
+            "Row must be a dict, list, or tuple; got {type_name}"
         ))
     })?;
     let schema = table_info.row_type();
@@ -357,7 +356,7 @@ fn python_to_generic_row(
                         .name()
                         .map(|n| n.to_string())
                         .unwrap_or_else(|_| "unknown".to_string());
-                    FlussError::new_err(format!("Row dict keys must be strings; got {}", key_type))
+                    FlussError::new_err(format!("Row dict keys must be strings; got {key_type}"))
                 })?;
 
                 if fields.iter().all(|f| f.name() != key_str) {
@@ -367,8 +366,7 @@ fn python_to_generic_row(
                         .collect::<Vec<_>>()
                         .join(", ");
                     return Err(FlussError::new_err(format!(
-                        "Unknown field '{}'. Expected fields: {}",
-                        key_str, expected
+                        "Unknown field '{key_str}'. Expected fields: {expected}"
                     )));
                 }
             }
@@ -476,8 +474,7 @@ fn python_value_to_datum(
             }
         }
         _ => Err(FlussError::new_err(format!(
-            "Unsupported data type for row-level operations: {:?}",
-            data_type
+            "Unsupported data type for row-level operations: {data_type}"
         ))),
     }
 }
