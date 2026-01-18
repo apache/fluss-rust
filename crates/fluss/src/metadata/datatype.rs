@@ -457,12 +457,42 @@ impl DecimalType {
         Self::with_nullable(true, precision, scale)
     }
 
-    pub fn with_nullable(nullable: bool, precision: u32, scale: u32) -> Self {
-        DecimalType {
+    /// Try to create a DecimalType with validation, returning an error if parameters are invalid.
+    pub fn try_with_nullable(nullable: bool, precision: u32, scale: u32) -> Result<Self> {
+        // Validate precision
+        if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Decimal precision must be between {} and {} (both inclusive), got: {}",
+                    Self::MIN_PRECISION,
+                    Self::MAX_PRECISION,
+                    precision
+                ),
+            });
+        }
+        // Validate scale
+        if scale < Self::MIN_SCALE || scale > precision {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Decimal scale must be between {} and the precision {} (both inclusive), got: {}",
+                    Self::MIN_SCALE,
+                    precision,
+                    scale
+                ),
+            });
+        }
+        Ok(DecimalType {
             nullable,
             precision,
             scale,
-        }
+        })
+    }
+
+    /// Create a DecimalType with validation, panicking if parameters are invalid.
+    /// Use this for hardcoded schemas where validation failure is a programming error.
+    pub fn with_nullable(nullable: bool, precision: u32, scale: u32) -> Self {
+        Self::try_with_nullable(nullable, precision, scale)
+            .expect("Invalid decimal precision or scale")
     }
 
     pub fn precision(&self) -> u32 {
@@ -546,11 +576,29 @@ impl TimeType {
         Self::with_nullable(true, precision)
     }
 
-    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
-        TimeType {
+    /// Try to create a TimeType with validation, returning an error if precision is invalid.
+    pub fn try_with_nullable(nullable: bool, precision: u32) -> Result<Self> {
+        // Validate precision
+        if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Time precision must be between {} and {} (both inclusive), got: {}",
+                    Self::MIN_PRECISION,
+                    Self::MAX_PRECISION,
+                    precision
+                ),
+            });
+        }
+        Ok(TimeType {
             nullable,
             precision,
-        }
+        })
+    }
+
+    /// Create a TimeType with validation, panicking if precision is invalid.
+    /// Use this for hardcoded schemas where validation failure is a programming error.
+    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
+        Self::try_with_nullable(nullable, precision).expect("Invalid time precision")
     }
 
     pub fn precision(&self) -> u32 {
@@ -595,11 +643,29 @@ impl TimestampType {
         Self::with_nullable(true, precision)
     }
 
-    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
-        TimestampType {
+    /// Try to create a TimestampType with validation, returning an error if precision is invalid.
+    pub fn try_with_nullable(nullable: bool, precision: u32) -> Result<Self> {
+        // Validate precision
+        if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Timestamp precision must be between {} and {} (both inclusive), got: {}",
+                    Self::MIN_PRECISION,
+                    Self::MAX_PRECISION,
+                    precision
+                ),
+            });
+        }
+        Ok(TimestampType {
             nullable,
             precision,
-        }
+        })
+    }
+
+    /// Create a TimestampType with validation, panicking if precision is invalid.
+    /// Use this for hardcoded schemas where validation failure is a programming error.
+    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
+        Self::try_with_nullable(nullable, precision).expect("Invalid timestamp precision")
     }
 
     pub fn precision(&self) -> u32 {
@@ -644,11 +710,30 @@ impl TimestampLTzType {
         Self::with_nullable(true, precision)
     }
 
-    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
-        TimestampLTzType {
+    /// Try to create a TimestampLTzType with validation, returning an error if precision is invalid.
+    pub fn try_with_nullable(nullable: bool, precision: u32) -> Result<Self> {
+        // Validate precision
+        if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Timestamp with local time zone precision must be between {} and {} (both inclusive), got: {}",
+                    Self::MIN_PRECISION,
+                    Self::MAX_PRECISION,
+                    precision
+                ),
+            });
+        }
+        Ok(TimestampLTzType {
             nullable,
             precision,
-        }
+        })
+    }
+
+    /// Create a TimestampLTzType with validation, panicking if precision is invalid.
+    /// Use this for hardcoded schemas where validation failure is a programming error.
+    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
+        Self::try_with_nullable(nullable, precision)
+            .expect("Invalid timestamp with local time zone precision")
     }
 
     pub fn precision(&self) -> u32 {
@@ -1100,82 +1185,56 @@ impl Display for DataField {
 }
 
 #[test]
-fn test_boolean_display() {
+fn test_primitive_types_display() {
+    // Test simple primitive types with nullable and non-nullable variants
     assert_eq!(BooleanType::new().to_string(), "BOOLEAN");
     assert_eq!(
         BooleanType::with_nullable(false).to_string(),
         "BOOLEAN NOT NULL"
     );
-}
 
-#[test]
-fn test_tinyint_display() {
     assert_eq!(TinyIntType::new().to_string(), "TINYINT");
     assert_eq!(
         TinyIntType::with_nullable(false).to_string(),
         "TINYINT NOT NULL"
     );
-}
 
-#[test]
-fn test_smallint_display() {
     assert_eq!(SmallIntType::new().to_string(), "SMALLINT");
     assert_eq!(
         SmallIntType::with_nullable(false).to_string(),
         "SMALLINT NOT NULL"
     );
-}
 
-#[test]
-fn test_int_display() {
     assert_eq!(IntType::new().to_string(), "INT");
     assert_eq!(IntType::with_nullable(false).to_string(), "INT NOT NULL");
-}
 
-#[test]
-fn test_bigint_display() {
     assert_eq!(BigIntType::new().to_string(), "BIGINT");
     assert_eq!(
         BigIntType::with_nullable(false).to_string(),
         "BIGINT NOT NULL"
     );
-}
 
-#[test]
-fn test_float_display() {
     assert_eq!(FloatType::new().to_string(), "FLOAT");
     assert_eq!(
         FloatType::with_nullable(false).to_string(),
         "FLOAT NOT NULL"
     );
-}
 
-#[test]
-fn test_double_display() {
     assert_eq!(DoubleType::new().to_string(), "DOUBLE");
     assert_eq!(
         DoubleType::with_nullable(false).to_string(),
         "DOUBLE NOT NULL"
     );
-}
 
-#[test]
-fn test_string_display() {
     assert_eq!(StringType::new().to_string(), "STRING");
     assert_eq!(
         StringType::with_nullable(false).to_string(),
         "STRING NOT NULL"
     );
-}
 
-#[test]
-fn test_date_display() {
     assert_eq!(DateType::new().to_string(), "DATE");
     assert_eq!(DateType::with_nullable(false).to_string(), "DATE NOT NULL");
-}
 
-#[test]
-fn test_bytes_display() {
     assert_eq!(BytesType::new().to_string(), "BYTES");
     assert_eq!(
         BytesType::with_nullable(false).to_string(),
@@ -1184,59 +1243,45 @@ fn test_bytes_display() {
 }
 
 #[test]
-fn test_char_display() {
+fn test_parameterized_types_display() {
+    // Test types with parameters (length, precision, scale, etc.)
     assert_eq!(CharType::new(10).to_string(), "CHAR(10)");
     assert_eq!(
         CharType::with_nullable(20, false).to_string(),
         "CHAR(20) NOT NULL"
     );
-}
 
-#[test]
-fn test_decimal_display() {
+    assert_eq!(BinaryType::new(100).to_string(), "BINARY(100)");
+    assert_eq!(
+        BinaryType::with_nullable(false, 256).to_string(),
+        "BINARY(256) NOT NULL"
+    );
+
     assert_eq!(DecimalType::new(10, 2).to_string(), "DECIMAL(10, 2)");
     assert_eq!(
         DecimalType::with_nullable(false, 38, 10).to_string(),
         "DECIMAL(38, 10) NOT NULL"
     );
-}
 
-#[test]
-fn test_time_display() {
     assert_eq!(TimeType::new(0).to_string(), "TIME(0)");
     assert_eq!(TimeType::new(3).to_string(), "TIME(3)");
     assert_eq!(
         TimeType::with_nullable(false, 9).to_string(),
         "TIME(9) NOT NULL"
     );
-}
 
-#[test]
-fn test_timestamp_display() {
     assert_eq!(TimestampType::new(6).to_string(), "TIMESTAMP(6)");
     assert_eq!(TimestampType::new(0).to_string(), "TIMESTAMP(0)");
     assert_eq!(
         TimestampType::with_nullable(false, 9).to_string(),
         "TIMESTAMP(9) NOT NULL"
     );
-}
 
-#[test]
-fn test_timestamp_ltz_display() {
     assert_eq!(TimestampLTzType::new(6).to_string(), "TIMESTAMP_LTZ(6)");
     assert_eq!(TimestampLTzType::new(3).to_string(), "TIMESTAMP_LTZ(3)");
     assert_eq!(
         TimestampLTzType::with_nullable(false, 9).to_string(),
         "TIMESTAMP_LTZ(9) NOT NULL"
-    );
-}
-
-#[test]
-fn test_binary_display() {
-    assert_eq!(BinaryType::new(100).to_string(), "BINARY(100)");
-    assert_eq!(
-        BinaryType::with_nullable(false, 256).to_string(),
-        "BINARY(256) NOT NULL"
     );
 }
 

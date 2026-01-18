@@ -202,7 +202,14 @@ impl JsonSerde for DataType {
                     .get(Self::FIELD_NAME_SCALE)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
-                DataTypes::decimal(precision, scale)
+                DataType::Decimal(
+                    crate::metadata::datatype::DecimalType::try_with_nullable(
+                        true, precision, scale,
+                    )
+                    .map_err(|e| Error::JsonSerdeError {
+                        message: format!("Invalid DECIMAL parameters: {}", e),
+                    })?,
+                )
             }
             "DATE" => DataTypes::date(),
             "TIME_WITHOUT_TIME_ZONE" => {
@@ -210,21 +217,36 @@ impl JsonSerde for DataType {
                     .get(Self::FIELD_NAME_PRECISION)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
-                DataTypes::time_with_precision(precision)
+                DataType::Time(
+                    crate::metadata::datatype::TimeType::try_with_nullable(true, precision)
+                        .map_err(|e| Error::JsonSerdeError {
+                            message: format!("Invalid TIME precision: {}", e),
+                        })?,
+                )
             }
             "TIMESTAMP_WITHOUT_TIME_ZONE" => {
                 let precision = node
                     .get(Self::FIELD_NAME_PRECISION)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(6) as u32;
-                DataTypes::timestamp_with_precision(precision)
+                DataType::Timestamp(
+                    crate::metadata::datatype::TimestampType::try_with_nullable(true, precision)
+                        .map_err(|e| Error::JsonSerdeError {
+                            message: format!("Invalid TIMESTAMP precision: {}", e),
+                        })?,
+                )
             }
             "TIMESTAMP_WITH_LOCAL_TIME_ZONE" => {
                 let precision = node
                     .get(Self::FIELD_NAME_PRECISION)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(6) as u32;
-                DataTypes::timestamp_ltz_with_precision(precision)
+                DataType::TimestampLTz(
+                    crate::metadata::datatype::TimestampLTzType::try_with_nullable(true, precision)
+                        .map_err(|e| Error::JsonSerdeError {
+                            message: format!("Invalid TIMESTAMP_LTZ precision: {}", e),
+                        })?,
+                )
             }
             "BYTES" => DataTypes::bytes(),
             "BINARY" => {
@@ -688,5 +710,82 @@ mod tests {
             let deserialized = DataType::deserialize_json(&json).unwrap();
             assert_eq!(dt, deserialized);
         }
+    }
+
+    #[test]
+    fn test_invalid_datatype_validation() {
+        use serde_json::json;
+
+        // Invalid DECIMAL precision (> 38)
+        let invalid_decimal = json!({
+            "type": "DECIMAL",
+            "precision": 50,
+            "scale": 2
+        });
+        let result = DataType::deserialize_json(&invalid_decimal);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid DECIMAL parameters")
+        );
+
+        // Invalid TIME precision (> 9)
+        let invalid_time = json!({
+            "type": "TIME_WITHOUT_TIME_ZONE",
+            "precision": 15
+        });
+        let result = DataType::deserialize_json(&invalid_time);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid TIME precision")
+        );
+
+        // Invalid TIMESTAMP precision (> 9)
+        let invalid_timestamp = json!({
+            "type": "TIMESTAMP_WITHOUT_TIME_ZONE",
+            "precision": 20
+        });
+        let result = DataType::deserialize_json(&invalid_timestamp);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid TIMESTAMP precision")
+        );
+
+        // Invalid TIMESTAMP_LTZ precision (> 9)
+        let invalid_timestamp_ltz = json!({
+            "type": "TIMESTAMP_WITH_LOCAL_TIME_ZONE",
+            "precision": 10
+        });
+        let result = DataType::deserialize_json(&invalid_timestamp_ltz);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid TIMESTAMP_LTZ precision")
+        );
+
+        // Invalid DECIMAL scale (> precision)
+        let invalid_decimal_scale = json!({
+            "type": "DECIMAL",
+            "precision": 10,
+            "scale": 15
+        });
+        let result = DataType::deserialize_json(&invalid_decimal_scale);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid DECIMAL parameters")
+        );
     }
 }

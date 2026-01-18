@@ -73,8 +73,14 @@ impl FieldGetter {
             },
             DataType::Date(_) => InnerFieldGetter::Date { pos },
             DataType::Time(_) => InnerFieldGetter::Time { pos },
-            DataType::Timestamp(_) => InnerFieldGetter::Timestamp { pos },
-            DataType::TimestampLTz(_) => InnerFieldGetter::TimestampLtz { pos },
+            DataType::Timestamp(t) => InnerFieldGetter::Timestamp {
+                pos,
+                precision: t.precision(),
+            },
+            DataType::TimestampLTz(t) => InnerFieldGetter::TimestampLtz {
+                pos,
+                precision: t.precision(),
+            },
             _ => unimplemented!("DataType {:?} is currently unimplemented", data_type),
         };
 
@@ -136,9 +142,11 @@ pub enum InnerFieldGetter {
     },
     Timestamp {
         pos: usize,
+        precision: u32,
     },
     TimestampLtz {
         pos: usize,
+        precision: u32,
     },
 }
 
@@ -161,15 +169,13 @@ impl InnerFieldGetter {
                 precision,
                 scale,
             } => Datum::Decimal(row.get_decimal(*pos, *precision, *scale)),
-            InnerFieldGetter::Date { pos } => {
-                Datum::Date(crate::row::datum::Date::new(row.get_date(*pos)))
+            InnerFieldGetter::Date { pos } => Datum::Date(row.get_date(*pos)),
+            InnerFieldGetter::Time { pos } => Datum::Time(row.get_time(*pos)),
+            InnerFieldGetter::Timestamp { pos, precision } => {
+                Datum::TimestampNtz(row.get_timestamp_ntz(*pos, *precision))
             }
-            InnerFieldGetter::Time { pos } => {
-                Datum::Time(crate::row::datum::Time::new(row.get_time(*pos)))
-            }
-            InnerFieldGetter::Timestamp { pos } => Datum::Timestamp(row.get_timestamp_ntz(*pos)),
-            InnerFieldGetter::TimestampLtz { pos } => {
-                Datum::TimestampTz(row.get_timestamp_ltz(*pos))
+            InnerFieldGetter::TimestampLtz { pos, precision } => {
+                Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision))
             } //TODO Array, Map, Row
         }
     }
@@ -190,8 +196,8 @@ impl InnerFieldGetter {
             | Self::Decimal { pos, .. }
             | Self::Date { pos }
             | Self::Time { pos }
-            | Self::Timestamp { pos }
-            | Self::TimestampLtz { pos } => *pos,
+            | Self::Timestamp { pos, .. }
+            | Self::TimestampLtz { pos, .. } => *pos,
         }
     }
 }

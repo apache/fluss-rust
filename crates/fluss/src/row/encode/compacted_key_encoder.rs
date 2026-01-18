@@ -238,101 +238,118 @@ mod tests {
     }
 
     #[test]
-    fn test_all_data_types() {
+    fn test_all_data_types_java_compatible() {
+        // Test encoding compatibility with Java using reference from:
+        // https://github.com/apache/fluss/blob/main/fluss-common/src/test/resources/encoding/encoded_key.hex
+        use crate::metadata::{DataType, TimestampLTzType, TimestampType};
+
         let row_type = RowType::with_data_types(vec![
-            DataTypes::boolean(),
-            DataTypes::tinyint(),
-            DataTypes::smallint(),
-            DataTypes::int(),
-            DataTypes::bigint(),
-            DataTypes::float(),
-            DataTypes::double(),
-            DataTypes::date(),
-            DataTypes::time(),
-            DataTypes::timestamp(),
-            DataTypes::timestamp_ltz(),
-            DataTypes::decimal(10, 2),
-            DataTypes::binary(20),
-            DataTypes::bytes(),
-            DataTypes::char(2),
-            DataTypes::string(),
-            // TODO Array of Int
-            // TODO Array of Float
-            // TODO Array of String
-            // TODO: Add Map and Row fields in Issue #1973
+            DataTypes::boolean(),                                              // BOOLEAN
+            DataTypes::tinyint(),                                              // TINYINT
+            DataTypes::smallint(),                                             // SMALLINT
+            DataTypes::int(),                                                  // INT
+            DataTypes::bigint(),                                               // BIGINT
+            DataTypes::float(),                                                // FLOAT
+            DataTypes::double(),                                               // DOUBLE
+            DataTypes::date(),                                                 // DATE
+            DataTypes::time(),                                                 // TIME
+            DataTypes::binary(20),                                             // BINARY(20)
+            DataTypes::bytes(),                                                // BYTES
+            DataTypes::char(2),                                                // CHAR(2)
+            DataTypes::string(),                                               // STRING
+            DataTypes::decimal(5, 2),                                          // DECIMAL(5,2)
+            DataTypes::decimal(20, 0),                                         // DECIMAL(20,0)
+            DataType::Timestamp(TimestampType::with_nullable(false, 1)),       // TIMESTAMP(1)
+            DataType::Timestamp(TimestampType::with_nullable(false, 5)),       // TIMESTAMP(5)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 1)), // TIMESTAMP_LTZ(1)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 5)), // TIMESTAMP_LTZ(5)
         ]);
 
+        // Exact values from Java's IndexedRowTest.genRecordForAllTypes()
         let row = GenericRow::from_data(vec![
-            Datum::from(true),
-            Datum::from(2i8),
-            Datum::from(10i16),
-            Datum::from(100i32),
-            Datum::from(-6101065172474983726i64), // from Java test case: new BigInteger("12345678901234567890").longValue()
-            Datum::from(13.2f32),
-            Datum::from(15.21f64),
-            Datum::Date(crate::row::datum::Date::new(19651)), // 2023-10-25
-            Datum::Time(crate::row::datum::Time::new(34200000)), // 09:30:00.0
-            Datum::Timestamp(crate::row::datum::Timestamp::new(1698235273182)), // Java test value
-            Datum::TimestampTz(crate::row::datum::TimestampLtz::new(1698235273182)), // Java test value
-            Datum::Decimal(bigdecimal::BigDecimal::new(
-                bigdecimal::num_bigint::BigInt::from(12345),
-                2,
-            )), // 123.45
-            Datum::from("1234567890".as_bytes()),
-            Datum::from("20".as_bytes()),
-            Datum::from("1"),
-            Datum::from("hello"),
-            // TODO Array of Int
-            // TODO Array of Float
-            // TODO Array of String
-            // TODO: Add Map and Row fields in Issue #1973
+            Datum::from(true),                                   // BOOLEAN: true
+            Datum::from(2i8),                                    // TINYINT: 2
+            Datum::from(10i16),                                  // SMALLINT: 10
+            Datum::from(100i32),                                 // INT: 100
+            Datum::from(-6101065172474983726i64),                // BIGINT
+            Datum::from(13.2f32),                                // FLOAT: 13.2
+            Datum::from(15.21f64),                               // DOUBLE: 15.21
+            Datum::Date(crate::row::datum::Date::new(19655)), // DATE: 2023-10-25 (19655 days since epoch)
+            Datum::Time(crate::row::datum::Time::new(34200000)), // TIME: 09:30:00.0
+            Datum::from("1234567890".as_bytes()),             // BINARY(20)
+            Datum::from("20".as_bytes()),                     // BYTES
+            Datum::from("1"),                                 // CHAR(2): "1"
+            Datum::from("hello"),                             // STRING: "hello"
+            Datum::Decimal(crate::row::Decimal::from_unscaled_long(9, 5, 2).unwrap()), // DECIMAL(5,2)
+            Datum::Decimal(
+                crate::row::Decimal::from_big_decimal(
+                    bigdecimal::BigDecimal::new(bigdecimal::num_bigint::BigInt::from(10), 0),
+                    20,
+                    0,
+                )
+                .unwrap(),
+            ), // DECIMAL(20,0)
+            Datum::TimestampNtz(crate::row::datum::TimestampNtz::new(1698235273182)), // TIMESTAMP(1)
+            Datum::TimestampNtz(crate::row::datum::TimestampNtz::new(1698235273182)), // TIMESTAMP(5)
+            Datum::TimestampLtz(crate::row::datum::TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(1)
+            Datum::TimestampLtz(crate::row::datum::TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(5)
         ]);
+
+        // Expected bytes from Java's encoded_key.hex reference file
+        #[rustfmt::skip]
+        let expected: Vec<u8> = vec![
+            // BOOLEAN: true
+            0x01,
+            // TINYINT: 2
+            0x02,
+            // SMALLINT: 10 (varint encoded)
+            0x0A,
+            // INT: 100 (varint encoded)
+            0x00, 0x64,
+            // BIGINT: -6101065172474983726
+            0xD2, 0x95, 0xFC, 0xD8, 0xCE, 0xB1, 0xAA, 0xAA, 0xAB, 0x01,
+            // FLOAT: 13.2
+            0x33, 0x33, 0x53, 0x41,
+            // DOUBLE: 15.21
+            0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40,
+            // DATE: 2023-10-25
+            0xC7, 0x99, 0x01,
+            // TIME: 09:30:00.0
+            0xC0, 0xB3, 0xA7, 0x10,
+            // BINARY(20): "1234567890"
+            0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30,
+            // BYTES: "20"
+            0x02, 0x32, 0x30,
+            // CHAR(2): "1"
+            0x01, 0x31,
+            // STRING: "hello"
+            0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F,
+            // DECIMAL(5,2): 9
+            0x09,
+            // DECIMAL(20,0): 10
+            0x01, 0x0A,
+            // TIMESTAMP(1): 1698235273182
+            0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31,
+            // TIMESTAMP(5): 1698235273182
+            0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31, 0x00,
+            // TIMESTAMP_LTZ(1): 1698235273182
+            0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31,
+            // TIMESTAMP_LTZ(5): 1698235273182
+            0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31, 0x00,
+        ];
 
         let mut encoder = for_test_row_type(&row_type);
-
-        let mut expected: Vec<u8> = Vec::new();
-        // BOOLEAN: true
-        expected.extend(vec![0x01]);
-        // TINYINT: 2
-        expected.extend(vec![0x02]);
-        // SMALLINT: 10
-        expected.extend(vec![0x0A]);
-        // INT: 100
-        expected.extend(vec![0x00, 0x64]);
-        // BIGINT: -6101065172474983726
-        expected.extend(vec![
-            0xD2, 0x95, 0xFC, 0xD8, 0xCE, 0xB1, 0xAA, 0xAA, 0xAB, 0x01,
-        ]);
-        // FLOAT: 13.2
-        expected.extend(vec![0x33, 0x33, 0x53, 0x41]);
-        // DOUBLE: 15.21
-        expected.extend(vec![0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40]);
-        // DATE: 19651 (2023-10-25) - varint encoding
-        expected.extend(vec![0xC3, 0x99, 0x01]);
-        // TIME: 34200000 (09:30:00.0) - varint encoding
-        expected.extend(vec![0xC0, 0xB3, 0xA7, 0x10]);
-        // TIMESTAMP: 1698235273182 - non-compact encoding (precision=6 > 3)
-        // Format: millis (varint i64) + nanos (varint i32)
-        // Millis: 1698235273182 = [DE 9F D7 B5 B6 31], Nanos: 0 = [00]
-        expected.extend(vec![0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31, 0x00]);
-        // TIMESTAMP_LTZ: 1698235273182 - same non-compact encoding
-        expected.extend(vec![0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31, 0x00]);
-        // DECIMAL: 12345 (representing 123.45 with scale 2) - varint encoding
-        expected.extend(vec![0xB9, 0x60]);
-        // BINARY(20): "1234567890".getBytes()
-        expected.extend(vec![
-            0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30,
-        ]);
-
-        // BYTES: "20".getBytes()
-        expected.extend(vec![0x02, 0x32, 0x30]);
-        // CHAR(2): "1"
-        expected.extend(vec![0x01, 0x31]);
-        // STRING: String: "hello"
-        expected.extend(vec![0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F]);
-
-        // Verify the encoding
         let encoded = encoder.encode_key(&row).unwrap();
-        assert_eq!(encoded.iter().as_slice(), expected.as_slice());
+
+        // Assert byte-for-byte compatibility with Java's encoded_key.hex
+        assert_eq!(
+            encoded.iter().as_slice(),
+            expected.as_slice(),
+            "\n\nRust encoding does not match Java reference from encoded_key.hex\n\
+             Expected: {:02X?}\n\
+             Actual:   {:02X?}\n",
+            expected,
+            encoded.iter().as_slice()
+        );
     }
 }

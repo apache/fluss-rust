@@ -98,8 +98,8 @@ mod tests {
     fn test_compacted_row_decoder() {
         // Write a CompactedRow
         let mut writer = CompactedRowWriter::new(2);
-        writer.write_int(42).unwrap();
-        writer.write_string("hello").unwrap();
+        writer.write_int(42);
+        writer.write_string("hello");
 
         let data = writer.to_bytes();
 
@@ -123,8 +123,8 @@ mod tests {
 
         // Write a row
         let mut writer = CompactedRowWriter::new(2);
-        writer.write_int(100).unwrap();
-        writer.write_string("world").unwrap();
+        writer.write_int(100);
+        writer.write_string("world");
         let data = writer.to_bytes();
 
         // Decode
