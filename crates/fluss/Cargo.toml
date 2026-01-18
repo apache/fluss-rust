@@ -48,7 +48,7 @@ tokio = { workspace = true }
 parking_lot = "0.12"
 bytes = "1.10.1"
 dashmap = "6.1.0"
-rust_decimal = "1"
+bigdecimal = { version = "0.4", features = ["serde"] }
 ordered-float = { version = "5", features = ["serde"] }
 parse-display = "0.10"
 ref-cast = "1.0"

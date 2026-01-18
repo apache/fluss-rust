@@ -248,14 +248,14 @@ mod tests {
             DataTypes::float(),
             DataTypes::double(),
             DataTypes::date(),
-            // TIME is not yet represented in Datum
+            DataTypes::time(),
             DataTypes::timestamp(),
+            DataTypes::timestamp_ltz(),
+            DataTypes::decimal(10, 2),
             DataTypes::binary(20),
             DataTypes::bytes(),
             DataTypes::char(2),
             DataTypes::string(),
-            // TODO Decimal
-            // TODO Timestamp LTZ
             // TODO Array of Int
             // TODO Array of Float
             // TODO Array of String
@@ -270,14 +270,18 @@ mod tests {
             Datum::from(-6101065172474983726i64), // from Java test case: new BigInteger("12345678901234567890").longValue()
             Datum::from(13.2f32),
             Datum::from(15.21f64),
-            Datum::Date(crate::row::datum::Date::new(5)),
-            Datum::Timestamp(crate::row::datum::Timestamp::new(13)),
+            Datum::Date(crate::row::datum::Date::new(19651)), // 2023-10-25
+            Datum::Time(crate::row::datum::Time::new(34200000)), // 09:30:00.0
+            Datum::Timestamp(crate::row::datum::Timestamp::new(1698235273182)), // Java test value
+            Datum::TimestampTz(crate::row::datum::TimestampLtz::new(1698235273182)), // Java test value
+            Datum::Decimal(bigdecimal::BigDecimal::new(
+                bigdecimal::num_bigint::BigInt::from(12345),
+                2,
+            )), // 123.45
             Datum::from("1234567890".as_bytes()),
             Datum::from("20".as_bytes()),
             Datum::from("1"),
             Datum::from("hello"),
-            // TODO Decimal
-            // TODO Timestamp LTZ
             // TODO Array of Int
             // TODO Array of Float
             // TODO Array of String
@@ -303,10 +307,18 @@ mod tests {
         expected.extend(vec![0x33, 0x33, 0x53, 0x41]);
         // DOUBLE: 15.21
         expected.extend(vec![0xEC, 0x51, 0xB8, 0x1E, 0x85, 0x6B, 0x2E, 0x40]);
-        // DATE: 5
-        expected.extend(vec![0x05]);
-        // TIMESTAMP: 13
-        expected.extend(vec![0x0D]);
+        // DATE: 19651 (2023-10-25) - varint encoding
+        expected.extend(vec![0xC3, 0x99, 0x01]);
+        // TIME: 34200000 (09:30:00.0) - varint encoding
+        expected.extend(vec![0xC0, 0xB3, 0xA7, 0x10]);
+        // TIMESTAMP: 1698235273182 - non-compact encoding (precision=6 > 3)
+        // Format: millis (varint i64) + nanos (varint i32)
+        // Millis: 1698235273182 = [DE 9F D7 B5 B6 31], Nanos: 0 = [00]
+        expected.extend(vec![0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31, 0x00]);
+        // TIMESTAMP_LTZ: 1698235273182 - same non-compact encoding
+        expected.extend(vec![0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31, 0x00]);
+        // DECIMAL: 12345 (representing 123.45 with scale 2) - varint encoding
+        expected.extend(vec![0xB9, 0x60]);
         // BINARY(20): "1234567890".getBytes()
         expected.extend(vec![
             0x0A, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30,
@@ -318,9 +330,9 @@ mod tests {
         expected.extend(vec![0x01, 0x31]);
         // STRING: String: "hello"
         expected.extend(vec![0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F]);
-        assert_eq!(
-            encoder.encode_key(&row).unwrap().iter().as_slice(),
-            expected.as_slice()
-        );
+
+        // Verify the encoding
+        let encoded = encoder.encode_key(&row).unwrap();
+        assert_eq!(encoded.iter().as_slice(), expected.as_slice());
     }
 }

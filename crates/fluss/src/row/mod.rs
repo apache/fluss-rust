@@ -31,6 +31,8 @@ pub use datum::*;
 pub use encode::KeyEncoder;
 pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
 
+use bigdecimal::BigDecimal;
+
 pub trait BinaryRow: InternalRow {
     /// Returns the binary representation of this row as a byte slice.
     fn as_bytes(&self) -> &[u8];
@@ -71,17 +73,20 @@ pub trait InternalRow {
     /// Returns the string value at the given position
     fn get_string(&self, pos: usize) -> &str;
 
-    // /// Returns the decimal value at the given position
-    // fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Decimal;
+    /// Returns the decimal value at the given position
+    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> BigDecimal;
 
     /// Returns the date value at the given position (date as days since epoch)
     fn get_date(&self, pos: usize) -> i32;
 
+    /// Returns the time value at the given position (time as milliseconds since midnight)
+    fn get_time(&self, pos: usize) -> i32;
+
     /// Returns the timestamp value at the given position (timestamp without timezone)
-    fn get_timestamp_ntz(&self, pos: usize) -> i64;
+    fn get_timestamp_ntz(&self, pos: usize) -> datum::Timestamp;
 
     /// Returns the timestamp value at the given position (timestamp with local timezone)
-    fn get_timestamp_ltz(&self, pos: usize) -> i64;
+    fn get_timestamp_ltz(&self, pos: usize) -> datum::TimestampLtz;
 
     /// Returns the binary value at the given position with fixed length
     fn get_binary(&self, pos: usize, length: usize) -> &[u8];
@@ -126,6 +131,13 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.get(_pos).unwrap().try_into().unwrap()
     }
 
+    fn get_decimal(&self, pos: usize, _precision: usize, _scale: usize) -> BigDecimal {
+        match self.values.get(pos).unwrap() {
+            Datum::Decimal(d) => d.clone(),
+            other => panic!("Expected Decimal at pos {pos:?}, got {other:?}"),
+        }
+    }
+
     fn get_date(&self, pos: usize) -> i32 {
         match self.values.get(pos).unwrap() {
             Datum::Date(d) => d.get_inner(),
@@ -134,19 +146,25 @@ impl<'a> InternalRow for GenericRow<'a> {
         }
     }
 
-    fn get_timestamp_ntz(&self, pos: usize) -> i64 {
+    fn get_time(&self, pos: usize) -> i32 {
         match self.values.get(pos).unwrap() {
-            Datum::Timestamp(t) => t.get_inner(),
-            Datum::Int64(i) => *i,
-            other => panic!("Expected Timestamp or Int64 at pos {pos:?}, got {other:?}"),
+            Datum::Time(t) => t.get_inner(),
+            Datum::Int32(i) => *i,
+            other => panic!("Expected Time or Int32 at pos {pos:?}, got {other:?}"),
         }
     }
 
-    fn get_timestamp_ltz(&self, pos: usize) -> i64 {
+    fn get_timestamp_ntz(&self, pos: usize) -> datum::Timestamp {
         match self.values.get(pos).unwrap() {
-            Datum::TimestampTz(t) => t.get_inner(),
-            Datum::Int64(i) => *i,
-            other => panic!("Expected TimestampTz or Int64 at pos {pos:?}, got {other:?}"),
+            Datum::Timestamp(t) => *t,
+            other => panic!("Expected Timestamp at pos {pos:?}, got {other:?}"),
+        }
+    }
+
+    fn get_timestamp_ltz(&self, pos: usize) -> datum::TimestampLtz {
+        match self.values.get(pos).unwrap() {
+            Datum::TimestampTz(t) => *t,
+            other => panic!("Expected TimestampTz at pos {pos:?}, got {other:?}"),
         }
     }
 

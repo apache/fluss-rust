@@ -17,8 +17,8 @@
 
 use crate::row::InternalRow;
 use arrow::array::{
-    AsArray, BinaryArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array, Int16Array,
-    Int32Array, Int64Array, RecordBatch, StringArray,
+    Array, AsArray, BinaryArray, Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array,
+    Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch, StringArray,
 };
 use std::sync::Arc;
 
@@ -126,16 +126,103 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id)
     }
 
+    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> bigdecimal::BigDecimal {
+        use arrow::datatypes::DataType;
+
+        let column = self.record_batch.column(pos);
+        let array = column
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected Decimal128Array at column {}, found: {:?}",
+                    pos,
+                    column.data_type()
+                )
+            });
+
+        // Null check: InternalRow trait doesn't return Result, so this would be UB
+        debug_assert!(
+            !array.is_null(self.row_id),
+            "get_decimal called on null value at pos {} row {}",
+            pos,
+            self.row_id
+        );
+
+        // Read precision/scale from schema field metadata (version-safe approach)
+        let schema = self.record_batch.schema();
+        let field = schema.field(pos);
+        let (arrow_precision, arrow_scale) = match field.data_type() {
+            DataType::Decimal128(p, s) => (*p as usize, *s as i64),
+            dt => panic!(
+                "Expected Decimal128 data type at column {}, found: {:?}",
+                pos, dt
+            ),
+        };
+
+        // Validate Arrow precision matches schema (scale may differ due to schema evolution)
+        debug_assert_eq!(
+            arrow_precision, precision,
+            "Arrow Decimal128 precision ({}) doesn't match schema precision ({})",
+            arrow_precision, precision
+        );
+
+        let i128_val = array.value(self.row_id);
+
+        // Construct BigDecimal with Arrow's scale
+        let bd = bigdecimal::BigDecimal::new(
+            bigdecimal::num_bigint::BigInt::from(i128_val),
+            arrow_scale,
+        );
+
+        // Rescale if needed (matches Java's Decimal.fromBigDecimal behavior)
+        let result = if arrow_scale != scale as i64 {
+            use bigdecimal::rounding::RoundingMode;
+            bd.with_scale_round(scale as i64, RoundingMode::HalfUp)
+        } else {
+            bd
+        };
+
+        // Validate precision after rescale (matches Java: if (bd.precision() > precision) throw)
+        // Use Java's precision rules: strip trailing zeros, count significant digits
+        let (unscaled, _) = result.as_bigint_and_exponent();
+        let actual_precision = {
+            use bigdecimal::num_traits::Zero;
+            if unscaled.is_zero() {
+                1
+            } else {
+                let s = unscaled.magnitude().to_str_radix(10);
+                let trimmed = s.trim_end_matches('0');
+                trimmed.len()
+            }
+        };
+
+        if actual_precision > precision {
+            panic!(
+                "Decimal precision overflow at column {} row {}: value {} has {} digits but precision is {}",
+                pos, self.row_id, result, actual_precision, precision
+            );
+        }
+
+        result
+    }
+
     fn get_date(&self, pos: usize) -> i32 {
         self.get_int(pos)
     }
 
-    fn get_timestamp_ntz(&self, pos: usize) -> i64 {
-        self.get_long(pos)
+    fn get_time(&self, pos: usize) -> i32 {
+        self.get_int(pos)
     }
 
-    fn get_timestamp_ltz(&self, pos: usize) -> i64 {
-        self.get_long(pos)
+    fn get_timestamp_ntz(&self, pos: usize) -> crate::row::datum::Timestamp {
+        let millis = self.get_long(pos);
+        crate::row::datum::Timestamp::new(millis)
+    }
+
+    fn get_timestamp_ltz(&self, pos: usize) -> crate::row::datum::TimestampLtz {
+        let millis = self.get_long(pos);
+        crate::row::datum::TimestampLtz::new(millis)
     }
 
     fn get_char(&self, pos: usize, _length: usize) -> &str {
@@ -240,5 +327,62 @@ mod tests {
         assert_eq!(row.get_char(9, 2), "ab");
         row.set_row_id(0);
         assert_eq!(row.get_row_id(), 0);
+    }
+
+    #[test]
+    fn columnar_row_reads_decimal() {
+        use arrow::datatypes::DataType;
+        use bigdecimal::{BigDecimal, num_bigint::BigInt};
+
+        // Test with Decimal128
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("dec1", DataType::Decimal128(10, 2), false),
+            Field::new("dec2", DataType::Decimal128(20, 5), false),
+            Field::new("dec3", DataType::Decimal128(38, 10), false),
+        ]));
+
+        // Create decimal values: 123.45, 12345.67890, large decimal
+        let dec1_val = 12345i128; // 123.45 with scale 2
+        let dec2_val = 1234567890i128; // 12345.67890 with scale 5
+        let dec3_val = 999999999999999999i128; // Large value (18 nines) with scale 10
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(
+                    Decimal128Array::from(vec![dec1_val])
+                        .with_precision_and_scale(10, 2)
+                        .unwrap(),
+                ),
+                Arc::new(
+                    Decimal128Array::from(vec![dec2_val])
+                        .with_precision_and_scale(20, 5)
+                        .unwrap(),
+                ),
+                Arc::new(
+                    Decimal128Array::from(vec![dec3_val])
+                        .with_precision_and_scale(38, 10)
+                        .unwrap(),
+                ),
+            ],
+        )
+        .expect("record batch");
+
+        let row = ColumnarRow::new(Arc::new(batch));
+        assert_eq!(row.get_field_count(), 3);
+
+        // Verify decimal values
+        assert_eq!(
+            row.get_decimal(0, 10, 2),
+            BigDecimal::new(BigInt::from(12345), 2)
+        );
+        assert_eq!(
+            row.get_decimal(1, 20, 5),
+            BigDecimal::new(BigInt::from(1234567890), 5)
+        );
+        assert_eq!(
+            row.get_decimal(2, 38, 10),
+            BigDecimal::new(BigInt::from(999999999999999999i128), 10)
+        );
     }
 }

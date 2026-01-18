@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::{Error, Result};
 use crate::metadata::RowType;
 use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
 use crate::{
@@ -22,6 +23,7 @@ use crate::{
     row::{Datum, GenericRow, compacted::compacted_row_writer::CompactedRowWriter},
     util::varint::{read_unsigned_varint_at, read_unsigned_varint_u64_at},
 };
+use bigdecimal::{BigDecimal, num_bigint::BigInt};
 use std::borrow::Cow;
 use std::str::from_utf8;
 
@@ -49,7 +51,7 @@ impl<'a> CompactedRowDeserializer<'a> {
         self.row_type.as_ref()
     }
 
-    pub fn deserialize(&self, reader: &CompactedRowReader<'a>) -> GenericRow<'a> {
+    pub fn deserialize(&self, reader: &CompactedRowReader<'a>) -> Result<GenericRow<'a>> {
         let mut row = GenericRow::new();
         let mut cursor = reader.initial_position();
         for (col_pos, data_field) in self.row_type.fields().iter().enumerate() {
@@ -97,12 +99,92 @@ impl<'a> CompactedRowDeserializer<'a> {
                     let (val, next) = reader.read_bytes(cursor);
                     (Datum::Blob(val.into()), next)
                 }
-                _ => panic!("unsupported DataType in CompactedRowDeserializer"),
+                DataType::Decimal(decimal_type) => {
+                    let precision = decimal_type.precision();
+                    let scale = decimal_type.scale();
+                    if precision <= 18 {
+                        // Compact: stored as i64
+                        let (val, next) = reader.read_long(cursor);
+                        let decimal = BigDecimal::new(BigInt::from(val), scale as i64);
+                        (Datum::Decimal(decimal), next)
+                    } else {
+                        // Non-compact: stored as minimal big-endian bytes
+                        let (bytes, next) = reader.read_bytes(cursor);
+                        // Convert big-endian bytes to BigInt (supports arbitrary precision)
+                        let big_int = BigInt::from_signed_bytes_be(bytes);
+                        let decimal = BigDecimal::new(big_int, scale as i64);
+                        (Datum::Decimal(decimal), next)
+                    }
+                }
+                DataType::Date(_) => {
+                    let (val, next) = reader.read_int(cursor);
+                    (Datum::Date(crate::row::datum::Date::new(val)), next)
+                }
+                DataType::Time(_) => {
+                    let (val, next) = reader.read_int(cursor);
+                    (Datum::Time(crate::row::datum::Time::new(val)), next)
+                }
+                DataType::Timestamp(timestamp_type) => {
+                    let precision = timestamp_type.precision();
+                    if crate::row::datum::Timestamp::is_compact(precision) {
+                        // Compact: only milliseconds
+                        let (millis, next) = reader.read_long(cursor);
+                        (
+                            Datum::Timestamp(crate::row::datum::Timestamp::new(millis)),
+                            next,
+                        )
+                    } else {
+                        // Non-compact: milliseconds + nanos
+                        let (millis, mid) = reader.read_long(cursor);
+                        let (nanos, next) = reader.read_int(mid);
+                        let timestamp =
+                            crate::row::datum::Timestamp::from_millis_nanos(millis, nanos)
+                                .map_err(|e| Error::IllegalArgument {
+                                    message: format!(
+                                        "Invalid nano_of_millisecond value in compacted row: {}",
+                                        e
+                                    ),
+                                })?;
+                        (Datum::Timestamp(timestamp), next)
+                    }
+                }
+                DataType::TimestampLTz(timestamp_ltz_type) => {
+                    let precision = timestamp_ltz_type.precision();
+                    if crate::row::datum::TimestampLtz::is_compact(precision) {
+                        // Compact: only epoch milliseconds
+                        let (epoch_millis, next) = reader.read_long(cursor);
+                        (
+                            Datum::TimestampTz(crate::row::datum::TimestampLtz::new(epoch_millis)),
+                            next,
+                        )
+                    } else {
+                        // Non-compact: epoch milliseconds + nanos
+                        let (epoch_millis, mid) = reader.read_long(cursor);
+                        let (nanos, next) = reader.read_int(mid);
+                        let timestamp_ltz =
+                            crate::row::datum::TimestampLtz::from_millis_nanos(epoch_millis, nanos)
+                                .map_err(|e| Error::IllegalArgument {
+                                    message: format!(
+                                        "Invalid nano_of_millisecond value in compacted row: {}",
+                                        e
+                                    ),
+                                })?;
+                        (Datum::TimestampTz(timestamp_ltz), next)
+                    }
+                }
+                _ => {
+                    return Err(Error::IllegalArgument {
+                        message: format!(
+                            "Unsupported DataType in CompactedRowDeserializer: {:?}",
+                            dtype
+                        ),
+                    });
+                }
             };
             cursor = next_cursor;
             row.set_field(col_pos, datum);
         }
-        row
+        Ok(row)
     }
 }
 

@@ -30,33 +30,48 @@ pub trait BinaryWriter {
     /// Set null to this field
     fn set_null_at(&mut self, pos: usize);
 
-    fn write_boolean(&mut self, value: bool);
+    fn write_boolean(&mut self, value: bool) -> Result<()>;
 
-    fn write_byte(&mut self, value: u8);
+    fn write_byte(&mut self, value: u8) -> Result<()>;
 
-    fn write_bytes(&mut self, value: &[u8]);
+    fn write_bytes(&mut self, value: &[u8]) -> Result<()>;
 
-    fn write_char(&mut self, value: &str, length: usize);
+    fn write_char(&mut self, value: &str, length: usize) -> Result<()>;
 
-    fn write_string(&mut self, value: &str);
+    fn write_string(&mut self, value: &str) -> Result<()>;
 
-    fn write_short(&mut self, value: i16);
+    fn write_short(&mut self, value: i16) -> Result<()>;
 
-    fn write_int(&mut self, value: i32);
+    fn write_int(&mut self, value: i32) -> Result<()>;
 
-    fn write_long(&mut self, value: i64);
+    fn write_long(&mut self, value: i64) -> Result<()>;
 
-    fn write_float(&mut self, value: f32);
+    fn write_float(&mut self, value: f32) -> Result<()>;
 
-    fn write_double(&mut self, value: f64);
+    fn write_double(&mut self, value: f64) -> Result<()>;
 
-    fn write_binary(&mut self, bytes: &[u8], length: usize);
+    fn write_binary(&mut self, bytes: &[u8], length: usize) -> Result<()>;
 
-    fn write_decimal(&mut self, value: &rust_decimal::Decimal, precision: u32);
+    fn write_decimal(
+        &mut self,
+        value: &bigdecimal::BigDecimal,
+        precision: u32,
+        scale: u32,
+    ) -> Result<()>;
 
-    fn write_timestamp_ntz(&mut self, value: i64, precision: u32);
+    fn write_time(&mut self, value: i32, precision: u32) -> Result<()>;
 
-    fn write_timestamp_ltz(&mut self, value: i64, precision: u32);
+    fn write_timestamp_ntz(
+        &mut self,
+        value: &crate::row::datum::Timestamp,
+        precision: u32,
+    ) -> Result<()>;
+
+    fn write_timestamp_ltz(
+        &mut self,
+        value: &crate::row::datum::TimestampLtz,
+        precision: u32,
+    ) -> Result<()>;
 
     // TODO InternalArray, ArraySerializer
     // fn write_array(&mut self, pos: i32, value: i64);
@@ -122,11 +137,12 @@ pub enum InnerValueWriter {
     BigInt,
     Float,
     Double,
-    Decimal(u32), // precision
+    Decimal(u32, u32), // precision, scale
     Date,
+    Time(u32),         // precision (not used in wire format, but kept for consistency)
     TimestampNtz(u32), // precision
     TimestampLtz(u32), // precision
-                       // TODO TimeWithoutTimeZone, Array, Row
+                       // TODO Array, Row
 }
 
 /// Accessor for writing the fields/elements of a binary writer during runtime, the
@@ -148,10 +164,64 @@ impl InnerValueWriter {
             DataType::BigInt(_) => Ok(InnerValueWriter::BigInt),
             DataType::Float(_) => Ok(InnerValueWriter::Float),
             DataType::Double(_) => Ok(InnerValueWriter::Double),
-            DataType::Decimal(d) => Ok(InnerValueWriter::Decimal(d.precision())),
+            DataType::Decimal(d) => {
+                let precision = d.precision();
+                let scale = d.scale();
+                if !(1..=38).contains(&precision) {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Decimal precision must be between 1 and 38 (both inclusive), got: {}",
+                            precision
+                        ),
+                    });
+                }
+                if scale > precision {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Decimal scale must be between 0 and the precision {} (both inclusive), got: {}",
+                            precision, scale
+                        ),
+                    });
+                }
+                Ok(InnerValueWriter::Decimal(precision, scale))
+            }
             DataType::Date(_) => Ok(InnerValueWriter::Date),
-            DataType::Timestamp(t) => Ok(InnerValueWriter::TimestampNtz(t.precision())),
-            DataType::TimestampLTz(t) => Ok(InnerValueWriter::TimestampLtz(t.precision())),
+            DataType::Time(t) => {
+                let precision = t.precision();
+                if precision > 9 {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Time precision must be between 0 and 9 (both inclusive), got: {}",
+                            precision
+                        ),
+                    });
+                }
+                Ok(InnerValueWriter::Time(precision))
+            }
+            DataType::Timestamp(t) => {
+                let precision = t.precision();
+                if precision > 9 {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Timestamp precision must be between 0 and 9 (both inclusive), got: {}",
+                            precision
+                        ),
+                    });
+                }
+                Ok(InnerValueWriter::TimestampNtz(precision))
+            }
+            DataType::TimestampLTz(t) => {
+                let precision = t.precision();
+                if precision > 9 {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Timestamp with local time zone precision must be between 0 and 9 (both inclusive), got: {}",
+                            precision
+                        ),
+                    });
+                }
+                Ok(InnerValueWriter::TimestampLtz(precision))
+            }
             _ => unimplemented!(
                 "ValueWriter for DataType {:?} is currently not implemented",
                 data_type
@@ -166,50 +236,53 @@ impl InnerValueWriter {
     ) -> Result<()> {
         match (self, value) {
             (InnerValueWriter::Char, Datum::String(v)) => {
-                writer.write_char(v, v.len());
+                writer.write_char(v, v.len())?;
             }
             (InnerValueWriter::String, Datum::String(v)) => {
-                writer.write_string(v);
+                writer.write_string(v)?;
             }
             (InnerValueWriter::Boolean, Datum::Bool(v)) => {
-                writer.write_boolean(*v);
+                writer.write_boolean(*v)?;
             }
             (InnerValueWriter::Binary, Datum::Blob(v)) => {
                 let b = v.as_ref();
-                writer.write_binary(b, b.len());
+                writer.write_binary(b, b.len())?;
             }
             (InnerValueWriter::Bytes, Datum::Blob(v)) => {
-                writer.write_bytes(v.as_ref());
+                writer.write_bytes(v.as_ref())?;
             }
             (InnerValueWriter::TinyInt, Datum::Int8(v)) => {
-                writer.write_byte(*v as u8);
+                writer.write_byte(*v as u8)?;
             }
             (InnerValueWriter::SmallInt, Datum::Int16(v)) => {
-                writer.write_short(*v);
+                writer.write_short(*v)?;
             }
             (InnerValueWriter::Int, Datum::Int32(v)) => {
-                writer.write_int(*v);
+                writer.write_int(*v)?;
             }
             (InnerValueWriter::BigInt, Datum::Int64(v)) => {
-                writer.write_long(*v);
+                writer.write_long(*v)?;
             }
             (InnerValueWriter::Float, Datum::Float32(v)) => {
-                writer.write_float(v.into_inner());
+                writer.write_float(v.into_inner())?;
             }
             (InnerValueWriter::Double, Datum::Float64(v)) => {
-                writer.write_double(v.into_inner());
+                writer.write_double(v.into_inner())?;
             }
-            (InnerValueWriter::Decimal(p), Datum::Decimal(v)) => {
-                writer.write_decimal(v, *p);
+            (InnerValueWriter::Decimal(p, s), Datum::Decimal(v)) => {
+                writer.write_decimal(v, *p, *s)?;
             }
             (InnerValueWriter::Date, Datum::Date(d)) => {
-                writer.write_int(d.get_inner());
+                writer.write_int(d.get_inner())?;
+            }
+            (InnerValueWriter::Time(p), Datum::Time(t)) => {
+                writer.write_time(t.get_inner(), *p)?;
             }
             (InnerValueWriter::TimestampNtz(p), Datum::Timestamp(ts)) => {
-                writer.write_timestamp_ntz(ts.get_inner(), *p);
+                writer.write_timestamp_ntz(ts, *p)?;
             }
             (InnerValueWriter::TimestampLtz(p), Datum::TimestampTz(ts)) => {
-                writer.write_timestamp_ltz(ts.get_inner(), *p);
+                writer.write_timestamp_ltz(ts, *p)?;
             }
             _ => {
                 return Err(IllegalArgument {
@@ -218,5 +291,165 @@ impl InnerValueWriter {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::{DataTypes, DecimalType, TimeType, TimestampLTzType, TimestampType};
+
+    #[test]
+    fn test_decimal_precision_validation() {
+        // Valid cases
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::decimal(1, 0),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::decimal(38, 10),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+
+        // Invalid: precision too low
+        let result = InnerValueWriter::create_inner_value_writer(
+            &DataType::Decimal(DecimalType::with_nullable(true, 0, 0)),
+            Some(&BinaryRowFormat::Compacted),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Decimal precision must be between 1 and 38")
+        );
+
+        // Invalid: precision too high
+        let result = InnerValueWriter::create_inner_value_writer(
+            &DataType::Decimal(DecimalType::with_nullable(true, 39, 0)),
+            Some(&BinaryRowFormat::Compacted),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Decimal precision must be between 1 and 38")
+        );
+
+        // Invalid: scale > precision
+        let result = InnerValueWriter::create_inner_value_writer(
+            &DataType::Decimal(DecimalType::with_nullable(true, 10, 11)),
+            Some(&BinaryRowFormat::Compacted),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Decimal scale must be between 0 and the precision")
+        );
+    }
+
+    #[test]
+    fn test_time_precision_validation() {
+        // Valid cases
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::time_with_precision(0),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::time_with_precision(9),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+
+        // Invalid: precision too high
+        let result = InnerValueWriter::create_inner_value_writer(
+            &DataType::Time(TimeType::with_nullable(true, 10)),
+            Some(&BinaryRowFormat::Compacted),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Time precision must be between 0 and 9")
+        );
+    }
+
+    #[test]
+    fn test_timestamp_precision_validation() {
+        // Valid cases
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::timestamp_with_precision(0),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::timestamp_with_precision(9),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+
+        // Invalid: precision too high
+        let result = InnerValueWriter::create_inner_value_writer(
+            &DataType::Timestamp(TimestampType::with_nullable(true, 10)),
+            Some(&BinaryRowFormat::Compacted),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Timestamp precision must be between 0 and 9")
+        );
+    }
+
+    #[test]
+    fn test_timestamp_ltz_precision_validation() {
+        // Valid cases
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::timestamp_ltz_with_precision(0),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+        assert!(
+            InnerValueWriter::create_inner_value_writer(
+                &DataTypes::timestamp_ltz_with_precision(9),
+                Some(&BinaryRowFormat::Compacted)
+            )
+            .is_ok()
+        );
+
+        // Invalid: precision too high
+        let result = InnerValueWriter::create_inner_value_writer(
+            &DataType::TimestampLTz(TimestampLTzType::with_nullable(true, 10)),
+            Some(&BinaryRowFormat::Compacted),
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Timestamp with local time zone precision must be between 0 and 9")
+        );
     }
 }
