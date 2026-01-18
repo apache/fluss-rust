@@ -22,7 +22,7 @@ use crate::error::{Error, Result};
 use crate::metadata::{RowType, TableBucket, TableInfo};
 use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
-use crate::row::encode::KeyEncoder;
+use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
 use crate::rpc::ApiError;
 use crate::rpc::message::LookupRequest;
 use std::sync::Arc;
@@ -130,8 +130,11 @@ impl<'a> TableLookup<'a> {
 
         // Create key encoder for the primary key fields
         let pk_fields = self.table_info.get_physical_primary_keys().to_vec();
-        let key_encoder =
-            <dyn KeyEncoder>::of(self.table_info.row_type(), pk_fields, data_lake_format)?;
+        let key_encoder = KeyEncoderFactory::of(
+            self.table_info.row_type(),
+            pk_fields.as_slice(),
+            &data_lake_format,
+        )?;
 
         Ok(Lookuper {
             conn: self.conn,

@@ -19,11 +19,12 @@ mod accumulator;
 mod batch;
 
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
-use crate::error::Error;
+use crate::error::{Error, Result};
 use crate::metadata::TablePath;
-use crate::row::GenericRow;
+use crate::row::{BinaryRow, GenericRow};
 pub use accumulator::*;
 use arrow::array::RecordBatch;
+use bytes::Bytes;
 use std::sync::Arc;
 
 pub(crate) mod broadcast;
@@ -33,6 +34,9 @@ mod sender;
 mod write_format;
 mod writer_client;
 
+use crate::error::Error::IllegalArgument;
+use crate::record::kv::{KvRecord, RECORD_BATCH_HEADER_SIZE};
+use crate::row::compacted::CompactedRow;
 pub use write_format::WriteFormat;
 pub use writer_client::WriterClient;
 
@@ -42,6 +46,7 @@ pub struct WriteRecord<'a> {
 }
 
 pub enum Record<'a> {
+    KvRow(KvRow<CompactedRow<'a>>),
     Row(GenericRow<'a>),
     RecordBatch(Arc<RecordBatch>),
 }
@@ -60,6 +65,63 @@ impl<'a> WriteRecord<'a> {
             table_path,
         }
     }
+
+    pub fn for_upsert(
+        table_path: Arc<TablePath>,
+        row: CompactedRow<'a>,
+        key: Bytes,
+        bucket_key: Option<Bytes>,
+        write_format: &WriteFormat,
+        target_columns: Arc<[usize]>,
+    ) -> Result<Self> {
+        if !write_format.is_kv() {
+            return Err(IllegalArgument {
+                message: format!("writeFormat must be a KV format, got {}", write_format),
+            });
+        }
+
+        let estimated_size_in_bytes =
+            KvRecord::size_of(key.as_ref(), Some(row.as_bytes())) + RECORD_BATCH_HEADER_SIZE;
+
+        Ok(Self {
+            row: Record::KvRow(KvRow::new(
+                row,
+                key,
+                bucket_key,
+                target_columns,
+                estimated_size_in_bytes,
+            )),
+            table_path,
+        })
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct KvRow<B: BinaryRow> {
+    row: B,
+    key: Bytes,
+    bucket_key: Option<Bytes>,
+    target_columns: Arc<[usize]>,
+    estimated_size_in_bytes: usize,
+}
+
+impl<B: BinaryRow> KvRow<B> {
+    pub fn new(
+        row: B,
+        key: Bytes,
+        bucket_key: Option<Bytes>,
+        target_columns: Arc<[usize]>,
+        estimated_size_in_bytes: usize,
+    ) -> Self {
+        Self {
+            row,
+            key,
+            bucket_key,
+            target_columns,
+            estimated_size_in_bytes,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +134,7 @@ impl ResultHandle {
         ResultHandle { receiver }
     }
 
-    pub async fn wait(&self) -> Result<BatchWriteResult, Error> {
+    pub async fn wait(&self) -> Result<BatchWriteResult> {
         self.receiver
             .receive()
             .await
@@ -82,7 +144,7 @@ impl ResultHandle {
             })
     }
 
-    pub fn result(&self, batch_result: BatchWriteResult) -> Result<(), Error> {
+    pub fn result(&self, batch_result: BatchWriteResult) -> Result<()> {
         batch_result.map_err(|e| match e {
             client_broadcast::Error::WriteFailed { code, message } => Error::FlussAPIError {
                 api_error: crate::rpc::ApiError { code, message },

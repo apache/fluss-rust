@@ -18,7 +18,7 @@
 use crate::client::{Record, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
-use crate::metadata::DataType;
+use crate::metadata::{DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
 use arrow::array::{
@@ -48,7 +48,9 @@ use std::{
     sync::Arc,
 };
 
+use crate::error::Error::IllegalArgument;
 use arrow::ipc::writer::IpcWriteOptions;
+
 /// const for record batch
 pub const BASE_OFFSET_LENGTH: usize = 8;
 pub const LENGTH_LENGTH: usize = 4;
@@ -171,7 +173,7 @@ pub struct RowAppendRecordBatchBuilder {
 }
 
 impl RowAppendRecordBatchBuilder {
-    pub fn new(row_type: &DataType) -> Self {
+    pub fn new(row_type: &RowType) -> Self {
         let schema_ref = to_arrow_schema(row_type);
         let builders = Mutex::new(
             schema_ref
@@ -251,7 +253,7 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
 impl MemoryLogRecordsArrowBuilder {
     pub fn new(
         schema_id: i32,
-        row_type: &DataType,
+        row_type: &RowType,
         to_append_record_batch: bool,
         arrow_compression_info: ArrowCompressionInfo,
     ) -> Self {
@@ -280,6 +282,9 @@ impl MemoryLogRecordsArrowBuilder {
             Record::RecordBatch(record_batch) => Ok(self
                 .arrow_record_batch_builder
                 .append_batch(record_batch.clone())?),
+            Record::KvRow(_) => Err(IllegalArgument {
+                message: "KvRow WriteRecord is not supported for memory log".to_string(),
+            }),
         }
         // todo: consider write other change type
     }
@@ -324,7 +329,7 @@ impl MemoryLogRecordsArrowBuilder {
         // write arrow batch bytes
         let mut cursor = Cursor::new(&mut batch_bytes[..]);
         cursor.set_position(RECORD_BATCH_HEADER_SIZE as u64);
-        cursor.write_all(real_arrow_batch_bytes).unwrap();
+        cursor.write_all(real_arrow_batch_bytes)?;
 
         let calcute_crc_bytes = &cursor.get_ref()[SCHEMA_ID_OFFSET..];
         // then update crc
@@ -557,16 +562,17 @@ impl LogRecordBatch {
             return Ok(RecordBatch::new_empty(read_context.target_schema.clone()));
         }
 
-        let data = self.data.get(RECORDS_OFFSET..).ok_or_else(|| {
-            crate::error::Error::UnexpectedError {
+        let data = self
+            .data
+            .get(RECORDS_OFFSET..)
+            .ok_or_else(|| Error::UnexpectedError {
                 message: format!(
                     "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
                     self.data.len(),
                     RECORDS_OFFSET
                 ),
                 source: None,
-            }
-        })?;
+            })?;
         read_context.record_batch(data)
     }
 }
@@ -634,27 +640,20 @@ fn parse_ipc_message(
     Ok((batch_metadata, body_buffer, message.version()))
 }
 
-pub fn to_arrow_schema(fluss_schema: &DataType) -> SchemaRef {
-    match &fluss_schema {
-        DataType::Row(row_type) => {
-            let fields: Vec<Field> = row_type
-                .fields()
-                .iter()
-                .map(|f| {
-                    Field::new(
-                        f.name(),
-                        to_arrow_type(f.data_type()),
-                        f.data_type().is_nullable(),
-                    )
-                })
-                .collect();
+pub fn to_arrow_schema(fluss_schema: &RowType) -> SchemaRef {
+    let fields: Vec<Field> = fluss_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            Field::new(
+                f.name(),
+                to_arrow_type(f.data_type()),
+                f.data_type().is_nullable(),
+            )
+        })
+        .collect();
 
-            SchemaRef::new(arrow_schema::Schema::new(fields))
-        }
-        _ => {
-            panic!("must be row data type.")
-        }
-    }
+    SchemaRef::new(arrow_schema::Schema::new(fields))
 }
 
 pub fn to_arrow_type(fluss_type: &DataType) -> ArrowDataType {
@@ -808,7 +807,7 @@ impl ReadContext {
                 let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
                 for &original_idx in &projected_fields {
                     let pos = sorted_fields.binary_search(&original_idx).map_err(|_| {
-                        Error::IllegalArgument {
+                        IllegalArgument {
                             message: format!(
                                 "Projection index {original_idx} is invalid for the current schema."
                             ),
@@ -852,7 +851,7 @@ impl ReadContext {
         let field_count = schema.fields().len();
         for &index in projected_fields {
             if index >= field_count {
-                return Err(Error::IllegalArgument {
+                return Err(IllegalArgument {
                     message: format!(
                         "Projection index {index} is out of bounds for schema with {field_count} fields."
                     ),
@@ -864,7 +863,7 @@ impl ReadContext {
 
     pub fn project_schema(schema: SchemaRef, projected_fields: &[usize]) -> Result<SchemaRef> {
         Ok(SchemaRef::new(schema.project(projected_fields).map_err(
-            |e| Error::IllegalArgument {
+            |e| IllegalArgument {
                 message: format!("Invalid projection: {e}"),
             },
         )?))
@@ -1055,7 +1054,6 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
     use crate::metadata::DataField;
     use crate::metadata::DataTypes;
 
@@ -1231,14 +1229,14 @@ mod tests {
 
     #[test]
     fn projection_rejects_out_of_bounds_index() {
-        let row_type = DataTypes::row(vec![
+        let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
         let schema = to_arrow_schema(&row_type);
         let result = ReadContext::with_projection_pushdown(schema, vec![0, 2], false);
 
-        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+        assert!(matches!(result, Err(IllegalArgument { .. })));
     }
 
     #[test]

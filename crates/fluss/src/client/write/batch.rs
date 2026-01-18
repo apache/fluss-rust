@@ -20,7 +20,7 @@ use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{ResultHandle, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::Result;
-use crate::metadata::{DataType, TablePath};
+use crate::metadata::{RowType, TablePath};
 use crate::record::MemoryLogRecordsArrowBuilder;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -182,7 +182,7 @@ impl ArrowLogWriteBatch {
         table_path: TablePath,
         schema_id: i32,
         arrow_compression_info: ArrowCompressionInfo,
-        row_type: &DataType,
+        row_type: &RowType,
         bucket_id: BucketId,
         create_ms: i64,
         to_append_record_batch: bool,
