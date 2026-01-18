@@ -364,12 +364,11 @@ mod tests {
             let mut reader = Cursor::new(&buffer);
             let read_value = read_unsigned_varint(&mut reader).unwrap();
 
-            assert_eq!(value, read_value, "Round trip failed for value {}", value);
+            assert_eq!(value, read_value, "Round trip failed for value {value}");
             assert_eq!(
                 written,
                 buffer.len(),
-                "Bytes written mismatch for value {}",
-                value
+                "Bytes written mismatch for value {value}"
             );
 
             // Test with BufMut
@@ -382,22 +381,19 @@ mod tests {
             assert_eq!(
                 calculated_size,
                 buffer.len(),
-                "Size calculation failed for value {}",
-                value
+                "Size calculation failed for value {value}"
             );
 
             // Test reading from bytes
             let (read_value_bytes, bytes_read) = read_unsigned_varint_bytes(&buffer).unwrap();
             assert_eq!(
                 value, read_value_bytes,
-                "Bytes read failed for value {}",
-                value
+                "Bytes read failed for value {value}"
             );
             assert_eq!(
                 bytes_read,
                 buffer.len(),
-                "Bytes read count mismatch for value {}",
-                value
+                "Bytes read count mismatch for value {value}"
             );
         }
     }

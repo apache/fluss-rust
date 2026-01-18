@@ -17,7 +17,7 @@
 
 use crate::client::{Record, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
 use crate::row::{ColumnarRow, GenericRow};
@@ -88,6 +88,8 @@ pub enum LogMagicValue {
     V0 = 0,
 }
 
+// NOTE: Rust layout/offsets currently match Java only for V0.
+// TODO: Add V1 layout/offsets to keep parity with Java's V1 format.
 pub const CURRENT_LOG_MAGIC_VALUE: u8 = LogMagicValue::V0 as u8;
 
 /// Value used if writer ID is not available or non-idempotent.
@@ -327,7 +329,7 @@ impl MemoryLogRecordsArrowBuilder {
         // write arrow batch bytes
         let mut cursor = Cursor::new(&mut batch_bytes[..]);
         cursor.set_position(RECORD_BATCH_HEADER_SIZE as u64);
-        cursor.write_all(real_arrow_batch_bytes).unwrap();
+        cursor.write_all(real_arrow_batch_bytes)?;
 
         let calcute_crc_bytes = &cursor.get_ref()[SCHEMA_ID_OFFSET..];
         // then update crc
@@ -451,7 +453,7 @@ impl LogRecordBatch {
     }
 
     pub fn ensure_valid(&self) -> Result<()> {
-        // todo
+        // TODO enable validation once checksum handling is corrected.
         Ok(())
     }
 
@@ -462,8 +464,7 @@ impl LogRecordBatch {
 
     fn compute_checksum(&self) -> u32 {
         let start = SCHEMA_ID_OFFSET;
-        let end = start + self.data.len();
-        crc32c(&self.data[start..end])
+        crc32c(&self.data[start..])
     }
 
     fn attributes(&self) -> u8 {
@@ -476,12 +477,12 @@ impl LogRecordBatch {
 
     pub fn checksum(&self) -> u32 {
         let offset = CRC_OFFSET;
-        LittleEndian::read_u32(&self.data[offset..offset + CRC_OFFSET])
+        LittleEndian::read_u32(&self.data[offset..offset + CRC_LENGTH])
     }
 
     pub fn schema_id(&self) -> i16 {
         let offset = SCHEMA_ID_OFFSET;
-        LittleEndian::read_i16(&self.data[offset..offset + SCHEMA_ID_OFFSET])
+        LittleEndian::read_i16(&self.data[offset..offset + SCHEMA_ID_LENGTH])
     }
 
     pub fn base_log_offset(&self) -> i64 {
@@ -561,16 +562,17 @@ impl LogRecordBatch {
             return Ok(RecordBatch::new_empty(read_context.target_schema.clone()));
         }
 
-        let data = self.data.get(RECORDS_OFFSET..).ok_or_else(|| {
-            crate::error::Error::UnexpectedError {
+        let data = self
+            .data
+            .get(RECORDS_OFFSET..)
+            .ok_or_else(|| Error::UnexpectedError {
                 message: format!(
                     "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
                     self.data.len(),
                     RECORDS_OFFSET
                 ),
                 source: None,
-            }
-        })?;
+            })?;
         read_context.record_batch(data)
     }
 }
@@ -778,8 +780,10 @@ impl ReadContext {
         arrow_schema: SchemaRef,
         projected_fields: Vec<usize>,
         is_from_remote: bool,
-    ) -> ReadContext {
-        let target_schema = Self::project_schema(arrow_schema.clone(), projected_fields.as_slice());
+    ) -> Result<ReadContext> {
+        Self::validate_projection(&arrow_schema, projected_fields.as_slice())?;
+        let target_schema =
+            Self::project_schema(arrow_schema.clone(), projected_fields.as_slice())?;
         // the logic is little bit of hard to understand, to refactor it to follow
         // java side
         let (need_do_reorder, sorted_fields) = {
@@ -802,16 +806,20 @@ impl ReadContext {
                 // Calculate reordering indexes to transform from sorted order to user-requested order
                 let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
                 for &original_idx in &projected_fields {
-                    let pos = sorted_fields
-                        .binary_search(&original_idx)
-                        .expect("projection index should exist in sorted list");
+                    let pos = sorted_fields.binary_search(&original_idx).map_err(|_| {
+                        IllegalArgument {
+                            message: format!(
+                                "Projection index {original_idx} is invalid for the current schema."
+                            ),
+                        }
+                    })?;
                     reordering_indexes.push(pos);
                 }
                 Projection {
                     ordered_schema: Self::project_schema(
                         arrow_schema.clone(),
                         sorted_fields.as_slice(),
-                    ),
+                    )?,
                     projected_fields,
                     ordered_fields: sorted_fields,
                     reordering_indexes,
@@ -822,7 +830,7 @@ impl ReadContext {
                     ordered_schema: Self::project_schema(
                         arrow_schema.clone(),
                         projected_fields.as_slice(),
-                    ),
+                    )?,
                     ordered_fields: projected_fields.clone(),
                     projected_fields,
                     reordering_indexes: vec![],
@@ -831,21 +839,34 @@ impl ReadContext {
             }
         };
 
-        ReadContext {
+        Ok(ReadContext {
             target_schema,
             full_schema: arrow_schema,
             projection: Some(project),
             is_from_remote,
-        }
+        })
     }
 
-    pub fn project_schema(schema: SchemaRef, projected_fields: &[usize]) -> SchemaRef {
-        // todo: handle the exception
-        SchemaRef::new(
-            schema
-                .project(projected_fields)
-                .expect("can't project schema"),
-        )
+    fn validate_projection(schema: &SchemaRef, projected_fields: &[usize]) -> Result<()> {
+        let field_count = schema.fields().len();
+        for &index in projected_fields {
+            if index >= field_count {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Projection index {index} is out of bounds for schema with {field_count} fields."
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn project_schema(schema: SchemaRef, projected_fields: &[usize]) -> Result<SchemaRef> {
+        Ok(SchemaRef::new(schema.project(projected_fields).map_err(
+            |e| IllegalArgument {
+                message: format!("Invalid projection: {e}"),
+            },
+        )?))
     }
 
     pub fn project_fields(&self) -> Option<&[usize]> {
@@ -1033,6 +1054,7 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::DataField;
     use crate::metadata::DataTypes;
 
     #[test]
@@ -1203,6 +1225,39 @@ mod tests {
                 "Fluss hitting Arrow error Parser error: Not a record batch: ParseError(\"Not a record batch\")."
             )
         );
+    }
+
+    #[test]
+    fn projection_rejects_out_of_bounds_index() {
+        let row_type = RowType::new(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let schema = to_arrow_schema(&row_type);
+        let result = ReadContext::with_projection_pushdown(schema, vec![0, 2], false);
+
+        assert!(matches!(result, Err(IllegalArgument { .. })));
+    }
+
+    #[test]
+    fn checksum_and_schema_id_read_minimum_header() {
+        // Header-only batches with record_count == 0 are valid; this covers the minimal bytes
+        // needed for checksum/schema_id access.
+        let mut data = vec![0u8; SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH];
+        let crc = 0xA1B2C3D4u32;
+        let schema_id = 42i16;
+        LittleEndian::write_u32(&mut data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH], crc);
+        LittleEndian::write_i16(
+            &mut data[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH],
+            schema_id,
+        );
+
+        let batch = LogRecordBatch::new(Bytes::from(data));
+        assert_eq!(batch.checksum(), crc);
+        assert_eq!(batch.schema_id(), schema_id);
+
+        let expected = crc32c(&batch.data[SCHEMA_ID_OFFSET..]);
+        assert_eq!(batch.compute_checksum(), expected);
     }
 
     fn le_bytes(vals: &[u32]) -> Vec<u8> {

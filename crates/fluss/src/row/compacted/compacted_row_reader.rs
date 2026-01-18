@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::metadata::RowType;
 use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
 use crate::{
     metadata::DataType,
@@ -27,31 +28,32 @@ use std::str::from_utf8;
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct CompactedRowDeserializer<'a> {
-    schema: Cow<'a, [DataType]>,
+    row_type: Cow<'a, RowType>,
 }
 
 #[allow(dead_code)]
 impl<'a> CompactedRowDeserializer<'a> {
-    pub fn new(schema: &'a [DataType]) -> Self {
+    pub fn new(row_type: &'a RowType) -> Self {
         Self {
-            schema: Cow::Borrowed(schema),
+            row_type: Cow::Borrowed(row_type),
         }
     }
 
-    pub fn new_from_owned(schema: Vec<DataType>) -> Self {
+    pub fn new_from_owned(row_type: RowType) -> Self {
         Self {
-            schema: Cow::Owned(schema),
+            row_type: Cow::Owned(row_type),
         }
     }
 
-    pub fn get_data_types(&self) -> &[DataType] {
-        self.schema.as_ref()
+    pub fn get_row_type(&self) -> &RowType {
+        self.row_type.as_ref()
     }
 
     pub fn deserialize(&self, reader: &CompactedRowReader<'a>) -> GenericRow<'a> {
         let mut row = GenericRow::new();
         let mut cursor = reader.initial_position();
-        for (col_pos, dtype) in self.schema.iter().enumerate() {
+        for (col_pos, data_field) in self.row_type.fields().iter().enumerate() {
+            let dtype = &data_field.data_type;
             if dtype.is_nullable() && reader.is_null_at(col_pos) {
                 row.set_field(col_pos, Datum::Null);
                 continue;

@@ -409,7 +409,7 @@ impl PendingFetch for RemotePendingFetch {
             self.read_context,
             self.fetch_offset,
             self.high_watermark,
-        )?;
+        );
 
         Ok(Box::new(completed_fetch))
     }

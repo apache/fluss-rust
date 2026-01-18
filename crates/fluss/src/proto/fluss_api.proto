@@ -318,3 +318,31 @@ message GetFileSystemSecurityTokenResponse {
   optional int64 expiration_time = 3;
   repeated PbKeyValue addition_info = 4;
 }
+
+// lookup request and response
+message LookupRequest {
+  required int64 table_id = 1;
+  repeated PbLookupReqForBucket buckets_req = 2;
+}
+
+message LookupResponse {
+  repeated PbLookupRespForBucket buckets_resp = 1;
+}
+
+message PbLookupReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  repeated bytes key = 3;
+}
+
+message PbLookupRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  repeated PbValue values = 5;
+}
+
+message PbValue {
+  optional bytes values = 1;
+}

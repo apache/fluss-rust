@@ -17,7 +17,7 @@
 
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::DataType;
+use crate::metadata::RowType;
 use crate::row::Datum;
 use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
 use crate::row::compacted::{CompactedRow, CompactedRowDeserializer, CompactedRowWriter};
@@ -33,18 +33,18 @@ pub struct CompactedRowEncoder<'a> {
 }
 
 impl<'a> CompactedRowEncoder<'a> {
-    pub fn new(field_data_types: Vec<DataType>) -> Result<Self> {
-        let field_writers = field_data_types
-            .iter()
+    pub fn new(row_type: RowType) -> Result<Self> {
+        let field_writers = row_type
+            .field_types()
             .map(|d| ValueWriter::create_value_writer(d, Some(&BinaryRowFormat::Compacted)))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
-            arity: field_data_types.len(),
-            writer: CompactedRowWriter::new(field_data_types.len()),
+            arity: field_writers.len(),
+            writer: CompactedRowWriter::new(field_writers.len()),
             field_writers,
             compacted_row_deserializer: Arc::new(CompactedRowDeserializer::new_from_owned(
-                field_data_types,
+                row_type,
             )),
         })
     }
@@ -60,10 +60,7 @@ impl RowEncoder for CompactedRowEncoder<'_> {
         self.field_writers
             .get(pos)
             .ok_or_else(|| IllegalArgument {
-                message: format!(
-                    "invalid position {} when attempting to encode value {}",
-                    pos, value
-                ),
+                message: format!("invalid position {pos} when attempting to encode value {value}"),
             })?
             .write_value(&mut self.writer, pos, &value)
     }
