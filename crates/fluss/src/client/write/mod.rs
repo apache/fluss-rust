@@ -33,7 +33,6 @@ mod sender;
 mod write_format;
 mod writer_client;
 
-use crate::client::Record::Compacted;
 pub use write_format::WriteFormat;
 pub use writer_client::WriterClient;
 
@@ -44,10 +43,6 @@ pub struct WriteRecord<'a> {
     bucket_key: Option<&'a [u8]>,
     schema_id: i32,
     write_format: WriteFormat,
-
-    // only valid for primary key table
-    key: Option<&'a [u8]>,
-    target_columns: Option<&'a [usize]>,
 }
 
 impl<'a> WriteRecord<'a> {
@@ -57,19 +52,42 @@ impl<'a> WriteRecord<'a> {
 }
 
 pub enum Record<'a> {
+    Log(LogWriteRecord<'a>),
+    Kv(KvWriteRecord<'a>),
+}
+
+pub enum LogWriteRecord<'a> {
     Generic(GenericRow<'a>),
     RecordBatch(Arc<RecordBatch>),
-    Compacted(Option<CompactedRow<'a>>),
+}
+
+pub struct KvWriteRecord<'a> {
+    // only valid for primary key table
+    key: &'a [u8],
+    target_columns: Option<&'a [usize]>,
+    compacted_row: Option<CompactedRow<'a>>,
+}
+
+impl<'a> KvWriteRecord<'a> {
+    fn new(
+        key: &'a [u8],
+        target_columns: Option<&'a [usize]>,
+        compacted_row: Option<CompactedRow<'a>>,
+    ) -> Self {
+        KvWriteRecord {
+            key,
+            target_columns,
+            compacted_row,
+        }
+    }
 }
 
 impl<'a> WriteRecord<'a> {
     pub fn for_append(table_path: Arc<TablePath>, schema_id: i32, row: GenericRow<'a>) -> Self {
         Self {
-            record: Record::Generic(row),
+            record: Record::Log(LogWriteRecord::Generic(row)),
             table_path,
-            key: None,
             bucket_key: None,
-            target_columns: None,
             schema_id,
             write_format: WriteFormat::ArrowLog,
         }
@@ -81,10 +99,8 @@ impl<'a> WriteRecord<'a> {
         row: RecordBatch,
     ) -> Self {
         Self {
-            record: Record::RecordBatch(Arc::new(row)),
+            record: Record::Log(LogWriteRecord::RecordBatch(Arc::new(row))),
             table_path,
-            key: None,
-            target_columns: None,
             bucket_key: None,
             schema_id,
             write_format: WriteFormat::ArrowLog,
@@ -100,13 +116,11 @@ impl<'a> WriteRecord<'a> {
         row: CompactedRow<'a>,
     ) -> Self {
         Self {
-            record: Compacted(Some(row)),
+            record: Record::Kv(KvWriteRecord::new(key, Some(target_columns), Some(row))),
             table_path,
             bucket_key: Some(bucket_key),
             schema_id,
             write_format: WriteFormat::CompactedKv,
-            key: Some(key),
-            target_columns: Some(target_columns),
         }
     }
 }

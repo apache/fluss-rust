@@ -275,10 +275,16 @@ impl KvWriteBatch {
     }
 
     pub fn try_append(&mut self, write_record: &WriteRecord) -> Result<Option<ResultHandle>> {
-        let key = write_record.key.ok_or_else(|| Error::UnexpectedError {
-            message: "The key for write record of KvWriteBatch must not be null".to_string(),
-            source: None,
-        })?;
+        let kv_write_record = match &write_record.record {
+            Record::Kv(record) => record,
+            _ => {
+                return Err(Error::UnsupportedOperation {
+                    message: "Only KvRecord to append to KvWriteBatch ".to_string(),
+                });
+            }
+        };
+
+        let key = kv_write_record.key;
 
         if self.schema_id != write_record.schema_id {
             return Err(Error::UnexpectedError {
@@ -290,25 +296,18 @@ impl KvWriteBatch {
             });
         };
 
-        if self.target_columns.as_deref() != write_record.target_columns {
+        if self.target_columns.as_deref() != kv_write_record.target_columns {
             return Err(Error::UnexpectedError {
                 message: format!(
                     "target columns {:?} of the write record to append are not the same as the current target columns {:?} in the batch.",
-                    write_record.target_columns,
+                    kv_write_record.target_columns,
                     self.target_columns.as_deref()
                 ),
                 source: None,
             });
         }
 
-        let row = match &write_record.record {
-            Record::Compacted(row) => row.as_ref(),
-            _ => {
-                return Err(Error::UnsupportedOperation {
-                    message: "Only Compacted row is supported for KvWriteBatch".to_string(),
-                });
-            }
-        };
+        let row = kv_write_record.compacted_row.as_ref();
 
         if self.is_closed() || !self.kv_batch_builder.has_room_for_row(key, row) {
             Ok(None)

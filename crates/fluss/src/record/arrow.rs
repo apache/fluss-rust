@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{Record, WriteRecord};
+use crate::client::{LogWriteRecord, Record, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
 use crate::metadata::DataType;
@@ -276,12 +276,14 @@ impl MemoryLogRecordsArrowBuilder {
 
     pub fn append(&mut self, record: &WriteRecord) -> Result<bool> {
         match &record.record() {
-            Record::Generic(row) => Ok(self.arrow_record_batch_builder.append(row)?),
-            Record::RecordBatch(record_batch) => Ok(self
-                .arrow_record_batch_builder
-                .append_batch(record_batch.clone())?),
-            _ => Err(Error::UnsupportedOperation {
-                message: "Only GenericRow and RecordBatch is supported to append".to_string(),
+            Record::Log(log_write_record) => match log_write_record {
+                LogWriteRecord::Generic(row) => Ok(self.arrow_record_batch_builder.append(row)?),
+                LogWriteRecord::RecordBatch(record_batch) => Ok(self
+                    .arrow_record_batch_builder
+                    .append_batch(record_batch.clone())?),
+            },
+            Record::Kv(_) => Err(Error::UnsupportedOperation {
+                message: "Only LogRecord is supported to append".to_string(),
             }),
         }
         // todo: consider write other change type
