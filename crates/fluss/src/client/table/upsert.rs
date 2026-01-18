@@ -129,16 +129,25 @@ impl UpsertWriterFactory {
         partial_update_columns: Option<&Arc<[usize]>>,
         writer_client: &Arc<WriterClient>,
     ) -> Result<impl UpsertWriter> {
-        let datalake_format = &table_info.table_config.get_datalake_format()?;
+        let data_lake_format = &table_info.table_config.get_datalake_format()?;
         let row_type = table_info.row_type();
         let physical_pks = table_info.get_physical_primary_keys();
 
-        let primary_key_encoder = KeyEncoderFactory::of(row_type, physical_pks, datalake_format)?;
+        let names = table_info.get_schema().auto_increment_col_names();
+
+        Self::sanity_check(
+            row_type,
+            &table_info.primary_keys,
+            names,
+            partial_update_columns,
+        )?;
+
+        let primary_key_encoder = KeyEncoderFactory::of(row_type, physical_pks, data_lake_format)?;
         let bucket_key_encoder = if !table_info.is_default_bucket_key() {
             Some(KeyEncoderFactory::of(
                 row_type,
                 table_info.get_bucket_keys(),
-                datalake_format,
+                data_lake_format,
             )?)
         } else {
             None
@@ -165,10 +174,10 @@ impl UpsertWriterFactory {
 
     #[allow(dead_code)]
     fn sanity_check(
-        row_type: RowType,
-        primary_keys: Vec<String>,
-        auto_increment_col_names: Vec<String>,
-        target_columns: Option<Vec<usize>>,
+        row_type: &RowType,
+        primary_keys: &Vec<String>,
+        auto_increment_col_names: &Vec<String>,
+        target_columns: Option<&Arc<[usize]>>,
     ) -> Result<()> {
         if target_columns.is_none() && auto_increment_col_names.is_empty() {
             return Err(IllegalArgument {
@@ -184,14 +193,14 @@ impl UpsertWriterFactory {
 
         let mut target_column_set = bitvec![0; field_count];
 
-        for &target_index in &target_columns {
+        for &target_index in target_columns.as_ref() {
             target_column_set.insert(target_index, true);
         }
 
         let mut pk_column_set = bitvec![0; field_count];
 
         // check the target columns contains the primary key
-        for primary_key in &primary_keys {
+        for primary_key in primary_keys {
             let pk_index = row_type.get_field_index(primary_key.as_str());
             match pk_index {
                 Some(pk_index) => {
@@ -202,7 +211,7 @@ impl UpsertWriterFactory {
                         message: format!(
                             "The target write columns {} must contain the primary key columns {}",
                             row_type
-                                .project(target_columns.as_slice())?
+                                .project(target_columns)?
                                 .get_field_names()
                                 .join(", "),
                             primary_keys.join(", ")
@@ -214,7 +223,7 @@ impl UpsertWriterFactory {
 
         let mut auto_increment_column_set = bitvec![0; field_count];
         // explicitly specifying values for an auto increment column is not allowed
-        for auto_increment_col_name in &auto_increment_col_names {
+        for auto_increment_col_name in auto_increment_col_names {
             let auto_increment_field_index =
                 row_type.get_field_index(auto_increment_col_name.as_str());
 
@@ -240,7 +249,7 @@ impl UpsertWriterFactory {
                 if !row_type.fields().get(i).unwrap().data_type.is_nullable() {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Partial Update requres all columns except primary key to be nullable, but column {} is NOT NULL.",
+                            "Partial Update requires all columns except primary key to be nullable, but column {} is NOT NULL.",
                             row_type.fields().get(i).unwrap().name()
                         ),
                     });

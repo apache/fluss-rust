@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::compression::ArrowCompressionInfo;
-use crate::error::Error::InvalidTableError;
+use crate::error::Error::{IllegalArgument, InvalidTableError};
 use crate::error::{Error, Result};
 use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{DataField, DataType, RowType};
@@ -98,6 +98,7 @@ pub struct Schema {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
     row_type: RowType,
+    auto_increment_col_names: Vec<String>,
 }
 
 impl Schema {
@@ -143,12 +144,17 @@ impl Schema {
     pub fn column_names(&self) -> Vec<&str> {
         self.columns.iter().map(|c| c.name.as_str()).collect()
     }
+
+    pub fn auto_increment_col_names(&self) -> &Vec<String> {
+        &self.auto_increment_col_names
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
+    auto_increment_col_names: Vec<String>,
 }
 
 impl SchemaBuilder {
@@ -197,6 +203,21 @@ impl SchemaBuilder {
         self
     }
 
+    /// Declares a column to be auto-incremented. With an auto-increment column in the table,
+    /// whenever a new row is inserted into the table, the new row will be assigned with the next
+    /// available value from the auto-increment sequence. A table can have at most one auto
+    /// increment column.
+    pub fn enable_auto_increment(mut self, column_name: &str) -> Result<Self> {
+        if !self.auto_increment_col_names.is_empty() {
+            return Err(IllegalArgument {
+                message: "Multiple auto increment columns are not supported yet.".to_string(),
+            });
+        }
+
+        self.auto_increment_col_names.push(column_name.to_string());
+        Ok(self)
+    }
+
     pub fn build(&mut self) -> Result<Schema> {
         let columns = Self::normalize_columns(&mut self.columns, self.primary_key.as_ref())?;
 
@@ -213,6 +234,7 @@ impl SchemaBuilder {
             columns,
             primary_key: self.primary_key.clone(),
             row_type: RowType::new(data_fields),
+            auto_increment_col_names: self.auto_increment_col_names.clone(),
         })
     }
 
