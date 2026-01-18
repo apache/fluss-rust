@@ -43,6 +43,7 @@ pub struct AbstractTableWriter {
     table_path: Arc<TablePath>,
     writer_client: Arc<WriterClient>,
     field_count: i32,
+    schema_id: i32,
 }
 
 #[allow(dead_code)]
@@ -57,6 +58,7 @@ impl AbstractTableWriter {
             table_path: Arc::new(table_path),
             writer_client,
             field_count: table_info.row_type().fields().len() as i32,
+            schema_id: table_info.schema_id,
         }
     }
 
@@ -82,7 +84,8 @@ pub struct AppendWriterImpl {
 #[allow(dead_code)]
 impl AppendWriterImpl {
     pub async fn append(&self, row: GenericRow<'_>) -> Result<()> {
-        let record = WriteRecord::new(self.base.table_path.clone(), row);
+        let record =
+            WriteRecord::for_append(self.base.table_path.clone(), self.base.schema_id, row);
         self.base.send(&record).await
     }
 }

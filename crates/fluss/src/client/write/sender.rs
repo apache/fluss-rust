@@ -178,9 +178,9 @@ impl Sender {
         };
 
         for (table_id, table_buckets) in write_batch_by_table {
-            let request_batches: Vec<&ReadyWriteBatch> = table_buckets
+            let mut request_batches: Vec<ReadyWriteBatch> = table_buckets
                 .iter()
-                .filter_map(|bucket| records_by_bucket.get(bucket))
+                .filter_map(|bucket| records_by_bucket.remove(bucket))
                 .collect();
             if request_batches.is_empty() {
                 continue;
@@ -189,7 +189,7 @@ impl Sender {
                 table_id,
                 acks,
                 self.max_request_timeout_ms,
-                request_batches.as_slice(),
+                &mut request_batches,
             ) {
                 Ok(request) => request,
                 Err(e) => {
@@ -204,6 +204,12 @@ impl Sender {
                     continue;
                 }
             };
+
+            // let's put in back into records_by_bucket
+            // since response handle will use it.
+            for request_batch in request_batches {
+                records_by_bucket.insert(request_batch.table_bucket.clone(), request_batch);
+            }
 
             let response = match connection.request(request).await {
                 Ok(response) => response,
@@ -462,8 +468,9 @@ mod tests {
         cluster: Arc<Cluster>,
         table_path: Arc<TablePath>,
     ) -> Result<(ReadyWriteBatch, crate::client::ResultHandle)> {
-        let record = WriteRecord::new(
+        let record = WriteRecord::for_append(
             table_path,
+            1,
             GenericRow {
                 values: vec![Datum::Int32(1)],
             },
