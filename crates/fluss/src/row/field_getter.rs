@@ -66,6 +66,15 @@ impl FieldGetter {
             DataType::BigInt(_) => InnerFieldGetter::BigInt { pos },
             DataType::Float(_) => InnerFieldGetter::Float { pos },
             DataType::Double(_) => InnerFieldGetter::Double { pos },
+            DataType::Decimal(decimal_type) => InnerFieldGetter::Decimal {
+                pos,
+                precision: decimal_type.precision() as usize,
+                scale: decimal_type.scale() as usize,
+            },
+            DataType::Date(_) => InnerFieldGetter::Date { pos },
+            DataType::Time(_) => InnerFieldGetter::Time { pos },
+            DataType::Timestamp(_) => InnerFieldGetter::Timestamp { pos },
+            DataType::TimestampLTz(_) => InnerFieldGetter::TimestampLtz { pos },
             _ => unimplemented!("DataType {:?} is currently unimplemented", data_type),
         };
 
@@ -79,17 +88,58 @@ impl FieldGetter {
 
 #[derive(Clone)]
 pub enum InnerFieldGetter {
-    Char { pos: usize, len: usize },
-    String { pos: usize },
-    Bool { pos: usize },
-    Binary { pos: usize, len: usize },
-    Bytes { pos: usize },
-    TinyInt { pos: usize },
-    SmallInt { pos: usize },
-    Int { pos: usize },
-    BigInt { pos: usize },
-    Float { pos: usize },
-    Double { pos: usize },
+    Char {
+        pos: usize,
+        len: usize,
+    },
+    String {
+        pos: usize,
+    },
+    Bool {
+        pos: usize,
+    },
+    Binary {
+        pos: usize,
+        len: usize,
+    },
+    Bytes {
+        pos: usize,
+    },
+    TinyInt {
+        pos: usize,
+    },
+    SmallInt {
+        pos: usize,
+    },
+    Int {
+        pos: usize,
+    },
+    BigInt {
+        pos: usize,
+    },
+    Float {
+        pos: usize,
+    },
+    Double {
+        pos: usize,
+    },
+    Decimal {
+        pos: usize,
+        precision: usize,
+        scale: usize,
+    },
+    Date {
+        pos: usize,
+    },
+    Time {
+        pos: usize,
+    },
+    Timestamp {
+        pos: usize,
+    },
+    TimestampLtz {
+        pos: usize,
+    },
 }
 
 impl InnerFieldGetter {
@@ -106,7 +156,21 @@ impl InnerFieldGetter {
             InnerFieldGetter::BigInt { pos } => Datum::from(row.get_long(*pos)),
             InnerFieldGetter::Float { pos } => Datum::from(row.get_float(*pos)),
             InnerFieldGetter::Double { pos } => Datum::from(row.get_double(*pos)),
-            //TODO Decimal, Date, Time, Timestamp, TimestampLTZ, Array, Map, Row
+            InnerFieldGetter::Decimal {
+                pos,
+                precision,
+                scale,
+            } => Datum::Decimal(row.get_decimal(*pos, *precision, *scale)),
+            InnerFieldGetter::Date { pos } => {
+                Datum::Date(crate::row::datum::Date::new(row.get_date(*pos)))
+            }
+            InnerFieldGetter::Time { pos } => {
+                Datum::Time(crate::row::datum::Time::new(row.get_time(*pos)))
+            }
+            InnerFieldGetter::Timestamp { pos } => Datum::Timestamp(row.get_timestamp_ntz(*pos)),
+            InnerFieldGetter::TimestampLtz { pos } => {
+                Datum::TimestampTz(row.get_timestamp_ltz(*pos))
+            } //TODO Array, Map, Row
         }
     }
 
@@ -122,7 +186,12 @@ impl InnerFieldGetter {
             | Self::Int { pos }
             | Self::BigInt { pos }
             | Self::Float { pos, .. }
-            | Self::Double { pos } => *pos,
+            | Self::Double { pos }
+            | Self::Decimal { pos, .. }
+            | Self::Date { pos }
+            | Self::Time { pos }
+            | Self::Timestamp { pos }
+            | Self::TimestampLtz { pos } => *pos,
         }
     }
 }

@@ -382,7 +382,7 @@ mod tests {
 
         // Test KvFormat validation
         let mut row_writer = CompactedRowWriter::new(1);
-        row_writer.write_int(42);
+        row_writer.write_int(42).unwrap();
         let row_type = RowType::with_data_types(vec![DataTypes::int()]);
         let row = &CompactedRow::from_bytes(&row_type, row_writer.buffer());
 
@@ -498,8 +498,8 @@ mod tests {
 
         // Create and append first record with CompactedRowWriter
         let mut row_writer1 = CompactedRowWriter::new(2);
-        row_writer1.write_int(42);
-        row_writer1.write_string("hello");
+        row_writer1.write_int(42).unwrap();
+        row_writer1.write_string("hello").unwrap();
 
         let row_type = RowType::with_data_types([DataTypes::int(), DataTypes::string()].to_vec());
         let row1 = &CompactedRow::from_bytes(&row_type, row_writer1.buffer());
@@ -510,8 +510,8 @@ mod tests {
 
         // Create and append second record
         let mut row_writer2 = CompactedRowWriter::new(2);
-        row_writer2.write_int(100);
-        row_writer2.write_string("world");
+        row_writer2.write_int(100).unwrap();
+        row_writer2.write_string("world").unwrap();
 
         let row2 = &CompactedRow::from_bytes(&row_type, row_writer2.buffer());
 
