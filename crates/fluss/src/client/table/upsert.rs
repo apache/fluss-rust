@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::table::writer::{DeleteResult, TableWriter, UpsertResult, UpsertWriter};
-use crate::client::{WriteFormat, WriteRecord, WriterClient};
+use crate::client::{RowBytes, WriteFormat, WriteRecord, WriterClient};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{KvFormat, RowType, TableInfo, TablePath};
@@ -336,9 +336,10 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
-        let row_bytes = match row.as_encoded_bytes() {
-            Some(bytes) => Bytes::copy_from_slice(bytes),
-            None => self.encode_row(row)?,
+
+        let row_bytes: RowBytes<'_> = match row.as_encoded_bytes() {
+            Some(bytes) => RowBytes::Borrowed(bytes),
+            None => RowBytes::Owned(self.encode_row(row)?),
         };
 
         let write_record = WriteRecord::for_upsert(

@@ -54,7 +54,7 @@ impl<'a> WriteRecord<'a> {
 
 pub enum Record<'a> {
     Log(LogWriteRecord<'a>),
-    Kv(KvWriteRecord),
+    Kv(KvWriteRecord<'a>),
 }
 
 pub enum LogWriteRecord<'a> {
@@ -62,14 +62,32 @@ pub enum LogWriteRecord<'a> {
     RecordBatch(Arc<RecordBatch>),
 }
 
-pub struct KvWriteRecord {
-    key: Bytes,
-    target_columns: Option<Arc<Vec<usize>>>,
-    row_bytes: Option<Bytes>,
+pub enum RowBytes<'a> {
+    Borrowed(&'a [u8]),
+    Owned(Bytes),
 }
 
-impl KvWriteRecord {
-    fn new(key: Bytes, target_columns: Option<Arc<Vec<usize>>>, row_bytes: Option<Bytes>) -> Self {
+impl<'a> RowBytes<'a> {
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            RowBytes::Borrowed(slice) => slice,
+            RowBytes::Owned(bytes) => bytes.as_ref(),
+        }
+    }
+}
+
+pub struct KvWriteRecord<'a> {
+    key: Bytes,
+    target_columns: Option<Arc<Vec<usize>>>,
+    row_bytes: Option<RowBytes<'a>>,
+}
+
+impl<'a> KvWriteRecord<'a> {
+    fn new(
+        key: Bytes,
+        target_columns: Option<Arc<Vec<usize>>>,
+        row_bytes: Option<RowBytes<'a>>,
+    ) -> Self {
         KvWriteRecord {
             key,
             target_columns,
@@ -78,7 +96,7 @@ impl KvWriteRecord {
     }
 
     pub fn row_bytes(&self) -> Option<&[u8]> {
-        self.row_bytes.as_deref()
+        self.row_bytes.as_ref().map(|rb| rb.as_slice())
     }
 }
 
@@ -113,7 +131,7 @@ impl<'a> WriteRecord<'a> {
         bucket_key: Option<Bytes>,
         key: Bytes,
         target_columns: Option<Arc<Vec<usize>>>,
-        row_bytes: Option<Bytes>,
+        row_bytes: Option<RowBytes<'a>>,
     ) -> Self {
         Self {
             record: Record::Kv(KvWriteRecord::new(key, target_columns, row_bytes)),
