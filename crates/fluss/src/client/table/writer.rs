@@ -35,9 +35,19 @@ pub trait AppendWriter: TableWriter {
 
 #[allow(dead_code, async_fn_in_trait)]
 pub trait UpsertWriter: TableWriter {
-    async fn upsert(&mut self, row: CompactedRow) -> Result<()>;
-    async fn delete(&mut self, row: CompactedRow) -> Result<()>;
+    async fn upsert(&mut self, row: CompactedRow) -> Result<UpsertResult>;
+    async fn delete(&mut self, row: CompactedRow) -> Result<DeleteResult>;
 }
+
+/// The result of upserting a record
+/// Currently this is an empty struct to allow for compatible evolution in the future
+#[derive(Default)]
+pub struct UpsertResult;
+
+/// The result of deleting a record
+/// Currently this is an empty struct to allow for compatible evolution in the future
+#[derive(Default)]
+pub struct DeleteResult;
 
 #[allow(dead_code)]
 pub struct AbstractTableWriter {

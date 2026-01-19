@@ -51,4 +51,6 @@ impl<'a> PartitionGetter<'a> {
 
         Ok(Self { partitions })
     }
+
+    // TODO Implement get partition
 }

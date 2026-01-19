@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::table::writer::{TableWriter, UpsertWriter};
+use crate::client::table::writer::{DeleteResult, TableWriter, UpsertResult, UpsertWriter};
 use crate::client::{WriteFormat, WriteRecord, WriterClient};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
@@ -189,7 +189,7 @@ impl UpsertWriterFactory {
         target_columns: &Option<Arc<Vec<usize>>>,
     ) -> Result<()> {
         if target_columns.is_none() {
-            if auto_increment_col_names.is_empty() {
+            if !auto_increment_col_names.is_empty() {
                 return Err(IllegalArgument {
                     message: format!(
                         "This table has auto increment column {}. Explicitly specifying values for an auto increment column is not allowed. Please Specify non-auto-increment columns as target columns using partialUpdate first.",
@@ -207,7 +207,7 @@ impl UpsertWriterFactory {
         let columns = target_columns.as_ref().unwrap().as_ref();
 
         for &target_index in columns {
-            target_column_set.insert(target_index, true);
+            target_column_set.set(target_index, true);
         }
 
         let mut pk_column_set = bitvec![0; field_count];
@@ -226,7 +226,7 @@ impl UpsertWriterFactory {
                             ),
                         });
                     }
-                    pk_column_set.insert(pk_index, true);
+                    pk_column_set.set(pk_index, true);
                 }
                 None => {
                     return Err(IllegalArgument {
@@ -255,7 +255,7 @@ impl UpsertWriterFactory {
                     });
                 }
 
-                auto_increment_column_set.insert(index, true);
+                auto_increment_column_set.set(index, true);
             }
         }
 
@@ -324,7 +324,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     ///
     /// # Returns
     /// Ok() when completed normally
-    async fn upsert(&mut self, row: CompactedRow<'_>) -> Result<()> {
+    async fn upsert(&mut self, row: CompactedRow<'_>) -> Result<UpsertResult> {
         self.check_field_count(&row)?;
 
         let (key, bucket_key) = self.get_keys(&row)?;
@@ -338,9 +338,10 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
             Some(row),
         );
 
-        self.writer_client.send(&write_record).await?;
+        let result_handle = self.writer_client.send(&write_record).await?;
+        let result = result_handle.wait().await?;
 
-        Ok(())
+        result_handle.result(result).map(|_| UpsertResult)
     }
 
     /// Delete certain row by the input row in Fluss table, the input row must contain the primary
@@ -351,7 +352,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     ///
     /// # Returns
     /// Ok() when completed normally
-    async fn delete(&mut self, row: CompactedRow<'_>) -> Result<()> {
+    async fn delete(&mut self, row: CompactedRow<'_>) -> Result<DeleteResult> {
         self.check_field_count(&row)?;
 
         let (key, bucket_key) = self.get_keys(&row)?;
@@ -367,6 +368,9 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
 
         self.writer_client.send(&write_record).await?;
 
-        Ok(())
+        let result_handle = self.writer_client.send(&write_record).await?;
+        let result = result_handle.wait().await?;
+
+        result_handle.result(result).map(|_| DeleteResult)
     }
 }
