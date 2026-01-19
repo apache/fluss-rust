@@ -52,14 +52,20 @@ pub trait BinaryWriter {
 
     fn write_binary(&mut self, bytes: &[u8], length: usize);
 
-    // TODO Decimal type
-    // fn write_decimal(&mut self, pos: i32, value: f64);
+    fn write_decimal(&mut self, value: &crate::row::Decimal, precision: u32);
 
-    // TODO Timestamp type
-    // fn write_timestamp_ntz(&mut self, pos: i32, value: i64);
+    /// Writes a TIME value.
+    ///
+    /// Note: TIME is physically stored as an i32 (milliseconds since midnight).
+    /// This method exists for type safety and semantic clarity, even though it's
+    /// currently equivalent to `write_int()`. The precision parameter is accepted
+    /// for API consistency with TIMESTAMP types, though TIME encoding doesn't
+    /// currently vary by precision.
+    fn write_time(&mut self, value: i32, precision: u32);
 
-    // TODO Timestamp type
-    // fn write_timestamp_ltz(&mut self, pos: i32, value: i64);
+    fn write_timestamp_ntz(&mut self, value: &crate::row::datum::TimestampNtz, precision: u32);
+
+    fn write_timestamp_ltz(&mut self, value: &crate::row::datum::TimestampLtz, precision: u32);
 
     // TODO InternalArray, ArraySerializer
     // fn write_array(&mut self, pos: i32, value: i64);
@@ -125,7 +131,12 @@ pub enum InnerValueWriter {
     BigInt,
     Float,
     Double,
-    // TODO Decimal, Date, TimeWithoutTimeZone, TimestampWithoutTimeZone, TimestampWithLocalTimeZone, Array, Row
+    Decimal(u32, u32), // precision, scale
+    Date,
+    Time(u32),         // precision (not used in wire format, but kept for consistency)
+    TimestampNtz(u32), // precision
+    TimestampLtz(u32), // precision
+                       // TODO Array, Row
 }
 
 /// Accessor for writing the fields/elements of a binary writer during runtime, the
@@ -147,6 +158,23 @@ impl InnerValueWriter {
             DataType::BigInt(_) => Ok(InnerValueWriter::BigInt),
             DataType::Float(_) => Ok(InnerValueWriter::Float),
             DataType::Double(_) => Ok(InnerValueWriter::Double),
+            DataType::Decimal(d) => {
+                // Validation is done at DecimalType construction time
+                Ok(InnerValueWriter::Decimal(d.precision(), d.scale()))
+            }
+            DataType::Date(_) => Ok(InnerValueWriter::Date),
+            DataType::Time(t) => {
+                // Validation is done at TimeType construction time
+                Ok(InnerValueWriter::Time(t.precision()))
+            }
+            DataType::Timestamp(t) => {
+                // Validation is done at TimestampType construction time
+                Ok(InnerValueWriter::TimestampNtz(t.precision()))
+            }
+            DataType::TimestampLTz(t) => {
+                // Validation is done at TimestampLTzType construction time
+                Ok(InnerValueWriter::TimestampLtz(t.precision()))
+            }
             _ => unimplemented!(
                 "ValueWriter for DataType {:?} is currently not implemented",
                 data_type
@@ -193,6 +221,21 @@ impl InnerValueWriter {
             }
             (InnerValueWriter::Double, Datum::Float64(v)) => {
                 writer.write_double(v.into_inner());
+            }
+            (InnerValueWriter::Decimal(p, _s), Datum::Decimal(v)) => {
+                writer.write_decimal(v, *p);
+            }
+            (InnerValueWriter::Date, Datum::Date(d)) => {
+                writer.write_int(d.get_inner());
+            }
+            (InnerValueWriter::Time(p), Datum::Time(t)) => {
+                writer.write_time(t.get_inner(), *p);
+            }
+            (InnerValueWriter::TimestampNtz(p), Datum::TimestampNtz(ts)) => {
+                writer.write_timestamp_ntz(ts, *p);
+            }
+            (InnerValueWriter::TimestampLtz(p), Datum::TimestampLtz(ts)) => {
+                writer.write_timestamp_ltz(ts, *p);
             }
             _ => {
                 return Err(IllegalArgument {

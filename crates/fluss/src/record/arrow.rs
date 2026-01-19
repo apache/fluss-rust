@@ -1061,8 +1061,7 @@ pub struct MyVec<T>(pub StreamReader<T>);
 mod tests {
     use super::*;
     use crate::error::Error;
-    use crate::metadata::DataField;
-    use crate::metadata::DataTypes;
+    use crate::metadata::{DataField, DataTypes};
 
     #[test]
     fn test_to_array_type() {
@@ -1164,24 +1163,6 @@ mod tests {
                 Field::new("f2", ArrowDataType::Utf8, true),
             ]))
         );
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid precision value for TimeType: 10")]
-    fn test_time_invalid_precision() {
-        to_arrow_type(&DataTypes::time_with_precision(10));
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid precision value for TimestampType: 10")]
-    fn test_timestamp_invalid_precision() {
-        to_arrow_type(&DataTypes::timestamp_with_precision(10));
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid precision value for TimestampLTzType: 10")]
-    fn test_timestamp_ltz_invalid_precision() {
-        to_arrow_type(&DataTypes::timestamp_ltz_with_precision(10));
     }
 
     #[test]

@@ -133,6 +133,26 @@ impl<'a> InternalRow for CompactedRow<'a> {
     fn get_bytes(&self, pos: usize) -> &[u8] {
         self.decoded_row().get_bytes(pos)
     }
+
+    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> crate::row::Decimal {
+        self.decoded_row().get_decimal(pos, precision, scale)
+    }
+
+    fn get_date(&self, pos: usize) -> crate::row::datum::Date {
+        self.decoded_row().get_date(pos)
+    }
+
+    fn get_time(&self, pos: usize) -> crate::row::datum::Time {
+        self.decoded_row().get_time(pos)
+    }
+
+    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampNtz {
+        self.decoded_row().get_timestamp_ntz(pos, precision)
+    }
+
+    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampLtz {
+        self.decoded_row().get_timestamp_ltz(pos, precision)
+    }
 }
 
 #[cfg(test)]
@@ -174,7 +194,7 @@ mod tests {
         writer.write_bytes(&[1, 2, 3, 4, 5]);
 
         let bytes = writer.to_bytes();
-        let mut row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         assert_eq!(row.get_field_count(), 9);
         assert!(row.get_boolean(0));
@@ -187,70 +207,107 @@ mod tests {
         assert_eq!(row.get_string(7), "Hello World");
         assert_eq!(row.get_bytes(8), &[1, 2, 3, 4, 5]);
 
-        // Test with nulls
-        let row_type = RowType::with_data_types(
-            [
-                DataType::Int(IntType::new()),
-                DataType::String(StringType::new()),
-                DataType::Double(DoubleType::new()),
-            ]
-            .to_vec(),
-        );
+        // Test with nulls and negative values
+        let row_type = RowType::with_data_types(vec![
+            DataType::Int(IntType::new()),
+            DataType::String(StringType::new()),
+            DataType::Double(DoubleType::new()),
+        ]);
 
         let mut writer = CompactedRowWriter::new(row_type.fields().len());
-
-        writer.write_int(100);
+        writer.write_int(-42);
         writer.set_null_at(1);
         writer.write_double(2.71);
 
         let bytes = writer.to_bytes();
-        row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         assert!(!row.is_null_at(0));
         assert!(row.is_null_at(1));
         assert!(!row.is_null_at(2));
-        assert_eq!(row.get_int(0), 100);
+        assert_eq!(row.get_int(0), -42);
         assert_eq!(row.get_double(2), 2.71);
+        // Verify caching works on repeated reads
+        assert_eq!(row.get_int(0), -42);
+    }
 
-        // Test multiple reads (caching)
-        assert_eq!(row.get_int(0), 100);
-        assert_eq!(row.get_int(0), 100);
+    #[test]
+    fn test_compacted_row_temporal_and_decimal_types() {
+        // Comprehensive test covering DATE, TIME, TIMESTAMP (compact/non-compact), and DECIMAL (compact/non-compact)
+        use crate::metadata::{DataTypes, DecimalType, TimestampLTzType, TimestampType};
+        use crate::row::Decimal;
+        use crate::row::datum::{TimestampLtz, TimestampNtz};
+        use bigdecimal::{BigDecimal, num_bigint::BigInt};
 
-        // Test from_bytes
         let row_type = RowType::with_data_types(vec![
-            DataType::Int(IntType::new()),
-            DataType::String(StringType::new()),
+            DataTypes::date(),
+            DataTypes::time(),
+            DataType::Timestamp(TimestampType::with_nullable(true, 3).unwrap()), // Compact (precision <= 3)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(true, 3).unwrap()), // Compact
+            DataType::Timestamp(TimestampType::with_nullable(true, 6).unwrap()), // Non-compact (precision > 3)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(true, 9).unwrap()), // Non-compact
+            DataType::Decimal(DecimalType::new(10, 2).unwrap()), // Compact (precision <= 18)
+            DataType::Decimal(DecimalType::new(28, 10).unwrap()), // Non-compact (precision > 18)
         ]);
 
         let mut writer = CompactedRowWriter::new(row_type.fields().len());
-        writer.write_int(-1);
-        writer.write_string("test");
+
+        // Write values
+        writer.write_int(19651); // Date: 2023-10-25
+        writer.write_time(34200000, 0); // Time: 09:30:00.0
+        writer.write_timestamp_ntz(&TimestampNtz::new(1698235273182), 3); // Compact timestamp
+        writer.write_timestamp_ltz(&TimestampLtz::new(1698235273182), 3); // Compact timestamp ltz
+        let ts_ntz_high = TimestampNtz::from_millis_nanos(1698235273182, 123456).unwrap();
+        let ts_ltz_high = TimestampLtz::from_millis_nanos(1698235273182, 987654).unwrap();
+        writer.write_timestamp_ntz(&ts_ntz_high, 6); // Non-compact timestamp with nanos
+        writer.write_timestamp_ltz(&ts_ltz_high, 9); // Non-compact timestamp ltz with nanos
+
+        // Create Decimal values for testing
+        let small_decimal =
+            Decimal::from_big_decimal(BigDecimal::new(BigInt::from(12345), 2), 10, 2).unwrap(); // Compact decimal: 123.45
+        let large_decimal = Decimal::from_big_decimal(
+            BigDecimal::new(BigInt::from(999999999999999999i128), 10),
+            28,
+            10,
+        )
+        .unwrap(); // Non-compact decimal
+
+        writer.write_decimal(&small_decimal, 10);
+        writer.write_decimal(&large_decimal, 28);
 
         let bytes = writer.to_bytes();
-        let mut row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
-        assert_eq!(row.get_int(0), -1);
-        assert_eq!(row.get_string(1), "test");
-
-        // Test large row
-        let num_fields = 100;
-        let row_type = RowType::with_data_types(
-            (0..num_fields)
-                .map(|_| DataType::Int(IntType::new()))
-                .collect(),
+        // Verify all values
+        assert_eq!(row.get_date(0).get_inner(), 19651);
+        assert_eq!(row.get_time(1).get_inner(), 34200000);
+        assert_eq!(row.get_timestamp_ntz(2, 3).get_millisecond(), 1698235273182);
+        assert_eq!(
+            row.get_timestamp_ltz(3, 3).get_epoch_millisecond(),
+            1698235273182
         );
+        let read_ts_ntz = row.get_timestamp_ntz(4, 6);
+        assert_eq!(read_ts_ntz.get_millisecond(), 1698235273182);
+        assert_eq!(read_ts_ntz.get_nano_of_millisecond(), 123456);
+        let read_ts_ltz = row.get_timestamp_ltz(5, 9);
+        assert_eq!(read_ts_ltz.get_epoch_millisecond(), 1698235273182);
+        assert_eq!(read_ts_ltz.get_nano_of_millisecond(), 987654);
+        // Assert on Decimal equality
+        assert_eq!(row.get_decimal(6, 10, 2), small_decimal);
+        assert_eq!(row.get_decimal(7, 28, 10), large_decimal);
 
-        let mut writer = CompactedRowWriter::new(num_fields);
+        // Assert on Decimal components to catch any regressions
+        let read_small_decimal = row.get_decimal(6, 10, 2);
+        assert_eq!(read_small_decimal.precision(), 10);
+        assert_eq!(read_small_decimal.scale(), 2);
+        assert_eq!(read_small_decimal.to_unscaled_long().unwrap(), 12345);
 
-        for i in 0..num_fields {
-            writer.write_int((i * 10) as i32);
-        }
-
-        let bytes = writer.to_bytes();
-        row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
-
-        for i in 0..num_fields {
-            assert_eq!(row.get_int(i), (i * 10) as i32);
-        }
+        let read_large_decimal = row.get_decimal(7, 28, 10);
+        assert_eq!(read_large_decimal.precision(), 28);
+        assert_eq!(read_large_decimal.scale(), 10);
+        assert_eq!(
+            read_large_decimal.to_unscaled_long().unwrap(),
+            999999999999999999i64
+        );
     }
 }
