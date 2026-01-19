@@ -203,10 +203,8 @@ impl JsonSerde for DataType {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
                 DataType::Decimal(
-                    crate::metadata::datatype::DecimalType::try_with_nullable(
-                        true, precision, scale,
-                    )
-                    .map_err(|e| Error::JsonSerdeError {
+                    crate::metadata::datatype::DecimalType::with_nullable(true, precision, scale)
+                        .map_err(|e| Error::JsonSerdeError {
                         message: format!("Invalid DECIMAL parameters: {}", e),
                     })?,
                 )
@@ -218,10 +216,11 @@ impl JsonSerde for DataType {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
                 DataType::Time(
-                    crate::metadata::datatype::TimeType::try_with_nullable(true, precision)
-                        .map_err(|e| Error::JsonSerdeError {
-                            message: format!("Invalid TIME precision: {}", e),
-                        })?,
+                    crate::metadata::datatype::TimeType::with_nullable(true, precision).map_err(
+                        |e| Error::JsonSerdeError {
+                            message: format!("Invalid TIME_WITHOUT_TIME_ZONE precision: {}", e),
+                        },
+                    )?,
                 )
             }
             "TIMESTAMP_WITHOUT_TIME_ZONE" => {
@@ -230,9 +229,12 @@ impl JsonSerde for DataType {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(6) as u32;
                 DataType::Timestamp(
-                    crate::metadata::datatype::TimestampType::try_with_nullable(true, precision)
+                    crate::metadata::datatype::TimestampType::with_nullable(true, precision)
                         .map_err(|e| Error::JsonSerdeError {
-                            message: format!("Invalid TIMESTAMP precision: {}", e),
+                            message: format!(
+                                "Invalid TIMESTAMP_WITHOUT_TIME_ZONE precision: {}",
+                                e
+                            ),
                         })?,
                 )
             }
@@ -242,9 +244,12 @@ impl JsonSerde for DataType {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(6) as u32;
                 DataType::TimestampLTz(
-                    crate::metadata::datatype::TimestampLTzType::try_with_nullable(true, precision)
+                    crate::metadata::datatype::TimestampLTzType::with_nullable(true, precision)
                         .map_err(|e| Error::JsonSerdeError {
-                            message: format!("Invalid TIMESTAMP_LTZ precision: {}", e),
+                            message: format!(
+                                "Invalid TIMESTAMP_WITH_LOCAL_TIME_ZONE precision: {}",
+                                e
+                            ),
                         })?,
                 )
             }
@@ -742,7 +747,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Invalid TIME precision")
+                .contains("Invalid TIME_WITHOUT_TIME_ZONE precision")
         );
 
         // Invalid TIMESTAMP precision (> 9)
@@ -756,7 +761,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Invalid TIMESTAMP precision")
+                .contains("Invalid TIMESTAMP_WITHOUT_TIME_ZONE precision")
         );
 
         // Invalid TIMESTAMP_LTZ precision (> 9)
@@ -770,7 +775,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("Invalid TIMESTAMP_LTZ precision")
+                .contains("Invalid TIMESTAMP_WITH_LOCAL_TIME_ZONE precision")
         );
 
         // Invalid DECIMAL scale (> precision)

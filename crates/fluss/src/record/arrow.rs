@@ -1056,9 +1056,7 @@ pub struct MyVec<T>(pub StreamReader<T>);
 mod tests {
     use super::*;
     use crate::error::Error;
-    use crate::metadata::{
-        DataField, DataTypes, DecimalType, TimeType, TimestampLTzType, TimestampType,
-    };
+    use crate::metadata::{DataField, DataTypes};
 
     #[test]
     fn test_to_array_type() {
@@ -1159,71 +1157,6 @@ mod tests {
                 Field::new("f1", ArrowDataType::Int32, true),
                 Field::new("f2", ArrowDataType::Utf8, true),
             ]))
-        );
-    }
-
-    #[test]
-    fn test_decimal_invalid_precision() {
-        // DecimalType::try_with_nullable should return an error for invalid precision
-        let result = DecimalType::try_with_nullable(true, 50, 2);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Decimal precision must be between 1 and 38")
-        );
-    }
-
-    #[test]
-    fn test_decimal_invalid_scale() {
-        // DecimalType::try_with_nullable should return an error when scale > precision
-        let result = DecimalType::try_with_nullable(true, 10, 15);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Decimal scale must be between 0 and the precision 10")
-        );
-    }
-
-    #[test]
-    fn test_time_invalid_precision() {
-        // TimeType::try_with_nullable should return an error for invalid precision
-        let result = TimeType::try_with_nullable(true, 10);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Time precision must be between 0 and 9")
-        );
-    }
-
-    #[test]
-    fn test_timestamp_invalid_precision() {
-        // TimestampType::try_with_nullable should return an error for invalid precision
-        let result = TimestampType::try_with_nullable(true, 10);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Timestamp precision must be between 0 and 9")
-        );
-    }
-
-    #[test]
-    fn test_timestamp_ltz_invalid_precision() {
-        // TimestampLTzType::try_with_nullable should return an error for invalid precision
-        let result = TimestampLTzType::try_with_nullable(true, 10);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Timestamp with local time zone precision must be between 0 and 9")
         );
     }
 

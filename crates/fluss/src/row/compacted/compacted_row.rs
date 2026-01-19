@@ -242,12 +242,12 @@ mod tests {
         let row_type = RowType::with_data_types(vec![
             DataTypes::date(),
             DataTypes::time(),
-            DataType::Timestamp(TimestampType::with_nullable(true, 3)), // Compact (precision <= 3)
-            DataType::TimestampLTz(TimestampLTzType::with_nullable(true, 3)), // Compact
-            DataType::Timestamp(TimestampType::with_nullable(true, 6)), // Non-compact (precision > 3)
-            DataType::TimestampLTz(TimestampLTzType::with_nullable(true, 9)), // Non-compact
-            DataType::Decimal(DecimalType::new(10, 2)),                 // Compact (precision <= 18)
-            DataType::Decimal(DecimalType::new(28, 10)), // Non-compact (precision > 18)
+            DataType::Timestamp(TimestampType::with_nullable(true, 3).unwrap()), // Compact (precision <= 3)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(true, 3).unwrap()), // Compact
+            DataType::Timestamp(TimestampType::with_nullable(true, 6).unwrap()), // Non-compact (precision > 3)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(true, 9).unwrap()), // Non-compact
+            DataType::Decimal(DecimalType::new(10, 2).unwrap()), // Compact (precision <= 18)
+            DataType::Decimal(DecimalType::new(28, 10).unwrap()), // Non-compact (precision > 18)
         ]);
 
         let mut writer = CompactedRowWriter::new(row_type.fields().len());
@@ -292,7 +292,22 @@ mod tests {
         let read_ts_ltz = row.get_timestamp_ltz(5, 9);
         assert_eq!(read_ts_ltz.get_epoch_millisecond(), 1698235273182);
         assert_eq!(read_ts_ltz.get_nano_of_millisecond(), 987654);
+        // Assert on Decimal equality
         assert_eq!(row.get_decimal(6, 10, 2), small_decimal);
         assert_eq!(row.get_decimal(7, 28, 10), large_decimal);
+
+        // Assert on Decimal components to catch any regressions
+        let read_small_decimal = row.get_decimal(6, 10, 2);
+        assert_eq!(read_small_decimal.precision(), 10);
+        assert_eq!(read_small_decimal.scale(), 2);
+        assert_eq!(read_small_decimal.to_unscaled_long().unwrap(), 12345);
+
+        let read_large_decimal = row.get_decimal(7, 28, 10);
+        assert_eq!(read_large_decimal.precision(), 28);
+        assert_eq!(read_large_decimal.scale(), 10);
+        assert_eq!(
+            read_large_decimal.to_unscaled_long().unwrap(),
+            999999999999999999i64
+        );
     }
 }

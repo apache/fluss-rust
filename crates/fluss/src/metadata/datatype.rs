@@ -453,12 +453,12 @@ impl DecimalType {
 
     pub const DEFAULT_SCALE: u32 = 0;
 
-    pub fn new(precision: u32, scale: u32) -> Self {
+    pub fn new(precision: u32, scale: u32) -> Result<Self> {
         Self::with_nullable(true, precision, scale)
     }
 
-    /// Try to create a DecimalType with validation, returning an error if parameters are invalid.
-    pub fn try_with_nullable(nullable: bool, precision: u32, scale: u32) -> Result<Self> {
+    /// Create a DecimalType with validation, returning an error if parameters are invalid.
+    pub fn with_nullable(nullable: bool, precision: u32, scale: u32) -> Result<Self> {
         // Validate precision
         if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
             return Err(IllegalArgument {
@@ -489,13 +489,6 @@ impl DecimalType {
         })
     }
 
-    /// Create a DecimalType with validation, panicking if parameters are invalid.
-    /// Use this for hardcoded schemas where validation failure is a programming error.
-    pub fn with_nullable(nullable: bool, precision: u32, scale: u32) -> Self {
-        Self::try_with_nullable(nullable, precision, scale)
-            .expect("Invalid decimal precision or scale")
-    }
-
     pub fn precision(&self) -> u32 {
         self.precision
     }
@@ -506,6 +499,7 @@ impl DecimalType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.precision, self.scale)
+            .expect("Invalid decimal precision or scale")
     }
 }
 
@@ -562,7 +556,7 @@ pub struct TimeType {
 
 impl TimeType {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_PRECISION)
+        Self::new(Self::DEFAULT_PRECISION).expect("Invalid default time precision")
     }
 }
 
@@ -573,12 +567,12 @@ impl TimeType {
 
     pub const DEFAULT_PRECISION: u32 = 0;
 
-    pub fn new(precision: u32) -> Self {
+    pub fn new(precision: u32) -> Result<Self> {
         Self::with_nullable(true, precision)
     }
 
-    /// Try to create a TimeType with validation, returning an error if precision is invalid.
-    pub fn try_with_nullable(nullable: bool, precision: u32) -> Result<Self> {
+    /// Create a TimeType with validation, returning an error if precision is invalid.
+    pub fn with_nullable(nullable: bool, precision: u32) -> Result<Self> {
         // Validate precision
         if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
             return Err(IllegalArgument {
@@ -596,18 +590,12 @@ impl TimeType {
         })
     }
 
-    /// Create a TimeType with validation, panicking if precision is invalid.
-    /// Use this for hardcoded schemas where validation failure is a programming error.
-    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
-        Self::try_with_nullable(nullable, precision).expect("Invalid time precision")
-    }
-
     pub fn precision(&self) -> u32 {
         self.precision
     }
 
     pub fn as_non_nullable(&self) -> Self {
-        Self::with_nullable(false, self.precision)
+        Self::with_nullable(false, self.precision).expect("Invalid time precision")
     }
 }
 
@@ -629,7 +617,7 @@ pub struct TimestampType {
 
 impl Default for TimestampType {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_PRECISION)
+        Self::new(Self::DEFAULT_PRECISION).expect("Invalid default timestamp precision")
     }
 }
 
@@ -640,12 +628,12 @@ impl TimestampType {
 
     pub const DEFAULT_PRECISION: u32 = 6;
 
-    pub fn new(precision: u32) -> Self {
+    pub fn new(precision: u32) -> Result<Self> {
         Self::with_nullable(true, precision)
     }
 
-    /// Try to create a TimestampType with validation, returning an error if precision is invalid.
-    pub fn try_with_nullable(nullable: bool, precision: u32) -> Result<Self> {
+    /// Create a TimestampType with validation, returning an error if precision is invalid.
+    pub fn with_nullable(nullable: bool, precision: u32) -> Result<Self> {
         // Validate precision
         if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
             return Err(IllegalArgument {
@@ -663,18 +651,12 @@ impl TimestampType {
         })
     }
 
-    /// Create a TimestampType with validation, panicking if precision is invalid.
-    /// Use this for hardcoded schemas where validation failure is a programming error.
-    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
-        Self::try_with_nullable(nullable, precision).expect("Invalid timestamp precision")
-    }
-
     pub fn precision(&self) -> u32 {
         self.precision
     }
 
     pub fn as_non_nullable(&self) -> Self {
-        Self::with_nullable(false, self.precision)
+        Self::with_nullable(false, self.precision).expect("Invalid timestamp precision")
     }
 }
 
@@ -697,6 +679,7 @@ pub struct TimestampLTzType {
 impl Default for TimestampLTzType {
     fn default() -> Self {
         Self::new(Self::DEFAULT_PRECISION)
+            .expect("Invalid default timestamp with local time zone precision")
     }
 }
 
@@ -707,12 +690,12 @@ impl TimestampLTzType {
 
     pub const DEFAULT_PRECISION: u32 = 6;
 
-    pub fn new(precision: u32) -> Self {
+    pub fn new(precision: u32) -> Result<Self> {
         Self::with_nullable(true, precision)
     }
 
-    /// Try to create a TimestampLTzType with validation, returning an error if precision is invalid.
-    pub fn try_with_nullable(nullable: bool, precision: u32) -> Result<Self> {
+    /// Create a TimestampLTzType with validation, returning an error if precision is invalid.
+    pub fn with_nullable(nullable: bool, precision: u32) -> Result<Self> {
         // Validate precision
         if !(Self::MIN_PRECISION..=Self::MAX_PRECISION).contains(&precision) {
             return Err(IllegalArgument {
@@ -730,19 +713,13 @@ impl TimestampLTzType {
         })
     }
 
-    /// Create a TimestampLTzType with validation, panicking if precision is invalid.
-    /// Use this for hardcoded schemas where validation failure is a programming error.
-    pub fn with_nullable(nullable: bool, precision: u32) -> Self {
-        Self::try_with_nullable(nullable, precision)
-            .expect("Invalid timestamp with local time zone precision")
-    }
-
     pub fn precision(&self) -> u32 {
         self.precision
     }
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.precision)
+            .expect("Invalid timestamp with local time zone precision")
     }
 }
 
@@ -1071,7 +1048,7 @@ impl DataTypes {
     /// digits to the right of the decimal point in a number (=scale). `p` must have a value
     /// between 1 and 38 (both inclusive). `s` must have a value between 0 and `p` (both inclusive).
     pub fn decimal(precision: u32, scale: u32) -> DataType {
-        DataType::Decimal(DecimalType::new(precision, scale))
+        DataType::Decimal(DecimalType::new(precision, scale).expect("Invalid decimal parameters"))
     }
 
     pub fn date() -> DataType {
@@ -1086,7 +1063,7 @@ impl DataTypes {
     /// Data type of a time WITHOUT time zone `TIME(p)` where `p` is the number of digits
     /// of fractional seconds (=precision). `p` must have a value between 0 and 9 (both inclusive).
     pub fn time_with_precision(precision: u32) -> DataType {
-        DataType::Time(TimeType::new(precision))
+        DataType::Time(TimeType::new(precision).expect("Invalid time precision"))
     }
 
     /// Data type of a timestamp WITHOUT time zone `TIMESTAMP` with 6 digits of fractional
@@ -1099,7 +1076,7 @@ impl DataTypes {
     /// of digits of fractional seconds (=precision). `p` must have a value between 0 and 9
     /// (both inclusive).
     pub fn timestamp_with_precision(precision: u32) -> DataType {
-        DataType::Timestamp(TimestampType::new(precision))
+        DataType::Timestamp(TimestampType::new(precision).expect("Invalid timestamp precision"))
     }
 
     /// Data type of a timestamp WITH time zone `TIMESTAMP WITH TIME ZONE` with 6 digits of
@@ -1111,7 +1088,10 @@ impl DataTypes {
     /// Data type of a timestamp WITH time zone `TIMESTAMP WITH TIME ZONE(p)` where `p` is the number
     /// of digits of fractional seconds (=precision). `p` must have a value between 0 and 9 (both inclusive).
     pub fn timestamp_ltz_with_precision(precision: u32) -> DataType {
-        DataType::TimestampLTz(TimestampLTzType::new(precision))
+        DataType::TimestampLTz(
+            TimestampLTzType::new(precision)
+                .expect("Invalid timestamp with local time zone precision"),
+        )
     }
 
     /// Data type of an array of elements with same subtype.
@@ -1258,30 +1238,43 @@ fn test_parameterized_types_display() {
         "BINARY(256) NOT NULL"
     );
 
-    assert_eq!(DecimalType::new(10, 2).to_string(), "DECIMAL(10, 2)");
     assert_eq!(
-        DecimalType::with_nullable(false, 38, 10).to_string(),
+        DecimalType::new(10, 2).unwrap().to_string(),
+        "DECIMAL(10, 2)"
+    );
+    assert_eq!(
+        DecimalType::with_nullable(false, 38, 10)
+            .unwrap()
+            .to_string(),
         "DECIMAL(38, 10) NOT NULL"
     );
 
-    assert_eq!(TimeType::new(0).to_string(), "TIME(0)");
-    assert_eq!(TimeType::new(3).to_string(), "TIME(3)");
+    assert_eq!(TimeType::new(0).unwrap().to_string(), "TIME(0)");
+    assert_eq!(TimeType::new(3).unwrap().to_string(), "TIME(3)");
     assert_eq!(
-        TimeType::with_nullable(false, 9).to_string(),
+        TimeType::with_nullable(false, 9).unwrap().to_string(),
         "TIME(9) NOT NULL"
     );
 
-    assert_eq!(TimestampType::new(6).to_string(), "TIMESTAMP(6)");
-    assert_eq!(TimestampType::new(0).to_string(), "TIMESTAMP(0)");
+    assert_eq!(TimestampType::new(6).unwrap().to_string(), "TIMESTAMP(6)");
+    assert_eq!(TimestampType::new(0).unwrap().to_string(), "TIMESTAMP(0)");
     assert_eq!(
-        TimestampType::with_nullable(false, 9).to_string(),
+        TimestampType::with_nullable(false, 9).unwrap().to_string(),
         "TIMESTAMP(9) NOT NULL"
     );
 
-    assert_eq!(TimestampLTzType::new(6).to_string(), "TIMESTAMP_LTZ(6)");
-    assert_eq!(TimestampLTzType::new(3).to_string(), "TIMESTAMP_LTZ(3)");
     assert_eq!(
-        TimestampLTzType::with_nullable(false, 9).to_string(),
+        TimestampLTzType::new(6).unwrap().to_string(),
+        "TIMESTAMP_LTZ(6)"
+    );
+    assert_eq!(
+        TimestampLTzType::new(3).unwrap().to_string(),
+        "TIMESTAMP_LTZ(3)"
+    );
+    assert_eq!(
+        TimestampLTzType::with_nullable(false, 9)
+            .unwrap()
+            .to_string(),
         "TIMESTAMP_LTZ(9) NOT NULL"
     );
 }
@@ -1397,4 +1390,69 @@ fn test_deeply_nested_types() {
         ]),
     ));
     assert_eq!(nested.to_string(), "ARRAY<MAP<STRING, ROW<x INT, y INT>>>");
+}
+
+#[test]
+fn test_decimal_invalid_precision() {
+    // DecimalType::with_nullable should return an error for invalid precision
+    let result = DecimalType::with_nullable(true, 50, 2);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Decimal precision must be between 1 and 38")
+    );
+}
+
+#[test]
+fn test_decimal_invalid_scale() {
+    // DecimalType::with_nullable should return an error when scale > precision
+    let result = DecimalType::with_nullable(true, 10, 15);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Decimal scale must be between 0 and the precision 10")
+    );
+}
+
+#[test]
+fn test_time_invalid_precision() {
+    // TimeType::with_nullable should return an error for invalid precision
+    let result = TimeType::with_nullable(true, 10);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Time precision must be between 0 and 9")
+    );
+}
+
+#[test]
+fn test_timestamp_invalid_precision() {
+    // TimestampType::with_nullable should return an error for invalid precision
+    let result = TimestampType::with_nullable(true, 10);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Timestamp precision must be between 0 and 9")
+    );
+}
+
+#[test]
+fn test_timestamp_ltz_invalid_precision() {
+    // TimestampLTzType::with_nullable should return an error for invalid precision
+    let result = TimestampLTzType::with_nullable(true, 10);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Timestamp with local time zone precision must be between 0 and 9")
+    );
 }

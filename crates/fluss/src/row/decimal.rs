@@ -386,11 +386,26 @@ mod tests {
         assert_eq!(d1, d2, "Numeric equality: 1.0 == 1.00");
         assert_eq!(d1.cmp(&d2), std::cmp::Ordering::Equal);
 
-        // Test ordering
+        // Test ordering with positive values
         let small = Decimal::from_unscaled_long(10, 5, 0).unwrap();
         let large = Decimal::from_unscaled_long(15, 5, 0).unwrap();
         assert!(small < large);
         assert_eq!(small.cmp(&large), std::cmp::Ordering::Less);
+
+        // Test ordering with negative values
+        let negative_large = Decimal::from_unscaled_long(-10, 5, 0).unwrap(); // -10
+        let negative_small = Decimal::from_unscaled_long(-15, 5, 0).unwrap(); // -15
+        assert!(negative_small < negative_large); // -15 < -10
+        assert_eq!(
+            negative_small.cmp(&negative_large),
+            std::cmp::Ordering::Less
+        );
+
+        // Test ordering with mixed positive and negative
+        let positive = Decimal::from_unscaled_long(5, 5, 0).unwrap();
+        let negative = Decimal::from_unscaled_long(-5, 5, 0).unwrap();
+        assert!(negative < positive);
+        assert_eq!(negative.cmp(&positive), std::cmp::Ordering::Less);
 
         // Test clone and round-trip equality
         let original = Decimal::from_unscaled_long(10, 5, 0).unwrap();

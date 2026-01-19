@@ -244,25 +244,28 @@ mod tests {
         use crate::metadata::{DataType, TimestampLTzType, TimestampType};
 
         let row_type = RowType::with_data_types(vec![
-            DataTypes::boolean(),                                              // BOOLEAN
-            DataTypes::tinyint(),                                              // TINYINT
-            DataTypes::smallint(),                                             // SMALLINT
-            DataTypes::int(),                                                  // INT
-            DataTypes::bigint(),                                               // BIGINT
-            DataTypes::float(),                                                // FLOAT
-            DataTypes::double(),                                               // DOUBLE
-            DataTypes::date(),                                                 // DATE
-            DataTypes::time(),                                                 // TIME
-            DataTypes::binary(20),                                             // BINARY(20)
-            DataTypes::bytes(),                                                // BYTES
-            DataTypes::char(2),                                                // CHAR(2)
-            DataTypes::string(),                                               // STRING
-            DataTypes::decimal(5, 2),                                          // DECIMAL(5,2)
-            DataTypes::decimal(20, 0),                                         // DECIMAL(20,0)
-            DataType::Timestamp(TimestampType::with_nullable(false, 1)),       // TIMESTAMP(1)
-            DataType::Timestamp(TimestampType::with_nullable(false, 5)),       // TIMESTAMP(5)
-            DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 1)), // TIMESTAMP_LTZ(1)
-            DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 5)), // TIMESTAMP_LTZ(5)
+            DataTypes::boolean(),                                                 // BOOLEAN
+            DataTypes::tinyint(),                                                 // TINYINT
+            DataTypes::smallint(),                                                // SMALLINT
+            DataTypes::int(),                                                     // INT
+            DataTypes::bigint(),                                                  // BIGINT
+            DataTypes::float(),                                                   // FLOAT
+            DataTypes::double(),                                                  // DOUBLE
+            DataTypes::date(),                                                    // DATE
+            DataTypes::time(),                                                    // TIME
+            DataTypes::binary(20),                                                // BINARY(20)
+            DataTypes::bytes(),                                                   // BYTES
+            DataTypes::char(2),                                                   // CHAR(2)
+            DataTypes::string(),                                                  // STRING
+            DataTypes::decimal(5, 2),                                             // DECIMAL(5,2)
+            DataTypes::decimal(20, 0),                                            // DECIMAL(20,0)
+            DataType::Timestamp(TimestampType::with_nullable(false, 1).unwrap()), // TIMESTAMP(1)
+            DataType::Timestamp(TimestampType::with_nullable(false, 5).unwrap()), // TIMESTAMP(5)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 1).unwrap()), // TIMESTAMP_LTZ(1)
+            DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 5).unwrap()), // TIMESTAMP_LTZ(5)
+                                                                                        // TODO: Add support for ARRAY type
+                                                                                        // TODO: Add support for MAP type
+                                                                                        // TODO: Add support for ROW type
         ]);
 
         // Exact values from Java's IndexedRowTest.genRecordForAllTypes()
