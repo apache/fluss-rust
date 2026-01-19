@@ -24,6 +24,7 @@ use crate::metadata::TablePath;
 use crate::row::{CompactedRow, GenericRow};
 pub use accumulator::*;
 use arrow::array::RecordBatch;
+use bytes::Bytes;
 use std::sync::Arc;
 
 pub(crate) mod broadcast;
@@ -40,7 +41,7 @@ pub use writer_client::WriterClient;
 pub struct WriteRecord<'a> {
     record: Record<'a>,
     table_path: Arc<TablePath>,
-    bucket_key: Option<&'a [u8]>,
+    bucket_key: Option<Bytes>,
     schema_id: i32,
     write_format: WriteFormat,
 }
@@ -63,15 +64,15 @@ pub enum LogWriteRecord<'a> {
 
 pub struct KvWriteRecord<'a> {
     // only valid for primary key table
-    key: &'a [u8],
-    target_columns: Option<&'a [usize]>,
+    key: Bytes,
+    target_columns: Option<Arc<[usize]>>,
     compacted_row: Option<CompactedRow<'a>>,
 }
 
 impl<'a> KvWriteRecord<'a> {
     fn new(
-        key: &'a [u8],
-        target_columns: Option<&'a [usize]>,
+        key: Bytes,
+        target_columns: Option<Arc<[usize]>>,
         compacted_row: Option<CompactedRow<'a>>,
     ) -> Self {
         KvWriteRecord {
@@ -110,15 +111,15 @@ impl<'a> WriteRecord<'a> {
     pub fn for_upsert(
         table_path: Arc<TablePath>,
         schema_id: i32,
-        bucket_key: &'a [u8],
-        key: &'a [u8],
-        target_columns: Option<&'a [usize]>,
+        bucket_key: Option<Bytes>,
+        key: Bytes,
+        target_columns: Option<Arc<[usize]>>,
         row: CompactedRow<'a>,
     ) -> Self {
         Self {
             record: Record::Kv(KvWriteRecord::new(key, target_columns, Some(row))),
             table_path,
-            bucket_key: Some(bucket_key),
+            bucket_key,
             schema_id,
             write_format: WriteFormat::CompactedKv,
         }

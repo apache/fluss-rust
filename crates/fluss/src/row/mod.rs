@@ -23,7 +23,7 @@ mod decimal;
 pub mod binary;
 pub mod compacted;
 pub mod encode;
-mod field_getter;
+pub mod field_getter;
 mod row_decoder;
 
 pub use column::*;

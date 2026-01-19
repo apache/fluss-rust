@@ -18,7 +18,7 @@
 //! Default implementation of ReadContext with decoder caching.
 
 use super::ReadContext;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::metadata::{KvFormat, Schema};
 use crate::row::{RowDecoder, RowDecoderFactory};
 use std::collections::HashMap;
@@ -85,20 +85,7 @@ impl ReadContext for KvRecordReadContext {
 
         // Build decoder outside the lock to avoid blocking other threads
         let schema = self.schema_getter.get_schema(schema_id)?;
-        let row_type = match schema.row_type() {
-            crate::metadata::DataType::Row(row_type) => row_type.clone(),
-            other => {
-                return Err(Error::IoUnexpectedError {
-                    message: format!(
-                        "Schema {schema_id} has invalid row type: expected Row, got {other:?}"
-                    ),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Invalid row type",
-                    ),
-                });
-            }
-        };
+        let row_type = schema.row_type().clone();
 
         // Create decoder outside lock
         let decoder = RowDecoderFactory::create(self.kv_format.clone(), row_type)?;

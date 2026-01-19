@@ -29,6 +29,7 @@ mod lookup;
 mod log_fetch_buffer;
 mod remote_log;
 mod scanner;
+mod upsert;
 mod writer;
 
 pub use append::{AppendWriter, TableAppend};

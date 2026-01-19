@@ -97,8 +97,7 @@ impl PrimaryKey {
 pub struct Schema {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
-    // must be Row data type kind
-    row_type: DataType,
+    row_type: RowType,
 }
 
 impl Schema {
@@ -118,7 +117,7 @@ impl Schema {
         self.primary_key.as_ref()
     }
 
-    pub fn row_type(&self) -> &DataType {
+    pub fn row_type(&self) -> &RowType {
         &self.row_type
     }
 
@@ -213,7 +212,7 @@ impl SchemaBuilder {
         Ok(Schema {
             columns,
             primary_key: self.primary_key.clone(),
-            row_type: DataType::Row(RowType::new(data_fields)),
+            row_type: RowType::new(data_fields),
         })
     }
 
@@ -500,7 +499,7 @@ impl TableDescriptor {
         bucket_keys.retain(|k| !partition_keys.contains(k));
 
         if bucket_keys.is_empty() {
-            return Err(Error::InvalidTableError {
+            return Err(InvalidTableError {
                 message: format!(
                     "Primary Key constraint {:?} should not be same with partition fields {:?}.",
                     schema.primary_key().unwrap().column_names(),
@@ -580,7 +579,7 @@ pub enum LogFormat {
 }
 
 impl Display for LogFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             LogFormat::ARROW => {
                 write!(f, "ARROW")?;
@@ -612,7 +611,7 @@ pub enum KvFormat {
 }
 
 impl Display for KvFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             KvFormat::COMPACTED => write!(f, "COMPACTED")?,
             KvFormat::INDEXED => write!(f, "INDEXED")?,
@@ -626,7 +625,7 @@ impl KvFormat {
         match s.to_uppercase().as_str() {
             "INDEXED" => Ok(KvFormat::INDEXED),
             "COMPACTED" => Ok(KvFormat::COMPACTED),
-            _ => Err(Error::InvalidTableError {
+            _ => Err(InvalidTableError {
                 message: format!("Unknown kv format: {s}"),
             }),
         }
@@ -692,7 +691,7 @@ pub struct TableInfo {
     pub table_id: i64,
     pub schema_id: i32,
     pub schema: Schema,
-    pub row_type: DataType,
+    pub row_type: RowType,
     pub primary_keys: Vec<String>,
     pub physical_primary_keys: Vec<String>,
     pub bucket_keys: Vec<String>,
@@ -708,10 +707,7 @@ pub struct TableInfo {
 
 impl TableInfo {
     pub fn row_type(&self) -> &RowType {
-        match &self.row_type {
-            DataType::Row(row_type) => row_type,
-            _ => panic!("should be a row type"),
-        }
+        &self.row_type
     }
 }
 
@@ -847,7 +843,7 @@ impl TableInfo {
         &self.schema
     }
 
-    pub fn get_row_type(&self) -> &DataType {
+    pub fn get_row_type(&self) -> &RowType {
         &self.row_type
     }
 
@@ -946,8 +942,8 @@ impl TableInfo {
     }
 }
 
-impl fmt::Display for TableInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for TableInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "TableInfo{{ table_path={:?}, table_id={}, schema_id={}, schema={:?}, physical_primary_keys={:?}, bucket_keys={:?}, partition_keys={:?}, num_buckets={}, properties={:?}, custom_properties={:?}, comment={:?}, created_time={}, modified_time={} }}",
@@ -998,7 +994,7 @@ impl TableBucket {
 }
 
 impl Display for TableBucket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if let Some(partition_id) = self.partition_id {
             write!(
                 f,

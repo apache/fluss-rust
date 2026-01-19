@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::BucketId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
-use crate::metadata::{DataType, KvFormat, TablePath};
-use crate::record::MemoryLogRecordsArrowBuilder;
+use crate::metadata::{KvFormat, RowType, TablePath};
 use crate::record::kv::KvRecordBatchBuilder;
+use crate::record::MemoryLogRecordsArrowBuilder;
+use crate::BucketId;
 use bytes::Bytes;
 use std::cmp::max;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -192,7 +192,7 @@ impl ArrowLogWriteBatch {
         table_path: TablePath,
         schema_id: i32,
         arrow_compression_info: ArrowCompressionInfo,
-        row_type: &DataType,
+        row_type: &RowType,
         bucket_id: BucketId,
         create_ms: i64,
         to_append_record_batch: bool,
@@ -284,7 +284,7 @@ impl KvWriteBatch {
             }
         };
 
-        let key = kv_write_record.key;
+        let key = kv_write_record.key.as_ref();
 
         if self.schema_id != write_record.schema_id {
             return Err(Error::UnexpectedError {
@@ -296,7 +296,7 @@ impl KvWriteBatch {
             });
         };
 
-        if self.target_columns.as_deref() != kv_write_record.target_columns {
+        if self.target_columns.as_deref() != kv_write_record.target_columns.as_deref() {
             return Err(Error::UnexpectedError {
                 message: format!(
                     "target columns {:?} of the write record to append are not the same as the current target columns {:?} in the batch.",

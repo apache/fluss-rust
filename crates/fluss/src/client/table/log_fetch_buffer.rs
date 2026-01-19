@@ -651,14 +651,14 @@ mod tests {
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
-    use crate::metadata::{DataField, DataTypes, TablePath};
+    use crate::metadata::{DataField, DataTypes, RowType, TablePath};
     use crate::record::{MemoryLogRecordsArrowBuilder, ReadContext, to_arrow_schema};
     use crate::row::GenericRow;
     use std::sync::Arc;
     use std::time::Duration;
 
     fn test_read_context() -> ReadContext {
-        let row_type = DataTypes::row(vec![DataField::new(
+        let row_type = RowType::new(vec![DataField::new(
             "id".to_string(),
             DataTypes::int(),
             None,
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn default_completed_fetch_reads_records() -> Result<()> {
-        let row_type = DataTypes::row(vec![
+        let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
