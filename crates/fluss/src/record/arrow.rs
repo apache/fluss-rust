@@ -1056,7 +1056,6 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
     use crate::metadata::{DataField, DataTypes};
 
     #[test]
