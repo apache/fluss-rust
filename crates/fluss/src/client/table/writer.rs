@@ -35,8 +35,8 @@ pub trait AppendWriter: TableWriter {
 
 #[allow(dead_code, async_fn_in_trait)]
 pub trait UpsertWriter: TableWriter {
-    async fn upsert(&mut self, row: CompactedRow) -> Result<UpsertResult>;
-    async fn delete(&mut self, row: CompactedRow) -> Result<DeleteResult>;
+    async fn upsert(&mut self, row: CompactedRow<'_>) -> Result<UpsertResult>;
+    async fn delete(&mut self, row: CompactedRow<'_>) -> Result<DeleteResult>;
 }
 
 /// The result of upserting a record
