@@ -471,7 +471,8 @@ impl DecimalType {
             });
         }
         // Validate scale
-        if scale < Self::MIN_SCALE || scale > precision {
+        // Note: MIN_SCALE is 0, and scale is u32, so scale >= MIN_SCALE is always true
+        if scale > precision {
             return Err(IllegalArgument {
                 message: format!(
                     "Decimal scale must be between {} and the precision {} (both inclusive), got: {}",
