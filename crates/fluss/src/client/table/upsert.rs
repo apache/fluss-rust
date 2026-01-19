@@ -331,7 +331,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     /// * row - the row to upsert.
     ///
     /// # Returns
-    /// Ok() when completed normally
+    /// Ok(UpsertResult) when completed normally
     async fn upsert<R: InternalRow>(&mut self, row: &R) -> Result<UpsertResult> {
         self.check_field_count(row)?;
 
@@ -364,7 +364,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     /// * row - the row to delete.
     ///
     /// # Returns
-    /// Ok() when completed normally
+    /// Ok(DeleteResult) when completed normally
     async fn delete<R: InternalRow>(&mut self, row: &R) -> Result<DeleteResult> {
         self.check_field_count(row)?;
 
@@ -385,5 +385,136 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         let result = result_handle.wait().await?;
 
         result_handle.result(result).map(|_| DeleteResult)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::{DataField, DataTypes};
+
+    #[test]
+    fn sanity_check() {
+        // No target columns specified but table has auto-increment column
+        let fields = vec![
+            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ];
+        let row_type = RowType::new(fields);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec!["id".to_string()];
+        let target_columns = None;
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(result.unwrap_err().to_string().contains(
+            "This table has auto increment column id. Explicitly specifying values for an auto increment column is not allowed. Please Specify non-auto-increment columns as target columns using partialUpdate first."
+        ));
+
+        // Target columns do not contain primary key
+        let fields = vec![
+            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+            DataField::new("value".to_string(), DataTypes::int(), None),
+        ];
+        let row_type = RowType::new(fields);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec![];
+        let target_columns = Some(Arc::new(vec![1usize]));
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("The target write columns name must contain the primary key columns id")
+        );
+
+        // Primary key column not found in row type
+        let fields = vec![
+            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ];
+        let row_type = RowType::new(fields);
+        let primary_keys = vec!["nonexistent_pk".to_string()];
+        let auto_increment_col_names = vec![];
+        let target_columns = Some(Arc::new(vec![0usize, 1]));
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("The specified primary key nonexistent_pk is not in row type")
+        );
+
+        // Target columns include auto-increment column
+        let fields = vec![
+            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
+            DataField::new(
+                "seq".to_string(),
+                DataTypes::bigint().as_non_nullable(),
+                None,
+            ),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ];
+        let row_type = RowType::new(fields);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec!["seq".to_string()];
+        let target_columns = Some(Arc::new(vec![0usize, 1, 2]));
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(result.unwrap_err().to_string().contains(
+            "Explicitly specifying values for the auto increment column seq is not allowed."
+        ));
+
+        // Non-nullable column not in target columns (partial update requires nullable)
+        let fields = vec![
+            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
+            DataField::new(
+                "required_field".to_string(),
+                DataTypes::string().as_non_nullable(),
+                None,
+            ),
+            DataField::new("optional_field".to_string(), DataTypes::int(), None),
+        ];
+        let row_type = RowType::new(fields);
+        let primary_keys = vec!["id".to_string()];
+        let auto_increment_col_names = vec![];
+        let target_columns = Some(Arc::new(vec![0usize]));
+
+        let result = UpsertWriterFactory::sanity_check(
+            &row_type,
+            &primary_keys,
+            &auto_increment_col_names,
+            &target_columns,
+        );
+
+        assert!(result.unwrap_err().to_string().contains(
+            "Partial Update requires all columns except primary key to be nullable, but column required_field is NOT NULL."
+        ));
     }
 }
