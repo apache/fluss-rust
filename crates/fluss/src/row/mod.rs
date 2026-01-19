@@ -26,6 +26,7 @@ pub mod encode;
 pub mod field_getter;
 mod row_decoder;
 
+use bytes::Bytes;
 pub use column::*;
 pub use compacted::CompactedRow;
 pub use datum::*;
@@ -33,9 +34,23 @@ pub use decimal::{Decimal, MAX_COMPACT_PRECISION};
 pub use encode::KeyEncoder;
 pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
 
-pub trait BinaryRow: InternalRow {
+pub struct BinaryRow<'a> {
+    data: BinaryDataWrapper<'a>,
+}
+
+pub enum BinaryDataWrapper<'a> {
+    Bytes(Bytes),
+    Ref(&'a [u8]),
+}
+
+impl<'a> BinaryRow<'a> {
     /// Returns the binary representation of this row as a byte slice.
-    fn as_bytes(&self) -> &[u8];
+    pub fn as_bytes(&'a self) -> &'a [u8] {
+        match &self.data {
+            BinaryDataWrapper::Bytes(bytes) => bytes.as_ref(),
+            BinaryDataWrapper::Ref(r) => r,
+        }
+    }
 }
 
 // TODO make functions return Result<?> for better error handling

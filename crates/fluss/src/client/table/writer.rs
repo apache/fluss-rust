@@ -16,12 +16,11 @@
 // under the License.
 
 use crate::client::{WriteRecord, WriterClient};
-use crate::row::GenericRow;
+use crate::row::{GenericRow, InternalRow};
 use std::sync::Arc;
 
 use crate::error::Result;
 use crate::metadata::{TableInfo, TablePath};
-use crate::row::compacted::CompactedRow;
 
 #[allow(dead_code, async_fn_in_trait)]
 pub trait TableWriter {
@@ -35,8 +34,8 @@ pub trait AppendWriter: TableWriter {
 
 #[allow(dead_code, async_fn_in_trait)]
 pub trait UpsertWriter: TableWriter {
-    async fn upsert(&mut self, row: CompactedRow<'_>) -> Result<UpsertResult>;
-    async fn delete(&mut self, row: CompactedRow<'_>) -> Result<DeleteResult>;
+    async fn upsert<R: InternalRow>(&mut self, row: &R) -> Result<UpsertResult>;
+    async fn delete<R: InternalRow>(&mut self, row: &R) -> Result<DeleteResult>;
 }
 
 /// The result of upserting a record

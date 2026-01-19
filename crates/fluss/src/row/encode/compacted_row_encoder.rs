@@ -20,8 +20,9 @@ use crate::error::Result;
 use crate::metadata::RowType;
 use crate::row::Datum;
 use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
-use crate::row::compacted::{CompactedRow, CompactedRowDeserializer, CompactedRowWriter};
-use crate::row::encode::{BinaryRow, RowEncoder};
+use crate::row::compacted::{CompactedRowDeserializer, CompactedRowWriter};
+use crate::row::encode::RowEncoder;
+use bytes::Bytes;
 use std::sync::Arc;
 
 #[allow(dead_code)]
@@ -65,12 +66,8 @@ impl RowEncoder for CompactedRowEncoder<'_> {
             .write_value(&mut self.writer, pos, &value)
     }
 
-    fn finish_row(&mut self) -> Result<impl BinaryRow> {
-        Ok(CompactedRow::deserialize(
-            Arc::clone(&self.compacted_row_deserializer),
-            self.arity,
-            self.writer.buffer(),
-        ))
+    fn finish_row(&mut self) -> Result<Bytes> {
+        Ok(self.writer.flush_bytes())
     }
 
     fn close(&mut self) -> Result<()> {

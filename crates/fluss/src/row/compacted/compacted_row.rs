@@ -17,7 +17,7 @@
 
 use crate::metadata::RowType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
-use crate::row::{BinaryRow, GenericRow, InternalRow};
+use crate::row::{GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
 
 // Reference implementation:
@@ -69,10 +69,8 @@ impl<'a> CompactedRow<'a> {
         self.decoded_row
             .get_or_init(|| self.deserializer.deserialize(&self.reader))
     }
-}
 
-impl BinaryRow for CompactedRow<'_> {
-    fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         self.data
     }
 }

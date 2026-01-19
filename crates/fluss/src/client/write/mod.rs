@@ -21,7 +21,7 @@ mod batch;
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
 use crate::metadata::TablePath;
-use crate::row::{CompactedRow, GenericRow};
+use crate::row::GenericRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
 use bytes::Bytes;
@@ -54,7 +54,7 @@ impl<'a> WriteRecord<'a> {
 
 pub enum Record<'a> {
     Log(LogWriteRecord<'a>),
-    Kv(KvWriteRecord<'a>),
+    Kv(KvWriteRecord),
 }
 
 pub enum LogWriteRecord<'a> {
@@ -62,24 +62,23 @@ pub enum LogWriteRecord<'a> {
     RecordBatch(Arc<RecordBatch>),
 }
 
-pub struct KvWriteRecord<'a> {
-    // only valid for primary key table
+pub struct KvWriteRecord {
     key: Bytes,
     target_columns: Option<Arc<Vec<usize>>>,
-    compacted_row: Option<CompactedRow<'a>>,
+    row_bytes: Option<Bytes>,
 }
 
-impl<'a> KvWriteRecord<'a> {
-    fn new(
-        key: Bytes,
-        target_columns: Option<Arc<Vec<usize>>>,
-        compacted_row: Option<CompactedRow<'a>>,
-    ) -> Self {
+impl KvWriteRecord {
+    fn new(key: Bytes, target_columns: Option<Arc<Vec<usize>>>, row_bytes: Option<Bytes>) -> Self {
         KvWriteRecord {
             key,
             target_columns,
-            compacted_row,
+            row_bytes,
         }
+    }
+
+    pub fn row_bytes(&self) -> Option<&[u8]> {
+        self.row_bytes.as_deref()
     }
 }
 
@@ -114,10 +113,10 @@ impl<'a> WriteRecord<'a> {
         bucket_key: Option<Bytes>,
         key: Bytes,
         target_columns: Option<Arc<Vec<usize>>>,
-        row: Option<CompactedRow<'a>>,
+        row_bytes: Option<Bytes>,
     ) -> Self {
         Self {
-            record: Record::Kv(KvWriteRecord::new(key, target_columns, row)),
+            record: Record::Kv(KvWriteRecord::new(key, target_columns, row_bytes)),
             table_path,
             bucket_key,
             schema_id,

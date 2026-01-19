@@ -28,7 +28,6 @@ use crate::record::kv::kv_record_batch::{
     WRITE_CLIENT_ID_OFFSET,
 };
 use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, NO_BATCH_SEQUENCE, NO_WRITER_ID};
-use crate::row::BinaryRow;
 use bytes::{Bytes, BytesMut};
 use std::io;
 
@@ -88,14 +87,13 @@ impl KvRecordBatchBuilder {
         }
     }
 
-    /// Check if there is room for a new record containing the given key and row.
+    /// Check if there is room for a new record containing the given key and row bytes.
     /// If no records have been appended, this always returns true.
-    pub fn has_room_for_row<R: BinaryRow>(&self, key: &[u8], row: Option<&R>) -> bool {
-        let value = row.map(|r| r.as_bytes());
-        self.size_in_bytes + KvRecord::size_of(key, value) <= self.write_limit
+    pub fn has_room_for_row(&self, key: &[u8], row_bytes: Option<&[u8]>) -> bool {
+        self.size_in_bytes + KvRecord::size_of(key, row_bytes) <= self.write_limit
     }
 
-    /// Append a KV record with a row value to the batch.
+    /// Append a KV record with row bytes to the batch.
     ///
     /// Returns an error if:
     /// - The builder has been aborted
@@ -103,7 +101,7 @@ impl KvRecordBatchBuilder {
     /// - Adding this record would exceed the write limit
     /// - The maximum number of records is exceeded
     /// - The KV format is not COMPACTED
-    pub fn append_row<R: BinaryRow>(&mut self, key: &[u8], row: Option<&R>) -> io::Result<()> {
+    pub fn append_row(&mut self, key: &[u8], row_bytes: Option<&[u8]>) -> io::Result<()> {
         if self.kv_format != KvFormat::COMPACTED {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -134,8 +132,7 @@ impl KvRecordBatchBuilder {
             ));
         }
 
-        let value = row.map(|r| r.as_bytes());
-        let record_size = KvRecord::size_of(key, value);
+        let record_size = KvRecord::size_of(key, row_bytes);
         if self.size_in_bytes + record_size > self.write_limit {
             return Err(io::Error::new(
                 io::ErrorKind::WriteZero,
@@ -146,7 +143,7 @@ impl KvRecordBatchBuilder {
             ));
         }
 
-        let record_byte_size = KvRecord::write_to_buf(&mut self.buffer, key, value)?;
+        let record_byte_size = KvRecord::write_to_buf(&mut self.buffer, key, row_bytes)?;
         debug_assert_eq!(record_byte_size, record_size, "Record size mismatch");
 
         self.current_record_number += 1;
@@ -349,12 +346,12 @@ mod tests {
 
         let key1 = b"key1";
         let value1 = create_test_row(b"value1");
-        assert!(builder.has_room_for_row(key1, Some(&value1)));
-        builder.append_row(key1, Some(&value1)).unwrap();
+        assert!(builder.has_room_for_row(key1, Some(value1.as_bytes())));
+        builder.append_row(key1, Some(value1.as_bytes())).unwrap();
 
         let key2 = b"key2";
-        assert!(builder.has_room_for_row::<CompactedRow>(key2, None));
-        builder.append_row::<CompactedRow>(key2, None).unwrap();
+        assert!(builder.has_room_for_row(key2, None));
+        builder.append_row(key2, None).unwrap();
 
         builder.close().unwrap();
         assert!(builder.is_closed());
@@ -369,35 +366,34 @@ mod tests {
         // Test lifecycle: abort behavior
         let mut builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::COMPACTED);
         let value = create_test_row(b"value");
-        builder.append_row(b"key", Some(&value)).unwrap();
+        builder.append_row(b"key", Some(value.as_bytes())).unwrap();
         builder.abort();
-        assert!(builder.append_row::<CompactedRow>(b"key2", None).is_err());
+        assert!(builder.append_row(b"key2", None).is_err());
         assert!(builder.build().is_err());
         assert!(builder.close().is_err());
 
         // Test lifecycle: close behavior
         let mut builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::COMPACTED);
         let value = create_test_row(b"value");
-        builder.append_row(b"key", Some(&value)).unwrap();
+        builder.append_row(b"key", Some(value.as_bytes())).unwrap();
         builder.close().unwrap();
-        assert!(builder.append_row::<CompactedRow>(b"key2", None).is_err());
+        assert!(builder.append_row(b"key2", None).is_err());
         assert!(builder.build().is_ok());
 
         // Test KvFormat validation
         let mut row_writer = CompactedRowWriter::new(1);
         row_writer.write_int(42);
-        let row_type = RowType::with_data_types(vec![DataTypes::int()]);
-        let row = &CompactedRow::from_bytes(&row_type, row_writer.buffer());
+        let row_bytes = row_writer.buffer();
 
         // INDEXED format should reject append_row
         let mut indexed_builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::INDEXED);
-        let result = indexed_builder.append_row(b"key", Some(row));
+        let result = indexed_builder.append_row(b"key", Some(row_bytes));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
 
         // COMPACTED format should accept append_row
         let mut compacted_builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::COMPACTED);
-        let result = compacted_builder.append_row(b"key", Some(row));
+        let result = compacted_builder.append_row(b"key", Some(row_bytes));
         assert!(result.is_ok());
     }
 
@@ -410,15 +406,17 @@ mod tests {
         let large_key = vec![0u8; 1000];
         let large_value = vec![1u8; 1000];
         let large_row = create_test_row(&large_value);
-        assert!(!builder.has_room_for_row(&large_key, Some(&large_row)));
+        assert!(!builder.has_room_for_row(&large_key, Some(large_row.as_bytes())));
         let small_value = create_test_row(b"value");
-        assert!(builder.has_room_for_row(b"key", Some(&small_value)));
+        assert!(builder.has_room_for_row(b"key", Some(small_value.as_bytes())));
 
         // Test append enforcement - add small record first
-        builder.append_row(b"key", Some(&small_value)).unwrap();
+        builder
+            .append_row(b"key", Some(small_value.as_bytes()))
+            .unwrap();
 
         // Try to add large record that exceeds limit (reuse large_row from above)
-        let result = builder.append_row(b"key2", Some(&large_row));
+        let result = builder.append_row(b"key2", Some(large_row.as_bytes()));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::WriteZero);
     }
@@ -429,10 +427,12 @@ mod tests {
         builder.current_record_number = i32::MAX - 1;
 
         let value1 = create_test_row(b"value1");
-        builder.append_row(b"key1", Some(&value1)).unwrap();
+        builder
+            .append_row(b"key1", Some(value1.as_bytes()))
+            .unwrap();
 
         let value2 = create_test_row(b"value2");
-        let result = builder.append_row(b"key2", Some(&value2));
+        let result = builder.append_row(b"key2", Some(value2.as_bytes()));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
@@ -452,13 +452,17 @@ mod tests {
         builder.set_writer_state(100, 5);
 
         let value1 = create_test_row(b"value1");
-        builder.append_row(b"key1", Some(&value1)).unwrap();
+        builder
+            .append_row(b"key1", Some(value1.as_bytes()))
+            .unwrap();
         let bytes1 = builder.build().unwrap();
         let len1 = bytes1.len();
 
         // Append another record - this should invalidate the cache
         let value2 = create_test_row(b"value2");
-        builder.append_row(b"key2", Some(&value2)).unwrap();
+        builder
+            .append_row(b"key2", Some(value2.as_bytes()))
+            .unwrap();
         let bytes2 = builder.build().unwrap();
         let len2 = bytes2.len();
 
@@ -472,7 +476,7 @@ mod tests {
         let mut builder = KvRecordBatchBuilder::new(1, 4096, KvFormat::COMPACTED);
         builder.set_writer_state(100, 5);
         let value = create_test_row(b"value");
-        builder.append_row(b"key", Some(&value)).unwrap();
+        builder.append_row(b"key", Some(value.as_bytes())).unwrap();
         let bytes1 = builder.build().unwrap();
 
         // Change writer state - this should invalidate the cache
@@ -494,7 +498,6 @@ mod tests {
     fn test_builder_with_compacted_row_writer() -> crate::error::Result<()> {
         use crate::record::kv::KvRecordBatch;
         use crate::row::InternalRow;
-        use crate::row::compacted::CompactedRow;
 
         let mut builder = KvRecordBatchBuilder::new(1, 100000, KvFormat::COMPACTED);
         builder.set_writer_state(100, 5);
@@ -504,26 +507,25 @@ mod tests {
         row_writer1.write_int(42);
         row_writer1.write_string("hello");
 
-        let row_type = RowType::with_data_types([DataTypes::int(), DataTypes::string()].to_vec());
-        let row1 = &CompactedRow::from_bytes(&row_type, row_writer1.buffer());
+        let row_bytes1 = row_writer1.buffer();
 
         let key1 = b"key1";
-        assert!(builder.has_room_for_row(key1, Some(row1)));
-        builder.append_row(key1, Some(row1))?;
+        assert!(builder.has_room_for_row(key1, Some(row_bytes1)));
+        builder.append_row(key1, Some(row_bytes1))?;
 
         // Create and append second record
         let mut row_writer2 = CompactedRowWriter::new(2);
         row_writer2.write_int(100);
         row_writer2.write_string("world");
 
-        let row2 = &CompactedRow::from_bytes(&row_type, row_writer2.buffer());
+        let row_bytes2 = row_writer2.buffer();
 
         let key2 = b"key2";
-        builder.append_row(key2, Some(row2))?;
+        builder.append_row(key2, Some(row_bytes2))?;
 
         // Append a deletion record
         let key3 = b"key3";
-        builder.append_row::<CompactedRow>(key3, None)?;
+        builder.append_row(key3, None)?;
 
         // Build and verify
         builder.close()?;

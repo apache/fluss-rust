@@ -20,10 +20,9 @@ use crate::client::{WriteFormat, WriteRecord, WriterClient};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{KvFormat, RowType, TableInfo, TablePath};
-use crate::row::compacted::CompactedRow;
+use crate::row::InternalRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory, RowEncoder, RowEncoderFactory};
 use crate::row::field_getter::FieldGetter;
-use crate::row::{BinaryRow, InternalRow};
 use std::sync::Arc;
 
 use bitvec::prelude::bitvec;
@@ -281,7 +280,7 @@ impl UpsertWriterFactory {
 
 #[allow(dead_code)]
 impl<RE: RowEncoder> UpsertWriterImpl<RE> {
-    fn check_field_count<R: BinaryRow + InternalRow>(&self, row: &R) -> Result<()> {
+    fn check_field_count<R: InternalRow>(&self, row: &R) -> Result<()> {
         let expected = self.table_info.get_row_type().fields().len();
         if row.get_field_count() != expected {
             return Err(IllegalArgument {
@@ -302,6 +301,15 @@ impl<RE: RowEncoder> UpsertWriterImpl<RE> {
             None => None,
         };
         Ok((key, bucket_key))
+    }
+
+    fn encode_row<R: InternalRow>(&mut self, row: &R) -> Result<Bytes> {
+        self.row_encoder.start_new_row()?;
+        for (pos, field_getter) in self.field_getters.iter().enumerate() {
+            let datum = field_getter.get_field(row);
+            self.row_encoder.encode_field(pos, datum)?;
+        }
+        self.row_encoder.finish_row()
     }
 }
 
@@ -324,10 +332,11 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     ///
     /// # Returns
     /// Ok() when completed normally
-    async fn upsert(&mut self, row: CompactedRow<'_>) -> Result<UpsertResult> {
-        self.check_field_count(&row)?;
+    async fn upsert<R: InternalRow>(&mut self, row: &R) -> Result<UpsertResult> {
+        self.check_field_count(row)?;
 
-        let (key, bucket_key) = self.get_keys(&row)?;
+        let (key, bucket_key) = self.get_keys(row)?;
+        let row_bytes = self.encode_row(row)?;
 
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_path),
@@ -335,7 +344,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
             bucket_key,
             key,
             self.target_columns.clone(),
-            Some(row),
+            Some(row_bytes),
         );
 
         let result_handle = self.writer_client.send(&write_record).await?;
@@ -352,10 +361,10 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     ///
     /// # Returns
     /// Ok() when completed normally
-    async fn delete(&mut self, row: CompactedRow<'_>) -> Result<DeleteResult> {
-        self.check_field_count(&row)?;
+    async fn delete<R: InternalRow>(&mut self, row: &R) -> Result<DeleteResult> {
+        self.check_field_count(row)?;
 
-        let (key, bucket_key) = self.get_keys(&row)?;
+        let (key, bucket_key) = self.get_keys(row)?;
 
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_path),

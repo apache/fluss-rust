@@ -307,14 +307,14 @@ impl KvWriteBatch {
             });
         }
 
-        let row = kv_write_record.compacted_row.as_ref();
+        let row_bytes = kv_write_record.row_bytes();
 
-        if self.is_closed() || !self.kv_batch_builder.has_room_for_row(key, row) {
+        if self.is_closed() || !self.kv_batch_builder.has_room_for_row(key, row_bytes) {
             Ok(None)
         } else {
             // append successfully
             self.kv_batch_builder
-                .append_row(key, row)
+                .append_row(key, row_bytes)
                 .map_err(|e| Error::UnexpectedError {
                     message: "Failed to append row to KvWriteBatch".to_string(),
                     source: Some(Box::new(e)),

@@ -22,7 +22,7 @@ use crate::error::Result;
 use crate::metadata::{DataLakeFormat, KvFormat, RowType};
 use crate::row::encode::compacted_key_encoder::CompactedKeyEncoder;
 use crate::row::encode::compacted_row_encoder::CompactedRowEncoder;
-use crate::row::{BinaryRow, Datum, InternalRow};
+use crate::row::{Datum, InternalRow};
 use bytes::Bytes;
 
 /// An interface for encoding key of row into bytes.
@@ -95,7 +95,7 @@ pub trait RowEncoder {
     ///
     /// # Returns
     /// * the written row
-    fn finish_row(&mut self) -> Result<impl BinaryRow>;
+    fn finish_row(&mut self) -> Result<Bytes>;
 
     /// Closes the row encoder
     ///
