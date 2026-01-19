@@ -336,7 +336,10 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
-        let row_bytes = self.encode_row(row)?;
+        let row_bytes = match row.as_encoded_bytes() {
+            Some(bytes) => Bytes::copy_from_slice(bytes),
+            None => self.encode_row(row)?,
+        };
 
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_path),

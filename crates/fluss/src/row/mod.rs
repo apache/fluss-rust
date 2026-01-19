@@ -114,6 +114,11 @@ pub trait InternalRow {
 
     /// Returns the binary value at the given position
     fn get_bytes(&self, pos: usize) -> &[u8];
+
+    /// Returns encoded bytes if already encoded
+    fn as_encoded_bytes(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
 pub struct GenericRow<'a> {

@@ -151,6 +151,10 @@ impl<'a> InternalRow for CompactedRow<'a> {
     fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampLtz {
         self.decoded_row().get_timestamp_ltz(pos, precision)
     }
+
+    fn as_encoded_bytes(&self) -> Option<&[u8]> {
+        Some(self.as_bytes())
+    }
 }
 
 #[cfg(test)]
