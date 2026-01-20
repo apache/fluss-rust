@@ -253,13 +253,15 @@ impl Sender {
                             });
                         }
                         WriteBatch::Kv(kvb) => {
-                            return Err(UnexpectedError {
-                                message: format!(
-                                    "All the write batches to make put kv request should have the same target columns, but got {:?} and {:?}.",
-                                    target_columns, kvb.target_columns
-                                ),
-                                source: None,
-                            });
+                            if target_columns != kvb.target_columns {
+                                return Err(UnexpectedError {
+                                    message: format!(
+                                        "All the write batches to make put kv request should have the same target columns, but got {:?} and {:?}.",
+                                        target_columns, kvb.target_columns
+                                    ),
+                                    source: None,
+                                });
+                            }
                         }
                     }
                 }
