@@ -337,8 +337,8 @@ impl KvWriteBatch {
         self.kv_batch_builder.close()
     }
 
-    pub fn target_columns(&self) -> &Option<Arc<Vec<usize>>> {
-        &self.target_columns
+    pub fn target_columns(&self) -> Option<&Arc<Vec<usize>>> {
+        self.target_columns.as_ref()
     }
 }
 

@@ -267,7 +267,6 @@ impl Sender {
                     }
                 }
                 let cols = target_columns
-                    .clone()
                     .map(|arc| arc.iter().map(|&c| c as i32).collect())
                     .unwrap_or_default();
                 let req = PutKvRequest::new(table_id, acks, timeout_ms, cols, request_batches)?;
