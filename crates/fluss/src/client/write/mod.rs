@@ -128,8 +128,9 @@ impl<'a> WriteRecord<'a> {
     pub fn for_upsert(
         table_path: Arc<TablePath>,
         schema_id: i32,
-        bucket_key: Option<Bytes>,
         key: Bytes,
+        bucket_key: Option<Bytes>,
+        write_format: WriteFormat,
         target_columns: Option<Arc<Vec<usize>>>,
         row_bytes: Option<RowBytes<'a>>,
     ) -> Self {
@@ -138,7 +139,7 @@ impl<'a> WriteRecord<'a> {
             table_path,
             bucket_key,
             schema_id,
-            write_format: WriteFormat::CompactedKv,
+            write_format,
         }
     }
 }

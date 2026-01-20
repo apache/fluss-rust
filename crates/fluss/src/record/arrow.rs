@@ -50,7 +50,6 @@ use std::{
 
 use crate::error::Error::IllegalArgument;
 use arrow::ipc::writer::IpcWriteOptions;
-
 /// const for record batch
 pub const BASE_OFFSET_LENGTH: usize = 8;
 pub const LENGTH_LENGTH: usize = 4;

@@ -221,6 +221,18 @@ impl SchemaBuilder {
     pub fn build(&mut self) -> Result<Schema> {
         let columns = Self::normalize_columns(&mut self.columns, self.primary_key.as_ref())?;
 
+        let column_names: HashSet<_> = columns.iter().map(|c| &c.name).collect();
+        for auto_inc_col in &self.auto_increment_col_names {
+            if !column_names.contains(auto_inc_col) {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Auto increment column '{}' is not found in the schema columns.",
+                        auto_inc_col
+                    ),
+                });
+            }
+        }
+
         let data_fields = columns
             .iter()
             .map(|c| DataField {

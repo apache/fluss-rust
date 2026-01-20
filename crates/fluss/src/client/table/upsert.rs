@@ -118,6 +118,7 @@ where
     // partition_field_getter: Option<Box<dyn KeyEncoder>>,
     primary_key_encoder: Box<dyn KeyEncoder>,
     target_columns: Option<Arc<Vec<usize>>>,
+    // Use primary key encoder as bucket key encoder when None
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
     kv_format: KvFormat,
     write_format: WriteFormat,
@@ -158,6 +159,7 @@ impl UpsertWriterFactory {
                 data_lake_format,
             )?)
         } else {
+            // Defaults to using primary key encoder when None for bucket key
             None
         };
 
@@ -298,7 +300,7 @@ impl<RE: RowEncoder> UpsertWriterImpl<RE> {
         let key = self.primary_key_encoder.encode_key(row)?;
         let bucket_key = match &mut self.bucket_key_encoder {
             Some(bucket_key_encoder) => Some(bucket_key_encoder.encode_key(row)?),
-            None => None,
+            None => Some(key.clone()),
         };
         Ok((key, bucket_key))
     }
@@ -317,7 +319,7 @@ impl<RE: RowEncoder> TableWriter for UpsertWriterImpl<RE> {
     /// Flush data written that have not yet been sent to the server, forcing the client to send the
     /// requests to server and blocks on the completion of the requests associated with these
     /// records. A request is considered completed when it is successfully acknowledged according to
-    /// the {@link ConfigOptions#CLIENT_WRITER_ACKS} configuration you have specified or else it
+    /// the CLIENT_WRITER_ACKS configuration option you have specified or else it
     /// results in an error.
     async fn flush(&self) -> Result<()> {
         self.writer_client.flush().await
@@ -325,7 +327,7 @@ impl<RE: RowEncoder> TableWriter for UpsertWriterImpl<RE> {
 }
 
 impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
-    ///  Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
+    /// Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
     ///
     /// # Arguments
     /// * row - the row to upsert.
@@ -337,7 +339,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
 
         let (key, bucket_key) = self.get_keys(row)?;
 
-        let row_bytes: RowBytes<'_> = match row.as_encoded_bytes() {
+        let row_bytes: RowBytes<'_> = match row.as_encoded_bytes(self.write_format) {
             Some(bytes) => RowBytes::Borrowed(bytes),
             None => RowBytes::Owned(self.encode_row(row)?),
         };
@@ -345,8 +347,9 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_path),
             self.table_info.schema_id,
-            bucket_key,
             key,
+            bucket_key,
+            self.write_format,
             self.target_columns.clone(),
             Some(row_bytes),
         );
@@ -373,13 +376,12 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_path),
             self.table_info.schema_id,
-            bucket_key,
             key,
+            bucket_key,
+            self.write_format,
             self.target_columns.clone(),
             None,
         );
-
-        self.writer_client.send(&write_record).await?;
 
         let result_handle = self.writer_client.send(&write_record).await?;
         let result = result_handle.wait().await?;

@@ -33,6 +33,7 @@ pub use datum::*;
 pub use decimal::{Decimal, MAX_COMPACT_PRECISION};
 pub use encode::KeyEncoder;
 pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
+use crate::client::WriteFormat;
 
 pub struct BinaryRow<'a> {
     data: BinaryDataWrapper<'a>,
@@ -116,7 +117,7 @@ pub trait InternalRow {
     fn get_bytes(&self, pos: usize) -> &[u8];
 
     /// Returns encoded bytes if already encoded
-    fn as_encoded_bytes(&self) -> Option<&[u8]> {
+    fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
         None
     }
 }

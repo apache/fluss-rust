@@ -19,6 +19,7 @@ use crate::metadata::RowType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
 use crate::row::{GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
+use crate::client::WriteFormat;
 
 // Reference implementation:
 // https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRow.java
@@ -152,8 +153,12 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.decoded_row().get_timestamp_ltz(pos, precision)
     }
 
-    fn as_encoded_bytes(&self) -> Option<&[u8]> {
-        Some(self.as_bytes())
+    fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
+        match write_format {
+            WriteFormat::CompactedKv => Some(self.as_bytes()),
+            WriteFormat::ArrowLog => None,
+            WriteFormat::CompactedLog => None,
+        }
     }
 }
 
