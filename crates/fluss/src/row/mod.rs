@@ -26,6 +26,7 @@ pub mod encode;
 pub mod field_getter;
 mod row_decoder;
 
+use crate::client::WriteFormat;
 use bytes::Bytes;
 pub use column::*;
 pub use compacted::CompactedRow;
@@ -33,7 +34,6 @@ pub use datum::*;
 pub use decimal::{Decimal, MAX_COMPACT_PRECISION};
 pub use encode::KeyEncoder;
 pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
-use crate::client::WriteFormat;
 
 pub struct BinaryRow<'a> {
     data: BinaryDataWrapper<'a>,

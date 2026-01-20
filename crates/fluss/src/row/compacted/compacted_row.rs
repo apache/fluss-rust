@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::WriteFormat;
 use crate::metadata::RowType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
 use crate::row::{GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
-use crate::client::WriteFormat;
 
 // Reference implementation:
 // https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRow.java
