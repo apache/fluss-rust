@@ -20,6 +20,7 @@ use bytes::Bytes;
 
 use crate::error::Result;
 use crate::metadata::DataType;
+use crate::row::Decimal;
 use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
 use delegate::delegate;
 
@@ -93,7 +94,13 @@ impl BinaryWriter for CompactedKeyWriter {
 
             fn write_double(&mut self, value: f64);
 
+            fn write_decimal(&mut self, value: &Decimal, precision: u32);
 
+            fn write_time(&mut self, value: i32, precision: u32);
+
+            fn write_timestamp_ntz(&mut self, value: &crate::row::datum::TimestampNtz, precision: u32);
+
+            fn write_timestamp_ltz(&mut self, value: &crate::row::datum::TimestampLtz, precision: u32);
         }
     }
 

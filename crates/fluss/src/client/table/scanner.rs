@@ -1531,8 +1531,9 @@ mod tests {
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
         );
-        let record = WriteRecord::new(
+        let record = WriteRecord::for_append(
             Arc::new(table_path.clone()),
+            table_info.schema_id,
             GenericRow {
                 values: vec![Datum::Int32(1)],
             },

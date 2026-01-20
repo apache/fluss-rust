@@ -809,7 +809,7 @@ mod tests {
         let mut row = GenericRow::new();
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let record = WriteRecord::new(table_path, row);
+        let record = WriteRecord::for_append(table_path, 1, row);
         builder.append(&record)?;
 
         let data = builder.build()?;

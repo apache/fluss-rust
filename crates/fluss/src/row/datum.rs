@@ -17,6 +17,7 @@
 
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
+use crate::row::Decimal;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int8Builder,
     Int16Builder, Int32Builder, Int64Builder, StringBuilder,
@@ -24,7 +25,6 @@ use arrow::array::{
 use jiff::ToSpan;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
-use rust_decimal::Decimal;
 use serde::Serialize;
 use std::borrow::Cow;
 
@@ -58,9 +58,11 @@ pub enum Datum<'a> {
     #[display("{0}")]
     Date(Date),
     #[display("{0}")]
-    Timestamp(Timestamp),
+    Time(Time),
     #[display("{0}")]
-    TimestampTz(TimestampLtz),
+    TimestampNtz(TimestampNtz),
+    #[display("{0}")]
+    TimestampLtz(TimestampLtz),
 }
 
 impl Datum<'_> {
@@ -296,7 +298,11 @@ impl Datum<'_> {
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, v.as_ref()),
             Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
-            Datum::Decimal(_) | Datum::Date(_) | Datum::Timestamp(_) | Datum::TimestampTz(_) => {
+            Datum::Decimal(_)
+            | Datum::Date(_)
+            | Datum::Time(_)
+            | Datum::TimestampNtz(_)
+            | Datum::TimestampLtz(_) => {
                 return Err(RowConvertError {
                     message: format!(
                         "Type {:?} is not yet supported for Arrow conversion",
@@ -350,10 +356,122 @@ pub type F64 = OrderedFloat<f64>;
 pub struct Date(i32);
 
 #[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
-pub struct Timestamp(i64);
+pub struct Time(i32);
+
+impl Time {
+    pub const fn new(inner: i32) -> Self {
+        Time(inner)
+    }
+
+    /// Get the inner value of time type (milliseconds since midnight)
+    pub fn get_inner(&self) -> i32 {
+        self.0
+    }
+}
+
+/// Maximum timestamp precision that can be stored compactly (milliseconds only).
+/// Values with precision > MAX_COMPACT_TIMESTAMP_PRECISION require additional nanosecond storage.
+pub const MAX_COMPACT_TIMESTAMP_PRECISION: u32 = 3;
+
+/// Maximum valid value for nanoseconds within a millisecond (0 to 999,999 inclusive).
+/// A millisecond contains 1,000,000 nanoseconds, so the fractional part ranges from 0 to 999,999.
+pub const MAX_NANO_OF_MILLISECOND: i32 = 999_999;
 
 #[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
-pub struct TimestampLtz(i64);
+#[display("{millisecond}")]
+pub struct TimestampNtz {
+    millisecond: i64,
+    nano_of_millisecond: i32,
+}
+
+impl TimestampNtz {
+    pub const fn new(millisecond: i64) -> Self {
+        TimestampNtz {
+            millisecond,
+            nano_of_millisecond: 0,
+        }
+    }
+
+    pub fn from_millis_nanos(
+        millisecond: i64,
+        nano_of_millisecond: i32,
+    ) -> crate::error::Result<Self> {
+        if !(0..=MAX_NANO_OF_MILLISECOND).contains(&nano_of_millisecond) {
+            return Err(crate::error::Error::IllegalArgument {
+                message: format!(
+                    "nanoOfMillisecond must be in range [0, {}], got: {}",
+                    MAX_NANO_OF_MILLISECOND, nano_of_millisecond
+                ),
+            });
+        }
+        Ok(TimestampNtz {
+            millisecond,
+            nano_of_millisecond,
+        })
+    }
+
+    pub fn get_millisecond(&self) -> i64 {
+        self.millisecond
+    }
+
+    pub fn get_nano_of_millisecond(&self) -> i32 {
+        self.nano_of_millisecond
+    }
+
+    /// Check if the timestamp is compact based on precision.
+    /// Precision <= MAX_COMPACT_TIMESTAMP_PRECISION means millisecond precision, no need for nanos.
+    pub fn is_compact(precision: u32) -> bool {
+        precision <= MAX_COMPACT_TIMESTAMP_PRECISION
+    }
+}
+
+#[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
+#[display("{epoch_millisecond}")]
+pub struct TimestampLtz {
+    epoch_millisecond: i64,
+    nano_of_millisecond: i32,
+}
+
+impl TimestampLtz {
+    pub const fn new(epoch_millisecond: i64) -> Self {
+        TimestampLtz {
+            epoch_millisecond,
+            nano_of_millisecond: 0,
+        }
+    }
+
+    pub fn from_millis_nanos(
+        epoch_millisecond: i64,
+        nano_of_millisecond: i32,
+    ) -> crate::error::Result<Self> {
+        if !(0..=MAX_NANO_OF_MILLISECOND).contains(&nano_of_millisecond) {
+            return Err(crate::error::Error::IllegalArgument {
+                message: format!(
+                    "nanoOfMillisecond must be in range [0, {}], got: {}",
+                    MAX_NANO_OF_MILLISECOND, nano_of_millisecond
+                ),
+            });
+        }
+        Ok(TimestampLtz {
+            epoch_millisecond,
+            nano_of_millisecond,
+        })
+    }
+
+    pub fn get_epoch_millisecond(&self) -> i64 {
+        self.epoch_millisecond
+    }
+
+    pub fn get_nano_of_millisecond(&self) -> i32 {
+        self.nano_of_millisecond
+    }
+
+    /// Check if the timestamp is compact based on precision.
+    /// Precision <= MAX_COMPACT_TIMESTAMP_PRECISION means millisecond precision, no need for nanos.
+    pub fn is_compact(precision: u32) -> bool {
+        precision <= MAX_COMPACT_TIMESTAMP_PRECISION
+    }
+}
 
 pub type Blob<'a> = Cow<'a, [u8]>;
 
@@ -459,5 +577,56 @@ mod tests {
         assert_eq!(date.year(), 1970);
         assert_eq!(date.month(), 1);
         assert_eq!(date.day(), 1);
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn test_timestamp_valid_nanos() {
+        // Valid range: 0 to MAX_NANO_OF_MILLISECOND for both TimestampNtz and TimestampLtz
+        let ntz1 = TimestampNtz::from_millis_nanos(1000, 0).unwrap();
+        assert_eq!(ntz1.get_nano_of_millisecond(), 0);
+
+        let ntz2 = TimestampNtz::from_millis_nanos(1000, MAX_NANO_OF_MILLISECOND).unwrap();
+        assert_eq!(ntz2.get_nano_of_millisecond(), MAX_NANO_OF_MILLISECOND);
+
+        let ntz3 = TimestampNtz::from_millis_nanos(1000, 500_000).unwrap();
+        assert_eq!(ntz3.get_nano_of_millisecond(), 500_000);
+
+        let ltz1 = TimestampLtz::from_millis_nanos(1000, 0).unwrap();
+        assert_eq!(ltz1.get_nano_of_millisecond(), 0);
+
+        let ltz2 = TimestampLtz::from_millis_nanos(1000, MAX_NANO_OF_MILLISECOND).unwrap();
+        assert_eq!(ltz2.get_nano_of_millisecond(), MAX_NANO_OF_MILLISECOND);
+    }
+
+    #[test]
+    fn test_timestamp_nanos_out_of_range() {
+        // Test that both TimestampNtz and TimestampLtz reject invalid nanos
+        let expected_msg = format!(
+            "nanoOfMillisecond must be in range [0, {}]",
+            MAX_NANO_OF_MILLISECOND
+        );
+
+        // Too large (1,000,000 is just beyond the valid range)
+        let result_ntz = TimestampNtz::from_millis_nanos(1000, MAX_NANO_OF_MILLISECOND + 1);
+        assert!(result_ntz.is_err());
+        assert!(result_ntz.unwrap_err().to_string().contains(&expected_msg));
+
+        let result_ltz = TimestampLtz::from_millis_nanos(1000, MAX_NANO_OF_MILLISECOND + 1);
+        assert!(result_ltz.is_err());
+        assert!(result_ltz.unwrap_err().to_string().contains(&expected_msg));
+
+        // Negative
+        let result_ntz = TimestampNtz::from_millis_nanos(1000, -1);
+        assert!(result_ntz.is_err());
+        assert!(result_ntz.unwrap_err().to_string().contains(&expected_msg));
+
+        let result_ltz = TimestampLtz::from_millis_nanos(1000, -1);
+        assert!(result_ltz.is_err());
+        assert!(result_ltz.unwrap_err().to_string().contains(&expected_msg));
     }
 }

@@ -17,13 +17,13 @@
 
 use crate::BucketId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
-use crate::client::{ResultHandle, WriteRecord};
+use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
-use crate::error::Result;
-use crate::metadata::{DataType, TablePath};
+use crate::error::{Error, Result};
+use crate::metadata::{DataType, KvFormat, TablePath};
 use crate::record::MemoryLogRecordsArrowBuilder;
+use crate::record::kv::KvRecordBatchBuilder;
 use bytes::Bytes;
-use parking_lot::Mutex;
 use std::cmp::max;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -92,18 +92,28 @@ impl InnerWriteBatch {
 
 pub enum WriteBatch {
     ArrowLog(ArrowLogWriteBatch),
+    Kv(KvWriteBatch),
 }
 
 impl WriteBatch {
     pub fn inner_batch(&self) -> &InnerWriteBatch {
         match self {
             WriteBatch::ArrowLog(batch) => &batch.write_batch,
+            WriteBatch::Kv(batch) => &batch.write_batch,
+        }
+    }
+
+    pub fn inner_batch_mut(&mut self) -> &mut InnerWriteBatch {
+        match self {
+            WriteBatch::ArrowLog(batch) => &mut batch.write_batch,
+            WriteBatch::Kv(batch) => &mut batch.write_batch,
         }
     }
 
     pub fn try_append(&mut self, write_record: &WriteRecord) -> Result<Option<ResultHandle>> {
         match self {
             WriteBatch::ArrowLog(batch) => batch.try_append(write_record),
+            WriteBatch::Kv(batch) => batch.try_append(write_record),
         }
     }
 
@@ -111,11 +121,13 @@ impl WriteBatch {
         self.inner_batch().waited_time_ms(now)
     }
 
-    pub fn close(&mut self) {
+    pub fn close(&mut self) -> Result<()> {
         match self {
             WriteBatch::ArrowLog(batch) => {
                 batch.close();
+                Ok(())
             }
+            WriteBatch::Kv(batch) => batch.close(),
         }
     }
 
@@ -127,20 +139,18 @@ impl WriteBatch {
     pub fn is_closed(&self) -> bool {
         match self {
             WriteBatch::ArrowLog(batch) => batch.is_closed(),
+            WriteBatch::Kv(batch) => batch.is_closed(),
         }
     }
 
     pub fn drained(&mut self, now_ms: i64) {
-        match self {
-            WriteBatch::ArrowLog(batch) => {
-                batch.write_batch.drained(now_ms);
-            }
-        }
+        self.inner_batch_mut().drained(now_ms);
     }
 
-    pub fn build(&self) -> Result<Bytes> {
+    pub fn build(&mut self) -> Result<Bytes> {
         match self {
             WriteBatch::ArrowLog(batch) => batch.build(),
+            WriteBatch::Kv(batch) => batch.build(),
         }
     }
 
@@ -172,7 +182,7 @@ impl WriteBatch {
 pub struct ArrowLogWriteBatch {
     pub write_batch: InnerWriteBatch,
     pub arrow_builder: MemoryLogRecordsArrowBuilder,
-    built_records: Mutex<Option<Bytes>>,
+    built_records: Option<Bytes>,
 }
 
 impl ArrowLogWriteBatch {
@@ -196,7 +206,7 @@ impl ArrowLogWriteBatch {
                 to_append_record_batch,
                 arrow_compression_info,
             ),
-            built_records: Mutex::new(None),
+            built_records: None,
         }
     }
 
@@ -218,13 +228,12 @@ impl ArrowLogWriteBatch {
         }
     }
 
-    pub fn build(&self) -> Result<Bytes> {
-        let mut cached = self.built_records.lock();
-        if let Some(bytes) = cached.as_ref() {
+    pub fn build(&mut self) -> Result<Bytes> {
+        if let Some(bytes) = &self.built_records {
             return Ok(bytes.clone());
         }
         let bytes = Bytes::from(self.arrow_builder.build()?);
-        *cached = Some(bytes.clone());
+        self.built_records = Some(bytes.clone());
         Ok(bytes)
     }
 
@@ -234,6 +243,96 @@ impl ArrowLogWriteBatch {
 
     pub fn close(&mut self) {
         self.arrow_builder.close()
+    }
+}
+
+pub struct KvWriteBatch {
+    write_batch: InnerWriteBatch,
+    kv_batch_builder: KvRecordBatchBuilder,
+    target_columns: Option<Vec<usize>>,
+    schema_id: i32,
+}
+
+impl KvWriteBatch {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        batch_id: i64,
+        table_path: TablePath,
+        schema_id: i32,
+        write_limit: usize,
+        kv_format: KvFormat,
+        bucket_id: BucketId,
+        target_columns: Option<Vec<usize>>,
+        create_ms: i64,
+    ) -> Self {
+        let base = InnerWriteBatch::new(batch_id, table_path, create_ms, bucket_id);
+        Self {
+            write_batch: base,
+            kv_batch_builder: KvRecordBatchBuilder::new(schema_id, write_limit, kv_format),
+            target_columns,
+            schema_id,
+        }
+    }
+
+    pub fn try_append(&mut self, write_record: &WriteRecord) -> Result<Option<ResultHandle>> {
+        let kv_write_record = match &write_record.record {
+            Record::Kv(record) => record,
+            _ => {
+                return Err(Error::UnsupportedOperation {
+                    message: "Only KvRecord to append to KvWriteBatch ".to_string(),
+                });
+            }
+        };
+
+        let key = kv_write_record.key;
+
+        if self.schema_id != write_record.schema_id {
+            return Err(Error::UnexpectedError {
+                message: format!(
+                    "schema id {} of the write record to append is not the same as the current schema id {} in the batch.",
+                    write_record.schema_id, self.schema_id
+                ),
+                source: None,
+            });
+        };
+
+        if self.target_columns.as_deref() != kv_write_record.target_columns {
+            return Err(Error::UnexpectedError {
+                message: format!(
+                    "target columns {:?} of the write record to append are not the same as the current target columns {:?} in the batch.",
+                    kv_write_record.target_columns,
+                    self.target_columns.as_deref()
+                ),
+                source: None,
+            });
+        }
+
+        let row = kv_write_record.compacted_row.as_ref();
+
+        if self.is_closed() || !self.kv_batch_builder.has_room_for_row(key, row) {
+            Ok(None)
+        } else {
+            // append successfully
+            self.kv_batch_builder
+                .append_row(key, row)
+                .map_err(|e| Error::UnexpectedError {
+                    message: "Failed to append row to KvWriteBatch".to_string(),
+                    source: Some(Box::new(e)),
+                })?;
+            Ok(Some(ResultHandle::new(self.write_batch.results.receiver())))
+        }
+    }
+
+    pub fn build(&mut self) -> Result<Bytes> {
+        self.kv_batch_builder.build()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.kv_batch_builder.is_closed()
+    }
+
+    pub fn close(&mut self) -> Result<()> {
+        self.kv_batch_builder.close()
     }
 }
 

@@ -119,6 +119,34 @@ message PbProduceLogRespForBucket {
   optional int64 base_offset = 5;
 }
 
+// put kv request and response
+message PutKvRequest {
+  required int32 acks = 1;
+  required int64 table_id = 2;
+  required int32 timeout_ms = 3;
+  // the indexes for the columns to write,
+  // if empty, means write all columns
+  repeated int32 target_columns = 4 [packed = true];
+  repeated PbPutKvReqForBucket buckets_req = 5;
+}
+
+message PutKvResponse {
+  repeated PbPutKvRespForBucket buckets_resp = 1;
+}
+
+message PbPutKvReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required bytes records = 3;
+}
+
+message PbPutKvRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+}
+
 message CreateTableRequest {
   required PbTablePath table_path = 1;
   required bytes table_json = 2;

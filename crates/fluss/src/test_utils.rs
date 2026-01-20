@@ -212,8 +212,9 @@ pub(crate) fn build_log_record_bytes(values: Vec<i32>) -> Result<Vec<u8>> {
             compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
         },
     );
-    let record = WriteRecord::new(
+    let record = WriteRecord::for_append(
         table_path,
+        1,
         GenericRow {
             values: values.into_iter().map(Datum::Int32).collect(),
         },

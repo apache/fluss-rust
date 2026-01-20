@@ -408,8 +408,9 @@ mod tests {
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
         );
-        let record = WriteRecord::new(
+        let record = WriteRecord::for_append(
             table_path,
+            1,
             GenericRow {
                 values: vec![Datum::Int32(1)],
             },
