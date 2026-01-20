@@ -21,6 +21,7 @@ use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
 use crate::config::Config;
 use crate::metadata::TablePath;
+use bytes::Bytes;
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -90,8 +91,9 @@ impl WriterClient {
     pub async fn send(&self, record: &WriteRecord<'_>) -> Result<ResultHandle> {
         let table_path = &record.table_path;
         let cluster = self.metadata.get_cluster();
+        let bucket_key = record.bucket_key.as_ref();
 
-        let (bucket_assigner, bucket_id) = self.assign_bucket(table_path)?;
+        let (bucket_assigner, bucket_id) = self.assign_bucket(bucket_key, table_path)?;
 
         let mut result = self
             .accumulate
@@ -116,6 +118,7 @@ impl WriterClient {
     }
     fn assign_bucket(
         &self,
+        bucket_key: Option<&Bytes>,
         table_path: &Arc<TablePath>,
     ) -> Result<(Arc<Box<dyn BucketAssigner>>, i32)> {
         let cluster = self.metadata.get_cluster();
@@ -129,7 +132,7 @@ impl WriterClient {
                 assigner
             }
         };
-        let bucket_id = bucket_assigner.assign_bucket(None, &cluster)?;
+        let bucket_id = bucket_assigner.assign_bucket(bucket_key, &cluster)?;
         Ok((bucket_assigner, bucket_id))
     }
 

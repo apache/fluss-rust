@@ -37,6 +37,7 @@ use crate::client::table::upsert::TableUpsert;
 pub use append::{AppendWriter, TableAppend};
 pub use lookup::{LookupResult, Lookuper, TableLookup};
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
+pub use writer::{TableWriter, UpsertWriter};
 
 #[allow(dead_code)]
 pub struct FlussTable<'a> {

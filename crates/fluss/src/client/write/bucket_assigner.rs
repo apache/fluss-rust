@@ -20,6 +20,7 @@ use crate::cluster::Cluster;
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::TablePath;
+use bytes::Bytes;
 use rand::Rng;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -28,7 +29,7 @@ pub trait BucketAssigner: Sync + Send {
 
     fn on_new_batch(&self, cluster: &Cluster, prev_bucket_id: i32);
 
-    fn assign_bucket(&self, bucket_key: Option<&[u8]>, cluster: &Cluster) -> Result<i32>;
+    fn assign_bucket(&self, bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<i32>;
 }
 
 #[derive(Debug)]
@@ -94,7 +95,7 @@ impl BucketAssigner for StickyBucketAssigner {
         self.next_bucket(cluster, prev_bucket_id);
     }
 
-    fn assign_bucket(&self, _bucket_key: Option<&[u8]>, cluster: &Cluster) -> Result<i32> {
+    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<i32> {
         let bucket_id = self.current_bucket_id.load(Ordering::Relaxed);
         if bucket_id < 0 {
             Ok(self.next_bucket(cluster, bucket_id))
@@ -139,7 +140,7 @@ impl BucketAssigner for HashBucketAssigner {
         // do nothing
     }
 
-    fn assign_bucket(&self, bucket_key: Option<&[u8]>, _: &Cluster) -> Result<i32> {
+    fn assign_bucket(&self, bucket_key: Option<&Bytes>, _: &Cluster) -> Result<i32> {
         let key = bucket_key.ok_or_else(|| IllegalArgument {
             message: "no bucket key provided".to_string(),
         })?;
@@ -181,7 +182,7 @@ mod tests {
         let assigner = HashBucketAssigner::new(4, <dyn BucketingFunction>::of(None));
         let cluster = Cluster::default();
         let bucket = assigner
-            .assign_bucket(Some(b"key"), &cluster)
+            .assign_bucket(Some(&Bytes::from_static(b"key")), &cluster)
             .expect("bucket");
         assert!((0..4).contains(&bucket));
     }
