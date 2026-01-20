@@ -62,6 +62,7 @@ pub enum LogWriteRecord<'a> {
     RecordBatch(Arc<RecordBatch>),
 }
 
+#[derive(Clone)]
 pub enum RowBytes<'a> {
     Borrowed(&'a [u8]),
     Owned(Bytes),
