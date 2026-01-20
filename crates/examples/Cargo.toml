@@ -30,3 +30,7 @@ clap = { workspace = true }
 [[example]]
 name = "example-table"
 path = "src/example_table.rs"
+
+[[example]]
+name = "example-upsert-lookup"
+path = "src/example_kv_table.rs"

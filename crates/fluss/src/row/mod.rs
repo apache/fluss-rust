@@ -122,6 +122,7 @@ pub trait InternalRow {
     }
 }
 
+#[derive(Debug)]
 pub struct GenericRow<'a> {
     pub values: Vec<Datum<'a>>,
 }
