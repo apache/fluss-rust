@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::client::{WriteRecord, WriterClient};
-use crate::row::GenericRow;
+use crate::row::{GenericRow, InternalRow};
 use std::sync::Arc;
 
 use crate::error::Result;
 use crate::metadata::{TableInfo, TablePath};
 
-#[allow(dead_code)]
+#[allow(dead_code, async_fn_in_trait)]
 pub trait TableWriter {
     async fn flush(&self) -> Result<()>;
 }
@@ -32,11 +32,21 @@ pub trait AppendWriter: TableWriter {
     async fn append(&self, row: GenericRow) -> Result<()>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, async_fn_in_trait)]
 pub trait UpsertWriter: TableWriter {
-    async fn upsert(&self, row: GenericRow) -> Result<()>;
-    async fn delete(&self, row: GenericRow) -> Result<()>;
+    async fn upsert<R: InternalRow>(&mut self, row: &R) -> Result<UpsertResult>;
+    async fn delete<R: InternalRow>(&mut self, row: &R) -> Result<DeleteResult>;
 }
+
+/// The result of upserting a record
+/// Currently this is an empty struct to allow for compatible evolution in the future
+#[derive(Default)]
+pub struct UpsertResult;
+
+/// The result of deleting a record
+/// Currently this is an empty struct to allow for compatible evolution in the future
+#[derive(Default)]
+pub struct DeleteResult;
 
 #[allow(dead_code)]
 pub struct AbstractTableWriter {

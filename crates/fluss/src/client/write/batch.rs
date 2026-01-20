@@ -20,11 +20,12 @@ use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
-use crate::metadata::{DataType, KvFormat, TablePath};
+use crate::metadata::{KvFormat, RowType, TablePath};
 use crate::record::MemoryLogRecordsArrowBuilder;
 use crate::record::kv::KvRecordBatchBuilder;
 use bytes::Bytes;
 use std::cmp::max;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 #[allow(dead_code)]
@@ -192,7 +193,7 @@ impl ArrowLogWriteBatch {
         table_path: TablePath,
         schema_id: i32,
         arrow_compression_info: ArrowCompressionInfo,
-        row_type: &DataType,
+        row_type: &RowType,
         bucket_id: BucketId,
         create_ms: i64,
         to_append_record_batch: bool,
@@ -249,11 +250,12 @@ impl ArrowLogWriteBatch {
 pub struct KvWriteBatch {
     write_batch: InnerWriteBatch,
     kv_batch_builder: KvRecordBatchBuilder,
-    target_columns: Option<Vec<usize>>,
+    target_columns: Option<Arc<Vec<usize>>>,
     schema_id: i32,
 }
 
 impl KvWriteBatch {
+    pub const DEFAULT_WRITE_LIMIT: usize = 256;
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_id: i64,
@@ -262,7 +264,7 @@ impl KvWriteBatch {
         write_limit: usize,
         kv_format: KvFormat,
         bucket_id: BucketId,
-        target_columns: Option<Vec<usize>>,
+        target_columns: Option<Arc<Vec<usize>>>,
         create_ms: i64,
     ) -> Self {
         let base = InnerWriteBatch::new(batch_id, table_path, create_ms, bucket_id);
@@ -284,7 +286,7 @@ impl KvWriteBatch {
             }
         };
 
-        let key = kv_write_record.key;
+        let key = kv_write_record.key.as_ref();
 
         if self.schema_id != write_record.schema_id {
             return Err(Error::UnexpectedError {
@@ -296,7 +298,7 @@ impl KvWriteBatch {
             });
         };
 
-        if self.target_columns.as_deref() != kv_write_record.target_columns {
+        if self.target_columns != kv_write_record.target_columns {
             return Err(Error::UnexpectedError {
                 message: format!(
                     "target columns {:?} of the write record to append are not the same as the current target columns {:?} in the batch.",
@@ -307,14 +309,14 @@ impl KvWriteBatch {
             });
         }
 
-        let row = kv_write_record.compacted_row.as_ref();
+        let row_bytes = kv_write_record.row_bytes();
 
-        if self.is_closed() || !self.kv_batch_builder.has_room_for_row(key, row) {
+        if self.is_closed() || !self.kv_batch_builder.has_room_for_row(key, row_bytes) {
             Ok(None)
         } else {
             // append successfully
             self.kv_batch_builder
-                .append_row(key, row)
+                .append_row(key, row_bytes)
                 .map_err(|e| Error::UnexpectedError {
                     message: "Failed to append row to KvWriteBatch".to_string(),
                     source: Some(Box::new(e)),

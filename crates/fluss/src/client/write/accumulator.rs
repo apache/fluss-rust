@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::write::batch::WriteBatch::ArrowLog;
-use crate::client::write::batch::{ArrowLogWriteBatch, WriteBatch};
+use crate::client::write::batch::WriteBatch::{ArrowLog, Kv};
+use crate::client::write::batch::{ArrowLogWriteBatch, KvWriteBatch, WriteBatch};
 use crate::client::{LogWriteRecord, Record, ResultHandle, WriteRecord};
 use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::config::Config;
@@ -102,16 +102,29 @@ impl RecordAccumulator {
 
         let schema_id = table_info.schema_id;
 
-        let mut batch = ArrowLog(ArrowLogWriteBatch::new(
-            self.batch_id.fetch_add(1, Ordering::Relaxed),
-            table_path.as_ref().clone(),
-            schema_id,
-            arrow_compression_info,
-            row_type,
-            bucket_id,
-            current_time_ms(),
-            matches!(&record.record, Record::Log(LogWriteRecord::RecordBatch(_))),
-        ));
+        let mut batch: WriteBatch = match record.record() {
+            Record::Log(_) => ArrowLog(ArrowLogWriteBatch::new(
+                self.batch_id.fetch_add(1, Ordering::Relaxed),
+                table_path.as_ref().clone(),
+                schema_id,
+                arrow_compression_info,
+                row_type,
+                bucket_id,
+                current_time_ms(),
+                matches!(&record.record, Record::Log(LogWriteRecord::RecordBatch(_))),
+            )),
+            Record::Kv(kv_record) => Kv(KvWriteBatch::new(
+                self.batch_id.fetch_add(1, Ordering::Relaxed),
+                table_path.as_ref().clone(),
+                schema_id,
+                // TODO: Decide how to derive write limit in the absence of java's equivalent of PreAllocatedPagedOutputView
+                KvWriteBatch::DEFAULT_WRITE_LIMIT,
+                record.write_format.to_kv_format()?,
+                bucket_id,
+                kv_record.target_columns.clone(),
+                current_time_ms(),
+            )),
+        };
 
         let batch_id = batch.batch_id();
 
@@ -141,6 +154,8 @@ impl RecordAccumulator {
         abort_if_batch_full: bool,
     ) -> Result<RecordAppendResult> {
         let table_path = &record.table_path;
+
+        // TODO: Implement partitioning
 
         let dq = {
             let mut binding = self

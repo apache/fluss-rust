@@ -63,6 +63,18 @@ impl CompactedRowWriter {
         Bytes::copy_from_slice(&self.buffer[..self.position])
     }
 
+    /// Flushes writer's ByteMut, resetting writer's inner state and returns Byte of flushed state
+    pub fn flush_bytes(&mut self) -> Bytes {
+        let used = self.buffer.split_to(self.position);
+        self.position = self.header_size_in_bytes;
+        if self.buffer.len() < self.header_size_in_bytes {
+            self.buffer.resize(self.header_size_in_bytes.max(64), 0);
+        } else {
+            self.buffer[..self.header_size_in_bytes].fill(0);
+        }
+        used.freeze()
+    }
+
     fn ensure_capacity(&mut self, need_len: usize) {
         if (self.buffer.len() - self.position) < need_len {
             let new_len = cmp::max(self.buffer.len() * 2, self.buffer.len() + need_len);

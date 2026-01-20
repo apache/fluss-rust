@@ -20,6 +20,7 @@ use crate::error::Result;
 use crate::metadata::KvFormat;
 use std::fmt::Display;
 
+#[derive(Copy, Clone)]
 pub enum WriteFormat {
     ArrowLog,
     CompactedLog,
