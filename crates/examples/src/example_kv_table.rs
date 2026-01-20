@@ -16,7 +16,7 @@
 // under the License.
 
 use clap::Parser;
-use fluss::client::{FlussConnection, TableWriter, UpsertWriter};
+use fluss::client::{FlussConnection, UpsertWriter};
 use fluss::config::Config;
 use fluss::error::Result;
 use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
@@ -65,7 +65,6 @@ pub async fn main() -> Result<()> {
         upsert_writer.upsert(&row).await?;
         println!("Upserted: {row:?}");
     }
-    upsert_writer.flush().await?;
 
     println!("\n=== Looking up ===");
     let mut lookuper = table.new_lookup()?.create_lookuper()?;
@@ -86,7 +85,6 @@ pub async fn main() -> Result<()> {
     row.set_field(1, "Verso");
     row.set_field(2, 33i64);
     upsert_writer.upsert(&row).await?;
-    upsert_writer.flush().await?;
     println!("Updated: {row:?}");
 
     let result = lookuper.lookup(&make_key(1)).await?;
@@ -100,10 +98,7 @@ pub async fn main() -> Result<()> {
     println!("\n=== Deleting ===");
     let mut row = GenericRow::new();
     row.set_field(0, 2);
-    row.set_field(1, "");
-    row.set_field(2, 0i64);
     upsert_writer.delete(&row).await?;
-    upsert_writer.flush().await?;
     println!("Deleted: {row:?}");
 
     let result = lookuper.lookup(&make_key(2)).await?;
