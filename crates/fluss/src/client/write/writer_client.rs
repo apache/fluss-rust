@@ -103,7 +103,7 @@ impl WriterClient {
         if result.abort_record_for_new_batch {
             let prev_bucket_id = bucket_id;
             bucket_assigner.on_new_batch(&cluster, prev_bucket_id);
-            let bucket_id = bucket_assigner.assign_bucket(None, &cluster)?;
+            let bucket_id = bucket_assigner.assign_bucket(bucket_key, &cluster)?;
             result = self
                 .accumulate
                 .append(record, bucket_id, &cluster, false)
