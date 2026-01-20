@@ -19,6 +19,7 @@ use crate::client::broadcast;
 use crate::client::metadata::Metadata;
 use crate::client::write::batch::WriteBatch;
 use crate::client::{ReadyWriteBatch, RecordAccumulator};
+use crate::error::Error::UnexpectedError;
 use crate::error::{FlussError, Result};
 use crate::metadata::{TableBucket, TablePath};
 use crate::proto::{
@@ -242,13 +243,24 @@ impl Sender {
             }
             WriteBatch::Kv(kv_write_batch) => {
                 let target_columns = kv_write_batch.target_columns.clone();
-                for batch in request_batches.iter() {
-                    if let WriteBatch::Kv(kvb) = &batch.write_batch {
-                        if target_columns != kvb.target_columns {
-                            todo!("Target columns mismatch");
+                if let Some(batch) = request_batches.iter().next() {
+                    match &batch.write_batch {
+                        WriteBatch::ArrowLog(_) => {
+                            return Err(UnexpectedError {
+                                message: "Expecting KvWriteBatch but found ArrowLogWriteBatch"
+                                    .to_string(),
+                                source: None,
+                            });
                         }
-                    } else {
-                        todo!("Non KvWriteBatch found")
+                        WriteBatch::Kv(kvb) => {
+                            return Err(UnexpectedError {
+                                message: format!(
+                                    "All the write batches to make put kv request should have the same target columns, but got {:?} and {:?}.",
+                                    target_columns, kvb.target_columns
+                                ),
+                                source: None,
+                            });
+                        }
                     }
                 }
                 let cols = target_columns
