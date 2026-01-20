@@ -243,7 +243,7 @@ impl Sender {
             }
             WriteBatch::Kv(kv_write_batch) => {
                 let target_columns = kv_write_batch.target_columns();
-                if let Some(batch) = request_batches.iter().next() {
+                for batch in request_batches.iter().skip(1) {
                     match &batch.write_batch {
                         WriteBatch::ArrowLog(_) => {
                             return Err(UnexpectedError {
