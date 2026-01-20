@@ -188,14 +188,17 @@ impl Sender {
                 .filter_map(|bucket| records_by_bucket.remove(bucket))
                 .collect();
 
+            if request_batches.is_empty() {
+                continue;
+            }
+
             let write_request = match Self::build_write_request(
                 table_id,
                 acks,
                 self.max_request_timeout_ms,
                 &mut request_batches,
             ) {
-                Ok(None) => continue, // Skip empty batches
-                Ok(Some(req)) => req,
+                Ok(req) => req,
                 Err(e) => {
                     self.handle_batches_with_local_error(
                         request_batches,
@@ -230,11 +233,8 @@ impl Sender {
         acks: i16,
         timeout_ms: i32,
         request_batches: &mut [ReadyWriteBatch],
-    ) -> Result<Option<WriteRequest>> {
-        let first_batch = match request_batches.first() {
-            None => return Ok(None),
-            Some(b) => &b.write_batch,
-        };
+    ) -> Result<WriteRequest> {
+        let first_batch = &request_batches.first().unwrap().write_batch;
 
         let request = match first_batch {
             WriteBatch::ArrowLog(_) => {
@@ -273,7 +273,7 @@ impl Sender {
             }
         };
 
-        Ok(Some(request))
+        Ok(request)
     }
 
     async fn send_and_handle_response(
