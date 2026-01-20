@@ -1464,7 +1464,8 @@ mod tests {
     impl ScannerTestEnv {
         fn new() -> Self {
             let table_path = default_table_path();
-            let table_info = build_table_info(table_path.clone(), DEFAULT_TABLE_ID, DEFAULT_BUCKETS);
+            let table_info =
+                build_table_info(table_path.clone(), DEFAULT_TABLE_ID, DEFAULT_BUCKETS);
             let cluster = build_cluster_arc(&table_path, DEFAULT_TABLE_ID, DEFAULT_BUCKETS);
             Self::with_table_info_and_cluster(table_info, cluster)
         }

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
 use crate::client::{CompletedFetch, FetchErrorContext, WriteRecord};
+use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
 use crate::compression::{
     ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
 };
@@ -185,8 +185,7 @@ fn build_single_int_record_batch() -> RecordBatch {
         ArrowDataType::Int32,
         false,
     )]));
-    RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])
-        .expect("record batch")
+    RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))]).expect("record batch")
 }
 
 pub(crate) fn build_single_int_scan_record() -> ScanRecord {

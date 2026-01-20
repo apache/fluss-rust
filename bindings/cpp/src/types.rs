@@ -578,11 +578,7 @@ mod tests {
 
     #[test]
     fn core_scan_records_to_ffi_maps_records() {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "id",
-            DataType::Int32,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![7]))])
             .expect("record batch");
         let row = ColumnarRow::new(Arc::new(batch));

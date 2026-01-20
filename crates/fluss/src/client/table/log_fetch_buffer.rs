@@ -661,8 +661,8 @@ mod tests {
         TestCompletedFetch, build_read_context_for_int32, build_single_int_scan_record,
     };
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     struct ErrorPendingFetch {
