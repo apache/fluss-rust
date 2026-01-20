@@ -250,7 +250,7 @@ impl ArrowLogWriteBatch {
 pub struct KvWriteBatch {
     write_batch: InnerWriteBatch,
     kv_batch_builder: KvRecordBatchBuilder,
-    pub target_columns: Option<Arc<Vec<usize>>>,
+    target_columns: Option<Arc<Vec<usize>>>,
     schema_id: i32,
 }
 
@@ -335,6 +335,10 @@ impl KvWriteBatch {
 
     pub fn close(&mut self) -> Result<()> {
         self.kv_batch_builder.close()
+    }
+
+    pub fn target_columns(&self) -> &Option<Arc<Vec<usize>>> {
+        &self.target_columns
     }
 }
 

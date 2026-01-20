@@ -242,7 +242,7 @@ impl Sender {
                 WriteRequest::ProduceLog(req)
             }
             WriteBatch::Kv(kv_write_batch) => {
-                let target_columns = kv_write_batch.target_columns.clone();
+                let target_columns = kv_write_batch.target_columns();
                 if let Some(batch) = request_batches.iter().next() {
                     match &batch.write_batch {
                         WriteBatch::ArrowLog(_) => {
@@ -253,11 +253,12 @@ impl Sender {
                             });
                         }
                         WriteBatch::Kv(kvb) => {
-                            if target_columns != kvb.target_columns {
+                            if target_columns != kvb.target_columns() {
                                 return Err(UnexpectedError {
                                     message: format!(
                                         "All the write batches to make put kv request should have the same target columns, but got {:?} and {:?}.",
-                                        target_columns, kvb.target_columns
+                                        target_columns,
+                                        kvb.target_columns()
                                     ),
                                     source: None,
                                 });
@@ -266,6 +267,7 @@ impl Sender {
                     }
                 }
                 let cols = target_columns
+                    .clone()
                     .map(|arc| arc.iter().map(|&c| c as i32).collect())
                     .unwrap_or_default();
                 let req = PutKvRequest::new(table_id, acks, timeout_ms, cols, request_batches)?;
