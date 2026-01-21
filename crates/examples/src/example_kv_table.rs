@@ -69,7 +69,7 @@ pub async fn main() -> Result<()> {
     println!("\n=== Looking up ===");
     let mut lookuper = table.new_lookup()?.create_lookuper()?;
 
-    for id in 1..=2 {
+    for id in 1..=3 {
         let result = lookuper.lookup(&make_key(id)).await?;
         let row = result.get_single_row()?.unwrap();
         println!(
@@ -98,6 +98,8 @@ pub async fn main() -> Result<()> {
     println!("\n=== Deleting ===");
     let mut row = GenericRow::new();
     row.set_field(0, 2);
+    row.set_field(1, "");
+    row.set_field(2, 0i64);
     upsert_writer.delete(&row).await?;
     println!("Deleted: {row:?}");
 

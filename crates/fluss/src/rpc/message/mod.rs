@@ -57,6 +57,7 @@ pub use list_offsets::*;
 pub use list_tables::*;
 pub use lookup::*;
 pub use produce_log::*;
+pub use put_kv::*;
 pub use table_exists::*;
 pub use update_metadata::*;
 
