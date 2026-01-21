@@ -1061,7 +1061,7 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataField, DataTypes};
+    use crate::metadata::{DataField, DataTypes, RowType};
     use crate::test_utils::build_log_record_bytes;
     use arrow::array::Int32Array;
     use bytes::Bytes;
@@ -1233,7 +1233,7 @@ mod tests {
 
     #[test]
     fn project_schema_rejects_invalid_indices() {
-        let row_type = DataTypes::row(vec![
+        let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
@@ -1245,7 +1245,7 @@ mod tests {
 
     #[test]
     fn record_batch_for_remote_log_rejects_invalid_ipc() -> Result<()> {
-        let row_type = DataTypes::row(vec![DataField::new(
+        let row_type = RowType::new(vec![DataField::new(
             "id".to_string(),
             DataTypes::int(),
             None,
@@ -1286,7 +1286,7 @@ mod tests {
         let batch_bytes = build_log_record_bytes(vec![10, 20, 30])?;
         let batch = LogRecordBatch::new(Bytes::from(batch_bytes));
 
-        let row_type = DataTypes::row(vec![
+        let row_type = RowType::new(vec![
             DataField::new("c0".to_string(), DataTypes::int(), None),
             DataField::new("c1".to_string(), DataTypes::int(), None),
             DataField::new("c2".to_string(), DataTypes::int(), None),

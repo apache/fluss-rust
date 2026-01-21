@@ -377,6 +377,44 @@ impl RemotePendingFetch {
     }
 }
 
+impl PendingFetch for RemotePendingFetch {
+    fn table_bucket(&self) -> &TableBucket {
+        &self.segment.table_bucket
+    }
+
+    fn is_completed(&self) -> bool {
+        self.download_future.is_done()
+    }
+
+    fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
+        // Get the file path (this should only be called when is_completed() returns true)
+        let mut data = self.download_future.get_remote_log_bytes()?;
+
+        // Slice the data if needed
+        let data = if self.pos_in_log_segment > 0 {
+            data.split_off(self.pos_in_log_segment as usize)
+        } else {
+            data
+        };
+
+        let size_in_bytes = data.len();
+
+        let log_record_batch = LogRecordsBatches::new(data);
+
+        // Create DefaultCompletedFetch from the data
+        let completed_fetch = DefaultCompletedFetch::new(
+            self.segment.table_bucket,
+            log_record_batch,
+            size_in_bytes,
+            self.read_context,
+            self.fetch_offset,
+            self.high_watermark,
+        );
+
+        Ok(Box::new(completed_fetch))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,7 +422,7 @@ mod tests {
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
-    use crate::metadata::{DataField, DataTypes, TablePath};
+    use crate::metadata::{DataField, DataTypes, RowType, TablePath};
     use crate::record::{MemoryLogRecordsArrowBuilder, to_arrow_schema};
     use crate::row::{Datum, GenericRow};
     use std::collections::HashMap;
@@ -393,7 +431,7 @@ mod tests {
     use tokio::time::{Duration, timeout};
 
     fn build_log_bytes() -> Result<Vec<u8>> {
-        let row_type = DataTypes::row(vec![DataField::new(
+        let row_type = RowType::new(vec![DataField::new(
             "id".to_string(),
             DataTypes::int(),
             None,
@@ -602,7 +640,7 @@ mod tests {
         })
         .await;
 
-        let row_type = DataTypes::row(vec![DataField::new(
+        let row_type = RowType::new(vec![DataField::new(
             "id".to_string(),
             DataTypes::int(),
             None,
@@ -623,43 +661,5 @@ mod tests {
         let records = completed.fetch_records(10)?;
         assert_eq!(records.len(), 1);
         Ok(())
-    }
-}
-
-impl PendingFetch for RemotePendingFetch {
-    fn table_bucket(&self) -> &TableBucket {
-        &self.segment.table_bucket
-    }
-
-    fn is_completed(&self) -> bool {
-        self.download_future.is_done()
-    }
-
-    fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
-        // Get the file path (this should only be called when is_completed() returns true)
-        let mut data = self.download_future.get_remote_log_bytes()?;
-
-        // Slice the data if needed
-        let data = if self.pos_in_log_segment > 0 {
-            data.split_off(self.pos_in_log_segment as usize)
-        } else {
-            data
-        };
-
-        let size_in_bytes = data.len();
-
-        let log_record_batch = LogRecordsBatches::new(data);
-
-        // Create DefaultCompletedFetch from the data
-        let completed_fetch = DefaultCompletedFetch::new(
-            self.segment.table_bucket,
-            log_record_batch,
-            size_in_bytes,
-            self.read_context,
-            self.fetch_offset,
-            self.high_watermark,
-        );
-
-        Ok(Box::new(completed_fetch))
     }
 }

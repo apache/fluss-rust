@@ -22,7 +22,7 @@ use crate::compression::{
 };
 use crate::error::{ApiError, Error, Result};
 use crate::metadata::{
-    DataField, DataTypes, Schema, TableBucket, TableDescriptor, TableInfo, TablePath,
+    DataField, DataTypes, RowType, Schema, TableBucket, TableDescriptor, TableInfo, TablePath,
 };
 use crate::record::{MemoryLogRecordsArrowBuilder, ReadContext, ScanRecord, to_arrow_schema};
 use crate::row::{ColumnarRow, Datum, GenericRow};
@@ -171,7 +171,7 @@ pub(crate) fn build_cluster_with_coordinator_arc(
 }
 
 pub(crate) fn build_read_context_for_int32() -> ReadContext {
-    let row_type = DataTypes::row(vec![DataField::new(
+    let row_type = RowType::new(vec![DataField::new(
         "id".to_string(),
         DataTypes::int(),
         None,
@@ -200,7 +200,7 @@ pub(crate) fn build_log_record_bytes(values: Vec<i32>) -> Result<Vec<u8>> {
         .enumerate()
         .map(|(idx, _)| DataField::new(format!("c{idx}"), DataTypes::int(), None))
         .collect::<Vec<_>>();
-    let row_type = DataTypes::row(fields);
+    let row_type = RowType::new(fields);
     let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
     let mut builder = MemoryLogRecordsArrowBuilder::new(
         1,

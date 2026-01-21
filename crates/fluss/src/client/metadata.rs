@@ -323,7 +323,7 @@ mod tests {
         let cluster = build_cluster(&table_path, 1);
         let metadata = Metadata::new_for_test(cluster);
         metadata
-            .check_and_update_table_metadata(&[table_path.clone()])
+            .check_and_update_table_metadata(std::slice::from_ref(&table_path))
             .await?;
         let cluster = metadata.get_cluster();
         assert!(cluster.opt_get_table(&table_path).is_some());
@@ -373,7 +373,7 @@ mod tests {
             .insert_connection_for_test(&server, connection);
 
         metadata
-            .check_and_update_table_metadata(&[table_path.clone()])
+            .check_and_update_table_metadata(std::slice::from_ref(&table_path))
             .await?;
         assert!(metadata.get_cluster().opt_get_table(&table_path).is_some());
         handle.abort();
