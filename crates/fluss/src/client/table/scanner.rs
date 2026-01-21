@@ -19,10 +19,12 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use log::{debug, warn};
 use parking_lot::{Mutex, RwLock};
-use std::collections::{HashMap, HashSet};
-use std::slice::from_ref;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    slice::from_ref,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tempfile::TempDir;
 
 use crate::client::connection::FlussConnection;
@@ -294,7 +296,7 @@ impl LogScannerInner {
     }
 
     async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let deadline = start + timeout;
 
         loop {
@@ -309,7 +311,7 @@ impl LogScannerInner {
             }
 
             // No data available, check if we should wait
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             if now >= deadline {
                 // Timeout reached, return empty result
                 return Ok(ScanRecords::new(HashMap::new()));
@@ -378,7 +380,7 @@ impl LogScannerInner {
     }
 
     async fn poll_batches(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let deadline = start + timeout;
 
         loop {
@@ -389,7 +391,7 @@ impl LogScannerInner {
                 return Ok(batches);
             }
 
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             if now >= deadline {
                 return Ok(Vec::new());
             }

@@ -46,7 +46,10 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use crc32c::crc32c;
 use std::{
-    io::{Cursor, Seek, SeekFrom, Write},
+    collections::HashMap,
+    fs::File,
+    io::{Cursor, Read, Seek, SeekFrom, Write},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -489,36 +492,19 @@ pub trait ToArrow {
     fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()>;
 }
 
-/// Abstract source of log record data.
-/// Allows streaming from files or in-memory buffers.
-pub trait LogRecordsSource: Send + Sync {
-    /// Read batch header at given position.
-    /// Returns (base_offset, batch_size) tuple.
-    fn read_batch_header(&self, pos: usize) -> Result<(i64, usize)>;
-
-    /// Read full batch data at given position with given size.
-    /// Returns Bytes that can be zero-copy sliced.
-    fn read_batch_data(&self, pos: usize, size: usize) -> Result<Bytes>;
-
-    /// Total size of the source in bytes.
-    fn total_size(&self) -> usize;
-}
-
-/// In-memory implementation of LogRecordsSource.
+/// In-memory log record source.
 /// Used for local tablet server fetches (existing path).
-pub struct MemorySource {
+struct MemorySource {
     data: Bytes,
 }
 
 impl MemorySource {
-    pub fn new(data: Vec<u8>) -> Self {
+    fn new(data: Vec<u8>) -> Self {
         Self {
             data: Bytes::from(data),
         }
     }
-}
 
-impl LogRecordsSource for MemorySource {
     fn read_batch_header(&self, pos: usize) -> Result<(i64, usize)> {
         if pos + LOG_OVERHEAD > self.data.len() {
             return Err(Error::UnexpectedError {
@@ -565,7 +551,7 @@ impl LogRecordsSource for MemorySource {
 /// RAII guard that deletes a file when dropped.
 /// Used to ensure file deletion happens AFTER the file handle is closed.
 struct FileCleanupGuard {
-    file_path: std::path::PathBuf,
+    file_path: PathBuf,
 }
 
 impl Drop for FileCleanupGuard {
@@ -583,14 +569,14 @@ impl Drop for FileCleanupGuard {
     }
 }
 
-/// File-backed implementation of LogRecordsSource.
+/// File-backed log record source.
 /// Used for remote log segments downloaded to local disk.
 /// Streams data on-demand instead of loading entire file into memory.
 ///
 /// Uses Mutex<File> with seek + read_exact for cross-platform compatibility.
 /// Access pattern is sequential iteration (single consumer), so mutex overhead is negligible.
-pub struct FileSource {
-    file: Mutex<std::fs::File>,
+struct FileSource {
+    file: Mutex<File>,
     file_size: usize,
     base_offset: usize,
     _cleanup: Option<FileCleanupGuard>, // Drops AFTER file (field order matters!)
@@ -598,7 +584,7 @@ pub struct FileSource {
 
 impl FileSource {
     /// Create a new FileSource without automatic cleanup.
-    pub fn new(file: std::fs::File, base_offset: usize) -> Result<Self> {
+    pub fn new(file: File, base_offset: usize) -> Result<Self> {
         let file_size = file.metadata()?.len() as usize;
 
         // Validate base_offset to prevent underflow in total_size()
@@ -622,11 +608,7 @@ impl FileSource {
 
     /// Create a new FileSource that will delete the file when dropped.
     /// This is used for remote log files that need cleanup.
-    pub fn new_with_cleanup(
-        file: std::fs::File,
-        base_offset: usize,
-        file_path: std::path::PathBuf,
-    ) -> Result<Self> {
+    fn new_with_cleanup(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
         let file_size = file.metadata()?.len() as usize;
 
         // Validate base_offset to prevent underflow in total_size()
@@ -651,15 +633,12 @@ impl FileSource {
     /// Read data at a specific position using seek + read_exact.
     /// This is cross-platform and adequate for sequential access patterns.
     fn read_at(&self, pos: u64, buf: &mut [u8]) -> Result<()> {
-        use std::io::Read;
         let mut file = self.file.lock();
         file.seek(SeekFrom::Start(pos))?;
         file.read_exact(buf)?;
         Ok(())
     }
-}
 
-impl LogRecordsSource for FileSource {
     fn read_batch_header(&self, pos: usize) -> Result<(i64, usize)> {
         let actual_pos = self.base_offset + pos;
         if actual_pos + LOG_OVERHEAD > self.file_size {
@@ -709,8 +688,37 @@ impl LogRecordsSource for FileSource {
     }
 }
 
+/// Enum for different log record sources.
+pub enum LogRecordsSource {
+    Memory(MemorySource),
+    File(FileSource),
+}
+
+impl LogRecordsSource {
+    fn read_batch_header(&self, pos: usize) -> Result<(i64, usize)> {
+        match self {
+            Self::Memory(s) => s.read_batch_header(pos),
+            Self::File(s) => s.read_batch_header(pos),
+        }
+    }
+
+    fn read_batch_data(&self, pos: usize, size: usize) -> Result<Bytes> {
+        match self {
+            Self::Memory(s) => s.read_batch_data(pos, size),
+            Self::File(s) => s.read_batch_data(pos, size),
+        }
+    }
+
+    fn total_size(&self) -> usize {
+        match self {
+            Self::Memory(s) => s.total_size(),
+            Self::File(s) => s.total_size(),
+        }
+    }
+}
+
 pub struct LogRecordsBatches {
-    source: Box<dyn LogRecordsSource>,
+    source: LogRecordsSource,
     current_pos: usize,
     remaining_bytes: usize,
 }
@@ -720,7 +728,7 @@ impl LogRecordsBatches {
     pub fn new(data: Vec<u8>) -> Self {
         let remaining_bytes = data.len();
         Self {
-            source: Box::new(MemorySource::new(data)),
+            source: LogRecordsSource::Memory(MemorySource::new(data)),
             current_pos: 0,
             remaining_bytes,
         }
@@ -728,11 +736,11 @@ impl LogRecordsBatches {
 
     /// Create from file.
     /// Enables streaming without loading entire file into memory.
-    pub fn from_file(file: std::fs::File, base_offset: usize) -> Result<Self> {
+    pub fn from_file(file: File, base_offset: usize) -> Result<Self> {
         let source = FileSource::new(file, base_offset)?;
         let remaining_bytes = source.total_size();
         Ok(Self {
-            source: Box::new(source),
+            source: LogRecordsSource::File(source),
             current_pos: 0,
             remaining_bytes,
         })
@@ -742,21 +750,21 @@ impl LogRecordsBatches {
     /// The file will be deleted when the LogRecordsBatches is dropped.
     /// This ensures file is closed before deletion.
     pub fn from_file_with_cleanup(
-        file: std::fs::File,
+        file: File,
         base_offset: usize,
-        file_path: std::path::PathBuf,
+        file_path: PathBuf,
     ) -> Result<Self> {
         let source = FileSource::new_with_cleanup(file, base_offset, file_path)?;
         let remaining_bytes = source.total_size();
         Ok(Self {
-            source: Box::new(source),
+            source: LogRecordsSource::File(source),
             current_pos: 0,
             remaining_bytes,
         })
     }
 
     /// Create from any source (for testing).
-    pub fn from_source(source: Box<dyn LogRecordsSource>) -> Self {
+    pub fn from_source(source: LogRecordsSource) -> Self {
         let remaining_bytes = source.total_size();
         Self {
             source,
@@ -1328,7 +1336,7 @@ impl ReadContext {
             &body_buffer,
             batch_metadata,
             resolve_schema,
-            &std::collections::HashMap::new(),
+            &HashMap::new(),
             None,
             &version,
         )?;
@@ -1368,7 +1376,7 @@ impl ReadContext {
             &body_buffer,
             batch_metadata,
             self.full_schema.clone(),
-            &std::collections::HashMap::new(),
+            &HashMap::new(),
             None,
             &version,
         )?;
@@ -1776,7 +1784,6 @@ mod tests {
 
     #[test]
     fn test_file_source_streaming() -> Result<()> {
-        use std::io::Write;
         use tempfile::NamedTempFile;
 
         // Test 1: Basic file reads work
@@ -1785,7 +1792,7 @@ mod tests {
         tmp_file.write_all(&test_data)?;
         tmp_file.flush()?;
 
-        let file = std::fs::File::open(tmp_file.path())?;
+        let file = File::open(tmp_file.path())?;
         let source = FileSource::new(file, 0)?;
 
         // Read full data
@@ -1804,7 +1811,7 @@ mod tests {
         tmp_file2.write_all(&actual_data)?;
         tmp_file2.flush()?;
 
-        let file2 = std::fs::File::open(tmp_file2.path())?;
+        let file2 = File::open(tmp_file2.path())?;
         let source2 = FileSource::new(file2, 100)?; // Skip first 100 bytes
 
         assert_eq!(source2.total_size(), 5); // Only counts data after offset
@@ -1957,7 +1964,6 @@ mod tests {
         };
         use crate::metadata::TablePath;
         use crate::row::GenericRow;
-        use std::io::Write;
         use tempfile::NamedTempFile;
 
         // Integration test: Real log record batch streamed from file
@@ -1997,7 +2003,7 @@ mod tests {
         tmp_file.flush()?;
 
         // Create file-backed LogRecordsBatches (should stream, not load all into memory)
-        let file = std::fs::File::open(tmp_file.path())?;
+        let file = File::open(tmp_file.path())?;
         let mut batches = LogRecordsBatches::from_file(file, 0)?;
 
         // Iterate through batches (should work just like in-memory)

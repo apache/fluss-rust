@@ -19,13 +19,17 @@ use crate::io::{FileIO, Storage};
 use crate::metadata::TableBucket;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
 use parking_lot::{Mutex, RwLock};
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
-use std::future::Future;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{
+    cmp::{Ordering, Reverse, min},
+    collections::{BinaryHeap, HashMap},
+    env,
+    future::Future,
+    io, mem,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
@@ -211,7 +215,7 @@ impl RemoteLogDownloadRequest {
 // Primary: Java semantics (timestamp cross-bucket, offset within-bucket)
 // Tie-breakers: table_bucket fields (table_id, partition_id, bucket_id), then segment_id
 impl Ord for RemoteLogDownloadRequest {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         if self.segment.table_bucket == other.segment.table_bucket {
             // Same bucket: order by start_offset (ascending - earlier segments first)
             self.segment
@@ -248,14 +252,14 @@ impl Ord for RemoteLogDownloadRequest {
 }
 
 impl PartialOrd for RemoteLogDownloadRequest {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl PartialEq for RemoteLogDownloadRequest {
     fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -637,7 +641,7 @@ impl RemoteLogDownloadFuture {
             // This also ensures that any callbacks registered after this point will be called immediately
             let callbacks: Vec<CompletionCallback> = {
                 let mut callbacks_guard = callbacks_clone.lock();
-                std::mem::take(&mut *callbacks_guard)
+                mem::take(&mut *callbacks_guard)
             };
             for callback in callbacks {
                 callback();
@@ -890,7 +894,7 @@ impl RemoteLogDownloader {
         let (op, relative_path) = storage.create(remote_path)?;
 
         // Timeout for remote storage operations (30 seconds)
-        const REMOTE_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        const REMOTE_OP_TIMEOUT: Duration = Duration::from_secs(30);
 
         // Get file metadata to know the size with timeout
         let meta = op.stat(relative_path).await?;
@@ -907,7 +911,7 @@ impl RemoteLogDownloader {
         let total_chunks = file_size.div_ceil(CHUNK_SIZE);
 
         while offset < file_size {
-            let end = std::cmp::min(offset + CHUNK_SIZE, file_size);
+            let end = min(offset + CHUNK_SIZE, file_size);
             let range = offset..end;
             chunk_count += 1;
 
@@ -1035,9 +1039,9 @@ mod tests {
                     })
                 } else {
                     let fake_data = vec![1, 2, 3, 4];
-                    let temp_dir = std::env::temp_dir();
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
+                    let temp_dir = env::temp_dir();
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
                         .unwrap()
                         .as_nanos();
                     let file_path =
@@ -1159,7 +1163,7 @@ mod tests {
             .collect();
 
         // Wait for exactly 2 to start
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             fake_fetcher.in_flight(),
             2,
@@ -1168,7 +1172,7 @@ mod tests {
 
         // Release one
         fake_fetcher.release_one();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Max should never exceed 2
         assert_eq!(
@@ -1206,7 +1210,7 @@ mod tests {
             .collect();
 
         // Wait for first 2 to complete
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
             if futures.iter().filter(|f| f.is_done()).count() >= 2 {
                 break;
@@ -1214,11 +1218,11 @@ mod tests {
             if tokio::time::Instant::now() > deadline {
                 panic!("Timeout waiting for first 2 downloads");
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         // Verify 3rd and 4th are blocked (prefetch limit)
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             futures.iter().filter(|f| f.is_done()).count(),
             2,
@@ -1231,7 +1235,7 @@ mod tests {
         drop(futures);
 
         // 3rd and 4th should now complete
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
             if f3.is_done() && f4.is_done() {
                 break;
@@ -1239,7 +1243,7 @@ mod tests {
             if tokio::time::Instant::now() > deadline {
                 panic!("Timeout after permit release");
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -1257,7 +1261,7 @@ mod tests {
         let future = downloader.request_remote_log("dir", &seg);
 
         // Should succeed after retries
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             if future.is_done() {
                 break;
@@ -1265,7 +1269,7 @@ mod tests {
             if tokio::time::Instant::now() > deadline {
                 panic!("Timeout waiting for retry to succeed");
             }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
         assert!(future.is_done(), "Should succeed after retries");
@@ -1277,11 +1281,11 @@ mod tests {
             RemoteLogDownloader::new_with_fetcher(fake_fetcher2.clone(), 10, 1).unwrap();
 
         let future2 = downloader2.request_remote_log("dir", &seg2);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Drop to cancel
         drop(future2);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(
             fake_fetcher2.in_flight(),

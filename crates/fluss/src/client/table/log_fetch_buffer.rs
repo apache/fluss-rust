@@ -26,10 +26,14 @@ use crate::metadata::TableBucket;
 use crate::record::{
     LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
 };
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +113,7 @@ impl LogFetchBuffer {
     /// Wait for the buffer to become non-empty, with timeout.
     /// Returns true if data became available, false if timeout.
     pub async fn await_not_empty(&self, timeout: Duration) -> Result<bool> {
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = Instant::now() + timeout;
 
         loop {
             // Check if buffer is not empty
@@ -125,7 +129,7 @@ impl LogFetchBuffer {
             }
 
             // Check if timeout
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             if now >= deadline {
                 return Ok(false);
             }
@@ -659,10 +663,7 @@ pub struct RemoteCompletedFetch {
 }
 
 impl RemoteCompletedFetch {
-    pub fn new(
-        inner: DefaultCompletedFetch,
-        permit: PrefetchPermit,
-    ) -> Self {
+    pub fn new(inner: DefaultCompletedFetch, permit: PrefetchPermit) -> Self {
         Self {
             inner,
             permit: Some(permit),
@@ -835,7 +836,6 @@ mod tests {
     use crate::record::{MemoryLogRecordsArrowBuilder, ReadContext, to_arrow_schema};
     use crate::row::GenericRow;
     use std::sync::Arc;
-    use std::time::Duration;
 
     fn test_read_context() -> Result<ReadContext> {
         let row_type = RowType::new(vec![DataField::new(
