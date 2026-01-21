@@ -71,6 +71,12 @@ impl Metadata {
         *cluster_guard = Arc::new(updated_cluster);
     }
 
+    pub fn invalidate_bucket_leader(&self, table_bucket: &TableBucket) {
+        let mut cluster_guard = self.cluster.write();
+        let updated_cluster = cluster_guard.invalidate_bucket_leader(table_bucket);
+        *cluster_guard = Arc::new(updated_cluster);
+    }
+
     pub async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
         let origin_cluster = self.cluster.read().clone();
         let new_cluster =
