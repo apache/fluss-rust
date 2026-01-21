@@ -527,7 +527,7 @@ mod table_test {
 
         use arrow::array::Int32Array;
         let batches = scanner.poll(Duration::from_secs(10)).await.unwrap();
-        let mut all_ids: Vec<i32> = batches
+        let all_ids: Vec<i32> = batches
             .iter()
             .flat_map(|b| {
                 (0..b.num_rows()).map(|i| {
