@@ -600,6 +600,18 @@ impl FileSource {
     /// Create a new FileSource without automatic cleanup.
     pub fn new(file: std::fs::File, base_offset: usize) -> Result<Self> {
         let file_size = file.metadata()?.len() as usize;
+
+        // Validate base_offset to prevent underflow in total_size()
+        if base_offset > file_size {
+            return Err(Error::UnexpectedError {
+                message: format!(
+                    "base_offset ({}) exceeds file_size ({})",
+                    base_offset, file_size
+                ),
+                source: None,
+            });
+        }
+
         Ok(Self {
             file: Mutex::new(file),
             file_size,
@@ -616,6 +628,18 @@ impl FileSource {
         file_path: std::path::PathBuf,
     ) -> Result<Self> {
         let file_size = file.metadata()?.len() as usize;
+
+        // Validate base_offset to prevent underflow in total_size()
+        if base_offset > file_size {
+            return Err(Error::UnexpectedError {
+                message: format!(
+                    "base_offset ({}) exceeds file_size ({})",
+                    base_offset, file_size
+                ),
+                source: None,
+            });
+        }
+
         Ok(Self {
             file: Mutex::new(file),
             file_size,
@@ -741,58 +765,45 @@ impl LogRecordsBatches {
         }
     }
 
-    pub fn next_batch_size(&self) -> Option<usize> {
+    /// Try to get the size of the next batch.
+    fn next_batch_size(&self) -> Result<Option<usize>> {
         if self.remaining_bytes < LOG_OVERHEAD {
-            return None;
+            return Ok(None);
         }
 
-        // Read only header to get size (efficient!)
+        // Read only header to get size
         match self.source.read_batch_header(self.current_pos) {
             Ok((_base_offset, batch_size)) => {
                 if batch_size > self.remaining_bytes {
-                    None
+                    Ok(None)
                 } else {
-                    Some(batch_size)
+                    Ok(Some(batch_size))
                 }
             }
-            Err(e) => {
-                log::debug!(
-                    "Failed to read batch header at pos {}: {}",
-                    self.current_pos,
-                    e
-                );
-                None
-            }
+            Err(e) => Err(e),
         }
     }
 }
 
 impl Iterator for LogRecordsBatches {
-    type Item = LogRecordBatch;
+    type Item = Result<LogRecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_batch_size() {
-            Some(batch_size) => {
+            Ok(Some(batch_size)) => {
                 // Read full batch data on-demand
                 match self.source.read_batch_data(self.current_pos, batch_size) {
                     Ok(data) => {
                         let record_batch = LogRecordBatch::new(data);
                         self.current_pos += batch_size;
                         self.remaining_bytes -= batch_size;
-                        Some(record_batch)
+                        Some(Ok(record_batch))
                     }
-                    Err(e) => {
-                        log::error!(
-                            "Failed to read batch data at pos {} size {}: {}",
-                            self.current_pos,
-                            batch_size,
-                            e
-                        );
-                        None
-                    }
+                    Err(e) => Some(Err(e)),
                 }
             }
-            None => None,
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
         }
     }
 }
@@ -1990,7 +2001,7 @@ mod tests {
         let mut batches = LogRecordsBatches::from_file(file, 0)?;
 
         // Iterate through batches (should work just like in-memory)
-        let batch = batches.next().expect("Should have at least one batch");
+        let batch = batches.next().expect("Should have at least one batch")?;
         assert!(batch.size_in_bytes() > 0);
         assert_eq!(batch.record_count(), 2);
 

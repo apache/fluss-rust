@@ -176,7 +176,7 @@ impl Drop for PrefetchPermit {
 }
 
 /// Downloaded remote log file with prefetch permit
-/// File remains on disk for memory efficiency - permit cleanup deletes it
+/// File remains on disk for memory efficiency; file deletion is handled by FileCleanupGuard in FileSource
 #[derive(Debug)]
 pub struct RemoteLogFile {
     /// Path to the downloaded file on local disk
@@ -185,7 +185,7 @@ pub struct RemoteLogFile {
     /// Currently unused but kept for potential future use (logging, metrics, etc.)
     #[allow(dead_code)]
     pub file_size: usize,
-    /// RAII permit that will delete the file when dropped
+    /// RAII permit that releases prefetch semaphore slot and notifies coordinator when dropped
     pub permit: PrefetchPermit,
 }
 

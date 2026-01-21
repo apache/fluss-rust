@@ -442,7 +442,8 @@ impl DefaultCompletedFetch {
                 if record.offset() >= self.next_fetch_offset {
                     return Ok(Some(record));
                 }
-            } else if let Some(batch) = self.log_record_batch.next() {
+            } else if let Some(batch_result) = self.log_record_batch.next() {
+                let batch = batch_result?;
                 self.current_record_iterator = Some(batch.records(&self.read_context)?);
                 self.current_record_batch = Some(batch);
             } else {
@@ -471,11 +472,12 @@ impl DefaultCompletedFetch {
     /// Get the next batch directly without row iteration
     fn next_fetched_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
-            let Some(log_batch) = self.log_record_batch.next() else {
+            let Some(log_batch_result) = self.log_record_batch.next() else {
                 self.drain();
                 return Ok(None);
             };
 
+            let log_batch = log_batch_result?;
             let mut record_batch = log_batch.record_batch(&self.read_context)?;
 
             // Skip empty batches
@@ -813,7 +815,8 @@ impl PendingFetch for RemotePendingFetch {
         );
 
         // Wrap it with RemoteCompletedFetch to hold the permit
-        // Permit will delete the file when dropped
+        // Permit manages the prefetch slot (releases semaphore and notifies coordinator) when dropped;
+        // file deletion is handled by FileCleanupGuard in the file-backed source created via from_file_with_cleanup
         Ok(Box::new(RemoteCompletedFetch::new(inner_fetch, permit)))
     }
 }
