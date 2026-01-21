@@ -1360,7 +1360,7 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataField, DataTypes};
+    use crate::metadata::{DataField, DataTypes, RowType};
 
     #[test]
     fn test_to_array_type() {
@@ -1609,7 +1609,7 @@ mod tests {
         use tempfile::NamedTempFile;
 
         // Integration test: Real log record batch streamed from file
-        let row_type = DataTypes::row(vec![
+        let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
