@@ -18,6 +18,9 @@
 use arrow::array::RecordBatch;
 use parking_lot::Mutex;
 
+use crate::client::table::remote_log::{
+    PrefetchPermit, RemoteLogDownloadFuture, RemoteLogFile, RemoteLogSegment,
+};
 use crate::error::{ApiError, Error, Result};
 use crate::metadata::TableBucket;
 use crate::record::{
@@ -652,13 +655,13 @@ impl CompletedFetch for DefaultCompletedFetch {
 /// Holds RAII permit until consumed (data is in inner)
 pub struct RemoteCompletedFetch {
     inner: DefaultCompletedFetch,
-    permit: Option<crate::client::table::remote_log::PrefetchPermit>,
+    permit: Option<PrefetchPermit>,
 }
 
 impl RemoteCompletedFetch {
     pub fn new(
         inner: DefaultCompletedFetch,
-        permit: crate::client::table::remote_log::PrefetchPermit,
+        permit: PrefetchPermit,
     ) -> Self {
         Self {
             inner,
@@ -731,8 +734,8 @@ impl CompletedFetch for RemoteCompletedFetch {
 
 /// Pending fetch that waits for remote log file to be downloaded
 pub struct RemotePendingFetch {
-    segment: crate::client::table::remote_log::RemoteLogSegment,
-    download_future: crate::client::table::remote_log::RemoteLogDownloadFuture,
+    segment: RemoteLogSegment,
+    download_future: RemoteLogDownloadFuture,
     pos_in_log_segment: i32,
     fetch_offset: i64,
     high_watermark: i64,
@@ -741,8 +744,8 @@ pub struct RemotePendingFetch {
 
 impl RemotePendingFetch {
     pub fn new(
-        segment: crate::client::table::remote_log::RemoteLogSegment,
-        download_future: crate::client::table::remote_log::RemoteLogDownloadFuture,
+        segment: RemoteLogSegment,
+        download_future: RemoteLogDownloadFuture,
         pos_in_log_segment: i32,
         fetch_offset: i64,
         high_watermark: i64,
@@ -771,7 +774,7 @@ impl PendingFetch for RemotePendingFetch {
     fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>> {
         // Take the RemoteLogFile and destructure
         let remote_log_file = self.download_future.take_remote_log_file()?;
-        let crate::client::table::remote_log::RemoteLogFile {
+        let RemoteLogFile {
             file_path,
             file_size: _,
             permit,
