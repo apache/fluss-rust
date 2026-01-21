@@ -30,11 +30,9 @@ use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
 use crate::client::table::log_fetch_buffer::{
     CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
-    LogFetchBuffer,
+    LogFetchBuffer, RemotePendingFetch,
 };
-use crate::client::table::remote_log::{
-    RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
-};
+use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TableInfo, TablePath};
 use crate::proto::{ErrorResponse, FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
@@ -223,6 +221,7 @@ impl<'a> TableScan<'a> {
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
+            self.conn.config(),
             self.projected_fields,
         )?;
         Ok(LogScanner {
@@ -235,6 +234,7 @@ impl<'a> TableScan<'a> {
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
+            self.conn.config(),
             self.projected_fields,
         )?;
         Ok(RecordBatchLogScanner {
@@ -273,6 +273,7 @@ impl LogScannerInner {
         table_info: &TableInfo,
         metadata: Arc<Metadata>,
         connections: Arc<RpcClient>,
+        config: &crate::config::Config,
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
@@ -286,6 +287,7 @@ impl LogScannerInner {
                 connections.clone(),
                 metadata.clone(),
                 log_scanner_status.clone(),
+                config,
                 projected_fields,
             )?,
         })
@@ -478,6 +480,7 @@ impl LogFetcher {
         conns: Arc<RpcClient>,
         metadata: Arc<Metadata>,
         log_scanner_status: Arc<LogScannerStatus>,
+        config: &crate::config::Config,
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let full_arrow_schema = to_arrow_schema(table_info.get_row_type())?;
@@ -497,7 +500,11 @@ impl LogFetcher {
             log_scanner_status,
             read_context,
             remote_read_context,
-            remote_log_downloader: Arc::new(RemoteLogDownloader::new(tmp_dir)?),
+            remote_log_downloader: Arc::new(RemoteLogDownloader::new(
+                tmp_dir,
+                config.scanner_remote_log_prefetch_num,
+                config.scanner_remote_log_download_threads,
+            )?),
             credentials_cache: Arc::new(CredentialsCache::new(conns.clone(), metadata.clone())),
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
@@ -1510,6 +1517,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata,
             status.clone(),
+            &crate::config::Config::default(),
             None,
         )?;
 
@@ -1529,8 +1537,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn fetch_records_from_fetch_drains_unassigned_bucket() -> Result<()> {
+    #[tokio::test]
+    async fn fetch_records_from_fetch_drains_unassigned_bucket() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = build_table_info(table_path.clone(), 1, 1);
         let cluster = build_cluster_arc(&table_path, 1, 1);
@@ -1541,6 +1549,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata,
             status,
+            &crate::config::Config::default(),
             None,
         )?;
 
@@ -1576,6 +1585,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata,
             status,
+            &crate::config::Config::default(),
             None,
         )?;
 
@@ -1599,6 +1609,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata.clone(),
             status.clone(),
+            &crate::config::Config::default(),
             None,
         )?;
 

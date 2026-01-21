@@ -59,6 +59,10 @@ impl FlussConnection {
         self.network_connects.clone()
     }
 
+    pub fn config(&self) -> &Config {
+        &self.args
+    }
+
     pub async fn get_admin(&self) -> Result<FlussAdmin> {
         FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()).await
     }
