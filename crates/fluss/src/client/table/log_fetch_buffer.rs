@@ -651,7 +651,7 @@ mod tests {
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
-    use crate::metadata::{DataField, DataTypes, TablePath};
+    use crate::metadata::{DataField, DataTypes, RowType, TablePath};
     use crate::record::{
         LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD, MemoryLogRecordsArrowBuilder,
         RECORDS_COUNT_LENGTH, RECORDS_COUNT_OFFSET, RECORDS_OFFSET, ReadContext, to_arrow_schema,
@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn default_completed_fetch_reads_records() -> Result<()> {
-        let row_type = DataTypes::row(vec![
+        let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);

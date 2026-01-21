@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::WriteFormat;
 use crate::metadata::RowType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
-use crate::row::{BinaryRow, GenericRow, InternalRow};
+use crate::row::{GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
 
 // Reference implementation:
@@ -69,10 +70,8 @@ impl<'a> CompactedRow<'a> {
         self.decoded_row
             .get_or_init(|| self.deserializer.deserialize(&self.reader))
     }
-}
 
-impl BinaryRow for CompactedRow<'_> {
-    fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         self.data
     }
 }
@@ -152,6 +151,14 @@ impl<'a> InternalRow for CompactedRow<'a> {
 
     fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampLtz {
         self.decoded_row().get_timestamp_ltz(pos, precision)
+    }
+
+    fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
+        match write_format {
+            WriteFormat::CompactedKv => Some(self.as_bytes()),
+            WriteFormat::ArrowLog => None,
+            WriteFormat::CompactedLog => None,
+        }
     }
 }
 

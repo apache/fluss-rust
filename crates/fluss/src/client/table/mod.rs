@@ -26,14 +26,18 @@ pub const EARLIEST_OFFSET: i64 = -2;
 mod append;
 mod lookup;
 
-pub(crate) mod log_fetch_buffer;
+mod log_fetch_buffer;
+mod partition_getter;
 mod remote_log;
 mod scanner;
+mod upsert;
 mod writer;
 
+use crate::client::table::upsert::TableUpsert;
 pub use append::{AppendWriter, TableAppend};
 pub use lookup::{LookupResult, Lookuper, TableLookup};
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
+pub use writer::{TableWriter, UpsertWriter};
 
 #[allow(dead_code)]
 pub struct FlussTable<'a> {
@@ -117,6 +121,20 @@ impl<'a> FlussTable<'a> {
             self.conn,
             self.table_info.clone(),
             self.metadata.clone(),
+        ))
+    }
+
+    pub fn new_upsert(&self) -> Result<TableUpsert> {
+        if !self.has_primary_key {
+            return Err(Error::UnsupportedOperation {
+                message: "Upsert is only supported for primary key tables".to_string(),
+            });
+        }
+
+        Ok(TableUpsert::new(
+            self.table_path.clone(),
+            self.table_info.clone(),
+            self.conn.get_or_create_writer_client()?,
         ))
     }
 }

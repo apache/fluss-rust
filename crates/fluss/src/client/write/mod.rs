@@ -21,9 +21,10 @@ mod batch;
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
 use crate::metadata::TablePath;
-use crate::row::{CompactedRow, GenericRow};
+use crate::row::GenericRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
+use bytes::Bytes;
 use std::sync::Arc;
 
 pub(crate) mod broadcast;
@@ -40,7 +41,7 @@ pub use writer_client::WriterClient;
 pub struct WriteRecord<'a> {
     record: Record<'a>,
     table_path: Arc<TablePath>,
-    bucket_key: Option<&'a [u8]>,
+    bucket_key: Option<Bytes>,
     schema_id: i32,
     write_format: WriteFormat,
 }
@@ -61,24 +62,42 @@ pub enum LogWriteRecord<'a> {
     RecordBatch(Arc<RecordBatch>),
 }
 
+#[derive(Clone)]
+pub enum RowBytes<'a> {
+    Borrowed(&'a [u8]),
+    Owned(Bytes),
+}
+
+impl<'a> RowBytes<'a> {
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            RowBytes::Borrowed(slice) => slice,
+            RowBytes::Owned(bytes) => bytes.as_ref(),
+        }
+    }
+}
+
 pub struct KvWriteRecord<'a> {
-    // only valid for primary key table
-    key: &'a [u8],
-    target_columns: Option<&'a [usize]>,
-    compacted_row: Option<CompactedRow<'a>>,
+    key: Bytes,
+    target_columns: Option<Arc<Vec<usize>>>,
+    row_bytes: Option<RowBytes<'a>>,
 }
 
 impl<'a> KvWriteRecord<'a> {
     fn new(
-        key: &'a [u8],
-        target_columns: Option<&'a [usize]>,
-        compacted_row: Option<CompactedRow<'a>>,
+        key: Bytes,
+        target_columns: Option<Arc<Vec<usize>>>,
+        row_bytes: Option<RowBytes<'a>>,
     ) -> Self {
         KvWriteRecord {
             key,
             target_columns,
-            compacted_row,
+            row_bytes,
         }
+    }
+
+    pub fn row_bytes(&self) -> Option<&[u8]> {
+        self.row_bytes.as_ref().map(|rb| rb.as_slice())
     }
 }
 
@@ -110,17 +129,18 @@ impl<'a> WriteRecord<'a> {
     pub fn for_upsert(
         table_path: Arc<TablePath>,
         schema_id: i32,
-        bucket_key: &'a [u8],
-        key: &'a [u8],
-        target_columns: Option<&'a [usize]>,
-        row: CompactedRow<'a>,
+        key: Bytes,
+        bucket_key: Option<Bytes>,
+        write_format: WriteFormat,
+        target_columns: Option<Arc<Vec<usize>>>,
+        row_bytes: Option<RowBytes<'a>>,
     ) -> Self {
         Self {
-            record: Record::Kv(KvWriteRecord::new(key, target_columns, Some(row))),
+            record: Record::Kv(KvWriteRecord::new(key, target_columns, row_bytes)),
             table_path,
-            bucket_key: Some(bucket_key),
+            bucket_key,
             schema_id,
-            write_format: WriteFormat::CompactedKv,
+            write_format,
         }
     }
 }

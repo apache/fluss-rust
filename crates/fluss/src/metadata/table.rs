@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::compression::ArrowCompressionInfo;
-use crate::error::Error::InvalidTableError;
+use crate::error::Error::{IllegalArgument, InvalidTableError};
 use crate::error::{Error, Result};
 use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{DataField, DataType, RowType};
@@ -97,8 +97,8 @@ impl PrimaryKey {
 pub struct Schema {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
-    // must be Row data type kind
-    row_type: DataType,
+    row_type: RowType,
+    auto_increment_col_names: Vec<String>,
 }
 
 impl Schema {
@@ -118,7 +118,7 @@ impl Schema {
         self.primary_key.as_ref()
     }
 
-    pub fn row_type(&self) -> &DataType {
+    pub fn row_type(&self) -> &RowType {
         &self.row_type
     }
 
@@ -144,12 +144,17 @@ impl Schema {
     pub fn column_names(&self) -> Vec<&str> {
         self.columns.iter().map(|c| c.name.as_str()).collect()
     }
+
+    pub fn auto_increment_col_names(&self) -> &Vec<String> {
+        &self.auto_increment_col_names
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
+    auto_increment_col_names: Vec<String>,
 }
 
 impl SchemaBuilder {
@@ -198,8 +203,35 @@ impl SchemaBuilder {
         self
     }
 
+    /// Declares a column to be auto-incremented. With an auto-increment column in the table,
+    /// whenever a new row is inserted into the table, the new row will be assigned with the next
+    /// available value from the auto-increment sequence. A table can have at most one auto
+    /// increment column.
+    pub fn enable_auto_increment(mut self, column_name: &str) -> Result<Self> {
+        if !self.auto_increment_col_names.is_empty() {
+            return Err(IllegalArgument {
+                message: "Multiple auto increment columns are not supported yet.".to_string(),
+            });
+        }
+
+        self.auto_increment_col_names.push(column_name.to_string());
+        Ok(self)
+    }
+
     pub fn build(&mut self) -> Result<Schema> {
         let columns = Self::normalize_columns(&mut self.columns, self.primary_key.as_ref())?;
+
+        let column_names: HashSet<_> = columns.iter().map(|c| &c.name).collect();
+        for auto_inc_col in &self.auto_increment_col_names {
+            if !column_names.contains(auto_inc_col) {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Auto increment column '{}' is not found in the schema columns.",
+                        auto_inc_col
+                    ),
+                });
+            }
+        }
 
         let data_fields = columns
             .iter()
@@ -213,7 +245,8 @@ impl SchemaBuilder {
         Ok(Schema {
             columns,
             primary_key: self.primary_key.clone(),
-            row_type: DataType::Row(RowType::new(data_fields)),
+            row_type: RowType::new(data_fields),
+            auto_increment_col_names: self.auto_increment_col_names.clone(),
         })
     }
 
@@ -500,7 +533,7 @@ impl TableDescriptor {
         bucket_keys.retain(|k| !partition_keys.contains(k));
 
         if bucket_keys.is_empty() {
-            return Err(Error::InvalidTableError {
+            return Err(InvalidTableError {
                 message: format!(
                     "Primary Key constraint {:?} should not be same with partition fields {:?}.",
                     schema.primary_key().unwrap().column_names(),
@@ -580,7 +613,7 @@ pub enum LogFormat {
 }
 
 impl Display for LogFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             LogFormat::ARROW => {
                 write!(f, "ARROW")?;
@@ -612,7 +645,7 @@ pub enum KvFormat {
 }
 
 impl Display for KvFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             KvFormat::COMPACTED => write!(f, "COMPACTED")?,
             KvFormat::INDEXED => write!(f, "INDEXED")?,
@@ -626,7 +659,7 @@ impl KvFormat {
         match s.to_uppercase().as_str() {
             "INDEXED" => Ok(KvFormat::INDEXED),
             "COMPACTED" => Ok(KvFormat::COMPACTED),
-            _ => Err(Error::InvalidTableError {
+            _ => Err(InvalidTableError {
                 message: format!("Unknown kv format: {s}"),
             }),
         }
@@ -692,7 +725,7 @@ pub struct TableInfo {
     pub table_id: i64,
     pub schema_id: i32,
     pub schema: Schema,
-    pub row_type: DataType,
+    pub row_type: RowType,
     pub primary_keys: Vec<String>,
     pub physical_primary_keys: Vec<String>,
     pub bucket_keys: Vec<String>,
@@ -708,10 +741,7 @@ pub struct TableInfo {
 
 impl TableInfo {
     pub fn row_type(&self) -> &RowType {
-        match &self.row_type {
-            DataType::Row(row_type) => row_type,
-            _ => panic!("should be a row type"),
-        }
+        &self.row_type
     }
 }
 
@@ -847,7 +877,7 @@ impl TableInfo {
         &self.schema
     }
 
-    pub fn get_row_type(&self) -> &DataType {
+    pub fn get_row_type(&self) -> &RowType {
         &self.row_type
     }
 
@@ -946,8 +976,8 @@ impl TableInfo {
     }
 }
 
-impl fmt::Display for TableInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for TableInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "TableInfo{{ table_path={:?}, table_id={}, schema_id={}, schema={:?}, physical_primary_keys={:?}, bucket_keys={:?}, partition_keys={:?}, num_buckets={}, properties={:?}, custom_properties={:?}, comment={:?}, created_time={}, modified_time={} }}",
@@ -998,7 +1028,7 @@ impl TableBucket {
 }
 
 impl Display for TableBucket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if let Some(partition_id) = self.partition_id {
             write!(
                 f,

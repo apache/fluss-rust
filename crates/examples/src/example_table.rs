@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod example_kv_table;
+
 use clap::Parser;
 use fluss::client::FlussConnection;
 use fluss::config::Config;
