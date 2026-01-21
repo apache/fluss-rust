@@ -36,6 +36,16 @@ pub struct Config {
 
     #[arg(long, default_value_t = 2 * 1024 * 1024)]
     pub writer_batch_size: i32,
+
+    /// Maximum number of remote log segments to prefetch
+    /// Default: 4 (matching Java CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM)
+    #[arg(long, default_value_t = 4)]
+    pub scanner_remote_log_prefetch_num: usize,
+
+    /// Maximum concurrent remote log downloads
+    /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
+    #[arg(long, default_value_t = 3)]
+    pub scanner_remote_log_download_threads: usize,
 }
 
 impl Default for Config {
@@ -46,6 +56,8 @@ impl Default for Config {
             writer_acks: String::from("all"),
             writer_retries: i32::MAX,
             writer_batch_size: 2 * 1024 * 1024,
+            scanner_remote_log_prefetch_num: 4,
+            scanner_remote_log_download_threads: 3,
         }
     }
 }

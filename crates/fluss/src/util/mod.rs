@@ -22,7 +22,6 @@ use crate::metadata::TableBucket;
 use linked_hash_map::LinkedHashMap;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,11 +32,9 @@ pub fn current_time_ms() -> i64 {
         .as_millis() as i64
 }
 
-pub async fn delete_file(file_path: PathBuf) {
-    tokio::fs::remove_file(&file_path)
-        .await
-        .unwrap_or_else(|err| log::warn!("Could not delete file: {file_path:?}, error: {err:?}"));
-}
+// Removed: delete_file() is no longer used.
+// File cleanup is now handled via RAII with FileCleanupGuard in arrow.rs
+// which uses Rust's drop order to ensure files are closed before deletion.
 
 pub struct FairBucketStatusMap<S> {
     map: LinkedHashMap<TableBucket, Arc<S>>,
