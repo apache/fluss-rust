@@ -52,8 +52,8 @@ mod kv_table_test {
                 *guard = Some(cluster);
             });
         })
-            .join()
-            .expect("Failed to create cluster");
+        .join()
+        .expect("Failed to create cluster");
 
         // wait for 20 seconds to avoid the error like
         // CoordinatorEventProcessor is not initialized yet
@@ -96,10 +96,7 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new(
-            "fluss".to_string(),
-            "test_upsert_and_lookup".to_string(),
-        );
+        let table_path = TablePath::new("fluss".to_string(), "test_upsert_and_lookup".to_string());
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -171,8 +168,10 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path =
-            TablePath::new("fluss".to_string(), "test_update_existing_record".to_string());
+        let table_path = TablePath::new(
+            "fluss".to_string(),
+            "test_update_existing_record".to_string(),
+        );
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -224,7 +223,11 @@ mod kv_table_test {
             .get_single_row()
             .expect("Failed to get row")
             .expect("Row should exist");
-        assert_eq!(found_row.get_long(2), row.get_long(2), "Expected initial score to be 123456789012i64");
+        assert_eq!(
+            found_row.get_long(2),
+            row.get_long(2),
+            "Expected initial score to match"
+        );
 
         // Update the record with new score
         let mut updated_row = GenericRow::new();
@@ -312,7 +315,10 @@ mod kv_table_test {
                 .await
                 .expect("Failed to lookup");
             assert!(
-                result.get_single_row().expect("Failed to get row").is_some(),
+                result
+                    .get_single_row()
+                    .expect("Failed to get row")
+                    .is_some(),
                 "Record {} should exist before delete",
                 i
             );
@@ -333,7 +339,10 @@ mod kv_table_test {
             .await
             .expect("Failed to lookup deleted record");
         assert!(
-            result.get_single_row().expect("Failed to get row").is_none(),
+            result
+                .get_single_row()
+                .expect("Failed to get row")
+                .is_none(),
             "Record 2 should not exist after delete"
         );
 
@@ -344,7 +353,10 @@ mod kv_table_test {
                 .await
                 .expect("Failed to lookup");
             assert!(
-                result.get_single_row().expect("Failed to get row").is_some(),
+                result
+                    .get_single_row()
+                    .expect("Failed to get row")
+                    .is_some(),
                 "Record {} should still exist after deleting record 2",
                 i
             );
@@ -352,7 +364,7 @@ mod kv_table_test {
     }
 
     #[tokio::test]
-    async fn test_lookup_non_existent_key() {
+    async fn lookup_non_existent_key() {
         let cluster = get_fluss_cluster();
         let connection = cluster.get_fluss_connection().await;
 
@@ -403,20 +415,22 @@ mod kv_table_test {
             .await
             .expect("Failed to lookup non-existent key");
         assert!(
-            result.get_single_row().expect("Failed to get row").is_none(),
+            result
+                .get_single_row()
+                .expect("Failed to get row")
+                .is_none(),
             "Non-existent key should return None"
         );
     }
 
     #[tokio::test]
-    async fn test_multiple_primary_key_columns() {
+    async fn multiple_primary_keys() {
         let cluster = get_fluss_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path =
-            TablePath::new("fluss".to_string(), "test_composite_pk".to_string());
+        let table_path = TablePath::new("fluss".to_string(), "test_composite_pk".to_string());
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -512,5 +526,113 @@ mod kv_table_test {
             update_row.get_long(2),
             "Row balance should be updated"
         );
+    }
+
+    #[tokio::test]
+    async fn partial_update() {
+        use fluss::row::Datum;
+
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_partial_update".to_string());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("age", DataTypes::bigint())
+                    .column("score", DataTypes::bigint())
+                    .primary_key(vec!["id".to_string()])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Insert initial record with all columns
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let mut upsert_writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        let mut row = GenericRow::new();
+        row.set_field(0, 1);
+        row.set_field(1, "Verso");
+        row.set_field(2, 32i64);
+        row.set_field(3, 6942i64);
+        upsert_writer
+            .upsert(&row)
+            .await
+            .expect("Failed to upsert initial row");
+
+        // Verify initial record
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        let result = lookuper
+            .lookup(&make_key(1))
+            .await
+            .expect("Failed to lookup");
+        let found_row = result
+            .get_single_row()
+            .expect("Failed to get row")
+            .expect("Row should exist");
+
+        assert_eq!(found_row.get_int(0), 1);
+        assert_eq!(found_row.get_string(1), "Verso");
+        assert_eq!(found_row.get_long(2), 32i64);
+        assert_eq!(found_row.get_long(3), 6942i64);
+
+        // Create partial update writer to update only score column
+        let partial_upsert = table_upsert
+            .partial_update_with_column_names(&["id", "score"])
+            .expect("Failed to create TableUpsert with partial update");
+        let mut partial_writer = partial_upsert
+            .create_writer()
+            .expect("Failed to create UpsertWriter with partial write");
+
+        // Update only the score column
+        let mut partial_row = GenericRow::new();
+        partial_row.set_field(0, 1);
+        partial_row.set_field(1, Datum::Null); // not in partial update column
+        partial_row.set_field(2, Datum::Null); // not in partial update column
+        partial_row.set_field(3, 420i64);
+        partial_writer
+            .upsert(&partial_row)
+            .await
+            .expect("Failed to upsert");
+
+        // Verify partial update - name and age should remain unchanged
+        let result = lookuper
+            .lookup(&make_key(1))
+            .await
+            .expect("Failed to lookup after partial update");
+        let found_row = result
+            .get_single_row()
+            .expect("Failed to get row")
+            .expect("Row should exist");
+
+        assert_eq!(found_row.get_int(0), 1, "id should remain 1");
+        assert_eq!(
+            found_row.get_string(1),
+            "Verso",
+            "name should remain unchanged"
+        );
+        assert_eq!(found_row.get_long(2), 32, "age should remain unchanged");
+        assert_eq!(found_row.get_long(3), 420, "score should be updated to 420");
     }
 }
