@@ -20,6 +20,7 @@ use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, Result};
 use crate::metadata::{RowType, TableBucket, TableInfo};
+use crate::record::kv::SCHEMA_ID_LENGTH;
 use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
@@ -64,7 +65,10 @@ impl<'a> LookupResult<'a> {
     pub fn get_single_row(&self) -> Result<Option<CompactedRow<'_>>> {
         match self.rows.len() {
             0 => Ok(None),
-            1 => Ok(Some(CompactedRow::from_bytes(self.row_type, &self.rows[0]))),
+            1 => Ok(Some(CompactedRow::from_bytes(
+                self.row_type,
+                &self.rows[0][SCHEMA_ID_LENGTH..],
+            ))),
             _ => Err(Error::UnexpectedError {
                 message: "LookupResult contains multiple rows, use get_rows() instead".to_string(),
                 source: None,
@@ -76,7 +80,8 @@ impl<'a> LookupResult<'a> {
     pub fn get_rows(&self) -> Vec<CompactedRow<'_>> {
         self.rows
             .iter()
-            .map(|bytes| CompactedRow::from_bytes(self.row_type, bytes))
+            // TODO Add schema id check and fetch when implementing prefix lookup
+            .map(|bytes| CompactedRow::from_bytes(self.row_type, &bytes[SCHEMA_ID_LENGTH..]))
             .collect()
     }
 }
