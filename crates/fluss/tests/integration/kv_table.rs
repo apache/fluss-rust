@@ -128,6 +128,11 @@ mod kv_table_test {
             assert_eq!(row.get_string(1), *expected_name, "name mismatch");
             assert_eq!(row.get_long(2), *expected_age, "age mismatch");
         }
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     #[tokio::test]
@@ -227,6 +232,11 @@ mod kv_table_test {
             updated_row.get_string(1),
             "Name should remain unchanged"
         );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     #[tokio::test]
@@ -330,6 +340,11 @@ mod kv_table_test {
                 i
             );
         }
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     #[tokio::test]
@@ -390,6 +405,11 @@ mod kv_table_test {
                 .is_none(),
             "Non-existent key should return None"
         );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     #[tokio::test]
@@ -495,6 +515,11 @@ mod kv_table_test {
             update_row.get_long(2),
             "Row score should be updated"
         );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     #[tokio::test]
@@ -603,5 +628,10 @@ mod kv_table_test {
         );
         assert_eq!(found_row.get_long(2), 32, "age should remain unchanged");
         assert_eq!(found_row.get_long(3), 420, "score should be updated to 420");
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 }
