@@ -103,19 +103,7 @@ mod table_remote_scan_test {
     }
 
     fn after_all() {
-        // Create a new tokio runtime in a separate thread
-        let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
-        thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            rt.block_on(async {
-                let mut guard = cluster_guard.write();
-                if let Some(cluster) = guard.take() {
-                    cluster.stop().await;
-                }
-            });
-        })
-        .join()
-        .expect("Failed to cleanup cluster");
+        stop_cluster(SHARED_FLUSS_CLUSTER.clone());
     }
 
     #[tokio::test]
@@ -211,10 +199,6 @@ mod table_remote_scan_test {
     }
 
     fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
-        let cluster_guard = SHARED_FLUSS_CLUSTER.read();
-        if cluster_guard.is_none() {
-            panic!("Fluss cluster not initialized. Make sure before_all() was called.");
-        }
-        Arc::new(cluster_guard.as_ref().unwrap().clone())
+        get_cluster(&SHARED_FLUSS_CLUSTER)
     }
 }

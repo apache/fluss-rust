@@ -33,54 +33,25 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 #[after_all]
 mod admin_test {
     use super::SHARED_FLUSS_CLUSTER;
-    use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
-    use crate::integration::utils::wait_for_cluster_ready;
+    use crate::integration::fluss_cluster::FlussTestingCluster;
+    use crate::integration::utils::{get_cluster, start_cluster, stop_cluster};
     use fluss::error::FlussError;
     use fluss::metadata::{
         DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat, Schema, TableDescriptor,
         TablePath,
     };
     use std::sync::Arc;
-    use std::thread;
 
     fn before_all() {
-        // Create a new tokio runtime in a separate thread
-        let cluster_lock = SHARED_FLUSS_CLUSTER.clone();
-        thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            rt.block_on(async {
-                let cluster = FlussTestingClusterBuilder::new("test-admin").build().await;
-                wait_for_cluster_ready(&cluster).await;
-                let mut guard = cluster_lock.write();
-                *guard = Some(cluster);
-            });
-        })
-        .join()
-        .expect("Failed to create cluster");
+        start_cluster("test-admin", SHARED_FLUSS_CLUSTER.clone());
     }
 
     fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
-        let cluster_guard = SHARED_FLUSS_CLUSTER.read();
-        if cluster_guard.is_none() {
-            panic!("Fluss cluster not initialized. Make sure before_all() was called.");
-        }
-        Arc::new(cluster_guard.as_ref().unwrap().clone())
+        get_cluster(&SHARED_FLUSS_CLUSTER)
     }
 
     fn after_all() {
-        // Create a new tokio runtime in a separate thread
-        let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            rt.block_on(async {
-                let mut guard = cluster_guard.write();
-                if let Some(cluster) = guard.take() {
-                    cluster.stop().await;
-                }
-            });
-        })
-        .join()
-        .expect("Failed to cleanup cluster");
+        stop_cluster(SHARED_FLUSS_CLUSTER.clone());
     }
 
     #[tokio::test]

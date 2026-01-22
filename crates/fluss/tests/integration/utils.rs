@@ -15,9 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::integration::fluss_cluster::FlussTestingCluster;
+use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
 use fluss::client::FlussAdmin;
 use fluss::metadata::{TableDescriptor, TablePath};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Polls the cluster until the CoordinatorEventProcessor is initialized.
@@ -54,4 +56,43 @@ pub async fn create_table(
         .create_table(&table_path, &table_descriptor, false)
         .await
         .expect("Failed to create table");
+}
+
+pub fn start_cluster(name: &str, cluster_lock: Arc<RwLock<Option<FlussTestingCluster>>>) {
+    let name = name.to_string();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        rt.block_on(async {
+            let cluster = FlussTestingClusterBuilder::new(&name).build().await;
+            wait_for_cluster_ready(&cluster).await;
+            let mut guard = cluster_lock.write();
+            *guard = Some(cluster);
+        });
+    })
+    .join()
+    .expect("Failed to create cluster");
+}
+
+pub fn stop_cluster(cluster_lock: Arc<RwLock<Option<FlussTestingCluster>>>) {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        rt.block_on(async {
+            let mut guard = cluster_lock.write();
+            if let Some(cluster) = guard.take() {
+                cluster.stop().await;
+            }
+        });
+    })
+    .join()
+    .expect("Failed to cleanup cluster");
+}
+
+pub fn get_cluster(cluster_lock: &RwLock<Option<FlussTestingCluster>>) -> Arc<FlussTestingCluster> {
+    let guard = cluster_lock.read();
+    Arc::new(
+        guard
+            .as_ref()
+            .expect("Fluss cluster not initialized. Make sure before_all() was called.")
+            .clone(),
+    )
 }
