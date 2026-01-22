@@ -22,13 +22,18 @@ use parking_lot::{Mutex, RwLock};
 use std::{
     cmp::{Ordering, Reverse, min},
     collections::{BinaryHeap, HashMap},
-    env,
     future::Future,
     io, mem,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
+};
+
+#[cfg(test)]
+use std::{
+    env,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;

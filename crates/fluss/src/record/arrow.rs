@@ -689,7 +689,7 @@ impl FileSource {
 }
 
 /// Enum for different log record sources.
-pub enum LogRecordsSource {
+enum LogRecordsSource {
     Memory(MemorySource),
     File(FileSource),
 }
@@ -726,9 +726,10 @@ pub struct LogRecordsBatches {
 impl LogRecordsBatches {
     /// Create from in-memory Vec (existing path - backward compatible).
     pub fn new(data: Vec<u8>) -> Self {
-        let remaining_bytes = data.len();
+        let source = LogRecordsSource::Memory(MemorySource::new(data));
+        let remaining_bytes = source.total_size();
         Self {
-            source: LogRecordsSource::Memory(MemorySource::new(data)),
+            source,
             current_pos: 0,
             remaining_bytes,
         }
@@ -761,16 +762,6 @@ impl LogRecordsBatches {
             current_pos: 0,
             remaining_bytes,
         })
-    }
-
-    /// Create from any source (for testing).
-    pub fn from_source(source: LogRecordsSource) -> Self {
-        let remaining_bytes = source.total_size();
-        Self {
-            source,
-            current_pos: 0,
-            remaining_bytes,
-        }
     }
 
     /// Try to get the size of the next batch.
