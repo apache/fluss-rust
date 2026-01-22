@@ -197,18 +197,18 @@ impl ArrowLogWriteBatch {
         bucket_id: BucketId,
         create_ms: i64,
         to_append_record_batch: bool,
-    ) -> Self {
+    ) -> Result<Self> {
         let base = InnerWriteBatch::new(batch_id, table_path, create_ms, bucket_id);
-        Self {
+        Ok(Self {
             write_batch: base,
             arrow_builder: MemoryLogRecordsArrowBuilder::new(
                 schema_id,
                 row_type,
                 to_append_record_batch,
                 arrow_compression_info,
-            ),
+            )?,
             built_records: None,
-        }
+        })
     }
 
     pub fn batch_id(&self) -> i64 {

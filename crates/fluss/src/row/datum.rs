@@ -19,9 +19,13 @@ use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use crate::row::Decimal;
 use arrow::array::{
-    ArrayBuilder, BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int8Builder,
-    Int16Builder, Int32Builder, Int64Builder, StringBuilder,
+    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder,
+    Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder,
+    Time32MillisecondBuilder, Time32SecondBuilder, Time64MicrosecondBuilder,
+    Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
+    TimestampNanosecondBuilder, TimestampSecondBuilder,
 };
+use arrow::datatypes as arrow_schema;
 use jiff::ToSpan;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
@@ -81,6 +85,41 @@ impl Datum<'_> {
         match self {
             Self::Blob(blob) => blob.as_ref(),
             _ => panic!("not a blob: {self:?}"),
+        }
+    }
+
+    pub fn as_decimal(&self) -> &Decimal {
+        match self {
+            Self::Decimal(d) => d,
+            _ => panic!("not a decimal: {self:?}"),
+        }
+    }
+
+    pub fn as_date(&self) -> Date {
+        match self {
+            Self::Date(d) => *d,
+            _ => panic!("not a date: {self:?}"),
+        }
+    }
+
+    pub fn as_time(&self) -> Time {
+        match self {
+            Self::Time(t) => *t,
+            _ => panic!("not a time: {self:?}"),
+        }
+    }
+
+    pub fn as_timestamp_ntz(&self) -> TimestampNtz {
+        match self {
+            Self::TimestampNtz(ts) => *ts,
+            _ => panic!("not a timestamp ntz: {self:?}"),
+        }
+    }
+
+    pub fn as_timestamp_ltz(&self) -> TimestampLtz {
+        match self {
+            Self::TimestampLtz(ts) => *ts,
+            _ => panic!("not a timestamp ltz: {self:?}"),
         }
     }
 }
@@ -246,6 +285,66 @@ impl TryFrom<&Datum<'_>> for i8 {
     }
 }
 
+impl TryFrom<&Datum<'_>> for Decimal {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Decimal(d) => Ok(d.clone()),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for Date {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Date(d) => Ok(*d),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for Time {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::Time(t) => Ok(*t),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for TimestampNtz {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::TimestampNtz(ts) => Ok(*ts),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Datum<'_>> for TimestampLtz {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: &Datum) -> std::result::Result<Self, Self::Error> {
+        match from {
+            Datum::TimestampLtz(ts) => Ok(*ts),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> From<bool> for Datum<'a> {
     #[inline]
     fn from(b: bool) -> Datum<'a> {
@@ -253,12 +352,55 @@ impl<'a> From<bool> for Datum<'a> {
     }
 }
 
+impl<'a> From<Decimal> for Datum<'a> {
+    #[inline]
+    fn from(d: Decimal) -> Datum<'a> {
+        Datum::Decimal(d)
+    }
+}
+
+impl<'a> From<Date> for Datum<'a> {
+    #[inline]
+    fn from(d: Date) -> Datum<'a> {
+        Datum::Date(d)
+    }
+}
+
+impl<'a> From<Time> for Datum<'a> {
+    #[inline]
+    fn from(t: Time) -> Datum<'a> {
+        Datum::Time(t)
+    }
+}
+
+impl<'a> From<TimestampNtz> for Datum<'a> {
+    #[inline]
+    fn from(ts: TimestampNtz) -> Datum<'a> {
+        Datum::TimestampNtz(ts)
+    }
+}
+
+impl<'a> From<TimestampLtz> for Datum<'a> {
+    #[inline]
+    fn from(ts: TimestampLtz) -> Datum<'a> {
+        Datum::TimestampLtz(ts)
+    }
+}
+
 pub trait ToArrow {
-    fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()>;
+    fn append_to(
+        &self,
+        builder: &mut dyn ArrayBuilder,
+        data_type: &arrow_schema::DataType,
+    ) -> Result<()>;
 }
 
 impl Datum<'_> {
-    pub fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()> {
+    pub fn append_to(
+        &self,
+        builder: &mut dyn ArrayBuilder,
+        data_type: &arrow_schema::DataType,
+    ) -> Result<()> {
         macro_rules! append_null_to_arrow {
             ($builder_type:ty) => {
                 if let Some(b) = builder.as_any_mut().downcast_mut::<$builder_type>() {
@@ -288,6 +430,16 @@ impl Datum<'_> {
                 append_null_to_arrow!(Float64Builder);
                 append_null_to_arrow!(StringBuilder);
                 append_null_to_arrow!(BinaryBuilder);
+                append_null_to_arrow!(Decimal128Builder);
+                append_null_to_arrow!(Date32Builder);
+                append_null_to_arrow!(Time32SecondBuilder);
+                append_null_to_arrow!(Time32MillisecondBuilder);
+                append_null_to_arrow!(Time64MicrosecondBuilder);
+                append_null_to_arrow!(Time64NanosecondBuilder);
+                append_null_to_arrow!(TimestampSecondBuilder);
+                append_null_to_arrow!(TimestampMillisecondBuilder);
+                append_null_to_arrow!(TimestampMicrosecondBuilder);
+                append_null_to_arrow!(TimestampNanosecondBuilder);
             }
             Datum::Bool(v) => append_value_to_arrow!(BooleanBuilder, *v),
             Datum::Int8(v) => append_value_to_arrow!(Int8Builder, *v),
@@ -298,16 +450,297 @@ impl Datum<'_> {
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, v.as_ref()),
             Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
-            Datum::Decimal(_)
-            | Datum::Date(_)
-            | Datum::Time(_)
-            | Datum::TimestampNtz(_)
-            | Datum::TimestampLtz(_) => {
+            Datum::Decimal(decimal) => {
+                // Extract target precision and scale from Arrow schema
+                let (p, s) = match data_type {
+                    arrow_schema::DataType::Decimal128(p, s) => (*p, *s),
+                    _ => {
+                        return Err(RowConvertError {
+                            message: format!(
+                                "Expected Decimal128 Arrow type, got: {:?}",
+                                data_type
+                            ),
+                        });
+                    }
+                };
+
+                // Validate scale is non-negative (Fluss doesn't support negative scales)
+                if s < 0 {
+                    return Err(RowConvertError {
+                        message: format!("Negative decimal scale {} is not supported", s),
+                    });
+                }
+
+                let target_precision = p as u32;
+                let target_scale = s as i64; // Safe now: 0..127 → 0i64..127i64
+
+                if let Some(b) = builder.as_any_mut().downcast_mut::<Decimal128Builder>() {
+                    use bigdecimal::RoundingMode;
+
+                    // Rescale the decimal to match Arrow's target scale
+                    let bd = decimal.to_big_decimal();
+                    let rescaled = bd.with_scale_round(target_scale, RoundingMode::HalfUp);
+                    let (unscaled, _) = rescaled.as_bigint_and_exponent();
+
+                    // Validate precision
+                    let actual_precision = Decimal::compute_precision(&unscaled);
+                    if actual_precision > target_precision as usize {
+                        return Err(RowConvertError {
+                            message: format!(
+                                "Decimal precision overflow: value has {} digits but Arrow expects {} (value: {})",
+                                actual_precision, target_precision, rescaled
+                            ),
+                        });
+                    }
+
+                    // Convert to i128 for Arrow
+                    let i128_val: i128 = match unscaled.try_into() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            return Err(RowConvertError {
+                                message: format!("Decimal value exceeds i128 range: {}", rescaled),
+                            });
+                        }
+                    };
+
+                    b.append_value(i128_val);
+                    return Ok(());
+                }
+
                 return Err(RowConvertError {
-                    message: format!(
-                        "Type {:?} is not yet supported for Arrow conversion",
-                        std::mem::discriminant(self)
-                    ),
+                    message: "Builder type mismatch for Decimal128".to_string(),
+                });
+            }
+            Datum::Date(date) => {
+                append_value_to_arrow!(Date32Builder, date.get_inner());
+            }
+            Datum::Time(time) => {
+                // Time is stored as milliseconds since midnight in Fluss
+                // Convert to Arrow's time unit based on schema
+                let millis = time.get_inner();
+
+                match data_type {
+                    arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second) => {
+                        if let Some(b) = builder.as_any_mut().downcast_mut::<Time32SecondBuilder>()
+                        {
+                            // Validate no sub-second precision is lost
+                            if millis % MILLIS_PER_SECOND as i32 != 0 {
+                                return Err(RowConvertError {
+                                    message: format!(
+                                        "Time value {} ms has sub-second precision but schema expects seconds only",
+                                        millis
+                                    ),
+                                });
+                            }
+                            b.append_value(millis / MILLIS_PER_SECOND as i32);
+                            return Ok(());
+                        }
+                    }
+                    arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+                        if let Some(b) = builder
+                            .as_any_mut()
+                            .downcast_mut::<Time32MillisecondBuilder>()
+                        {
+                            b.append_value(millis);
+                            return Ok(());
+                        }
+                    }
+                    arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+                        if let Some(b) = builder
+                            .as_any_mut()
+                            .downcast_mut::<Time64MicrosecondBuilder>()
+                        {
+                            let micros = (millis as i64)
+                                .checked_mul(MICROS_PER_MILLI)
+                                .ok_or_else(|| RowConvertError {
+                                    message: format!(
+                                        "Time value {} ms overflows when converting to microseconds",
+                                        millis
+                                    ),
+                                })?;
+                            b.append_value(micros);
+                            return Ok(());
+                        }
+                    }
+                    arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond) => {
+                        if let Some(b) = builder
+                            .as_any_mut()
+                            .downcast_mut::<Time64NanosecondBuilder>()
+                        {
+                            let nanos = (millis as i64).checked_mul(NANOS_PER_MILLI).ok_or_else(
+                                || RowConvertError {
+                                    message: format!(
+                                        "Time value {} ms overflows when converting to nanoseconds",
+                                        millis
+                                    ),
+                                },
+                            )?;
+                            b.append_value(nanos);
+                            return Ok(());
+                        }
+                    }
+                    _ => {
+                        return Err(RowConvertError {
+                            message: format!(
+                                "Expected Time32/Time64 Arrow type, got: {:?}",
+                                data_type
+                            ),
+                        });
+                    }
+                }
+
+                return Err(RowConvertError {
+                    message: "Builder type mismatch for Time".to_string(),
+                });
+            }
+            Datum::TimestampNtz(ts) => {
+                let millis = ts.get_millisecond();
+                let nanos = ts.get_nano_of_millisecond();
+
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampSecondBuilder>()
+                {
+                    // Convert milliseconds to seconds
+                    b.append_value(millis / MILLIS_PER_SECOND);
+                    return Ok(());
+                }
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampMillisecondBuilder>()
+                {
+                    b.append_value(millis);
+                    return Ok(());
+                }
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampMicrosecondBuilder>()
+                {
+                    // Convert milliseconds + nanos to microseconds
+                    let millis_micros = millis
+                        .checked_mul(MICROS_PER_MILLI)
+                        .ok_or_else(|| RowConvertError {
+                            message: format!(
+                                "Timestamp milliseconds {} overflows when converting to microseconds",
+                                millis
+                            ),
+                        })?;
+                    let nanos_micros = (nanos as i64) / MICROS_PER_MILLI;
+                    let micros =
+                        millis_micros
+                            .checked_add(nanos_micros)
+                            .ok_or_else(|| RowConvertError {
+                                message: format!(
+                                    "Timestamp overflow when adding microseconds: {} + {}",
+                                    millis_micros, nanos_micros
+                                ),
+                            })?;
+                    b.append_value(micros);
+                    return Ok(());
+                }
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampNanosecondBuilder>()
+                {
+                    // Convert milliseconds + nanos to nanoseconds
+                    let millis_nanos = millis
+                        .checked_mul(NANOS_PER_MILLI)
+                        .ok_or_else(|| RowConvertError {
+                            message: format!(
+                                "Timestamp milliseconds {} overflows when converting to nanoseconds",
+                                millis
+                            ),
+                        })?;
+                    let nanos_total =
+                        millis_nanos
+                            .checked_add(nanos as i64)
+                            .ok_or_else(|| RowConvertError {
+                                message: format!(
+                                    "Timestamp overflow when adding nanoseconds: {} + {}",
+                                    millis_nanos, nanos
+                                ),
+                            })?;
+                    b.append_value(nanos_total);
+                    return Ok(());
+                }
+
+                return Err(RowConvertError {
+                    message: "Builder type mismatch for TimestampNtz".to_string(),
+                });
+            }
+            Datum::TimestampLtz(ts) => {
+                let millis = ts.get_epoch_millisecond();
+                let nanos = ts.get_nano_of_millisecond();
+
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampSecondBuilder>()
+                {
+                    // Convert milliseconds to seconds
+                    b.append_value(millis / MILLIS_PER_SECOND);
+                    return Ok(());
+                }
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampMillisecondBuilder>()
+                {
+                    b.append_value(millis);
+                    return Ok(());
+                }
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampMicrosecondBuilder>()
+                {
+                    // Convert milliseconds + nanos to microseconds
+                    let millis_micros = millis
+                        .checked_mul(MICROS_PER_MILLI)
+                        .ok_or_else(|| RowConvertError {
+                            message: format!(
+                                "Timestamp milliseconds {} overflows when converting to microseconds",
+                                millis
+                            ),
+                        })?;
+                    let nanos_micros = (nanos as i64) / MICROS_PER_MILLI;
+                    let micros =
+                        millis_micros
+                            .checked_add(nanos_micros)
+                            .ok_or_else(|| RowConvertError {
+                                message: format!(
+                                    "Timestamp overflow when adding microseconds: {} + {}",
+                                    millis_micros, nanos_micros
+                                ),
+                            })?;
+                    b.append_value(micros);
+                    return Ok(());
+                }
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<TimestampNanosecondBuilder>()
+                {
+                    // Convert milliseconds + nanos to nanoseconds
+                    let millis_nanos = millis
+                        .checked_mul(NANOS_PER_MILLI)
+                        .ok_or_else(|| RowConvertError {
+                            message: format!(
+                                "Timestamp milliseconds {} overflows when converting to nanoseconds",
+                                millis
+                            ),
+                        })?;
+                    let nanos_total =
+                        millis_nanos
+                            .checked_add(nanos as i64)
+                            .ok_or_else(|| RowConvertError {
+                                message: format!(
+                                    "Timestamp overflow when adding nanoseconds: {} + {}",
+                                    millis_nanos, nanos
+                                ),
+                            })?;
+                    b.append_value(nanos_total);
+                    return Ok(());
+                }
+
+                return Err(RowConvertError {
+                    message: "Builder type mismatch for TimestampLtz".to_string(),
                 });
             }
         }
@@ -325,7 +758,11 @@ impl Datum<'_> {
 macro_rules! impl_to_arrow {
     ($ty:ty, $variant:ident) => {
         impl ToArrow for $ty {
-            fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()> {
+            fn append_to(
+                &self,
+                builder: &mut dyn ArrayBuilder,
+                _data_type: &arrow_schema::DataType,
+            ) -> Result<()> {
                 if let Some(b) = builder.as_any_mut().downcast_mut::<$variant>() {
                     b.append_value(*self);
                     Ok(())
@@ -376,6 +813,11 @@ pub const MAX_COMPACT_TIMESTAMP_PRECISION: u32 = 3;
 /// Maximum valid value for nanoseconds within a millisecond (0 to 999,999 inclusive).
 /// A millisecond contains 1,000,000 nanoseconds, so the fractional part ranges from 0 to 999,999.
 pub const MAX_NANO_OF_MILLISECOND: i32 = 999_999;
+
+// Time unit conversion constants
+const MILLIS_PER_SECOND: i64 = 1_000;
+const MICROS_PER_MILLI: i64 = 1_000;
+const NANOS_PER_MILLI: i64 = 1_000_000;
 
 #[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
 #[display("{millisecond}")]
@@ -536,24 +978,39 @@ mod tests {
         assert_eq!(value, 42);
         let value: std::result::Result<i16, _> = (&datum).try_into();
         assert!(value.is_err());
+
+        // Test temporal types
+        let decimal = Decimal::from_unscaled_long(12345, 10, 2).unwrap();
+        let datum: Datum = decimal.clone().into();
+        assert_eq!(datum.as_decimal(), &decimal);
+        let extracted: Decimal = (&datum).try_into().unwrap();
+        assert_eq!(extracted, decimal);
+
+        let date = Date::new(19000);
+        let datum: Datum = date.into();
+        assert_eq!(datum.as_date(), date);
+
+        let ts_ltz = TimestampLtz::new(1672531200000);
+        let datum: Datum = ts_ltz.into();
+        assert_eq!(datum.as_timestamp_ltz(), ts_ltz);
     }
 
     #[test]
     fn datum_append_to_builder() {
         let mut builder = Int32Builder::new();
-        Datum::Null.append_to(&mut builder).unwrap();
-        Datum::Int32(5).append_to(&mut builder).unwrap();
+        Datum::Null
+            .append_to(&mut builder, &arrow_schema::DataType::Int32)
+            .unwrap();
+        Datum::Int32(5)
+            .append_to(&mut builder, &arrow_schema::DataType::Int32)
+            .unwrap();
         let array = builder.finish();
         assert!(array.is_null(0));
         assert_eq!(array.value(1), 5);
 
         let mut builder = StringBuilder::new();
-        let err = Datum::Int32(1).append_to(&mut builder).unwrap_err();
-        assert!(matches!(err, crate::error::Error::RowConvertError { .. }));
-
-        let mut builder = Int32Builder::new();
-        let err = Datum::Date(Date::new(0))
-            .append_to(&mut builder)
+        let err = Datum::Int32(1)
+            .append_to(&mut builder, &arrow_schema::DataType::Utf8)
             .unwrap_err();
         assert!(matches!(err, crate::error::Error::RowConvertError { .. }));
     }

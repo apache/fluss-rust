@@ -470,7 +470,7 @@ impl LogFetcher {
         log_scanner_status: Arc<LogScannerStatus>,
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let full_arrow_schema = to_arrow_schema(table_info.get_row_type());
+        let full_arrow_schema = to_arrow_schema(table_info.get_row_type())?;
         let read_context =
             Self::create_read_context(full_arrow_schema.clone(), projected_fields.clone(), false)?;
         let remote_read_context =
@@ -1445,7 +1445,7 @@ mod tests {
                 compression_type: ArrowCompressionType::None,
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
-        );
+        )?;
         let record = WriteRecord::for_append(
             table_path,
             1,
@@ -1477,7 +1477,7 @@ mod tests {
 
         let data = build_records(&table_info, Arc::new(table_path))?;
         let log_records = LogRecordsBatches::new(data.clone());
-        let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type()), false);
+        let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type())?, false);
         let completed =
             DefaultCompletedFetch::new(bucket.clone(), log_records, data.len(), read_context, 0, 0);
         fetcher.log_fetch_buffer.add(Box::new(completed));
@@ -1506,7 +1506,7 @@ mod tests {
         let bucket = TableBucket::new(1, 0);
         let data = build_records(&table_info, Arc::new(table_path))?;
         let log_records = LogRecordsBatches::new(data.clone());
-        let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type()), false);
+        let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type())?, false);
         let mut completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::new(
             bucket,
             log_records,
