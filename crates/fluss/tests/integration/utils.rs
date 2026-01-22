@@ -15,8 +15,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::integration::fluss_cluster::FlussTestingCluster;
 use fluss::client::FlussAdmin;
 use fluss::metadata::{TableDescriptor, TablePath};
+use std::time::Duration;
+
+/// Polls the cluster until the CoordinatorEventProcessor is initialized.
+/// Times out after 20 seconds.
+pub async fn wait_for_cluster_ready(cluster: &FlussTestingCluster) {
+    let timeout = Duration::from_secs(20);
+    let poll_interval = Duration::from_millis(500);
+    let start = std::time::Instant::now();
+
+    loop {
+        let connection = cluster.get_fluss_connection().await;
+        if connection.get_admin().await.is_ok() {
+            return;
+        }
+
+        if start.elapsed() >= timeout {
+            panic!(
+                "Server readiness check timed out after {} seconds. \
+                 CoordinatorEventProcessor may not be initialized.",
+                timeout.as_secs()
+            );
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
 
 pub async fn create_table(
     admin: &FlussAdmin,

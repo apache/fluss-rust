@@ -34,7 +34,7 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 mod table_test {
     use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
-    use crate::integration::utils::create_table;
+    use crate::integration::utils::{create_table, wait_for_cluster_ready};
     use arrow::array::record_batch;
     use fluss::client::{FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
@@ -49,21 +49,18 @@ mod table_test {
 
     fn before_all() {
         // Create a new tokio runtime in a separate thread
-        let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
+        let cluster_lock = SHARED_FLUSS_CLUSTER.clone();
         thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             rt.block_on(async {
                 let cluster = FlussTestingClusterBuilder::new("test_table").build().await;
-                let mut guard = cluster_guard.write();
+                wait_for_cluster_ready(&cluster).await;
+                let mut guard = cluster_lock.write();
                 *guard = Some(cluster);
             });
         })
         .join()
         .expect("Failed to create cluster");
-
-        // wait for 20 seconds to avoid the error like
-        // CoordinatorEventProcessor is not initialized yet
-        thread::sleep(std::time::Duration::from_secs(20));
     }
 
     fn get_fluss_cluster() -> Arc<FlussTestingCluster> {

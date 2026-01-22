@@ -33,19 +33,18 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 mod table_remote_scan_test {
     use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
-    use crate::integration::utils::create_table;
+    use crate::integration::utils::{create_table, wait_for_cluster_ready};
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::{GenericRow, InternalRow};
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::thread;
-    use std::thread::sleep;
     use std::time::Duration;
     use uuid::Uuid;
 
     fn before_all() {
         // Create a new tokio runtime in a separate thread
-        let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
+        let cluster_lock = SHARED_FLUSS_CLUSTER.clone();
         thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             rt.block_on(async {
@@ -94,16 +93,13 @@ mod table_remote_scan_test {
                 .with_remote_data_dir(temp_dir)
                 .build()
                 .await;
-                let mut guard = cluster_guard.write();
+                wait_for_cluster_ready(&cluster).await;
+                let mut guard = cluster_lock.write();
                 *guard = Some(cluster);
             });
         })
         .join()
         .expect("Failed to create cluster");
-
-        // wait for 20 seconds to avoid the error like
-        // CoordinatorEventProcessor is not initialized yet
-        sleep(Duration::from_secs(20));
     }
 
     fn after_all() {
