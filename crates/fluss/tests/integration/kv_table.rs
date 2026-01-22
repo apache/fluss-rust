@@ -55,11 +55,13 @@ mod kv_table_test {
     fn make_key(id: i32) -> GenericRow<'static> {
         let mut row = GenericRow::new();
         row.set_field(0, id);
+        row.set_field(1, "");
+        row.set_field(2, 0i64);
         row
     }
 
     #[tokio::test]
-    async fn upsert_and_lookup() {
+    async fn upsert_delete_and_lookup() {
         let cluster = get_fluss_cluster();
         let connection = cluster.get_fluss_connection().await;
 
@@ -129,85 +131,11 @@ mod kv_table_test {
             assert_eq!(row.get_long(2), *expected_age, "age mismatch");
         }
 
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
-    #[tokio::test]
-    async fn update_existing_record() {
-        let cluster = get_fluss_cluster();
-        let connection = cluster.get_fluss_connection().await;
-
-        let admin = connection.get_admin().await.expect("Failed to get admin");
-
-        let table_path = TablePath::new(
-            "fluss".to_string(),
-            "test_update_existing_record".to_string(),
-        );
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("name", DataTypes::string())
-                    .column("score", DataTypes::bigint())
-                    .primary_key(vec!["id".to_string()])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
-            .create_writer()
-            .expect("Failed to create writer");
-
-        // Insert initial record
-        let mut row = GenericRow::new();
-        row.set_field(0, 1);
-        row.set_field(1, "Flash");
-        row.set_field(2, 123456789012i64);
-        upsert_writer
-            .upsert(&row)
-            .await
-            .expect("Failed to upsert initial row");
-
-        // Verify initial record
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
-        let result = lookuper
-            .lookup(&make_key(1))
-            .await
-            .expect("Failed to lookup");
-        let found_row = result
-            .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
-        assert_eq!(
-            found_row.get_long(2),
-            row.get_long(2),
-            "Expected initial score to match"
-        );
-
-        // Update the record with new score
+        // Update the record with new age
         let mut updated_row = GenericRow::new();
         updated_row.set_field(0, 1);
-        updated_row.set_field(1, "Flash");
-        updated_row.set_field(2, 987654321098i64);
+        updated_row.set_field(1, "Verso");
+        updated_row.set_field(2, 33i64);
         upsert_writer
             .upsert(&updated_row)
             .await
@@ -225,7 +153,7 @@ mod kv_table_test {
         assert_eq!(
             found_row.get_long(2),
             updated_row.get_long(2),
-            "Score should be updated"
+            "Age should be updated"
         );
         assert_eq!(
             found_row.get_string(1),
@@ -233,80 +161,11 @@ mod kv_table_test {
             "Name should remain unchanged"
         );
 
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
-    #[tokio::test]
-    async fn delete_record() {
-        let cluster = get_fluss_cluster();
-        let connection = cluster.get_fluss_connection().await;
-
-        let admin = connection.get_admin().await.expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss".to_string(), "test_delete_record".to_string());
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("data", DataTypes::string())
-                    .primary_key(vec!["id".to_string()])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
-            .create_writer()
-            .expect("Failed to create writer");
-
-        // Insert records
-        for i in 1..=3 {
-            let mut row = GenericRow::new();
-            row.set_field(0, i);
-            let data = format!("data{}", i);
-            row.set_field(1, data.as_str());
-            upsert_writer.upsert(&row).await.expect("Failed to upsert");
-        }
-
-        // Verify records exist
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
-        for i in 1..=3 {
-            let result = lookuper
-                .lookup(&make_key(i))
-                .await
-                .expect("Failed to lookup");
-            assert!(
-                result
-                    .get_single_row()
-                    .expect("Failed to get row")
-                    .is_some(),
-                "Record {} should exist before delete",
-                i
-            );
-        }
-
-        // Delete record with id=2
+        // Delete record with id=1
         let mut delete_row = GenericRow::new();
-        delete_row.set_field(0, 2);
+        delete_row.set_field(0, 1);
         delete_row.set_field(1, "");
+        delete_row.set_field(2, 0i64);
         upsert_writer
             .delete(&delete_row)
             .await
@@ -314,7 +173,7 @@ mod kv_table_test {
 
         // Verify deletion
         let result = lookuper
-            .lookup(&make_key(2))
+            .lookup(&make_key(1))
             .await
             .expect("Failed to lookup deleted record");
         assert!(
@@ -322,11 +181,11 @@ mod kv_table_test {
                 .get_single_row()
                 .expect("Failed to get row")
                 .is_none(),
-            "Record 2 should not exist after delete"
+            "Record 1 should not exist after delete"
         );
 
         // Verify other records still exist
-        for i in [1, 3] {
+        for i in [2, 3] {
             let result = lookuper
                 .lookup(&make_key(i))
                 .await
@@ -336,64 +195,12 @@ mod kv_table_test {
                     .get_single_row()
                     .expect("Failed to get row")
                     .is_some(),
-                "Record {} should still exist after deleting record 2",
+                "Record {} should still exist after deleting record 1",
                 i
             );
         }
 
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
-    #[tokio::test]
-    async fn lookup_non_existent_key() {
-        let cluster = get_fluss_cluster();
-        let connection = cluster.get_fluss_connection().await;
-
-        let admin = connection.get_admin().await.expect("Failed to get admin");
-
-        let table_path =
-            TablePath::new("fluss".to_string(), "test_lookup_non_existent".to_string());
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("value", DataTypes::string())
-                    .primary_key(vec!["id".to_string()])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        // Insert one record
-        let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
-            .create_writer()
-            .expect("Failed to create writer");
-
-        let mut row = GenericRow::new();
-        row.set_field(0, 1);
-        row.set_field(1, "exists");
-        upsert_writer.upsert(&row).await.expect("Failed to upsert");
-
         // Lookup non-existent key
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
         let result = lookuper
             .lookup(&make_key(999))
             .await
