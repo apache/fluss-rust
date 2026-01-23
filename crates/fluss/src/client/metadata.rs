@@ -17,7 +17,7 @@
 
 use crate::cluster::{Cluster, ServerNode, ServerType};
 use crate::error::Result;
-use crate::metadata::{TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::MetadataResponse;
 use crate::rpc::message::UpdateMetadataRequest;
 use crate::rpc::{RpcClient, ServerConnection};
@@ -68,6 +68,16 @@ impl Metadata {
         // reading the current cluster state and writing back the updated one.
         let mut cluster_guard = self.cluster.write();
         let updated_cluster = cluster_guard.invalidate_server(server_id, table_ids);
+        *cluster_guard = Arc::new(updated_cluster);
+    }
+
+    pub fn invalidate_physical_table_meta(
+        &self,
+        physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
+    ) {
+        let mut cluster_guard = self.cluster.write();
+        let updated_cluster =
+            cluster_guard.invalidate_physical_table_meta(physical_tables_to_invalid);
         *cluster_guard = Arc::new(updated_cluster);
     }
 

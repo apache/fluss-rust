@@ -176,7 +176,8 @@ pub(crate) fn build_read_context_for_int32() -> ReadContext {
         DataTypes::int(),
         None,
     )]);
-    ReadContext::new(to_arrow_schema(&row_type), false)
+    let schema = to_arrow_schema(&row_type).expect("arrow schema");
+    ReadContext::new(schema, false)
 }
 
 fn build_single_int_record_batch() -> RecordBatch {
@@ -210,7 +211,7 @@ pub(crate) fn build_log_record_bytes(values: Vec<i32>) -> Result<Vec<u8>> {
             compression_type: ArrowCompressionType::None,
             compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
         },
-    );
+    )?;
     let record = WriteRecord::for_append(
         table_path,
         1,

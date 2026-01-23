@@ -445,7 +445,7 @@ mod tests {
                 compression_type: ArrowCompressionType::None,
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
-        );
+        )?;
         let record = WriteRecord::for_append(
             table_path,
             1,
@@ -645,7 +645,7 @@ mod tests {
             DataTypes::int(),
             None,
         )]);
-        let read_context = ReadContext::new(to_arrow_schema(&row_type), false);
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, false);
 
         let bucket = TableBucket::new(1, 0);
         let segment = RemoteLogSegment {

@@ -33,19 +33,20 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 mod table_remote_scan_test {
     use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
-    use crate::integration::utils::create_table;
+    use crate::integration::utils::{
+        create_table, get_cluster, stop_cluster, wait_for_cluster_ready,
+    };
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::{GenericRow, InternalRow};
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::thread;
-    use std::thread::sleep;
     use std::time::Duration;
     use uuid::Uuid;
 
     fn before_all() {
         // Create a new tokio runtime in a separate thread
-        let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
+        let cluster_lock = SHARED_FLUSS_CLUSTER.clone();
         thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             rt.block_on(async {
@@ -94,32 +95,17 @@ mod table_remote_scan_test {
                 .with_remote_data_dir(temp_dir)
                 .build()
                 .await;
-                let mut guard = cluster_guard.write();
+                wait_for_cluster_ready(&cluster).await;
+                let mut guard = cluster_lock.write();
                 *guard = Some(cluster);
             });
         })
         .join()
         .expect("Failed to create cluster");
-
-        // wait for 20 seconds to avoid the error like
-        // CoordinatorEventProcessor is not initialized yet
-        sleep(Duration::from_secs(20));
     }
 
     fn after_all() {
-        // Create a new tokio runtime in a separate thread
-        let cluster_guard = SHARED_FLUSS_CLUSTER.clone();
-        thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            rt.block_on(async {
-                let mut guard = cluster_guard.write();
-                if let Some(cluster) = guard.take() {
-                    cluster.stop().await;
-                }
-            });
-        })
-        .join()
-        .expect("Failed to cleanup cluster");
+        stop_cluster(SHARED_FLUSS_CLUSTER.clone());
     }
 
     #[tokio::test]
@@ -215,10 +201,6 @@ mod table_remote_scan_test {
     }
 
     fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
-        let cluster_guard = SHARED_FLUSS_CLUSTER.read();
-        if cluster_guard.is_none() {
-            panic!("Fluss cluster not initialized. Make sure before_all() was called.");
-        }
-        Arc::new(cluster_guard.as_ref().unwrap().clone())
+        get_cluster(&SHARED_FLUSS_CLUSTER)
     }
 }

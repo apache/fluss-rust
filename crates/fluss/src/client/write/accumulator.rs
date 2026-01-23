@@ -112,7 +112,7 @@ impl RecordAccumulator {
                 bucket_id,
                 current_time_ms(),
                 matches!(&record.record, Record::Log(LogWriteRecord::RecordBatch(_))),
-            )),
+            )?),
             Record::Kv(kv_record) => Kv(KvWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
                 table_path.as_ref().clone(),

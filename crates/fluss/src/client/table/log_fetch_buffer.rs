@@ -665,6 +665,15 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
+    fn test_read_context() -> Result<ReadContext> {
+        let row_type = RowType::new(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        Ok(ReadContext::new(to_arrow_schema(&row_type)?, false))
+    }
+
     struct ErrorPendingFetch {
         table_bucket: TableBucket,
     }
@@ -688,7 +697,7 @@ mod tests {
 
     #[tokio::test]
     async fn await_not_empty_returns_wakeup_error() {
-        let buffer = LogFetchBuffer::new(build_read_context_for_int32());
+        let buffer = LogFetchBuffer::new(test_read_context().unwrap());
         buffer.wakeup();
 
         let result = buffer.await_not_empty(Duration::from_millis(10)).await;
@@ -697,7 +706,7 @@ mod tests {
 
     #[tokio::test]
     async fn await_not_empty_returns_pending_error() {
-        let buffer = LogFetchBuffer::new(build_read_context_for_int32());
+        let buffer = LogFetchBuffer::new(test_read_context().unwrap());
         let table_bucket = TableBucket::new(1, 0);
         buffer.pend(Box::new(ErrorPendingFetch {
             table_bucket: table_bucket.clone(),
@@ -804,7 +813,7 @@ mod tests {
                 compression_type: ArrowCompressionType::None,
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
-        );
+        )?;
 
         let mut row = GenericRow::new();
         row.set_field(0, 1_i32);
@@ -814,7 +823,7 @@ mod tests {
 
         let data = builder.build()?;
         let log_records = LogRecordsBatches::new(data.clone());
-        let read_context = ReadContext::new(to_arrow_schema(&row_type), false);
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, false);
         let mut fetch = DefaultCompletedFetch::new(
             TableBucket::new(1, 0),
             log_records,

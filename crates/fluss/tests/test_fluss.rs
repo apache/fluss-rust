@@ -22,6 +22,7 @@ extern crate fluss;
 mod integration {
     mod admin;
     mod fluss_cluster;
+    mod kv_table;
     mod table;
 
     mod utils;
