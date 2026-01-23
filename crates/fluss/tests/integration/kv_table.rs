@@ -452,8 +452,7 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path =
-            TablePath::new("fluss".to_string(), "test_all_datatypes".to_string());
+        let table_path = TablePath::new("fluss".to_string(), "test_all_datatypes".to_string());
 
         // Create a table with all supported primitive datatypes
         let table_descriptor = TableDescriptor::builder()
@@ -674,7 +673,10 @@ mod kv_table_test {
         assert!(found_row_nulls.is_null_at(10), "col_decimal should be null");
         assert!(found_row_nulls.is_null_at(11), "col_date should be null");
         assert!(found_row_nulls.is_null_at(12), "col_time should be null");
-        assert!(found_row_nulls.is_null_at(13), "col_timestamp should be null");
+        assert!(
+            found_row_nulls.is_null_at(13),
+            "col_timestamp should be null"
+        );
         assert!(
             found_row_nulls.is_null_at(14),
             "col_timestamp_ltz should be null"
