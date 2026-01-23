@@ -22,7 +22,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Polls the cluster until the CoordinatorEventProcessor is initialized.
+/// Polls the cluster until CoordinatorEventProcessor is initialized and tablet server is available.
 /// Times out after 20 seconds.
 pub async fn wait_for_cluster_ready(cluster: &FlussTestingCluster) {
     let timeout = Duration::from_secs(20);
@@ -31,14 +31,20 @@ pub async fn wait_for_cluster_ready(cluster: &FlussTestingCluster) {
 
     loop {
         let connection = cluster.get_fluss_connection().await;
-        if connection.get_admin().await.is_ok() {
+        if connection.get_admin().await.is_ok()
+            && connection
+                .get_metadata()
+                .get_cluster()
+                .get_one_available_server()
+                .is_some()
+        {
             return;
         }
 
         if start.elapsed() >= timeout {
             panic!(
                 "Server readiness check timed out after {} seconds. \
-                 CoordinatorEventProcessor may not be initialized.",
+                 CoordinatorEventProcessor may not be initialized or TabletServer may not be available.",
                 timeout.as_secs()
             );
         }
