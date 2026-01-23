@@ -462,6 +462,16 @@ struct LogFetcher {
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
 }
 
+struct FetchResponseContext {
+    metadata: Arc<Metadata>,
+    log_fetch_buffer: Arc<LogFetchBuffer>,
+    log_scanner_status: Arc<LogScannerStatus>,
+    read_context: ReadContext,
+    remote_read_context: ReadContext,
+    remote_log_downloader: Arc<RemoteLogDownloader>,
+    credentials_cache: Arc<CredentialsCache>,
+}
+
 impl LogFetcher {
     pub fn new(
         table_info: TableInfo,
@@ -650,6 +660,15 @@ impl LogFetcher {
             let creds_cache = self.credentials_cache.clone();
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
             let metadata = self.metadata.clone();
+            let response_context = FetchResponseContext {
+                metadata: metadata.clone(),
+                log_fetch_buffer,
+                log_scanner_status,
+                read_context,
+                remote_read_context,
+                remote_log_downloader,
+                credentials_cache: creds_cache,
+            };
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
             // This is acceptable because:
@@ -695,17 +714,7 @@ impl LogFetcher {
                     }
                 };
 
-                Self::handle_fetch_response(
-                    fetch_response,
-                    &metadata,
-                    &log_fetch_buffer,
-                    &log_scanner_status,
-                    &read_context,
-                    &remote_read_context,
-                    &remote_log_downloader,
-                    &creds_cache,
-                )
-                .await;
+                Self::handle_fetch_response(fetch_response, response_context).await;
             });
         }
 
@@ -724,14 +733,18 @@ impl LogFetcher {
     /// Handle fetch response and add completed fetches to buffer
     async fn handle_fetch_response(
         fetch_response: crate::proto::FetchLogResponse,
-        metadata: &Arc<Metadata>,
-        log_fetch_buffer: &Arc<LogFetchBuffer>,
-        log_scanner_status: &Arc<LogScannerStatus>,
-        read_context: &ReadContext,
-        remote_read_context: &ReadContext,
-        remote_log_downloader: &Arc<RemoteLogDownloader>,
-        credentials_cache: &Arc<CredentialsCache>,
+        context: FetchResponseContext,
     ) {
+        let FetchResponseContext {
+            metadata,
+            log_fetch_buffer,
+            log_scanner_status,
+            read_context,
+            remote_read_context,
+            remote_log_downloader,
+            credentials_cache,
+        } = context;
+
         for pb_fetch_log_resp in fetch_response.tables_resp {
             let table_id = pb_fetch_log_resp.table_id;
             let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
@@ -1593,17 +1606,17 @@ mod tests {
             }],
         };
 
-        LogFetcher::handle_fetch_response(
-            response,
-            &metadata,
-            &fetcher.log_fetch_buffer,
-            &fetcher.log_scanner_status,
-            &fetcher.read_context,
-            &fetcher.remote_read_context,
-            &fetcher.remote_log_downloader,
-            &fetcher.credentials_cache,
-        )
-        .await;
+        let response_context = FetchResponseContext {
+            metadata: metadata.clone(),
+            log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
+            log_scanner_status: fetcher.log_scanner_status.clone(),
+            read_context: fetcher.read_context.clone(),
+            remote_read_context: fetcher.remote_read_context.clone(),
+            remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            credentials_cache: fetcher.credentials_cache.clone(),
+        };
+
+        LogFetcher::handle_fetch_response(response, response_context).await;
 
         let completed = fetcher.log_fetch_buffer.poll().expect("completed fetch");
         let api_error = completed.api_error().expect("api error");
@@ -1646,17 +1659,17 @@ mod tests {
             }],
         };
 
-        LogFetcher::handle_fetch_response(
-            response,
-            &metadata,
-            &fetcher.log_fetch_buffer,
-            &fetcher.log_scanner_status,
-            &fetcher.read_context,
-            &fetcher.remote_read_context,
-            &fetcher.remote_log_downloader,
-            &fetcher.credentials_cache,
-        )
-        .await;
+        let response_context = FetchResponseContext {
+            metadata: metadata.clone(),
+            log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
+            log_scanner_status: fetcher.log_scanner_status.clone(),
+            read_context: fetcher.read_context.clone(),
+            remote_read_context: fetcher.remote_read_context.clone(),
+            remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            credentials_cache: fetcher.credentials_cache.clone(),
+        };
+
+        LogFetcher::handle_fetch_response(response, response_context).await;
 
         assert!(metadata.leader_for(&bucket).is_none());
         Ok(())
