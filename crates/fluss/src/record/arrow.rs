@@ -533,6 +533,9 @@ impl LogRecordBatch {
     }
 
     pub fn is_valid(&self) -> bool {
+        if self.data.len() < RECORD_BATCH_HEADER_SIZE {
+            return false;
+        }
         self.size_in_bytes() >= RECORD_BATCH_HEADER_SIZE
             && self.checksum() == self.compute_checksum()
     }
