@@ -36,7 +36,7 @@ use crate::client::table::remote_log::{
     RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
 };
 use crate::error::{ApiError, Error, FlussError, Result};
-use crate::metadata::{TableBucket, TableInfo, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TableInfo, TablePath};
 use crate::proto::{ErrorResponse, FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::{RpcClient, RpcError, message};
@@ -462,6 +462,16 @@ struct LogFetcher {
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
 }
 
+struct FetchResponseContext {
+    metadata: Arc<Metadata>,
+    log_fetch_buffer: Arc<LogFetchBuffer>,
+    log_scanner_status: Arc<LogScannerStatus>,
+    read_context: ReadContext,
+    remote_read_context: ReadContext,
+    remote_log_downloader: Arc<RemoteLogDownloader>,
+    credentials_cache: Arc<CredentialsCache>,
+}
+
 impl LogFetcher {
     pub fn new(
         table_info: TableInfo,
@@ -518,7 +528,8 @@ impl LogFetcher {
             | FlussError::LogStorageException
             | FlussError::KvStorageException
             | FlussError::StorageException
-            | FlussError::FencedLeaderEpochException => FetchErrorContext {
+            | FlussError::FencedLeaderEpochException
+            | FlussError::LeaderNotAvailableException => FetchErrorContext {
                 action: FetchErrorAction::Ignore,
                 log_level: FetchErrorLogLevel::Debug,
                 log_message: format!(
@@ -568,6 +579,17 @@ impl LogFetcher {
                 ),
             },
         }
+    }
+
+    fn should_invalidate_table_meta(error: FlussError) -> bool {
+        matches!(
+            error,
+            FlussError::NotLeaderOrFollower
+                | FlussError::LeaderNotAvailableException
+                | FlussError::FencedLeaderEpochException
+                | FlussError::UnknownTableOrBucketException
+                | FlussError::InvalidCoordinatorException
+        )
     }
 
     async fn check_and_update_metadata(&self) -> Result<()> {
@@ -639,6 +661,15 @@ impl LogFetcher {
             let creds_cache = self.credentials_cache.clone();
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
             let metadata = self.metadata.clone();
+            let response_context = FetchResponseContext {
+                metadata: metadata.clone(),
+                log_fetch_buffer,
+                log_scanner_status,
+                read_context,
+                remote_read_context,
+                remote_log_downloader,
+                credentials_cache: creds_cache,
+            };
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
             // This is acceptable because:
@@ -684,16 +715,7 @@ impl LogFetcher {
                     }
                 };
 
-                Self::handle_fetch_response(
-                    fetch_response,
-                    &log_fetch_buffer,
-                    &log_scanner_status,
-                    &read_context,
-                    &remote_read_context,
-                    &remote_log_downloader,
-                    &creds_cache,
-                )
-                .await;
+                Self::handle_fetch_response(fetch_response, response_context).await;
             });
         }
 
@@ -712,13 +734,18 @@ impl LogFetcher {
     /// Handle fetch response and add completed fetches to buffer
     async fn handle_fetch_response(
         fetch_response: crate::proto::FetchLogResponse,
-        log_fetch_buffer: &Arc<LogFetchBuffer>,
-        log_scanner_status: &Arc<LogScannerStatus>,
-        read_context: &ReadContext,
-        remote_read_context: &ReadContext,
-        remote_log_downloader: &Arc<RemoteLogDownloader>,
-        credentials_cache: &Arc<CredentialsCache>,
+        context: FetchResponseContext,
     ) {
+        let FetchResponseContext {
+            metadata,
+            log_fetch_buffer,
+            log_scanner_status,
+            read_context,
+            remote_read_context,
+            remote_log_downloader,
+            credentials_cache,
+        } = context;
+
         for pb_fetch_log_resp in fetch_response.tables_resp {
             let table_id = pb_fetch_log_resp.table_id;
             let fetch_log_for_buckets = pb_fetch_log_resp.buckets_resp;
@@ -745,6 +772,20 @@ impl LogFetcher {
                     .into();
 
                     let error = FlussError::for_code(error_code);
+                    if Self::should_invalidate_table_meta(error) {
+                        // TODO: Consider triggering table meta invalidation from sender/lookup paths.
+                        let table_id = table_bucket.table_id();
+                        let cluster = metadata.get_cluster();
+                        if let Some(table_path) = cluster.get_table_path_by_id(table_id) {
+                            let physical_tables =
+                                HashSet::from([PhysicalTablePath::of(table_path.clone())]);
+                            metadata.invalidate_physical_table_meta(&physical_tables);
+                        } else {
+                            warn!(
+                                "Table id {table_id} is missing from table_path_by_id while invalidating table metadata"
+                            );
+                        }
+                    }
                     let error_context = Self::describe_fetch_error(
                         error,
                         &table_bucket,
@@ -1577,20 +1618,72 @@ mod tests {
             }],
         };
 
-        LogFetcher::handle_fetch_response(
-            response,
-            &fetcher.log_fetch_buffer,
-            &fetcher.log_scanner_status,
-            &fetcher.read_context,
-            &fetcher.remote_read_context,
-            &fetcher.remote_log_downloader,
-            &fetcher.credentials_cache,
-        )
-        .await;
+        let response_context = FetchResponseContext {
+            metadata: metadata.clone(),
+            log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
+            log_scanner_status: fetcher.log_scanner_status.clone(),
+            read_context: fetcher.read_context.clone(),
+            remote_read_context: fetcher.remote_read_context.clone(),
+            remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            credentials_cache: fetcher.credentials_cache.clone(),
+        };
+
+        LogFetcher::handle_fetch_response(response, response_context).await;
 
         let completed = fetcher.log_fetch_buffer.poll().expect("completed fetch");
         let api_error = completed.api_error().expect("api error");
         assert_eq!(api_error.code, FlussError::AuthorizationException.code());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_fetch_response_invalidates_table_meta() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 5);
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status.clone(),
+            None,
+        )?;
+
+        let bucket = TableBucket::new(1, 0);
+        assert!(metadata.leader_for(&bucket).is_some());
+
+        let response = crate::proto::FetchLogResponse {
+            tables_resp: vec![crate::proto::PbFetchLogRespForTable {
+                table_id: 1,
+                buckets_resp: vec![crate::proto::PbFetchLogRespForBucket {
+                    partition_id: None,
+                    bucket_id: 0,
+                    error_code: Some(FlussError::NotLeaderOrFollower.code()),
+                    error_message: Some("not leader".to_string()),
+                    high_watermark: None,
+                    log_start_offset: None,
+                    remote_log_fetch_info: None,
+                    records: None,
+                }],
+            }],
+        };
+
+        let response_context = FetchResponseContext {
+            metadata: metadata.clone(),
+            log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
+            log_scanner_status: fetcher.log_scanner_status.clone(),
+            read_context: fetcher.read_context.clone(),
+            remote_read_context: fetcher.remote_read_context.clone(),
+            remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            credentials_cache: fetcher.credentials_cache.clone(),
+        };
+
+        LogFetcher::handle_fetch_response(response, response_context).await;
+
+        assert!(metadata.leader_for(&bucket).is_none());
         Ok(())
     }
 }

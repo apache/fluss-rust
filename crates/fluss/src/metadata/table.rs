@@ -697,7 +697,7 @@ impl TablePath {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalTablePath {
     table_path: TablePath,
     #[allow(dead_code)]
