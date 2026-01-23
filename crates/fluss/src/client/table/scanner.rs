@@ -588,6 +588,7 @@ impl LogFetcher {
                 | FlussError::LeaderNotAvailableException
                 | FlussError::FencedLeaderEpochException
                 | FlussError::UnknownTableOrBucketException
+                | FlussError::InvalidCoordinatorException
         )
     }
 
@@ -772,6 +773,7 @@ impl LogFetcher {
 
                     let error = FlussError::for_code(error_code);
                     if Self::should_invalidate_bucket_leader(error) {
+                        // TODO: Consider triggering leader invalidation from sender/lookup paths.
                         metadata.invalidate_bucket_leader(&table_bucket);
                     }
                     let error_context = Self::describe_fetch_error(

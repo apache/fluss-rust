@@ -18,9 +18,12 @@
 use crate::BucketId;
 use crate::cluster::{BucketLocation, ServerNode, ServerType};
 use crate::error::Result;
-use crate::metadata::{JsonSerde, TableBucket, TableDescriptor, TableInfo, TablePath};
+use crate::metadata::{
+    JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
+};
 use crate::proto::MetadataResponse;
 use crate::rpc::{from_pb_server_node, from_pb_table_path};
+use log::warn;
 use rand::random_range;
 use std::collections::{HashMap, HashSet};
 
@@ -77,23 +80,33 @@ impl Cluster {
             .filter_map(|id| self.table_path_by_id.get(id))
             .collect();
 
-        let available_locations_by_path = self
-            .available_locations_by_path
-            .iter()
-            .filter(|&(path, _)| !table_paths.contains(path))
-            .map(|(path, locations)| (path.clone(), locations.clone()))
-            .collect();
-
-        let available_locations_by_bucket = self
-            .available_locations_by_bucket
-            .iter()
-            .filter(|&(_bucket, location)| !table_paths.contains(&location.table_path))
-            .map(|(bucket, location)| (bucket.clone(), location.clone()))
-            .collect();
+        let (available_locations_by_path, available_locations_by_bucket) =
+            self.filter_bucket_locations_by_path(&table_paths);
 
         Cluster::new(
             self.coordinator_server.clone(),
             alive_tablet_servers_by_id,
+            available_locations_by_path,
+            available_locations_by_bucket,
+            self.table_id_by_path.clone(),
+            self.table_info_by_path.clone(),
+        )
+    }
+
+    pub fn invalidate_physical_table_bucket_meta(
+        &self,
+        physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
+    ) -> Self {
+        let table_paths: HashSet<&TablePath> = physical_tables_to_invalid
+            .iter()
+            .map(|path| path.get_table_path())
+            .collect();
+        let (available_locations_by_path, available_locations_by_bucket) =
+            self.filter_bucket_locations_by_path(&table_paths);
+
+        Cluster::new(
+            self.coordinator_server.clone(),
+            self.alive_tablet_servers_by_id.clone(),
             available_locations_by_path,
             available_locations_by_bucket,
             self.table_id_by_path.clone(),
@@ -111,6 +124,10 @@ impl Cluster {
                 locations.retain(|location| location.table_bucket() != table_bucket);
             }
         } else {
+            warn!(
+                "Table id {} is missing from table_path_by_id while invalidating bucket leader",
+                table_bucket.table_id()
+            );
             for locations in available_locations_by_path.values_mut() {
                 locations.retain(|location| location.table_bucket() != table_bucket);
             }
@@ -144,7 +161,31 @@ impl Cluster {
         self.available_locations_by_bucket = available_locations_by_bucket;
         self.table_id_by_path = table_id_by_path;
         self.table_path_by_id = table_path_by_id;
-        self.table_info_by_path = table_info_by_path;
+            self.table_info_by_path = table_info_by_path;
+    }
+
+    fn filter_bucket_locations_by_path(
+        &self,
+        table_paths: &HashSet<&TablePath>,
+    ) -> (
+        HashMap<TablePath, Vec<BucketLocation>>,
+        HashMap<TableBucket, BucketLocation>,
+    ) {
+        let available_locations_by_path = self
+            .available_locations_by_path
+            .iter()
+            .filter(|&(path, _)| !table_paths.contains(path))
+            .map(|(path, locations)| (path.clone(), locations.clone()))
+            .collect();
+
+        let available_locations_by_bucket = self
+            .available_locations_by_bucket
+            .iter()
+            .filter(|&(_bucket, location)| !table_paths.contains(&location.table_path))
+            .map(|(bucket, location)| (bucket.clone(), location.clone()))
+            .collect();
+
+        (available_locations_by_path, available_locations_by_bucket)
     }
 
     pub fn from_metadata_response(
