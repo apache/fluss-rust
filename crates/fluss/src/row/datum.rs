@@ -395,6 +395,54 @@ pub trait ToArrow {
     ) -> Result<()>;
 }
 
+// Time unit conversion constants
+const MILLIS_PER_SECOND: i64 = 1_000;
+const MICROS_PER_MILLI: i64 = 1_000;
+const NANOS_PER_MILLI: i64 = 1_000_000;
+
+/// Converts milliseconds and nanoseconds-within-millisecond to total microseconds.
+/// Returns an error if the conversion would overflow.
+fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
+    let millis_micros = millis
+        .checked_mul(MICROS_PER_MILLI)
+        .ok_or_else(|| RowConvertError {
+            message: format!(
+                "Timestamp milliseconds {} overflows when converting to microseconds",
+                millis
+            ),
+        })?;
+    let nanos_micros = (nanos as i64) / MICROS_PER_MILLI;
+    millis_micros
+        .checked_add(nanos_micros)
+        .ok_or_else(|| RowConvertError {
+            message: format!(
+                "Timestamp overflow when adding microseconds: {} + {}",
+                millis_micros, nanos_micros
+            ),
+        })
+}
+
+/// Converts milliseconds and nanoseconds-within-millisecond to total nanoseconds.
+/// Returns an error if the conversion would overflow.
+fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
+    let millis_nanos = millis
+        .checked_mul(NANOS_PER_MILLI)
+        .ok_or_else(|| RowConvertError {
+            message: format!(
+                "Timestamp milliseconds {} overflows when converting to nanoseconds",
+                millis
+            ),
+        })?;
+    millis_nanos
+        .checked_add(nanos as i64)
+        .ok_or_else(|| RowConvertError {
+            message: format!(
+                "Timestamp overflow when adding nanoseconds: {} + {}",
+                millis_nanos, nanos
+            ),
+        })
+}
+
 impl Datum<'_> {
     pub fn append_to(
         &self,
@@ -601,7 +649,6 @@ impl Datum<'_> {
                     .as_any_mut()
                     .downcast_mut::<TimestampSecondBuilder>()
                 {
-                    // Convert milliseconds to seconds
                     b.append_value(millis / MILLIS_PER_SECOND);
                     return Ok(());
                 }
@@ -616,51 +663,14 @@ impl Datum<'_> {
                     .as_any_mut()
                     .downcast_mut::<TimestampMicrosecondBuilder>()
                 {
-                    // Convert milliseconds + nanos to microseconds
-                    let millis_micros = millis
-                        .checked_mul(MICROS_PER_MILLI)
-                        .ok_or_else(|| RowConvertError {
-                            message: format!(
-                                "Timestamp milliseconds {} overflows when converting to microseconds",
-                                millis
-                            ),
-                        })?;
-                    let nanos_micros = (nanos as i64) / MICROS_PER_MILLI;
-                    let micros =
-                        millis_micros
-                            .checked_add(nanos_micros)
-                            .ok_or_else(|| RowConvertError {
-                                message: format!(
-                                    "Timestamp overflow when adding microseconds: {} + {}",
-                                    millis_micros, nanos_micros
-                                ),
-                            })?;
-                    b.append_value(micros);
+                    b.append_value(millis_nanos_to_micros(millis, nanos)?);
                     return Ok(());
                 }
                 if let Some(b) = builder
                     .as_any_mut()
                     .downcast_mut::<TimestampNanosecondBuilder>()
                 {
-                    // Convert milliseconds + nanos to nanoseconds
-                    let millis_nanos = millis
-                        .checked_mul(NANOS_PER_MILLI)
-                        .ok_or_else(|| RowConvertError {
-                            message: format!(
-                                "Timestamp milliseconds {} overflows when converting to nanoseconds",
-                                millis
-                            ),
-                        })?;
-                    let nanos_total =
-                        millis_nanos
-                            .checked_add(nanos as i64)
-                            .ok_or_else(|| RowConvertError {
-                                message: format!(
-                                    "Timestamp overflow when adding nanoseconds: {} + {}",
-                                    millis_nanos, nanos
-                                ),
-                            })?;
-                    b.append_value(nanos_total);
+                    b.append_value(millis_nanos_to_nanos(millis, nanos)?);
                     return Ok(());
                 }
 
@@ -676,7 +686,6 @@ impl Datum<'_> {
                     .as_any_mut()
                     .downcast_mut::<TimestampSecondBuilder>()
                 {
-                    // Convert milliseconds to seconds
                     b.append_value(millis / MILLIS_PER_SECOND);
                     return Ok(());
                 }
@@ -691,51 +700,14 @@ impl Datum<'_> {
                     .as_any_mut()
                     .downcast_mut::<TimestampMicrosecondBuilder>()
                 {
-                    // Convert milliseconds + nanos to microseconds
-                    let millis_micros = millis
-                        .checked_mul(MICROS_PER_MILLI)
-                        .ok_or_else(|| RowConvertError {
-                            message: format!(
-                                "Timestamp milliseconds {} overflows when converting to microseconds",
-                                millis
-                            ),
-                        })?;
-                    let nanos_micros = (nanos as i64) / MICROS_PER_MILLI;
-                    let micros =
-                        millis_micros
-                            .checked_add(nanos_micros)
-                            .ok_or_else(|| RowConvertError {
-                                message: format!(
-                                    "Timestamp overflow when adding microseconds: {} + {}",
-                                    millis_micros, nanos_micros
-                                ),
-                            })?;
-                    b.append_value(micros);
+                    b.append_value(millis_nanos_to_micros(millis, nanos)?);
                     return Ok(());
                 }
                 if let Some(b) = builder
                     .as_any_mut()
                     .downcast_mut::<TimestampNanosecondBuilder>()
                 {
-                    // Convert milliseconds + nanos to nanoseconds
-                    let millis_nanos = millis
-                        .checked_mul(NANOS_PER_MILLI)
-                        .ok_or_else(|| RowConvertError {
-                            message: format!(
-                                "Timestamp milliseconds {} overflows when converting to nanoseconds",
-                                millis
-                            ),
-                        })?;
-                    let nanos_total =
-                        millis_nanos
-                            .checked_add(nanos as i64)
-                            .ok_or_else(|| RowConvertError {
-                                message: format!(
-                                    "Timestamp overflow when adding nanoseconds: {} + {}",
-                                    millis_nanos, nanos
-                                ),
-                            })?;
-                    b.append_value(nanos_total);
+                    b.append_value(millis_nanos_to_nanos(millis, nanos)?);
                     return Ok(());
                 }
 
@@ -813,11 +785,6 @@ pub const MAX_COMPACT_TIMESTAMP_PRECISION: u32 = 3;
 /// Maximum valid value for nanoseconds within a millisecond (0 to 999,999 inclusive).
 /// A millisecond contains 1,000,000 nanoseconds, so the fractional part ranges from 0 to 999,999.
 pub const MAX_NANO_OF_MILLISECOND: i32 = 999_999;
-
-// Time unit conversion constants
-const MILLIS_PER_SECOND: i64 = 1_000;
-const MICROS_PER_MILLI: i64 = 1_000;
-const NANOS_PER_MILLI: i64 = 1_000_000;
 
 #[derive(PartialOrd, Ord, Display, PartialEq, Eq, Debug, Copy, Clone, Default, Hash, Serialize)]
 #[display("{millisecond}")]

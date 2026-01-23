@@ -45,7 +45,6 @@ use byteorder::WriteBytesExt;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use crc32c::crc32c;
-use parking_lot::Mutex;
 use std::{
     io::{Cursor, Write},
     sync::Arc,
@@ -116,7 +115,7 @@ pub struct MemoryLogRecordsArrowBuilder {
 }
 
 pub trait ArrowRecordBatchInnerBuilder: Send + Sync {
-    fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>>;
+    fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>>;
 
     fn append(&mut self, row: &GenericRow) -> Result<bool>;
 
@@ -136,7 +135,7 @@ pub struct PrebuiltRecordBatchBuilder {
 }
 
 impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
-    fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>> {
+    fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>> {
         Ok(self.arrow_record_batch.as_ref().unwrap().clone())
     }
 
@@ -170,7 +169,7 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
 
 pub struct RowAppendRecordBatchBuilder {
     table_schema: SchemaRef,
-    arrow_column_builders: Mutex<Vec<Box<dyn ArrayBuilder>>>,
+    arrow_column_builders: Vec<Box<dyn ArrayBuilder>>,
     records_count: i32,
 }
 
@@ -184,7 +183,7 @@ impl RowAppendRecordBatchBuilder {
             .collect();
         Ok(Self {
             table_schema: schema_ref.clone(),
-            arrow_column_builders: Mutex::new(builders?),
+            arrow_column_builders: builders?,
             records_count: 0,
         })
     }
@@ -260,10 +259,9 @@ impl RowAppendRecordBatchBuilder {
 }
 
 impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
-    fn build_arrow_record_batch(&self) -> Result<Arc<RecordBatch>> {
+    fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>> {
         let arrays: Result<Vec<ArrayRef>> = self
             .arrow_column_builders
-            .lock()
             .iter_mut()
             .enumerate()
             .map(|(idx, b)| {
@@ -295,8 +293,7 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
     fn append(&mut self, row: &GenericRow) -> Result<bool> {
         for (idx, value) in row.values.iter().enumerate() {
             let field_type = self.table_schema.field(idx).data_type();
-            let mut builder_binding = self.arrow_column_builders.lock();
-            let builder = builder_binding.get_mut(idx).unwrap();
+            let builder = self.arrow_column_builders.get_mut(idx).unwrap();
             value.append_to(builder.as_mut(), field_type)?;
         }
         self.records_count += 1;
@@ -373,7 +370,7 @@ impl MemoryLogRecordsArrowBuilder {
         self.is_closed = true;
     }
 
-    pub fn build(&self) -> Result<Vec<u8>> {
+    pub fn build(&mut self) -> Result<Vec<u8>> {
         // serialize arrow batch
         let mut arrow_batch_bytes = vec![];
         let table_schema = self.arrow_record_batch_builder.schema();
@@ -1391,15 +1388,18 @@ mod tests {
 
     #[test]
     fn test_temporal_and_decimal_builder_validation() {
-        // Test valid builder creation
-        let builder =
+        use arrow::array::Array;
+
+        // Test valid builder creation with precision=10, scale=2
+        let mut builder =
             RowAppendRecordBatchBuilder::create_builder(&ArrowDataType::Decimal128(10, 2)).unwrap();
-        assert!(
-            builder
-                .as_any()
-                .downcast_ref::<Decimal128Builder>()
-                .is_some()
-        );
+        let decimal_builder = builder
+            .as_any_mut()
+            .downcast_mut::<Decimal128Builder>()
+            .expect("Expected Decimal128Builder");
+        // Verify precision and scale
+        let array = decimal_builder.finish();
+        assert_eq!(array.data_type(), &ArrowDataType::Decimal128(10, 2));
 
         // Test error case: invalid precision/scale
         let result =
@@ -1431,7 +1431,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Decimal128Array>()
             .unwrap();
-        assert_eq!(array.value(0), 12346); // 123.46 rounded
+        assert_eq!(array.value(0), 12346); // 123.456 rounded to 2 decimal places
         assert_eq!(array.scale(), 2);
 
         // Test 2: Precision overflow (should error)
@@ -1457,7 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn test_temporal_types_end_to_end() -> Result<()> {
+    fn test_all_types_end_to_end() -> Result<()> {
         use crate::row::{Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz};
         use arrow::array::{
             Date32Array, Decimal128Array, Int32Array, Time32MillisecondArray,
@@ -1466,7 +1466,7 @@ mod tests {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
 
-        // Schema with decimal, date, time (ms + ns), timestamps (μs + ns)
+        // Schema with int, decimal, date, time (ms + ns), timestamps (μs + ns)
         let row_type = RowType::new(vec![
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("amount".to_string(), DataTypes::decimal(10, 2), None),
@@ -1495,7 +1495,7 @@ mod tests {
 
         let mut builder = RowAppendRecordBatchBuilder::new(&row_type)?;
 
-        // Append rows with temporal values
+        // Append rows with various data types
         builder.append(&GenericRow {
             values: vec![
                 Datum::Int32(1),
@@ -1504,10 +1504,15 @@ mod tests {
                     10,
                     3,
                 )?),
+                // 18000 days since epoch = 2019-04-14
                 Datum::Date(Date::new(18000)),
+                // 43200000 ms = 12:00:00.000 (noon)
                 Datum::Time(Time::new(43200000)),
+                // 12345 ms = 00:00:12.345
                 Datum::Time(Time::new(12345)),
+                // 1609459200000 ms = 2021-01-01 00:00:00 UTC, with 123456 additional nanoseconds
                 Datum::TimestampNtz(TimestampNtz::from_millis_nanos(1609459200000, 123456)?),
+                // 1609459200000 ms = 2021-01-01 00:00:00 UTC, with 987654 additional nanoseconds
                 Datum::TimestampLtz(TimestampLtz::from_millis_nanos(1609459200000, 987654)?),
             ],
         })?;
@@ -1530,7 +1535,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Decimal128Array>()
             .unwrap();
-        assert_eq!(dec.value(0), 12346); // 123.456 → 123.46 (scale 3 → 2)
+        assert_eq!(dec.value(0), 12346); // 123.456 rounded to 2 decimal places
 
         assert_eq!(
             batch
