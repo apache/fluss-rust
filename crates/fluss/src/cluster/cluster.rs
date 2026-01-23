@@ -161,7 +161,7 @@ impl Cluster {
         self.available_locations_by_bucket = available_locations_by_bucket;
         self.table_id_by_path = table_id_by_path;
         self.table_path_by_id = table_path_by_id;
-            self.table_info_by_path = table_info_by_path;
+        self.table_info_by_path = table_info_by_path;
     }
 
     fn filter_bucket_locations_by_path(
