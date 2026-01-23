@@ -23,7 +23,6 @@ use crate::metadata::{
 };
 use crate::proto::MetadataResponse;
 use crate::rpc::{from_pb_server_node, from_pb_table_path};
-use log::warn;
 use rand::random_range;
 use std::collections::{HashMap, HashSet};
 
@@ -93,7 +92,7 @@ impl Cluster {
         )
     }
 
-    pub fn invalidate_physical_table_bucket_meta(
+    pub fn invalidate_physical_table_meta(
         &self,
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) -> Self {
@@ -103,35 +102,6 @@ impl Cluster {
             .collect();
         let (available_locations_by_path, available_locations_by_bucket) =
             self.filter_bucket_locations_by_path(&table_paths);
-
-        Cluster::new(
-            self.coordinator_server.clone(),
-            self.alive_tablet_servers_by_id.clone(),
-            available_locations_by_path,
-            available_locations_by_bucket,
-            self.table_id_by_path.clone(),
-            self.table_info_by_path.clone(),
-        )
-    }
-
-    pub fn invalidate_bucket_leader(&self, table_bucket: &TableBucket) -> Self {
-        let mut available_locations_by_bucket = self.available_locations_by_bucket.clone();
-        available_locations_by_bucket.remove(table_bucket);
-
-        let mut available_locations_by_path = self.available_locations_by_path.clone();
-        if let Some(table_path) = self.table_path_by_id.get(&table_bucket.table_id()) {
-            if let Some(locations) = available_locations_by_path.get_mut(table_path) {
-                locations.retain(|location| location.table_bucket() != table_bucket);
-            }
-        } else {
-            warn!(
-                "Table id {} is missing from table_path_by_id while invalidating bucket leader",
-                table_bucket.table_id()
-            );
-            for locations in available_locations_by_path.values_mut() {
-                locations.retain(|location| location.table_bucket() != table_bucket);
-            }
-        }
 
         Cluster::new(
             self.coordinator_server.clone(),
@@ -306,6 +276,10 @@ impl Cluster {
 
     pub fn get_table_id_by_path(&self) -> &HashMap<TablePath, i64> {
         &self.table_id_by_path
+    }
+
+    pub fn get_table_path_by_id(&self, table_id: i64) -> Option<&TablePath> {
+        self.table_path_by_id.get(&table_id)
     }
 
     pub fn get_available_buckets_for_table_path(

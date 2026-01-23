@@ -36,7 +36,7 @@ use crate::client::table::remote_log::{
     RemoteLogDownloader, RemoteLogFetchInfo, RemotePendingFetch,
 };
 use crate::error::{ApiError, Error, FlussError, Result};
-use crate::metadata::{TableBucket, TableInfo, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TableInfo, TablePath};
 use crate::proto::{ErrorResponse, FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
 use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
 use crate::rpc::{RpcClient, RpcError, message};
@@ -581,7 +581,7 @@ impl LogFetcher {
         }
     }
 
-    fn should_invalidate_bucket_leader(error: FlussError) -> bool {
+    fn should_invalidate_table_meta(error: FlussError) -> bool {
         matches!(
             error,
             FlussError::NotLeaderOrFollower
@@ -772,9 +772,19 @@ impl LogFetcher {
                     .into();
 
                     let error = FlussError::for_code(error_code);
-                    if Self::should_invalidate_bucket_leader(error) {
-                        // TODO: Consider triggering leader invalidation from sender/lookup paths.
-                        metadata.invalidate_bucket_leader(&table_bucket);
+                    if Self::should_invalidate_table_meta(error) {
+                        // TODO: Consider triggering table meta invalidation from sender/lookup paths.
+                        let table_id = table_bucket.table_id();
+                        let cluster = metadata.get_cluster();
+                        if let Some(table_path) = cluster.get_table_path_by_id(table_id) {
+                            let physical_tables =
+                                HashSet::from([PhysicalTablePath::of(table_path.clone())]);
+                            metadata.invalidate_physical_table_meta(&physical_tables);
+                        } else {
+                            warn!(
+                                "Table id {table_id} is missing from table_path_by_id while invalidating table metadata"
+                            );
+                        }
                     }
                     let error_context = Self::describe_fetch_error(
                         error,
@@ -1627,7 +1637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_fetch_response_invalidates_bucket_leader() -> Result<()> {
+    async fn handle_fetch_response_invalidates_table_meta() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = build_table_info(table_path.clone(), 1, 1);
         let cluster = build_cluster_arc(&table_path, 1, 1);
