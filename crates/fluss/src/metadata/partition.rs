@@ -266,12 +266,12 @@ impl Display for ResolvedPartitionSpec {
 /// represents the unique identifier of the partition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PartitionInfo {
-    partition_id: i64,
+    partition_id: PartitionId,
     partition_spec: ResolvedPartitionSpec,
 }
 
 impl PartitionInfo {
-    pub fn new(partition_id: i64, partition_spec: ResolvedPartitionSpec) -> Self {
+    pub fn new(partition_id: PartitionId, partition_spec: ResolvedPartitionSpec) -> Self {
         Self {
             partition_id,
             partition_spec,
@@ -279,7 +279,7 @@ impl PartitionInfo {
     }
 
     /// Get the partition id. The id is globally unique in the Fluss cluster.
-    pub fn get_partition_id(&self) -> i64 {
+    pub fn get_partition_id(&self) -> PartitionId {
         self.partition_id
     }
 

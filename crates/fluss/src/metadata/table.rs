@@ -20,6 +20,7 @@ use crate::error::Error::{IllegalArgument, InvalidTableError};
 use crate::error::{Error, Result};
 use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{DataField, DataType, RowType};
+use crate::{BucketId, PartitionId, TableId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -761,7 +762,7 @@ impl Display for PhysicalTablePath {
 #[derive(Debug, Clone)]
 pub struct TableInfo {
     pub table_path: TablePath,
-    pub table_id: i64,
+    pub table_id: TableId,
     pub schema_id: i32,
     pub schema: Schema,
     pub row_type: RowType,
@@ -858,7 +859,7 @@ impl TableInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         table_path: TablePath,
-        table_id: i64,
+        table_id: TableId,
         schema_id: i32,
         schema: Schema,
         bucket_keys: Vec<String>,
@@ -1039,13 +1040,13 @@ impl Display for TableInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct TableBucket {
-    table_id: i64,
-    partition_id: Option<i64>,
-    bucket: i32,
+    table_id: TableId,
+    partition_id: Option<PartitionId>,
+    bucket: BucketId,
 }
 
 impl TableBucket {
-    pub fn new(table_id: i64, bucket: i32) -> Self {
+    pub fn new(table_id: TableId, bucket: BucketId) -> Self {
         TableBucket {
             table_id,
             partition_id: None,
@@ -1053,15 +1054,15 @@ impl TableBucket {
         }
     }
 
-    pub fn table_id(&self) -> i64 {
+    pub fn table_id(&self) -> TableId {
         self.table_id
     }
 
-    pub fn bucket_id(&self) -> i32 {
+    pub fn bucket_id(&self) -> BucketId {
         self.bucket
     }
 
-    pub fn partition_id(&self) -> Option<i64> {
+    pub fn partition_id(&self) -> Option<PartitionId> {
         self.partition_id
     }
 }

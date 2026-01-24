@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::TableId;
 use crate::client::broadcast;
 use crate::client::metadata::Metadata;
 use crate::client::write::batch::WriteBatch;
@@ -144,7 +145,7 @@ impl Sender {
             return Ok(());
         }
         let mut records_by_bucket = HashMap::new();
-        let mut write_batch_by_table: HashMap<i64, Vec<TableBucket>> = HashMap::new();
+        let mut write_batch_by_table: HashMap<TableId, Vec<TableBucket>> = HashMap::new();
 
         for batch in batches {
             let table_bucket = batch.table_bucket.clone();

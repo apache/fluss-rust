@@ -29,9 +29,9 @@ use crate::rpc::message::{
 use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
 
-use crate::BucketId;
 use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
+use crate::{BucketId, PartitionId, TableId};
 use std::collections::HashMap;
 use std::slice::from_ref;
 use std::sync::Arc;
@@ -321,13 +321,13 @@ impl FlussAdmin {
 
     fn prepare_list_offsets_requests(
         &self,
-        table_id: i64,
-        partition_id: Option<i64>,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
         buckets: &[BucketId],
         offset_spec: OffsetSpec,
     ) -> Result<HashMap<i32, ListOffsetsRequest>> {
         let cluster = self.metadata.get_cluster();
-        let mut node_for_bucket_list: HashMap<i32, Vec<i32>> = HashMap::new();
+        let mut node_for_bucket_list: HashMap<i32, Vec<BucketId>> = HashMap::new();
 
         for bucket_id in buckets {
             let table_bucket = TableBucket::new(table_id, *bucket_id);

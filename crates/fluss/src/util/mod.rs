@@ -18,6 +18,7 @@
 pub mod murmur_hash;
 pub mod varint;
 
+use crate::TableId;
 use crate::metadata::TableBucket;
 use linked_hash_map::LinkedHashMap;
 use std::collections::{HashMap, HashSet};
@@ -154,7 +155,7 @@ impl<S> FairBucketStatusMap<S> {
         self.map.clear();
 
         // Group buckets by table ID
-        let mut table_to_buckets: LinkedHashMap<i64, Vec<TableBucket>> = LinkedHashMap::new();
+        let mut table_to_buckets: LinkedHashMap<TableId, Vec<TableBucket>> = LinkedHashMap::new();
         for bucket in bucket_to_status.keys() {
             table_to_buckets
                 .entry(bucket.table_id())
