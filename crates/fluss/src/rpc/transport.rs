@@ -25,7 +25,13 @@ use tokio::net::TcpStream;
 
 #[derive(Debug)]
 pub enum Transport {
-    Plain { inner: TcpStream },
+    Plain {
+        inner: TcpStream,
+    },
+    #[cfg(test)]
+    Test {
+        inner: tokio::io::DuplexStream,
+    },
 }
 
 impl AsyncRead for Transport {
@@ -36,6 +42,8 @@ impl AsyncRead for Transport {
     ) -> Poll<std::io::Result<()>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_read(cx, buf),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_read(cx, buf),
         }
     }
 }
@@ -48,18 +56,24 @@ impl AsyncWrite for Transport {
     ) -> Poll<std::io::Result<usize>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_write(cx, buf),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_flush(cx),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.deref_mut() {
             Self::Plain { inner } => Pin::new(inner).poll_shutdown(cx),
+            #[cfg(test)]
+            Self::Test { inner } => Pin::new(inner).poll_shutdown(cx),
         }
     }
 }

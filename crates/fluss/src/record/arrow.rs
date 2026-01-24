@@ -522,11 +522,20 @@ impl LogRecordBatch {
     }
 
     pub fn ensure_valid(&self) -> Result<()> {
-        // TODO enable validation once checksum handling is corrected.
-        Ok(())
+        if self.is_valid() {
+            Ok(())
+        } else {
+            Err(Error::UnexpectedError {
+                message: "Corrupt log record batch checksum.".to_string(),
+                source: None,
+            })
+        }
     }
 
     pub fn is_valid(&self) -> bool {
+        if self.data.len() < RECORD_BATCH_HEADER_SIZE {
+            return false;
+        }
         self.size_in_bytes() >= RECORD_BATCH_HEADER_SIZE
             && self.checksum() == self.compute_checksum()
     }
@@ -1157,7 +1166,11 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataField, DataTypes};
+    use crate::metadata::{DataField, DataTypes, RowType};
+    use crate::test_utils::build_log_record_bytes;
+    use arrow::array::Int32Array;
+    use bytes::Bytes;
+    use std::sync::Arc;
 
     #[test]
     fn test_to_array_type() {
@@ -1355,6 +1368,100 @@ mod tests {
         let result = ReadContext::with_projection_pushdown(schema, vec![0, 2], false);
 
         assert!(matches!(result, Err(IllegalArgument { .. })));
+    }
+
+    #[test]
+    fn project_schema_rejects_invalid_indices() {
+        let row_type = RowType::new(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let schema = to_arrow_schema(&row_type).expect("arrow schema");
+        let result = ReadContext::project_schema(schema, &[2]);
+
+        assert!(matches!(result, Err(Error::IllegalArgument { .. })));
+    }
+
+    #[test]
+    fn record_batch_for_remote_log_rejects_invalid_ipc() -> Result<()> {
+        let row_type = RowType::new(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let schema = to_arrow_schema(&row_type)?;
+        let read_context = ReadContext::new(schema, true);
+
+        let result = read_context.record_batch_for_remote_log(&[]);
+        assert!(matches!(result, Err(Error::ArrowError { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn log_records_batches_iterates_over_concatenated_batches() -> Result<()> {
+        let batch_bytes = build_log_record_bytes(vec![1, 2, 3])?;
+        let mut data = batch_bytes.clone();
+        data.extend_from_slice(&batch_bytes);
+
+        let mut batches = LogRecordsBatches::new(data);
+        let first = batches.next().expect("first batch");
+        assert!(first.is_valid());
+        assert!(batches.next().is_some());
+        assert!(batches.next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn log_record_batch_detects_bad_checksum() -> Result<()> {
+        let mut batch_bytes = build_log_record_bytes(vec![1])?;
+        batch_bytes[CRC_OFFSET] ^= 0xFF;
+        let batch = LogRecordBatch::new(Bytes::from(batch_bytes));
+        assert!(batch.ensure_valid().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn log_record_batch_projection_reorders_columns() -> Result<()> {
+        let batch_bytes = build_log_record_bytes(vec![10, 20, 30])?;
+        let batch = LogRecordBatch::new(Bytes::from(batch_bytes));
+
+        let row_type = RowType::new(vec![
+            DataField::new("c0".to_string(), DataTypes::int(), None),
+            DataField::new("c1".to_string(), DataTypes::int(), None),
+            DataField::new("c2".to_string(), DataTypes::int(), None),
+        ]);
+        let schema = to_arrow_schema(&row_type)?;
+        let read_context = ReadContext::with_projection_pushdown(schema, vec![2, 0], false)?;
+
+        let mut records = batch.records(&read_context)?;
+        let record = records.next().expect("record");
+        let row_id = record.row().get_row_id();
+        let record_batch = record.row().get_record_batch();
+
+        assert_eq!(record_batch.num_columns(), 2);
+        assert_eq!(record_batch.schema().field(0).name(), "c2");
+        assert_eq!(record_batch.schema().field(1).name(), "c0");
+        let first = record_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(first.len(), row_id + 1);
+        Ok(())
+    }
+
+    #[test]
+    fn log_record_batch_header_fields_are_readable() -> Result<()> {
+        let batch_bytes = build_log_record_bytes(vec![1, 2])?;
+        let batch = LogRecordBatch::new(Bytes::from(batch_bytes));
+        assert_eq!(batch.magic(), CURRENT_LOG_MAGIC_VALUE);
+        assert_eq!(batch.schema_id(), 1);
+        assert_eq!(batch.record_count(), 1);
+        assert_eq!(batch.base_log_offset(), 0);
+        assert_eq!(batch.last_log_offset(), 0);
+        assert_eq!(batch.next_log_offset(), 1);
+        batch.ensure_valid()?;
+        Ok(())
     }
 
     #[test]

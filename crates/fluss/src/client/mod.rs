@@ -28,3 +28,6 @@ pub use credentials::*;
 pub use metadata::*;
 pub use table::*;
 pub use write::*;
+
+#[cfg(test)]
+pub(crate) use table::log_fetch_buffer::{CompletedFetch, FetchErrorContext};
