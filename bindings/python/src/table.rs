@@ -620,7 +620,8 @@ fn python_date_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'sta
 ///
 /// Note: Fluss TIME is always stored as milliseconds since midnight (i32) regardless
 /// of the schema's precision setting. This matches the Java Fluss wire protocol.
-/// Sub-millisecond precision from Python's microseconds is truncated (not rounded).
+/// Sub-millisecond precision (microseconds not divisible by 1000) will raise an error
+/// to prevent silent data loss and ensure fail-fast behavior.
 fn python_time_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'static>> {
     use pyo3::types::{PyTime, PyTimeAccess};
 
@@ -636,7 +637,18 @@ fn python_time_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'sta
     let second = time.get_second() as i32;
     let microsecond = time.get_microsecond() as i32;
 
-    // Convert to milliseconds since midnight (truncates sub-millisecond precision)
+    // Strict validation: reject sub-millisecond precision
+    if microsecond % MICROS_PER_MILLI as i32 != 0 {
+        return Err(FlussError::new_err(format!(
+            "TIME values with sub-millisecond precision are not supported. \
+             Got time with {} microseconds (not divisible by 1000). \
+             Fluss stores TIME as milliseconds since midnight. \
+             Please round to milliseconds before insertion.",
+            microsecond
+        )));
+    }
+
+    // Convert to milliseconds since midnight
     let millis = hour * MILLIS_PER_HOUR as i32
         + minute * MILLIS_PER_MINUTE as i32
         + second * MILLIS_PER_SECOND as i32

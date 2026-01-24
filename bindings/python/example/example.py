@@ -41,7 +41,7 @@ async def main():
     # Create connection using the static connect method
     conn = await fluss.FlussConnection.connect(config)
 
-    # Define fields for PyArrow (including new temporal and decimal types)
+    # Define fields for PyArrow
     fields = [
         pa.field("id", pa.int32()),
         pa.field("name", pa.string()),
