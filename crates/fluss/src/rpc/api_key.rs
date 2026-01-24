@@ -27,6 +27,7 @@ pub enum ApiKey {
     DropTable,
     GetTable,
     ListTables,
+    ListPartitionInfos,
     TableExists,
     MetaData,
     ProduceLog,
@@ -37,6 +38,8 @@ pub enum ApiKey {
     GetFileSystemSecurityToken,
     GetDatabaseInfo,
     GetLatestLakeSnapshot,
+    CreatePartition,
+    DropPartition,
     Unknown(i16),
 }
 
@@ -51,6 +54,7 @@ impl From<i16> for ApiKey {
             1006 => ApiKey::DropTable,
             1007 => ApiKey::GetTable,
             1008 => ApiKey::ListTables,
+            1009 => ApiKey::ListPartitionInfos,
             1010 => ApiKey::TableExists,
             1012 => ApiKey::MetaData,
             1014 => ApiKey::ProduceLog,
@@ -61,6 +65,8 @@ impl From<i16> for ApiKey {
             1025 => ApiKey::GetFileSystemSecurityToken,
             1032 => ApiKey::GetLatestLakeSnapshot,
             1035 => ApiKey::GetDatabaseInfo,
+            1036 => ApiKey::CreatePartition,
+            1037 => ApiKey::DropPartition,
             _ => Unknown(key),
         }
     }
@@ -77,6 +83,7 @@ impl From<ApiKey> for i16 {
             ApiKey::DropTable => 1006,
             ApiKey::GetTable => 1007,
             ApiKey::ListTables => 1008,
+            ApiKey::ListPartitionInfos => 1009,
             ApiKey::TableExists => 1010,
             ApiKey::MetaData => 1012,
             ApiKey::ProduceLog => 1014,
@@ -87,6 +94,8 @@ impl From<ApiKey> for i16 {
             ApiKey::GetFileSystemSecurityToken => 1025,
             ApiKey::GetLatestLakeSnapshot => 1032,
             ApiKey::GetDatabaseInfo => 1035,
+            ApiKey::CreatePartition => 1036,
+            ApiKey::DropPartition => 1037,
             Unknown(x) => x,
         }
     }
@@ -107,6 +116,7 @@ mod tests {
             (1006, ApiKey::DropTable),
             (1007, ApiKey::GetTable),
             (1008, ApiKey::ListTables),
+            (1009, ApiKey::ListPartitionInfos),
             (1010, ApiKey::TableExists),
             (1012, ApiKey::MetaData),
             (1014, ApiKey::ProduceLog),
@@ -117,6 +127,8 @@ mod tests {
             (1025, ApiKey::GetFileSystemSecurityToken),
             (1032, ApiKey::GetLatestLakeSnapshot),
             (1035, ApiKey::GetDatabaseInfo),
+            (1036, ApiKey::CreatePartition),
+            (1037, ApiKey::DropPartition),
         ];
 
         for (raw, key) in cases {

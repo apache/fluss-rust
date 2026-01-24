@@ -697,25 +697,64 @@ impl TablePath {
     }
 }
 
+/// A database name, table name and partition name combo. It's used to represent the physical path of
+/// a bucket. If the bucket belongs to a partition (i.e., the table is a partitioned table), the
+/// partition_name will be not null, otherwise null.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalTablePath {
     table_path: TablePath,
-    #[allow(dead_code)]
-    partition: Option<String>,
+    partition_name: Option<String>,
 }
 
 impl PhysicalTablePath {
     pub fn of(table_path: TablePath) -> Self {
         Self {
             table_path,
-            partition: None,
+            partition_name: None,
         }
     }
 
-    // TODO: support partition
+    pub fn of_partitioned(table_path: TablePath, partition_name: Option<String>) -> Self {
+        Self {
+            table_path,
+            partition_name,
+        }
+    }
+
+    pub fn of_with_names(
+        database_name: String,
+        table_name: String,
+        partition_name: Option<String>,
+    ) -> Self {
+        Self {
+            table_path: TablePath::new(database_name, table_name),
+            partition_name,
+        }
+    }
 
     pub fn get_table_path(&self) -> &TablePath {
         &self.table_path
+    }
+
+    pub fn get_database_name(&self) -> &str {
+        self.table_path.database()
+    }
+
+    pub fn get_table_name(&self) -> &str {
+        self.table_path.table()
+    }
+
+    pub fn get_partition_name(&self) -> Option<&String> {
+        self.partition_name.as_ref()
+    }
+}
+
+impl Display for PhysicalTablePath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.partition_name {
+            Some(partition) => write!(f, "{}(p={})", self.table_path, partition),
+            None => write!(f, "{}", self.table_path),
+        }
     }
 }
 

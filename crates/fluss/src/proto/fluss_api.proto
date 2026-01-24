@@ -374,3 +374,37 @@ message PbLookupRespForBucket {
 message PbValue {
   optional bytes values = 1;
 }
+
+message PbPartitionSpec {
+  repeated PbKeyValue partition_key_values = 1;
+}
+
+message PbPartitionInfo {
+  required int64 partition_id = 1;
+  required PbPartitionSpec partition_spec = 2;
+}
+
+message ListPartitionInfosRequest {
+  required PbTablePath table_path = 1;
+  optional PbPartitionSpec partial_partition_spec = 2;
+}
+
+message ListPartitionInfosResponse {
+  repeated PbPartitionInfo partitions_info = 1;
+}
+
+message CreatePartitionRequest {
+  required PbTablePath table_path = 1;
+  required PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_exists = 3;
+}
+
+message CreatePartitionResponse {}
+
+message DropPartitionRequest {
+  required PbTablePath table_path = 1;
+  required PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message DropPartitionResponse {}

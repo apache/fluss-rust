@@ -17,13 +17,14 @@
 
 use crate::client::metadata::Metadata;
 use crate::metadata::{
-    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, TableBucket, TableDescriptor,
-    TableInfo, TablePath,
+    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, PartitionInfo, PartitionSpec,
+    TableBucket, TableDescriptor, TableInfo, TablePath,
 };
 use crate::rpc::message::{
-    CreateDatabaseRequest, CreateTableRequest, DatabaseExistsRequest, DropDatabaseRequest,
-    DropTableRequest, GetDatabaseInfoRequest, GetLatestLakeSnapshotRequest, GetTableRequest,
-    ListDatabasesRequest, ListTablesRequest, TableExistsRequest,
+    CreateDatabaseRequest, CreatePartitionRequest, CreateTableRequest, DatabaseExistsRequest,
+    DropDatabaseRequest, DropPartitionRequest, DropTableRequest, GetDatabaseInfoRequest,
+    GetLatestLakeSnapshotRequest, GetTableRequest, ListDatabasesRequest, ListPartitionInfosRequest,
+    ListTablesRequest, TableExistsRequest,
 };
 use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
@@ -136,6 +137,63 @@ impl FlussAdmin {
             .request(ListTablesRequest::new(database_name))
             .await?;
         Ok(response.table_name)
+    }
+
+    /// List all partitions in the given table.
+    pub async fn list_partition_infos(&self, table_path: &TablePath) -> Result<Vec<PartitionInfo>> {
+        self.list_partition_infos_with_spec(table_path, None).await
+    }
+
+    /// List partitions in the given table that match the partial partition spec.
+    pub async fn list_partition_infos_with_spec(
+        &self,
+        table_path: &TablePath,
+        partial_partition_spec: Option<&PartitionSpec>,
+    ) -> Result<Vec<PartitionInfo>> {
+        let response = self
+            .admin_gateway
+            .request(ListPartitionInfosRequest::new(
+                table_path,
+                partial_partition_spec,
+            ))
+            .await?;
+        Ok(response.get_partitions_info())
+    }
+
+    /// Create a new partition for a partitioned table.
+    pub async fn create_partition(
+        &self,
+        table_path: &TablePath,
+        partition_spec: &PartitionSpec,
+        ignore_if_exists: bool,
+    ) -> Result<()> {
+        let _response = self
+            .admin_gateway
+            .request(CreatePartitionRequest::new(
+                table_path,
+                partition_spec,
+                ignore_if_exists,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Drop a partition from a partitioned table.
+    pub async fn drop_partition(
+        &self,
+        table_path: &TablePath,
+        partition_spec: &PartitionSpec,
+        ignore_if_not_exists: bool,
+    ) -> Result<()> {
+        let _response = self
+            .admin_gateway
+            .request(DropPartitionRequest::new(
+                table_path,
+                partition_spec,
+                ignore_if_not_exists,
+            ))
+            .await?;
+        Ok(())
     }
 
     /// Check if a table exists
