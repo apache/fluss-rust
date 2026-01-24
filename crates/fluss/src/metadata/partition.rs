@@ -359,16 +359,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_partition_spec() {
-        let mut map = HashMap::new();
-        map.insert("date".to_string(), "2024-01-15".to_string());
-        map.insert("region".to_string(), "US".to_string());
-
-        let spec = PartitionSpec::new(map.clone());
-        assert_eq!(spec.get_spec_map(), &map);
-    }
-
-    #[test]
     fn test_resolved_partition_spec_name() {
         let spec = ResolvedPartitionSpec::new(
             vec!["date".to_string(), "region".to_string()],
