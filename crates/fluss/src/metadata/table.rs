@@ -679,6 +679,10 @@ impl Display for TablePath {
     }
 }
 
+const MAX_NAME_LENGTH: usize = 200;
+
+const INTERNAL_NAME_PREFIX: &str = "__";
+
 impl TablePath {
     pub fn new(db: String, tbl: String) -> Self {
         TablePath {
@@ -695,6 +699,52 @@ impl TablePath {
     #[inline]
     pub fn table(&self) -> &str {
         &self.table
+    }
+
+    pub fn detect_invalid_name(identifier: &str) -> Option<String> {
+        if identifier.is_empty() {
+            return Some("the empty string is not allowed".to_string());
+        }
+        if identifier == "." {
+            return Some("'.' is not allowed".to_string());
+        }
+        if identifier == ".." {
+            return Some("'..' is not allowed".to_string());
+        }
+        if identifier.len() > MAX_NAME_LENGTH {
+            return Some(format!(
+                "the length of '{}' is longer than the max allowed length {}",
+                identifier, MAX_NAME_LENGTH
+            ));
+        }
+        if Self::contains_invalid_pattern(identifier) {
+            return Some(format!(
+                "'{}' contains one or more characters other than ASCII alphanumerics, '_' and '-'",
+                identifier
+            ));
+        }
+        None
+    }
+
+    pub fn validate_prefix(identifier: &str) -> Option<String> {
+        if identifier.starts_with(INTERNAL_NAME_PREFIX) {
+            return Some(format!(
+                "'{}' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server",
+                INTERNAL_NAME_PREFIX
+            ));
+        }
+        None
+    }
+
+    // Valid characters for Fluss table names are the ASCII alphanumerics, '_' and '-'.
+    fn contains_invalid_pattern(identifier: &str) -> bool {
+        for c in identifier.chars() {
+            let valid_char = c.is_ascii_alphanumeric() || c == '_' || c == '-';
+            if !valid_char {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -1105,5 +1155,65 @@ impl LakeSnapshot {
 
     pub fn table_buckets_offset(&self) -> &HashMap<TableBucket, i64> {
         &self.table_buckets_offset
+    }
+}
+
+/// Tests for [`TablePath`].
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate() {
+        // assert valid name
+        let path = TablePath::new("db_2-abc3".to_string(), "table-1_abc_2".to_string());
+        assert!(TablePath::detect_invalid_name(path.database()).is_none());
+        assert!(TablePath::detect_invalid_name(path.table()).is_none());
+        assert_eq!(path.to_string(), "db_2-abc3.table-1_abc_2");
+
+        // assert invalid name prefix
+        assert!(
+            TablePath::validate_prefix("__table-1")
+                .unwrap()
+                .contains("'__' is not allowed as prefix")
+        );
+
+        // check max length
+        let long_name = "a".repeat(200);
+        assert!(TablePath::detect_invalid_name(&long_name).is_none());
+
+        // assert invalid names
+        assert_invalid_name("*abc", "'*abc' contains one or more characters other than");
+        assert_invalid_name(
+            "table.abc",
+            "'table.abc' contains one or more characters other than",
+        );
+        assert_invalid_name("", "the empty string is not allowed");
+        assert_invalid_name(" ", "' ' contains one or more characters other than");
+        assert_invalid_name(".", "'.' is not allowed");
+        assert_invalid_name("..", "'..' is not allowed");
+        let invalid_long_name = "a".repeat(201);
+        assert_invalid_name(
+            &invalid_long_name,
+            &format!(
+                "the length of '{}' is longer than the max allowed length {}",
+                invalid_long_name, MAX_NAME_LENGTH
+            ),
+        );
+    }
+
+    fn assert_invalid_name(name: &str, expected_message: &str) {
+        let result = TablePath::detect_invalid_name(name);
+        assert!(
+            result.is_some(),
+            "Expected '{}' to be invalid, but it was valid",
+            name
+        );
+        assert!(
+            result.as_ref().unwrap().contains(expected_message),
+            "Expected message containing '{}', but got '{}'",
+            expected_message,
+            result.unwrap()
+        );
     }
 }
