@@ -1662,6 +1662,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata.clone(),
             status.clone(),
+            &crate::config::Config::default(),
             None,
         )?;
 

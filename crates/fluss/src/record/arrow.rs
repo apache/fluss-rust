@@ -505,7 +505,7 @@ impl MemorySource {
         }
     }
 
-    fn read_batch_header(&self, pos: usize) -> Result<(i64, usize)> {
+    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
         if pos + LOG_OVERHEAD > self.data.len() {
             return Err(Error::UnexpectedError {
                 message: format!(
@@ -527,7 +527,7 @@ impl MemorySource {
         Ok((base_offset, batch_size))
     }
 
-    fn read_batch_data(&self, pos: usize, size: usize) -> Result<Bytes> {
+    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
         if pos + size > self.data.len() {
             return Err(Error::UnexpectedError {
                 message: format!(
@@ -573,10 +573,10 @@ impl Drop for FileCleanupGuard {
 /// Used for remote log segments downloaded to local disk.
 /// Streams data on-demand instead of loading entire file into memory.
 ///
-/// Uses Mutex<File> with seek + read_exact for cross-platform compatibility.
-/// Access pattern is sequential iteration (single consumer), so mutex overhead is negligible.
+/// Uses seek + read_exact for cross-platform compatibility.
+/// Access pattern is sequential iteration (single consumer).
 struct FileSource {
-    file: Mutex<File>,
+    file: File,
     file_size: usize,
     base_offset: usize,
     _cleanup: Option<FileCleanupGuard>, // Drops AFTER file (field order matters!)
@@ -599,7 +599,7 @@ impl FileSource {
         }
 
         Ok(Self {
-            file: Mutex::new(file),
+            file,
             file_size,
             base_offset,
             _cleanup: None,
@@ -623,7 +623,7 @@ impl FileSource {
         }
 
         Ok(Self {
-            file: Mutex::new(file),
+            file,
             file_size,
             base_offset,
             _cleanup: Some(FileCleanupGuard { file_path }),
@@ -632,14 +632,13 @@ impl FileSource {
 
     /// Read data at a specific position using seek + read_exact.
     /// This is cross-platform and adequate for sequential access patterns.
-    fn read_at(&self, pos: u64, buf: &mut [u8]) -> Result<()> {
-        let mut file = self.file.lock();
-        file.seek(SeekFrom::Start(pos))?;
-        file.read_exact(buf)?;
+    fn read_at(&mut self, pos: u64, buf: &mut [u8]) -> Result<()> {
+        self.file.seek(SeekFrom::Start(pos))?;
+        self.file.read_exact(buf)?;
         Ok(())
     }
 
-    fn read_batch_header(&self, pos: usize) -> Result<(i64, usize)> {
+    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
         let actual_pos = self.base_offset + pos;
         if actual_pos + LOG_OVERHEAD > self.file_size {
             return Err(Error::UnexpectedError {
@@ -664,7 +663,7 @@ impl FileSource {
         Ok((base_offset, batch_size))
     }
 
-    fn read_batch_data(&self, pos: usize, size: usize) -> Result<Bytes> {
+    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
         let actual_pos = self.base_offset + pos;
         if actual_pos + size > self.file_size {
             return Err(Error::UnexpectedError {
@@ -695,14 +694,14 @@ enum LogRecordsSource {
 }
 
 impl LogRecordsSource {
-    fn read_batch_header(&self, pos: usize) -> Result<(i64, usize)> {
+    fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
         match self {
             Self::Memory(s) => s.read_batch_header(pos),
             Self::File(s) => s.read_batch_header(pos),
         }
     }
 
-    fn read_batch_data(&self, pos: usize, size: usize) -> Result<Bytes> {
+    fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
         match self {
             Self::Memory(s) => s.read_batch_data(pos, size),
             Self::File(s) => s.read_batch_data(pos, size),
@@ -765,7 +764,7 @@ impl LogRecordsBatches {
     }
 
     /// Try to get the size of the next batch.
-    fn next_batch_size(&self) -> Result<Option<usize>> {
+    fn next_batch_size(&mut self) -> Result<Option<usize>> {
         if self.remaining_bytes < LOG_OVERHEAD {
             return Ok(None);
         }
@@ -1784,7 +1783,7 @@ mod tests {
         tmp_file.flush()?;
 
         let file = File::open(tmp_file.path())?;
-        let source = FileSource::new(file, 0)?;
+        let mut source = FileSource::new(file, 0)?;
 
         // Read full data
         let data = source.read_batch_data(0, 10)?;
@@ -1803,7 +1802,7 @@ mod tests {
         tmp_file2.flush()?;
 
         let file2 = File::open(tmp_file2.path())?;
-        let source2 = FileSource::new(file2, 100)?; // Skip first 100 bytes
+        let mut source2 = FileSource::new(file2, 100)?; // Skip first 100 bytes
 
         assert_eq!(source2.total_size(), 5); // Only counts data after offset
         let data2 = source2.read_batch_data(0, 5)?;
@@ -1972,7 +1971,7 @@ mod tests {
                 compression_type: ArrowCompressionType::None,
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
-        );
+        )?;
 
         let mut row = GenericRow::new();
         row.set_field(0, 1_i32);
