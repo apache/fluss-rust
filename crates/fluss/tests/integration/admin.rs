@@ -250,14 +250,19 @@ mod admin_test {
             .column("id", DataTypes::int())
             .column("name", DataTypes::string())
             .column("dt", DataTypes::string())
-            .primary_key(vec!["id".to_string(), "dt".to_string()])
+            .column("region", DataTypes::string())
+            .primary_key(vec![
+                "id".to_string(),
+                "dt".to_string(),
+                "region".to_string(),
+            ])
             .build()
             .expect("Failed to build table schema");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(table_schema)
             .distributed_by(Some(3), vec!["id".to_string()])
-            .partitioned_by(vec!["dt".to_string()])
+            .partitioned_by(vec!["dt".to_string(), "region".to_string()])
             .property("table.replication.factor", "1")
             .log_format(LogFormat::ARROW)
             .kv_format(KvFormat::COMPACTED)
@@ -281,6 +286,7 @@ mod admin_test {
 
         let mut partition_values = HashMap::new();
         partition_values.insert("dt".to_string(), "2024-01-15".to_string());
+        partition_values.insert("region".to_string(), "EMEA".to_string());
         let partition_spec = PartitionSpec::new(partition_values);
 
         admin
@@ -299,13 +305,17 @@ mod admin_test {
         );
         assert_eq!(
             partitions[0].get_partition_name(),
-            "2024-01-15",
+            "2024-01-15$EMEA",
             "Partition name mismatch"
         );
 
         // list with partial spec filter - should find the partition
+        let mut partition_values = HashMap::new();
+        partition_values.insert("dt".to_string(), "2024-01-15".to_string());
+        let partial_partition_spec = PartitionSpec::new(partition_values);
+
         let partitions_with_spec = admin
-            .list_partition_infos_with_spec(&table_path, Some(&partition_spec))
+            .list_partition_infos_with_spec(&table_path, Some(&partial_partition_spec))
             .await
             .expect("Failed to list partitions with spec");
         assert_eq!(
@@ -315,7 +325,7 @@ mod admin_test {
         );
         assert_eq!(
             partitions_with_spec[0].get_partition_name(),
-            "2024-01-15",
+            "2024-01-15$EMEA",
             "Partition name mismatch with spec filter"
         );
 

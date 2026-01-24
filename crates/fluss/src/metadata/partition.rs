@@ -112,8 +112,10 @@ impl ResolvedPartitionSpec {
     }
 
     pub fn from_partition_name(partition_keys: Vec<String>, partition_name: &str) -> Self {
-        let partition_values: Vec<String> =
-            partition_name.split('$').map(|s| s.to_string()).collect();
+        let partition_values: Vec<String> = partition_name
+            .split(PARTITION_SPEC_SEPARATOR)
+            .map(|s| s.to_string())
+            .collect();
         Self {
             partition_keys,
             partition_values,
@@ -160,7 +162,7 @@ impl ResolvedPartitionSpec {
         PartitionSpec::new(spec_map)
     }
 
-    /// Generate the partition name for a partition table of specify partition values.
+    /// Generate the partition name for a partition table with specified partition values.
     ///
     /// The partition name is in the following format: value1$value2$...$valueN
     pub fn get_partition_name(&self) -> String {
@@ -197,7 +199,7 @@ impl ResolvedPartitionSpec {
                 None => {
                     return Err(Error::IllegalArgument {
                         message: format!(
-                            "table don't contains this partitionKey: {}",
+                            "table does not contain partitionKey: {}",
                             other_partition_key
                         ),
                     });

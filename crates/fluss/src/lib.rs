@@ -35,7 +35,7 @@ mod util;
 mod test_utils;
 
 pub type TableId = u64;
-pub type PartitionId = u64;
+pub type PartitionId = i64;
 pub type BucketId = i32;
 
 pub mod proto {

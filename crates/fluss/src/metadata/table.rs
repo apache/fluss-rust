@@ -698,8 +698,8 @@ impl TablePath {
 }
 
 /// A database name, table name and partition name combo. It's used to represent the physical path of
-/// a bucket. If the bucket belongs to a partition (i.e., the table is a partitioned table), the
-/// partition_name will be not null, otherwise null.
+/// a bucket. If the bucket belongs to a partition (i.e., the table is a partitioned table),
+/// `partition_name` will be `Some(...)`; otherwise, it will be `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalTablePath {
     table_path: TablePath,
