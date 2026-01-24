@@ -641,6 +641,23 @@ mod table_test {
                     )
                     // Bytes type
                     .column("col_bytes", DataTypes::bytes())
+                    // Timestamp types with negative values (before Unix epoch)
+                    .column(
+                        "col_timestamp_us_neg",
+                        DataTypes::timestamp_with_precision(6),
+                    )
+                    .column(
+                        "col_timestamp_ns_neg",
+                        DataTypes::timestamp_with_precision(9),
+                    )
+                    .column(
+                        "col_timestamp_ltz_us_neg",
+                        DataTypes::timestamp_ltz_with_precision(6),
+                    )
+                    .column(
+                        "col_timestamp_ltz_ns_neg",
+                        DataTypes::timestamp_ltz_with_precision(9),
+                    )
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -653,6 +670,8 @@ mod table_test {
             .get_table(&table_path)
             .await
             .expect("Failed to get table");
+
+        let field_count = table.table_info().schema.columns().len();
 
         let append_writer = table
             .new_append()
@@ -689,6 +708,15 @@ mod table_test {
         let col_timestamp_ltz_ns = TimestampLtz::from_millis_nanos(1769163227123, 999_999).unwrap();
         let col_bytes: Vec<u8> = b"binary data".to_vec();
 
+        // 1960-06-15 08:30:45.123456 UTC (before 1970)
+        let col_timestamp_us_neg = TimestampNtz::from_millis_nanos(-301234154877, 456000).unwrap();
+        // 1960-06-15 08:30:45.123999999 UTC (before 1970)
+        let col_timestamp_ns_neg = TimestampNtz::from_millis_nanos(-301234154877, 999_999).unwrap();
+        let col_timestamp_ltz_us_neg =
+            TimestampLtz::from_millis_nanos(-301234154877, 456000).unwrap();
+        let col_timestamp_ltz_ns_neg =
+            TimestampLtz::from_millis_nanos(-301234154877, 999_999).unwrap();
+
         // Append a row with all datatypes
         let mut row = GenericRow::new();
         row.set_field(0, col_tinyint);
@@ -715,6 +743,10 @@ mod table_test {
         row.set_field(21, col_timestamp_ltz_us.clone());
         row.set_field(22, col_timestamp_ltz_ns.clone());
         row.set_field(23, col_bytes.as_slice());
+        row.set_field(24, col_timestamp_us_neg.clone());
+        row.set_field(25, col_timestamp_ns_neg.clone());
+        row.set_field(26, col_timestamp_ltz_us_neg.clone());
+        row.set_field(27, col_timestamp_ltz_ns_neg.clone());
 
         append_writer
             .append(row)
@@ -723,7 +755,7 @@ mod table_test {
 
         // Append a row with null values for all columns
         let mut row_with_nulls = GenericRow::new();
-        for i in 0..24 {
+        for i in 0..field_count {
             row_with_nulls.set_field(i, Datum::Null);
         }
 
@@ -875,8 +907,58 @@ mod table_test {
         );
         assert_eq!(found_row.get_bytes(23), col_bytes, "col_bytes mismatch");
 
+        // Verify timestamps before Unix epoch (negative timestamps)
+        let read_ts_us_neg = found_row.get_timestamp_ntz(24, 6);
+        assert_eq!(
+            read_ts_us_neg.get_millisecond(),
+            col_timestamp_us_neg.get_millisecond(),
+            "col_timestamp_us_neg millis mismatch"
+        );
+        assert_eq!(
+            read_ts_us_neg.get_nano_of_millisecond(),
+            col_timestamp_us_neg.get_nano_of_millisecond(),
+            "col_timestamp_us_neg nanos mismatch"
+        );
+
+        let read_ts_ns_neg = found_row.get_timestamp_ntz(25, 9);
+        assert_eq!(
+            read_ts_ns_neg.get_millisecond(),
+            col_timestamp_ns_neg.get_millisecond(),
+            "col_timestamp_ns_neg millis mismatch"
+        );
+        assert_eq!(
+            read_ts_ns_neg.get_nano_of_millisecond(),
+            col_timestamp_ns_neg.get_nano_of_millisecond(),
+            "col_timestamp_ns_neg nanos mismatch"
+        );
+
+        let read_ts_ltz_us_neg = found_row.get_timestamp_ltz(26, 6);
+        assert_eq!(
+            read_ts_ltz_us_neg.get_epoch_millisecond(),
+            col_timestamp_ltz_us_neg.get_epoch_millisecond(),
+            "col_timestamp_ltz_us_neg millis mismatch"
+        );
+        assert_eq!(
+            read_ts_ltz_us_neg.get_nano_of_millisecond(),
+            col_timestamp_ltz_us_neg.get_nano_of_millisecond(),
+            "col_timestamp_ltz_us_neg nanos mismatch"
+        );
+
+        let read_ts_ltz_ns_neg = found_row.get_timestamp_ltz(27, 9);
+        assert_eq!(
+            read_ts_ltz_ns_neg.get_epoch_millisecond(),
+            col_timestamp_ltz_ns_neg.get_epoch_millisecond(),
+            "col_timestamp_ltz_ns_neg millis mismatch"
+        );
+        assert_eq!(
+            read_ts_ltz_ns_neg.get_nano_of_millisecond(),
+            col_timestamp_ltz_ns_neg.get_nano_of_millisecond(),
+            "col_timestamp_ltz_ns_neg nanos mismatch"
+        );
+
+        // Verify row with all nulls (record index 1)
         let found_row_nulls = records[1].row();
-        for i in 0..24 {
+        for i in 0..field_count {
             assert!(found_row_nulls.is_null_at(i), "column {} should be null", i);
         }
 

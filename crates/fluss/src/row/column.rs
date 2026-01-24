@@ -103,13 +103,16 @@ impl ColumnarRow {
                 TimeUnit::Second => (value * 1000, 0),
                 TimeUnit::Millisecond => (value, 0),
                 TimeUnit::Microsecond => {
-                    let millis = value / 1000;
-                    let nanos = ((value % 1000) * 1000) as i32;
+                    // Use Euclidean division so that nanos is always non-negative,
+                    // even for timestamps before the Unix epoch.
+                    let millis = value.div_euclid(1000);
+                    let nanos = (value.rem_euclid(1000) * 1000) as i32;
                     (millis, nanos)
                 }
                 TimeUnit::Nanosecond => {
-                    let millis = value / 1_000_000;
-                    let nanos = (value % 1_000_000) as i32;
+                    // Use Euclidean division so that nanos is always in [0, 999_999].
+                    let millis = value.div_euclid(1_000_000);
+                    let nanos = value.rem_euclid(1_000_000) as i32;
                     (millis, nanos)
                 }
             },
