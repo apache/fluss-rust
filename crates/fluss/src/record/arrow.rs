@@ -583,32 +583,10 @@ struct FileSource {
 }
 
 impl FileSource {
-    /// Create a new FileSource without automatic cleanup.
-    pub fn new(file: File, base_offset: usize) -> Result<Self> {
-        let file_size = file.metadata()?.len() as usize;
-
-        // Validate base_offset to prevent underflow in total_size()
-        if base_offset > file_size {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "base_offset ({}) exceeds file_size ({})",
-                    base_offset, file_size
-                ),
-                source: None,
-            });
-        }
-
-        Ok(Self {
-            file,
-            file_size,
-            base_offset,
-            _cleanup: None,
-        })
-    }
-
-    /// Create a new FileSource that will delete the file when dropped.
-    /// This is used for remote log files that need cleanup.
-    fn new_with_cleanup(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
+    /// Create a new FileSource.
+    ///
+    /// The file at `file_path` will be deleted when this FileSource is dropped.
+    fn new(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
         let file_size = file.metadata()?.len() as usize;
 
         // Validate base_offset to prevent underflow in total_size()
@@ -736,25 +714,11 @@ impl LogRecordsBatches {
 
     /// Create from file.
     /// Enables streaming without loading entire file into memory.
-    pub fn from_file(file: File, base_offset: usize) -> Result<Self> {
-        let source = FileSource::new(file, base_offset)?;
-        let remaining_bytes = source.total_size();
-        Ok(Self {
-            source: LogRecordsSource::File(source),
-            current_pos: 0,
-            remaining_bytes,
-        })
-    }
-
-    /// Create from file with automatic cleanup.
-    /// The file will be deleted when the LogRecordsBatches is dropped.
-    /// This ensures file is closed before deletion.
-    pub fn from_file_with_cleanup(
-        file: File,
-        base_offset: usize,
-        file_path: PathBuf,
-    ) -> Result<Self> {
-        let source = FileSource::new_with_cleanup(file, base_offset, file_path)?;
+    ///
+    /// The file at `file_path` will be deleted when dropped.
+    /// This ensures the file is closed before deletion.
+    pub fn from_file(file: File, base_offset: usize, file_path: PathBuf) -> Result<Self> {
+        let source = FileSource::new(file, base_offset, file_path)?;
         let remaining_bytes = source.total_size();
         Ok(Self {
             source: LogRecordsSource::File(source),
@@ -1782,8 +1746,9 @@ mod tests {
         tmp_file.write_all(&test_data)?;
         tmp_file.flush()?;
 
-        let file = File::open(tmp_file.path())?;
-        let mut source = FileSource::new(file, 0)?;
+        let file_path = tmp_file.path().to_path_buf();
+        let file = File::open(&file_path)?;
+        let mut source = FileSource::new(file, 0, file_path)?;
 
         // Read full data
         let data = source.read_batch_data(0, 10)?;
@@ -1801,8 +1766,9 @@ mod tests {
         tmp_file2.write_all(&actual_data)?;
         tmp_file2.flush()?;
 
-        let file2 = File::open(tmp_file2.path())?;
-        let mut source2 = FileSource::new(file2, 100)?; // Skip first 100 bytes
+        let file_path2 = tmp_file2.path().to_path_buf();
+        let file2 = File::open(&file_path2)?;
+        let mut source2 = FileSource::new(file2, 100, file_path2)?; // Skip first 100 bytes
 
         assert_eq!(source2.total_size(), 5); // Only counts data after offset
         let data2 = source2.read_batch_data(0, 5)?;
@@ -1993,8 +1959,9 @@ mod tests {
         tmp_file.flush()?;
 
         // Create file-backed LogRecordsBatches (should stream, not load all into memory)
-        let file = File::open(tmp_file.path())?;
-        let mut batches = LogRecordsBatches::from_file(file, 0)?;
+        let file_path = tmp_file.path().to_path_buf();
+        let file = File::open(&file_path)?;
+        let mut batches = LogRecordsBatches::from_file(file, 0, file_path)?;
 
         // Iterate through batches (should work just like in-memory)
         let batch = batches.next().expect("Should have at least one batch")?;

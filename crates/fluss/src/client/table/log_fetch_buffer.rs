@@ -788,11 +788,8 @@ impl PendingFetch for RemotePendingFetch {
         // Create file-backed LogRecordsBatches with cleanup (streaming!)
         // Data will be read batch-by-batch on-demand, not all at once
         // FileSource will delete the file when dropped (after file is closed)
-        let log_record_batch = LogRecordsBatches::from_file_with_cleanup(
-            file,
-            self.pos_in_log_segment as usize,
-            file_path.clone(),
-        )?;
+        let log_record_batch =
+            LogRecordsBatches::from_file(file, self.pos_in_log_segment as usize, file_path)?;
 
         // Calculate size based on position offset
         let size_in_bytes = if self.pos_in_log_segment > 0 {
@@ -820,7 +817,7 @@ impl PendingFetch for RemotePendingFetch {
 
         // Wrap it with RemoteCompletedFetch to hold the permit
         // Permit manages the prefetch slot (releases semaphore and notifies coordinator) when dropped;
-        // file deletion is handled by FileCleanupGuard in the file-backed source created via from_file_with_cleanup
+        // file deletion is handled by FileCleanupGuard in the file-backed source created via from_file
         Ok(Box::new(RemoteCompletedFetch::new(inner_fetch, permit)))
     }
 }

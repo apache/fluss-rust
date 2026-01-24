@@ -717,13 +717,16 @@ impl RemoteLogDownloadFuture {
     }
 }
 
-/// Downloader for remote log segment files
+/// Downloader for remote log segment files.
+///
+/// # Shutdown behavior
+///
+/// When the downloader is dropped, the request channel closes, signaling the coordinator
+/// to stop accepting new work. The coordinator will finish any in-flight downloads but
+/// won't wait for completion. Pending futures will fail.
 pub struct RemoteLogDownloader {
     request_sender: Option<mpsc::UnboundedSender<RemoteLogDownloadRequest>>,
     remote_fs_props: Option<Arc<RwLock<HashMap<String, String>>>>,
-    /// Handle to the coordinator task. Used for graceful shutdown via shutdown() method.
-    #[allow(dead_code)]
-    coordinator_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RemoteLogDownloader {
@@ -738,30 +741,14 @@ impl RemoteLogDownloader {
             local_log_dir: Arc::new(local_log_dir),
         });
 
-        let (request_sender, request_receiver) = mpsc::unbounded_channel();
-
-        let coordinator = DownloadCoordinator {
-            download_queue: BinaryHeap::new(),
-            active_downloads: JoinSet::new(),
-            in_flight: 0,
-            prefetch_semaphore: Arc::new(Semaphore::new(max_prefetch_segments)),
-            max_concurrent_downloads,
-            recycle_notify: Arc::new(Notify::new()),
-            fetcher,
-        };
-
-        let coordinator_handle = tokio::spawn(coordinator_loop(coordinator, request_receiver));
-
-        Ok(Self {
-            request_sender: Some(request_sender),
-            remote_fs_props: Some(remote_fs_props),
-            coordinator_handle: Some(coordinator_handle),
-        })
+        let mut downloader =
+            Self::new_with_fetcher(fetcher, max_prefetch_segments, max_concurrent_downloads)?;
+        downloader.remote_fs_props = Some(remote_fs_props);
+        Ok(downloader)
     }
 
-    /// Create a RemoteLogDownloader with a custom fetcher (for testing)
-    /// The remote_fs_props will be None since custom fetchers typically don't need S3 credentials
-    #[cfg(test)]
+    /// Create a RemoteLogDownloader with a custom fetcher (for testing).
+    /// The remote_fs_props will be None since custom fetchers typically don't need S3 credentials.
     pub fn new_with_fetcher(
         fetcher: Arc<dyn RemoteLogFetcher>,
         max_prefetch_segments: usize,
@@ -779,29 +766,13 @@ impl RemoteLogDownloader {
             fetcher,
         };
 
-        let coordinator_handle = tokio::spawn(coordinator_loop(coordinator, request_receiver));
+        // Spawn coordinator task - it will exit when request_sender is dropped
+        tokio::spawn(coordinator_loop(coordinator, request_receiver));
 
         Ok(Self {
             request_sender: Some(request_sender),
             remote_fs_props: None,
-            coordinator_handle: Some(coordinator_handle),
         })
-    }
-
-    /// Gracefully shutdown the downloader
-    /// Closes the request channel and waits for coordinator to finish pending work
-    ///
-    /// Note: This consumes self to prevent use-after-shutdown
-    #[allow(dead_code)]
-    pub async fn shutdown(mut self) {
-        // Drop the request_sender to close the channel
-        drop(self.request_sender.take());
-
-        // Wait for coordinator to finish gracefully
-        // Coordinator will exit when: recv() returns None && queue empty && joinset empty
-        if let Some(handle) = self.coordinator_handle.take() {
-            let _ = handle.await;
-        }
     }
 
     pub fn set_remote_fs_props(&self, props: HashMap<String, String>) {
@@ -845,20 +816,11 @@ impl RemoteLogDownloader {
 
 impl Drop for RemoteLogDownloader {
     fn drop(&mut self) {
-        // Drop the request sender to signal coordinator shutdown
+        // Drop the request sender to signal coordinator shutdown.
         // This causes request_receiver.recv() to return None, allowing the
         // coordinator to exit gracefully after processing pending work.
+        // The coordinator task will finish on its own when it sees the channel closed.
         drop(self.request_sender.take());
-
-        // Note: We cannot await in Drop (sync context), so we can't wait for
-        // the coordinator to finish. Pending futures will fail when they detect
-        // the coordinator has exited (via closed channel).
-        //
-        // For graceful shutdown with waiting, use `shutdown().await` instead.
-
-        // We don't abort the coordinator handle anymore - let it finish naturally.
-        // The JoinHandle will be dropped here, which detaches the task.
-        // The coordinator will exit on its own when it sees the channel closed.
     }
 }
 
