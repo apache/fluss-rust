@@ -520,7 +520,7 @@ static DECIMAL_TYPE: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
 static UTC_EPOCH: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
 
 /// Get the cached decimal.Decimal type, importing it once per interpreter.
-fn get_decimal_type<'py>(py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyType>> {
+fn get_decimal_type(py: Python) -> PyResult<Bound<pyo3::types::PyType>> {
     let ty = DECIMAL_TYPE.get_or_try_init(py, || -> PyResult<_> {
         let decimal_mod = py.import("decimal")?;
         let decimal_ty = decimal_mod
@@ -532,7 +532,7 @@ fn get_decimal_type<'py>(py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::Py
 }
 
 /// Get the cached UTC epoch datetime, creating it once per interpreter.
-fn get_utc_epoch<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+fn get_utc_epoch(py: Python) -> PyResult<Bound<PyAny>> {
     let epoch = UTC_EPOCH.get_or_try_init(py, || -> PyResult<_> {
         let datetime_mod = py.import("datetime")?;
         let timezone = datetime_mod.getattr("timezone")?;

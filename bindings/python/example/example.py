@@ -50,6 +50,7 @@ async def main():
         pa.field("birth_date", pa.date32()),
         pa.field("check_in_time", pa.time32("ms")),
         pa.field("created_at", pa.timestamp("us")),  # TIMESTAMP (NTZ)
+        pa.field("updated_at", pa.timestamp("us", tz="UTC")),  # TIMESTAMP_LTZ
         pa.field("salary", pa.decimal128(10, 2)),
     ]
 
@@ -105,6 +106,7 @@ async def main():
                 pa.array([date(1999, 5, 15), date(1994, 3, 20), date(1989, 11, 8)], type=pa.date32()),
                 pa.array([dt_time(9, 0, 0), dt_time(9, 30, 0), dt_time(10, 0, 0)], type=pa.time32("ms")),
                 pa.array([datetime(2024, 1, 15, 10, 30), datetime(2024, 1, 15, 11, 0), datetime(2024, 1, 15, 11, 30)], type=pa.timestamp("us")),
+                pa.array([datetime(2024, 1, 15, 10, 30), datetime(2024, 1, 15, 11, 0), datetime(2024, 1, 15, 11, 30)], type=pa.timestamp("us", tz="UTC")),
                 pa.array([Decimal("75000.00"), Decimal("82000.50"), Decimal("95000.75")], type=pa.decimal128(10, 2)),
             ],
             schema=schema,
@@ -124,6 +126,7 @@ async def main():
                 pa.array([date(1996, 7, 22), date(1992, 12, 1)], type=pa.date32()),
                 pa.array([dt_time(14, 15, 0), dt_time(8, 45, 0)], type=pa.time32("ms")),
                 pa.array([datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)], type=pa.timestamp("us")),
+                pa.array([datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)], type=pa.timestamp("us", tz="UTC")),
                 pa.array([Decimal("68000.00"), Decimal("72500.25")], type=pa.decimal128(10, 2)),
             ],
             schema=schema,
@@ -143,6 +146,7 @@ async def main():
             "birth_date": date(1998, 4, 10),
             "check_in_time": dt_time(11, 30, 45),
             "created_at": datetime(2024, 1, 17, 14, 0, 0),
+            "updated_at": datetime(2024, 1, 17, 14, 0, 0),
             "salary": Decimal("88000.00"),
         })
         print("Successfully appended row (dict with Date, Time, Timestamp, Decimal)")
@@ -152,6 +156,7 @@ async def main():
             9, "Ivan", 90.0, 31,
             date(1993, 8, 25),
             dt_time(16, 45, 0),
+            datetime(2024, 1, 17, 15, 30, 0),
             datetime(2024, 1, 17, 15, 30, 0),
             Decimal("91500.50"),
         ])
@@ -168,6 +173,7 @@ async def main():
                 "birth_date": [date(1995, 2, 14), date(1997, 9, 30)],
                 "check_in_time": [dt_time(10, 0, 0), dt_time(10, 30, 0)],
                 "created_at": [datetime(2024, 1, 18, 8, 0), datetime(2024, 1, 18, 8, 30)],
+                "updated_at": [datetime(2024, 1, 18, 8, 0), datetime(2024, 1, 18, 8, 30)],
                 "salary": [Decimal("79000.00"), Decimal("85500.75")],
             }
         )
