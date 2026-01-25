@@ -54,7 +54,7 @@ impl_write_version_type!(ListPartitionInfosRequest);
 impl_read_version_type!(ListPartitionInfosResponse);
 
 impl ListPartitionInfosResponse {
-    pub fn get_partitions_info(&self) -> Vec<PartitionInfo> {
+    pub fn get_partitions_info(&self) -> Vec<PartitionInfo<'static>> {
         self.partitions_info
             .iter()
             .map(PartitionInfo::from_pb)

@@ -66,7 +66,7 @@ impl PartitionGetter {
             .map(|ps| ps.get_partition_name())
     }
 
-    pub fn get_partition_spec(&self, row: &dyn InternalRow) -> Result<ResolvedPartitionSpec> {
+    pub fn get_partition_spec(&self, row: &dyn InternalRow) -> Result<ResolvedPartitionSpec<'_>> {
         let mut partition_values = Vec::with_capacity(self.partitions.len());
 
         for (data_type, field_getter) in &self.partitions {
@@ -76,10 +76,10 @@ impl PartitionGetter {
                     message: "Partition value shouldn't be null.".to_string(),
                 });
             }
-            partition_values.push(partition::convert_value_to_string(&value, data_type));
+            partition_values.push(partition::convert_value_to_string(&value, data_type)?);
         }
 
-        ResolvedPartitionSpec::new(self.partition_keys.clone(), partition_values)
+        ResolvedPartitionSpec::new(self.partition_keys.as_slice(), partition_values)
     }
 }
 

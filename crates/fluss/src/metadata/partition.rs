@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::PartitionId;
 use crate::error::{Error, Result};
 use crate::proto::{PbKeyValue, PbPartitionInfo, PbPartitionSpec};
+use crate::{PartitionId, TableId};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
@@ -71,53 +72,46 @@ impl Display for PartitionSpec {
 /// spec is re-arranged into the correct order by comparing it with a list of strictly ordered
 /// partition keys.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ResolvedPartitionSpec {
-    partition_keys: Vec<String>,
+pub struct ResolvedPartitionSpec<'a> {
+    partition_keys: Cow<'a, [String]>,
     partition_values: Vec<String>,
 }
 
 pub const PARTITION_SPEC_SEPARATOR: &str = "$";
 
-impl ResolvedPartitionSpec {
-    pub fn new(partition_keys: Vec<String>, partition_values: Vec<String>) -> Result<Self> {
+impl<'a> ResolvedPartitionSpec<'a> {
+    pub fn new(partition_keys: &'a [String], partition_values: Vec<String>) -> Result<Self> {
         if partition_keys.len() != partition_values.len() {
             return Err(Error::IllegalArgument {
                 message: "The number of partition keys and partition values should be the same."
                     .to_string(),
             });
         }
+
         Ok(Self {
-            partition_keys,
+            partition_keys: Cow::Borrowed(partition_keys),
             partition_values,
         })
     }
 
     pub fn from_partition_spec(
-        partition_keys: Vec<String>,
+        partition_keys: &'a [String],
         partition_spec: &PartitionSpec,
     ) -> Self {
-        let partition_values =
-            Self::get_reordered_partition_values(&partition_keys, partition_spec);
+        let partition_values = Self::get_reordered_partition_values(partition_keys, partition_spec);
         Self {
-            partition_keys,
+            partition_keys: Cow::Borrowed(partition_keys),
             partition_values,
         }
     }
 
-    pub fn from_partition_value(partition_key: String, partition_value: String) -> Self {
-        Self {
-            partition_keys: vec![partition_key],
-            partition_values: vec![partition_value],
-        }
-    }
-
-    pub fn from_partition_name(partition_keys: Vec<String>, partition_name: &str) -> Self {
+    pub fn from_partition_name(partition_keys: &'a [String], partition_name: &str) -> Self {
         let partition_values: Vec<String> = partition_name
             .split(PARTITION_SPEC_SEPARATOR)
             .map(|s| s.to_string())
             .collect();
         Self {
-            partition_keys,
+            partition_keys: Cow::Borrowed(partition_keys),
             partition_values,
         }
     }
@@ -141,7 +135,7 @@ impl ResolvedPartitionSpec {
         }
 
         Ok(Self {
-            partition_keys: keys,
+            partition_keys: Cow::Owned(keys),
             partition_values: values,
         })
     }
@@ -238,8 +232,9 @@ impl ResolvedPartitionSpec {
             .iter()
             .map(|kv| kv.value.clone())
             .collect();
+
         Self {
-            partition_keys,
+            partition_keys: Cow::Owned(partition_keys),
             partition_values,
         }
     }
@@ -256,7 +251,7 @@ impl ResolvedPartitionSpec {
     }
 }
 
-impl Display for ResolvedPartitionSpec {
+impl<'a> Display for ResolvedPartitionSpec<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.get_partition_qualified_name())
     }
@@ -265,13 +260,13 @@ impl Display for ResolvedPartitionSpec {
 /// Information of a partition metadata, includes the partition's name and the partition id that
 /// represents the unique identifier of the partition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PartitionInfo {
+pub struct PartitionInfo<'a> {
     partition_id: PartitionId,
-    partition_spec: ResolvedPartitionSpec,
+    partition_spec: ResolvedPartitionSpec<'a>,
 }
 
-impl PartitionInfo {
-    pub fn new(partition_id: PartitionId, partition_spec: ResolvedPartitionSpec) -> Self {
+impl<'a> PartitionInfo<'a> {
+    pub fn new(partition_id: PartitionId, partition_spec: ResolvedPartitionSpec<'a>) -> Self {
         Self {
             partition_id,
             partition_spec,
@@ -288,7 +283,7 @@ impl PartitionInfo {
         self.partition_spec.get_partition_name()
     }
 
-    pub fn get_resolved_partition_spec(&self) -> &ResolvedPartitionSpec {
+    pub fn get_resolved_partition_spec(&self) -> &ResolvedPartitionSpec<'_> {
         &self.partition_spec
     }
 
@@ -311,7 +306,7 @@ impl PartitionInfo {
     }
 }
 
-impl Display for PartitionInfo {
+impl<'a> Display for PartitionInfo<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -325,12 +320,12 @@ impl Display for PartitionInfo {
 /// A class to identify a table partition, containing the table id and the partition id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TablePartition {
-    table_id: i64,
+    table_id: TableId,
     partition_id: PartitionId,
 }
 
 impl TablePartition {
-    pub fn new(table_id: i64, partition_id: PartitionId) -> Self {
+    pub fn new(table_id: TableId, partition_id: PartitionId) -> Self {
         Self {
             table_id,
             partition_id,
@@ -362,8 +357,9 @@ mod tests {
 
     #[test]
     fn test_resolved_partition_spec_name() {
+        let partition_keys = vec!["date".to_string(), "region".to_string()];
         let spec = ResolvedPartitionSpec::new(
-            vec!["date".to_string(), "region".to_string()],
+            partition_keys.as_slice(),
             vec!["2024-01-15".to_string(), "US".to_string()],
         )
         .unwrap();
@@ -377,10 +373,9 @@ mod tests {
 
     #[test]
     fn test_resolved_partition_spec_from_partition_name() {
-        let spec = ResolvedPartitionSpec::from_partition_name(
-            vec!["date".to_string(), "region".to_string()],
-            "2024-01-15$US",
-        );
+        let partition_keys = vec!["date".to_string(), "region".to_string()];
+        let spec =
+            ResolvedPartitionSpec::from_partition_name(partition_keys.as_slice(), "2024-01-15$US");
 
         assert_eq!(spec.get_partition_values(), &["2024-01-15", "US"]);
     }
@@ -397,18 +392,18 @@ mod tests {
 
     #[test]
     fn test_resolved_partition_spec_mismatched_lengths() {
-        let result = ResolvedPartitionSpec::new(
-            vec!["date".to_string(), "region".to_string()],
-            vec!["2024-01-15".to_string()],
-        );
+        let partition_keys = vec!["date".to_string(), "region".to_string()];
+        let result =
+            ResolvedPartitionSpec::new(partition_keys.as_slice(), vec!["2024-01-15".to_string()]);
 
         assert!(result.is_err());
     }
 
     #[test]
     fn test_partition_info() {
+        let partition_keys = vec!["date".to_string()];
         let spec =
-            ResolvedPartitionSpec::new(vec!["date".to_string()], vec!["2024-01-15".to_string()])
+            ResolvedPartitionSpec::new(partition_keys.as_slice(), vec!["2024-01-15".to_string()])
                 .unwrap();
 
         let info = PartitionInfo::new(42, spec);
@@ -440,8 +435,9 @@ mod tests {
 
     #[test]
     fn test_partition_info_pb_roundtrip() {
+        let partition_keys = vec!["date".to_string()];
         let spec =
-            ResolvedPartitionSpec::new(vec!["date".to_string()], vec!["2024-01-15".to_string()])
+            ResolvedPartitionSpec::new(partition_keys.as_slice(), vec!["2024-01-15".to_string()])
                 .unwrap();
         let info = PartitionInfo::new(42, spec);
 
@@ -454,14 +450,16 @@ mod tests {
 
     #[test]
     fn test_contains() {
+        let partition_keys = vec!["date".to_string(), "region".to_string()];
         let full_spec = ResolvedPartitionSpec::new(
-            vec!["date".to_string(), "region".to_string()],
+            partition_keys.as_slice(),
             vec!["2024-01-15".to_string(), "US".to_string()],
         )
         .unwrap();
 
+        let partition_keys = vec!["date".to_string()];
         let partial_spec =
-            ResolvedPartitionSpec::new(vec!["date".to_string()], vec!["2024-01-15".to_string()])
+            ResolvedPartitionSpec::new(partition_keys.as_slice(), vec!["2024-01-15".to_string()])
                 .unwrap();
 
         assert!(full_spec.contains(&partial_spec).unwrap());

@@ -140,7 +140,10 @@ impl FlussAdmin {
     }
 
     /// List all partitions in the given table.
-    pub async fn list_partition_infos(&self, table_path: &TablePath) -> Result<Vec<PartitionInfo>> {
+    pub async fn list_partition_infos(
+        &self,
+        table_path: &TablePath,
+    ) -> Result<Vec<PartitionInfo<'_>>> {
         self.list_partition_infos_with_spec(table_path, None).await
     }
 
@@ -149,7 +152,7 @@ impl FlussAdmin {
         &self,
         table_path: &TablePath,
         partial_partition_spec: Option<&PartitionSpec>,
-    ) -> Result<Vec<PartitionInfo>> {
+    ) -> Result<Vec<PartitionInfo<'_>>> {
         let response = self
             .admin_gateway
             .request(ListPartitionInfosRequest::new(
