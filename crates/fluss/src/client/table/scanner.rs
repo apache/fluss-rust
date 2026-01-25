@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use log::{debug, warn};
 use parking_lot::{Mutex, RwLock};
@@ -39,7 +38,9 @@ use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TableInfo, TablePath};
 use crate::proto::{ErrorResponse, FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
-use crate::record::{LogRecordsBatches, ReadContext, ScanRecord, ScanRecords, to_arrow_schema};
+use crate::record::{
+    LogRecordsBatches, ReadContext, ScanBatch, ScanRecord, ScanRecords, to_arrow_schema,
+};
 use crate::rpc::{RpcClient, RpcError, message};
 use crate::util::FairBucketStatusMap;
 
@@ -380,7 +381,7 @@ impl LogScannerInner {
         self.log_fetcher.collect_fetches()
     }
 
-    async fn poll_batches(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+    async fn poll_batches(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -410,7 +411,7 @@ impl LogScannerInner {
         }
     }
 
-    async fn poll_for_batches(&self) -> Result<Vec<RecordBatch>> {
+    async fn poll_for_batches(&self) -> Result<Vec<ScanBatch>> {
         let result = self.log_fetcher.collect_batches()?;
         if !result.is_empty() {
             return Ok(result);
@@ -438,7 +439,8 @@ impl LogScanner {
 
 // Implementation for RecordBatchLogScanner (batches mode)
 impl RecordBatchLogScanner {
-    pub async fn poll(&self, timeout: Duration) -> Result<Vec<RecordBatch>> {
+    /// Poll for batches with metadata (bucket and offset information).
+    pub async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         self.inner.poll_batches(timeout).await
     }
 
@@ -1134,13 +1136,13 @@ impl LogFetcher {
         }
     }
 
-    /// Collect completed fetches as RecordBatches
-    fn collect_batches(&self) -> Result<Vec<RecordBatch>> {
+    /// Collect completed fetches as ScanBatches (with bucket and offset metadata)
+    fn collect_batches(&self) -> Result<Vec<ScanBatch>> {
         // Limit memory usage with both batch count and byte size constraints.
         // Max 100 batches per poll, but also check total bytes (soft cap ~64MB).
         const MAX_BATCHES: usize = 100;
         const MAX_BYTES: usize = 64 * 1024 * 1024; // 64MB soft cap
-        let mut result: Vec<RecordBatch> = Vec::new();
+        let mut result: Vec<ScanBatch> = Vec::new();
         let mut batches_remaining = MAX_BATCHES;
         let mut bytes_consumed: usize = 0;
 
@@ -1150,17 +1152,19 @@ impl LogFetcher {
 
                 match next_in_line {
                     Some(mut next_fetch) if !next_fetch.is_consumed() => {
-                        let batches =
+                        let scan_batches =
                             self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
-                        let batch_count = batches.len();
+                        let batch_count = scan_batches.len();
 
-                        if !batches.is_empty() {
+                        if !scan_batches.is_empty() {
                             // Track bytes consumed (soft cap - may exceed by one fetch)
-                            let batch_bytes: usize =
-                                batches.iter().map(|b| b.get_array_memory_size()).sum();
+                            let batch_bytes: usize = scan_batches
+                                .iter()
+                                .map(|sb| sb.batch().get_array_memory_size())
+                                .sum();
                             bytes_consumed += batch_bytes;
 
-                            result.extend(batches);
+                            result.extend(scan_batches);
                             batches_remaining = batches_remaining.saturating_sub(batch_count);
                         }
 
@@ -1214,7 +1218,7 @@ impl LogFetcher {
         &self,
         next_in_line_fetch: &mut Box<dyn CompletedFetch>,
         max_batches: usize,
-    ) -> Result<Vec<RecordBatch>> {
+    ) -> Result<Vec<ScanBatch>> {
         let table_bucket = next_in_line_fetch.table_bucket().clone();
         let current_offset = self.log_scanner_status.get_bucket_offset(&table_bucket);
 
@@ -1230,7 +1234,7 @@ impl LogFetcher {
         let fetch_offset = next_in_line_fetch.next_fetch_offset();
 
         if fetch_offset == current_offset {
-            let batches = next_in_line_fetch.fetch_batches(max_batches)?;
+            let batches_with_offsets = next_in_line_fetch.fetch_batches(max_batches)?;
             let next_fetch_offset = next_in_line_fetch.next_fetch_offset();
 
             if next_fetch_offset > current_offset {
@@ -1238,7 +1242,13 @@ impl LogFetcher {
                     .update_offset(&table_bucket, next_fetch_offset);
             }
 
-            Ok(batches)
+            // Convert to ScanBatch with bucket info
+            Ok(batches_with_offsets
+                .into_iter()
+                .map(|(batch, base_offset)| {
+                    ScanBatch::new(table_bucket.clone(), batch, base_offset)
+                })
+                .collect())
         } else {
             warn!(
                 "Ignoring fetched batches for {table_bucket:?} at offset {fetch_offset} since the current offset is {current_offset}"

@@ -17,6 +17,7 @@
 
 use crate::metadata::TableBucket;
 use crate::row::ColumnarRow;
+use ::arrow::array::RecordBatch;
 use core::fmt;
 use std::collections::HashMap;
 
@@ -170,6 +171,60 @@ impl ScanRecords {
     }
 }
 
+/// A batch of records with metadata about bucket and offsets.
+///
+/// This is the batch-level equivalent of [`ScanRecord`], providing efficient
+/// access to Arrow RecordBatches while preserving the bucket and offset information
+/// needed for tracking consumption progress.
+#[derive(Debug, Clone)]
+pub struct ScanBatch {
+    /// The bucket this batch belongs to
+    bucket: TableBucket,
+    /// The Arrow RecordBatch containing the data
+    batch: RecordBatch,
+    /// Offset of the first record in this batch
+    base_offset: i64,
+}
+
+impl ScanBatch {
+    pub fn new(bucket: TableBucket, batch: RecordBatch, base_offset: i64) -> Self {
+        Self {
+            bucket,
+            batch,
+            base_offset,
+        }
+    }
+
+    pub fn bucket(&self) -> &TableBucket {
+        &self.bucket
+    }
+
+    pub fn batch(&self) -> &RecordBatch {
+        &self.batch
+    }
+
+    pub fn into_batch(self) -> RecordBatch {
+        self.batch
+    }
+
+    pub fn base_offset(&self) -> i64 {
+        self.base_offset
+    }
+
+    pub fn num_records(&self) -> usize {
+        self.batch.num_rows()
+    }
+
+    /// Returns the offset of the last record in this batch.
+    pub fn last_offset(&self) -> i64 {
+        if self.batch.num_rows() == 0 {
+            self.base_offset - 1
+        } else {
+            self.base_offset + self.batch.num_rows() as i64 - 1
+        }
+    }
+}
+
 impl IntoIterator for ScanRecords {
     type Item = ScanRecord;
     type IntoIter = std::vec::IntoIter<ScanRecord>;
@@ -242,5 +297,27 @@ mod tests {
         assert_eq!(record.offset(), -1);
         assert_eq!(record.timestamp(), -1);
         assert_eq!(record.change_type(), &ChangeType::Insert);
+    }
+
+    #[test]
+    fn scan_batch_last_offset() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
+        let bucket = TableBucket::new(1, 0);
+
+        // Batch with 3 records starting at offset 100 -> last_offset = 102
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let scan_batch = ScanBatch::new(bucket.clone(), batch, 100);
+        assert_eq!(scan_batch.num_records(), 3);
+        assert_eq!(scan_batch.last_offset(), 102);
+
+        // Empty batch -> last_offset = base_offset - 1
+        let empty_batch = RecordBatch::new_empty(schema);
+        let empty_scan_batch = ScanBatch::new(bucket, empty_batch, 100);
+        assert_eq!(empty_scan_batch.num_records(), 0);
+        assert_eq!(empty_scan_batch.last_offset(), 99);
     }
 }

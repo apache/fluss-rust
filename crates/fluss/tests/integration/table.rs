@@ -498,8 +498,10 @@ mod table_test {
         let all_ids: Vec<i32> = batches
             .iter()
             .flat_map(|b| {
-                (0..b.num_rows()).map(|i| {
-                    b.column(0)
+                let batch = b.batch();
+                (0..batch.num_rows()).map(move |i| {
+                    batch
+                        .column(0)
                         .as_any()
                         .downcast_ref::<Int32Array>()
                         .unwrap()
@@ -523,8 +525,10 @@ mod table_test {
         let new_ids: Vec<i32> = more
             .iter()
             .flat_map(|b| {
-                (0..b.num_rows()).map(|i| {
-                    b.column(0)
+                let batch = b.batch();
+                (0..batch.num_rows()).map(move |i| {
+                    batch
+                        .column(0)
                         .as_any()
                         .downcast_ref::<Int32Array>()
                         .unwrap()
@@ -544,8 +548,10 @@ mod table_test {
         let trunc_ids: Vec<i32> = trunc_batches
             .iter()
             .flat_map(|b| {
-                (0..b.num_rows()).map(|i| {
-                    b.column(0)
+                let batch = b.batch();
+                (0..batch.num_rows()).map(move |i| {
+                    batch
+                        .column(0)
                         .as_any()
                         .downcast_ref::<Int32Array>()
                         .unwrap()
@@ -568,6 +574,6 @@ mod table_test {
         let proj_batches = proj.poll(Duration::from_secs(10)).await.unwrap();
 
         // Projected batch should have 1 column (id), not 2 (id, name)
-        assert_eq!(proj_batches[0].num_columns(), 1);
+        assert_eq!(proj_batches[0].batch().num_columns(), 1);
     }
 }

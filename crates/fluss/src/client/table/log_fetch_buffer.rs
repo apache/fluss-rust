@@ -65,7 +65,7 @@ pub trait CompletedFetch: Send + Sync {
     fn fetch_error_context(&self) -> Option<&FetchErrorContext>;
     fn take_error(&mut self) -> Option<Error>;
     fn fetch_records(&mut self, max_records: usize) -> Result<Vec<ScanRecord>>;
-    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<RecordBatch>>;
+    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<(RecordBatch, i64)>>;
     fn is_consumed(&self) -> bool;
     fn records_read(&self) -> usize;
     fn drain(&mut self);
@@ -476,8 +476,9 @@ impl DefaultCompletedFetch {
             source: None,
         }
     }
-    /// Get the next batch directly without row iteration
-    fn next_fetched_batch(&mut self) -> Result<Option<RecordBatch>> {
+    /// Get the next batch with its base offset.
+    /// Returns (RecordBatch, base_offset) where base_offset is the offset of the first record.
+    fn next_fetched_batch(&mut self) -> Result<Option<(RecordBatch, i64)>> {
         loop {
             let Some(log_batch_result) = self.log_record_batch.next() else {
                 self.drain();
@@ -492,20 +493,23 @@ impl DefaultCompletedFetch {
                 continue;
             }
 
-            // Truncate batch
-            let base_offset = log_batch.base_log_offset();
-            if self.next_fetch_offset > base_offset {
-                let skip_count = (self.next_fetch_offset - base_offset) as usize;
+            // Calculate the effective base offset for this batch
+            let log_base_offset = log_batch.base_log_offset();
+            let effective_base_offset = if self.next_fetch_offset > log_base_offset {
+                let skip_count = (self.next_fetch_offset - log_base_offset) as usize;
                 if skip_count >= record_batch.num_rows() {
                     continue;
                 }
                 // Slice the batch to skip the first skip_count rows
                 record_batch = record_batch.slice(skip_count, record_batch.num_rows() - skip_count);
-            }
+                self.next_fetch_offset
+            } else {
+                log_base_offset
+            };
 
             self.next_fetch_offset = log_batch.next_log_offset();
             self.records_read += record_batch.num_rows();
-            return Ok(Some(record_batch));
+            return Ok(Some((record_batch, effective_base_offset)));
         }
     }
 }
@@ -585,7 +589,7 @@ impl CompletedFetch for DefaultCompletedFetch {
         Ok(scan_records)
     }
 
-    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<RecordBatch>> {
+    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<(RecordBatch, i64)>> {
         if let Some(error) = self.error.take() {
             return Err(error);
         }
@@ -607,7 +611,7 @@ impl CompletedFetch for DefaultCompletedFetch {
 
         for _ in 0..max_batches {
             match self.next_fetched_batch()? {
-                Some(batch) => batches.push(batch),
+                Some(batch_with_offset) => batches.push(batch_with_offset),
                 None => break,
             }
         }
@@ -692,7 +696,7 @@ impl CompletedFetch for RemoteCompletedFetch {
         self.inner.fetch_records(max_records)
     }
 
-    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<RecordBatch>> {
+    fn fetch_batches(&mut self, max_batches: usize) -> Result<Vec<(RecordBatch, i64)>> {
         self.inner.fetch_batches(max_batches)
     }
 
