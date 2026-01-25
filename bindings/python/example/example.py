@@ -226,6 +226,7 @@ async def main():
 
         # Test the new poll() method for incremental reading
         print("\n--- Testing poll() method ---")
+        # Reset subscription to start from the beginning
         log_scanner.subscribe(None, None)
 
         # Poll with a timeout of 5000ms (5 seconds)
