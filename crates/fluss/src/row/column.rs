@@ -328,33 +328,12 @@ impl InternalRow for ColumnarRow {
     }
 
     fn get_char(&self, pos: usize, _length: usize) -> &str {
-        let column = self.record_batch.column(pos);
-        let schema = self.record_batch.schema();
-        let arrow_field = schema.field(pos);
-
-        match arrow_field.data_type() {
-            ArrowDataType::FixedSizeBinary(_) => {
-                // KV table format: char stored as FixedSizeBinary
-                let array = column
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .expect("Expected fixed-size binary array for char type");
-                let bytes = array.value(self.row_id);
-                // don't check length, following java client
-                std::str::from_utf8(bytes).expect("Invalid UTF-8 in char field")
-            }
-            ArrowDataType::Utf8 => {
-                // Log table format: char stored as Utf8
-                column
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .expect("Expected String array for char type")
-                    .value(self.row_id)
-            }
-            other => panic!(
-                "Expected FixedSizeBinary or Utf8 for char type at position {pos}, got {other:?}"
-            ),
-        }
+        self.record_batch
+            .column(pos)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected String array for char type")
+            .value(self.row_id)
     }
 
     fn get_string(&self, pos: usize) -> &str {
@@ -389,8 +368,8 @@ impl InternalRow for ColumnarRow {
 mod tests {
     use super::*;
     use arrow::array::{
-        BinaryArray, BooleanArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, StringArray,
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, StringArray,
     };
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -406,7 +385,7 @@ mod tests {
             Field::new("f64", DataType::Float64, false),
             Field::new("s", DataType::Utf8, false),
             Field::new("bin", DataType::Binary, false),
-            Field::new("char", DataType::FixedSizeBinary(2), false),
+            Field::new("char", DataType::Utf8, false),
         ]));
 
         let batch = RecordBatch::try_new(
@@ -421,13 +400,7 @@ mod tests {
                 Arc::new(Float64Array::from(vec![2.5])),
                 Arc::new(StringArray::from(vec!["hello"])),
                 Arc::new(BinaryArray::from(vec![b"data".as_slice()])),
-                Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                        vec![Some(b"ab".as_slice())].into_iter(),
-                        2,
-                    )
-                    .expect("fixed array"),
-                ),
+                Arc::new(StringArray::from(vec!["ab"])),
             ],
         )
         .expect("record batch");
