@@ -469,7 +469,7 @@ async fn spawn_download_task(
                 result_sender: request.result_sender,
             }
         }
-        Err(e) if request.result_sender.is_closed() => {
+        Err(_e) if request.result_sender.is_closed() => {
             // Receiver dropped (cancelled) - release permit, don't re-queue
             drop(permit);
             DownloadResult::Cancelled
@@ -491,8 +491,7 @@ async fn spawn_download_task(
                 DownloadResult::FailedPermanently {
                     error: Error::UnexpectedError {
                         message: format!(
-                            "Failed to download remote log segment after {} retries: {}",
-                            retry_count, e
+                            "Failed to download remote log segment after {retry_count} retries: {e}"
                         ),
                         source: Some(Box::new(e)),
                     },
@@ -585,7 +584,7 @@ async fn coordinator_loop(
                         // Cancelled - permit already released, nothing to do
                     }
                     Err(e) => {
-                        log::error!("Download task panicked: {:?}", e);
+                        log::error!("Download task panicked: {e:?}");
                         // Permit already released via RAII
                     }
                 }
@@ -1001,7 +1000,7 @@ mod tests {
 
                 if should_fail {
                     Err(Error::UnexpectedError {
-                        message: format!("Fake fetch failed for {}", segment_id),
+                        message: format!("Fake fetch failed for {segment_id}"),
                         source: None,
                     })
                 } else {
@@ -1012,7 +1011,7 @@ mod tests {
                         .unwrap()
                         .as_nanos();
                     let file_path =
-                        temp_dir.join(format!("fake_segment_{}_{}.log", segment_id, timestamp));
+                        temp_dir.join(format!("fake_segment_{segment_id}_{timestamp}.log"));
                     tokio::fs::write(&file_path, &fake_data).await?;
 
                     Ok(FetchResult {
@@ -1121,7 +1120,7 @@ mod tests {
 
         // Request 4 segments with same priority (to isolate concurrency limiting from priority)
         let segs: Vec<_> = (0..4)
-            .map(|i| create_segment(&format!("seg{}", i), i * 100, 1000, bucket.clone()))
+            .map(|i| create_segment(&format!("seg{i}"), i * 100, 1000, bucket.clone()))
             .collect();
 
         let _futures: Vec<_> = segs
@@ -1168,7 +1167,7 @@ mod tests {
 
         // Request 4 downloads
         let segs: Vec<_> = (0..4)
-            .map(|i| create_segment(&format!("seg{}", i), i * 100, 1000, bucket.clone()))
+            .map(|i| create_segment(&format!("seg{i}"), i * 100, 1000, bucket.clone()))
             .collect();
 
         let mut futures: Vec<_> = segs

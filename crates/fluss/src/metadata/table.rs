@@ -227,8 +227,7 @@ impl SchemaBuilder {
             if !column_names.contains(auto_inc_col) {
                 return Err(IllegalArgument {
                     message: format!(
-                        "Auto increment column '{}' is not found in the schema columns.",
-                        auto_inc_col
+                        "Auto increment column '{auto_inc_col}' is not found in the schema columns."
                     ),
                 });
             }

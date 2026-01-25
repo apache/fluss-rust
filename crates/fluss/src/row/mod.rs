@@ -159,6 +159,23 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.get(_pos).unwrap().try_into().unwrap()
     }
 
+    fn get_float(&self, pos: usize) -> f32 {
+        self.values.get(pos).unwrap().try_into().unwrap()
+    }
+
+    fn get_double(&self, pos: usize) -> f64 {
+        self.values.get(pos).unwrap().try_into().unwrap()
+    }
+
+    fn get_char(&self, pos: usize, _length: usize) -> &str {
+        // don't check length, following java client
+        self.get_string(pos)
+    }
+
+    fn get_string(&self, pos: usize) -> &str {
+        self.values.get(pos).unwrap().try_into().unwrap()
+    }
+
     fn get_decimal(&self, pos: usize, _precision: usize, _scale: usize) -> Decimal {
         match self.values.get(pos).unwrap() {
             Datum::Decimal(d) => d.clone(),
@@ -196,23 +213,6 @@ impl<'a> InternalRow for GenericRow<'a> {
         }
     }
 
-    fn get_float(&self, pos: usize) -> f32 {
-        self.values.get(pos).unwrap().try_into().unwrap()
-    }
-
-    fn get_double(&self, pos: usize) -> f64 {
-        self.values.get(pos).unwrap().try_into().unwrap()
-    }
-
-    fn get_char(&self, pos: usize, _length: usize) -> &str {
-        // don't check length, following java client
-        self.get_string(pos)
-    }
-
-    fn get_string(&self, pos: usize) -> &str {
-        self.values.get(pos).unwrap().try_into().unwrap()
-    }
-
     fn get_binary(&self, pos: usize, _length: usize) -> &[u8] {
         self.values.get(pos).unwrap().as_blob()
     }
@@ -222,24 +222,39 @@ impl<'a> InternalRow for GenericRow<'a> {
     }
 }
 
-impl<'a> Default for GenericRow<'a> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<'a> GenericRow<'a> {
     pub fn from_data(data: Vec<impl Into<Datum<'a>>>) -> GenericRow<'a> {
         GenericRow {
             values: data.into_iter().map(Into::into).collect(),
         }
     }
-    pub fn new() -> GenericRow<'a> {
-        GenericRow { values: vec![] }
+
+    /// Creates a GenericRow with the specified number of fields, all initialized to null.
+    ///
+    /// This is useful when you need to create a row with a specific field count
+    /// but only want to set some fields (e.g., for KV delete operations where
+    /// only primary key fields need to be set).
+    ///
+    /// # Example
+    /// ```
+    /// use fluss::row::GenericRow;
+    ///
+    /// let mut row = GenericRow::new(3);
+    /// row.set_field(0, 42); // Only set the primary key
+    /// // Fields 1 and 2 remain null
+    /// ```
+    pub fn new(field_count: usize) -> GenericRow<'a> {
+        GenericRow {
+            values: vec![Datum::Null; field_count],
+        }
     }
 
+    /// Sets the field at the given position to the specified value.
+    ///
+    /// # Panics
+    /// Panics if `pos` is out of bounds (>= field count).
     pub fn set_field(&mut self, pos: usize, value: impl Into<Datum<'a>>) {
-        self.values.insert(pos, value.into());
+        self.values[pos] = value.into();
     }
 }
 
@@ -249,11 +264,32 @@ mod tests {
 
     #[test]
     fn is_null_at_checks_datum_nullity() {
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(2);
         row.set_field(0, Datum::Null);
         row.set_field(1, 42_i32);
 
         assert!(row.is_null_at(0));
         assert!(!row.is_null_at(1));
+    }
+
+    #[test]
+    fn new_initializes_nulls() {
+        let row = GenericRow::new(3);
+        assert_eq!(row.get_field_count(), 3);
+        assert!(row.is_null_at(0));
+        assert!(row.is_null_at(1));
+        assert!(row.is_null_at(2));
+    }
+
+    #[test]
+    fn partial_row_for_delete() {
+        // Simulates delete scenario: only primary key (field 0) is set
+        let mut row = GenericRow::new(3);
+        row.set_field(0, 123_i32);
+        // Fields 1 and 2 remain null
+        assert_eq!(row.get_field_count(), 3);
+        assert_eq!(row.get_int(0), 123);
+        assert!(row.is_null_at(1));
+        assert!(row.is_null_at(2));
     }
 }

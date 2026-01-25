@@ -209,7 +209,7 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
 pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'_> {
     use fcore::row::Datum;
 
-    let mut generic_row = fcore::row::GenericRow::new();
+    let mut generic_row = fcore::row::GenericRow::new(row.fields.len());
 
     for (idx, field) in row.fields.iter().enumerate() {
         let datum = match field.datum_type {

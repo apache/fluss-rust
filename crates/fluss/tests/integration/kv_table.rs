@@ -53,10 +53,8 @@ mod kv_table_test {
     }
 
     fn make_key(id: i32) -> GenericRow<'static> {
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(3);
         row.set_field(0, id);
-        row.set_field(1, "");
-        row.set_field(2, 0i64);
         row
     }
 
@@ -98,7 +96,7 @@ mod kv_table_test {
 
         // Upsert rows
         for (id, name, age) in &test_data {
-            let mut row = GenericRow::new();
+            let mut row = GenericRow::new(3);
             row.set_field(0, *id);
             row.set_field(1, *name);
             row.set_field(2, *age);
@@ -132,7 +130,7 @@ mod kv_table_test {
         }
 
         // Update the record with new age
-        let mut updated_row = GenericRow::new();
+        let mut updated_row = GenericRow::new(3);
         updated_row.set_field(0, 1);
         updated_row.set_field(1, "Verso");
         updated_row.set_field(2, 33i64);
@@ -162,10 +160,8 @@ mod kv_table_test {
         );
 
         // Delete record with id=1
-        let mut delete_row = GenericRow::new();
+        let mut delete_row = GenericRow::new(3);
         delete_row.set_field(0, 1);
-        delete_row.set_field(1, "");
-        delete_row.set_field(2, 0i64);
         upsert_writer
             .delete(&delete_row)
             .await
@@ -262,7 +258,7 @@ mod kv_table_test {
         ];
 
         for (region, user_id, score) in &test_data {
-            let mut row = GenericRow::new();
+            let mut row = GenericRow::new(3);
             row.set_field(0, *region);
             row.set_field(1, *user_id);
             row.set_field(2, *score);
@@ -277,7 +273,7 @@ mod kv_table_test {
             .expect("Failed to create lookuper");
 
         // Lookup (US, 1) - should return score 100
-        let mut key = GenericRow::new();
+        let mut key = GenericRow::new(3);
         key.set_field(0, "US");
         key.set_field(1, 1);
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -288,7 +284,7 @@ mod kv_table_test {
         assert_eq!(row.get_long(2), 100, "Score for (US, 1) should be 100");
 
         // Lookup (EU, 2) - should return score 250
-        let mut key = GenericRow::new();
+        let mut key = GenericRow::new(3);
         key.set_field(0, "EU");
         key.set_field(1, 2);
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -299,7 +295,7 @@ mod kv_table_test {
         assert_eq!(row.get_long(2), 250, "Score for (EU, 2) should be 250");
 
         // Update (US, 1) score
-        let mut update_row = GenericRow::new();
+        let mut update_row = GenericRow::new(3);
         update_row.set_field(0, "US");
         update_row.set_field(1, 1);
         update_row.set_field(2, 500i64);
@@ -309,7 +305,7 @@ mod kv_table_test {
             .expect("Failed to update");
 
         // Verify update
-        let mut key = GenericRow::new();
+        let mut key = GenericRow::new(3);
         key.set_field(0, "US");
         key.set_field(1, 1);
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -367,7 +363,7 @@ mod kv_table_test {
             .create_writer()
             .expect("Failed to create writer");
 
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(4);
         row.set_field(0, 1);
         row.set_field(1, "Verso");
         row.set_field(2, 32i64);
@@ -407,7 +403,7 @@ mod kv_table_test {
             .expect("Failed to create UpsertWriter with partial write");
 
         // Update only the score column
-        let mut partial_row = GenericRow::new();
+        let mut partial_row = GenericRow::new(4);
         partial_row.set_field(0, 1);
         partial_row.set_field(1, Datum::Null); // not in partial update column
         partial_row.set_field(2, Datum::Null); // not in partial update column
@@ -522,7 +518,7 @@ mod kv_table_test {
         let col_binary: &[u8] = b"fixed binary data!!!";
 
         // Upsert a row with all datatypes
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(17);
         row.set_field(0, pk_int);
         row.set_field(1, col_boolean);
         row.set_field(2, col_tinyint);
@@ -553,7 +549,7 @@ mod kv_table_test {
             .create_lookuper()
             .expect("Failed to create lookuper");
 
-        let mut key = GenericRow::new();
+        let mut key = GenericRow::new(17);
         key.set_field(0, pk_int);
 
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -625,7 +621,7 @@ mod kv_table_test {
 
         // Test with null values for nullable columns
         let pk_int_2 = 2i32;
-        let mut row_with_nulls = GenericRow::new();
+        let mut row_with_nulls = GenericRow::new(17);
         row_with_nulls.set_field(0, pk_int_2);
         row_with_nulls.set_field(1, Datum::Null); // col_boolean
         row_with_nulls.set_field(2, Datum::Null); // col_tinyint
@@ -650,7 +646,7 @@ mod kv_table_test {
             .expect("Failed to upsert row with nulls");
 
         // Lookup row with nulls
-        let mut key2 = GenericRow::new();
+        let mut key2 = GenericRow::new(17);
         key2.set_field(0, pk_int_2);
 
         let result = lookuper.lookup(&key2).await.expect("Failed to lookup");

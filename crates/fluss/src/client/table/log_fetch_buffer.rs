@@ -800,7 +800,7 @@ impl PendingFetch for RemotePendingFetch {
             let pos = self.pos_in_log_segment as usize;
             if pos >= file_size {
                 return Err(Error::UnexpectedError {
-                    message: format!("Position {} exceeds file size {}", pos, file_size),
+                    message: format!("Position {pos} exceeds file size {file_size}"),
                     source: None,
                 });
             }
@@ -911,7 +911,7 @@ mod tests {
             },
         )?;
 
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
         let record = WriteRecord::for_append(table_path, 1, row);

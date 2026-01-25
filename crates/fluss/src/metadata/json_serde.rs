@@ -205,7 +205,7 @@ impl JsonSerde for DataType {
                 DataType::Decimal(
                     crate::metadata::datatype::DecimalType::with_nullable(true, precision, scale)
                         .map_err(|e| Error::JsonSerdeError {
-                        message: format!("Invalid DECIMAL parameters: {}", e),
+                        message: format!("Invalid DECIMAL parameters: {e}"),
                     })?,
                 )
             }
@@ -218,7 +218,7 @@ impl JsonSerde for DataType {
                 DataType::Time(
                     crate::metadata::datatype::TimeType::with_nullable(true, precision).map_err(
                         |e| Error::JsonSerdeError {
-                            message: format!("Invalid TIME_WITHOUT_TIME_ZONE precision: {}", e),
+                            message: format!("Invalid TIME_WITHOUT_TIME_ZONE precision: {e}"),
                         },
                     )?,
                 )
@@ -231,10 +231,7 @@ impl JsonSerde for DataType {
                 DataType::Timestamp(
                     crate::metadata::datatype::TimestampType::with_nullable(true, precision)
                         .map_err(|e| Error::JsonSerdeError {
-                            message: format!(
-                                "Invalid TIMESTAMP_WITHOUT_TIME_ZONE precision: {}",
-                                e
-                            ),
+                            message: format!("Invalid TIMESTAMP_WITHOUT_TIME_ZONE precision: {e}"),
                         })?,
                 )
             }
@@ -247,8 +244,7 @@ impl JsonSerde for DataType {
                     crate::metadata::datatype::TimestampLTzType::with_nullable(true, precision)
                         .map_err(|e| Error::JsonSerdeError {
                             message: format!(
-                                "Invalid TIMESTAMP_WITH_LOCAL_TIME_ZONE precision: {}",
-                                e
+                                "Invalid TIMESTAMP_WITH_LOCAL_TIME_ZONE precision: {e}"
                             ),
                         })?,
                 )

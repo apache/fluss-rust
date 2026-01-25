@@ -407,8 +407,7 @@ fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
         .checked_mul(MICROS_PER_MILLI)
         .ok_or_else(|| RowConvertError {
             message: format!(
-                "Timestamp milliseconds {} overflows when converting to microseconds",
-                millis
+                "Timestamp milliseconds {millis} overflows when converting to microseconds"
             ),
         })?;
     let nanos_micros = (nanos as i64) / MICROS_PER_MILLI;
@@ -416,8 +415,7 @@ fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
         .checked_add(nanos_micros)
         .ok_or_else(|| RowConvertError {
             message: format!(
-                "Timestamp overflow when adding microseconds: {} + {}",
-                millis_micros, nanos_micros
+                "Timestamp overflow when adding microseconds: {millis_micros} + {nanos_micros}"
             ),
         })
 }
@@ -429,16 +427,14 @@ fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
         .checked_mul(NANOS_PER_MILLI)
         .ok_or_else(|| RowConvertError {
             message: format!(
-                "Timestamp milliseconds {} overflows when converting to nanoseconds",
-                millis
+                "Timestamp milliseconds {millis} overflows when converting to nanoseconds"
             ),
         })?;
     millis_nanos
         .checked_add(nanos as i64)
         .ok_or_else(|| RowConvertError {
             message: format!(
-                "Timestamp overflow when adding nanoseconds: {} + {}",
-                millis_nanos, nanos
+                "Timestamp overflow when adding nanoseconds: {millis_nanos} + {nanos}"
             ),
         })
 }
@@ -504,10 +500,7 @@ impl Datum<'_> {
                     arrow_schema::DataType::Decimal128(p, s) => (*p, *s),
                     _ => {
                         return Err(RowConvertError {
-                            message: format!(
-                                "Expected Decimal128 Arrow type, got: {:?}",
-                                data_type
-                            ),
+                            message: format!("Expected Decimal128 Arrow type, got: {data_type:?}"),
                         });
                     }
                 };
@@ -515,7 +508,7 @@ impl Datum<'_> {
                 // Validate scale is non-negative (Fluss doesn't support negative scales)
                 if s < 0 {
                     return Err(RowConvertError {
-                        message: format!("Negative decimal scale {} is not supported", s),
+                        message: format!("Negative decimal scale {s} is not supported"),
                     });
                 }
 
@@ -535,8 +528,7 @@ impl Datum<'_> {
                     if actual_precision > target_precision as usize {
                         return Err(RowConvertError {
                             message: format!(
-                                "Decimal precision overflow: value has {} digits but Arrow expects {} (value: {})",
-                                actual_precision, target_precision, rescaled
+                                "Decimal precision overflow: value has {actual_precision} digits but Arrow expects {target_precision} (value: {rescaled})"
                             ),
                         });
                     }
@@ -546,7 +538,7 @@ impl Datum<'_> {
                         Ok(v) => v,
                         Err(_) => {
                             return Err(RowConvertError {
-                                message: format!("Decimal value exceeds i128 range: {}", rescaled),
+                                message: format!("Decimal value exceeds i128 range: {rescaled}"),
                             });
                         }
                     };
@@ -575,8 +567,7 @@ impl Datum<'_> {
                             if millis % MILLIS_PER_SECOND as i32 != 0 {
                                 return Err(RowConvertError {
                                     message: format!(
-                                        "Time value {} ms has sub-second precision but schema expects seconds only",
-                                        millis
+                                        "Time value {millis} ms has sub-second precision but schema expects seconds only"
                                     ),
                                 });
                             }
@@ -602,8 +593,7 @@ impl Datum<'_> {
                                 .checked_mul(MICROS_PER_MILLI)
                                 .ok_or_else(|| RowConvertError {
                                     message: format!(
-                                        "Time value {} ms overflows when converting to microseconds",
-                                        millis
+                                        "Time value {millis} ms overflows when converting to microseconds"
                                     ),
                                 })?;
                             b.append_value(micros);
@@ -618,8 +608,7 @@ impl Datum<'_> {
                             let nanos = (millis as i64).checked_mul(NANOS_PER_MILLI).ok_or_else(
                                 || RowConvertError {
                                     message: format!(
-                                        "Time value {} ms overflows when converting to nanoseconds",
-                                        millis
+                                        "Time value {millis} ms overflows when converting to nanoseconds"
                                     ),
                                 },
                             )?;
@@ -630,8 +619,7 @@ impl Datum<'_> {
                     _ => {
                         return Err(RowConvertError {
                             message: format!(
-                                "Expected Time32/Time64 Arrow type, got: {:?}",
-                                data_type
+                                "Expected Time32/Time64 Arrow type, got: {data_type:?}"
                             ),
                         });
                     }
@@ -808,8 +796,7 @@ impl TimestampNtz {
         if !(0..=MAX_NANO_OF_MILLISECOND).contains(&nano_of_millisecond) {
             return Err(crate::error::Error::IllegalArgument {
                 message: format!(
-                    "nanoOfMillisecond must be in range [0, {}], got: {}",
-                    MAX_NANO_OF_MILLISECOND, nano_of_millisecond
+                    "nanoOfMillisecond must be in range [0, {MAX_NANO_OF_MILLISECOND}], got: {nano_of_millisecond}"
                 ),
             });
         }
@@ -856,8 +843,7 @@ impl TimestampLtz {
         if !(0..=MAX_NANO_OF_MILLISECOND).contains(&nano_of_millisecond) {
             return Err(crate::error::Error::IllegalArgument {
                 message: format!(
-                    "nanoOfMillisecond must be in range [0, {}], got: {}",
-                    MAX_NANO_OF_MILLISECOND, nano_of_millisecond
+                    "nanoOfMillisecond must be in range [0, {MAX_NANO_OF_MILLISECOND}], got: {nano_of_millisecond}"
                 ),
             });
         }
@@ -1030,10 +1016,8 @@ mod timestamp_tests {
     #[test]
     fn test_timestamp_nanos_out_of_range() {
         // Test that both TimestampNtz and TimestampLtz reject invalid nanos
-        let expected_msg = format!(
-            "nanoOfMillisecond must be in range [0, {}]",
-            MAX_NANO_OF_MILLISECOND
-        );
+        let expected_msg =
+            format!("nanoOfMillisecond must be in range [0, {MAX_NANO_OF_MILLISECOND}]");
 
         // Too large (1,000,000 is just beyond the valid range)
         let result_ntz = TimestampNtz::from_millis_nanos(1000, MAX_NANO_OF_MILLISECOND + 1);

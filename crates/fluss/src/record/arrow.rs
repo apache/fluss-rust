@@ -107,7 +107,7 @@ fn validate_batch_size(batch_size_bytes: i32) -> Result<usize> {
     // Check for negative size (corrupted data)
     if batch_size_bytes < 0 {
         return Err(Error::UnexpectedError {
-            message: format!("Invalid negative batch size: {}", batch_size_bytes),
+            message: format!("Invalid negative batch size: {batch_size_bytes}"),
             source: None,
         });
     }
@@ -120,8 +120,7 @@ fn validate_batch_size(batch_size_bytes: i32) -> Result<usize> {
             .checked_add(LOG_OVERHEAD)
             .ok_or_else(|| Error::UnexpectedError {
                 message: format!(
-                    "Batch size {} + LOG_OVERHEAD {} would overflow",
-                    batch_size_u, LOG_OVERHEAD
+                    "Batch size {batch_size_u} + LOG_OVERHEAD {LOG_OVERHEAD} would overflow"
                 ),
                 source: None,
             })?;
@@ -130,8 +129,7 @@ fn validate_batch_size(batch_size_bytes: i32) -> Result<usize> {
     if total_size > MAX_BATCH_SIZE {
         return Err(Error::UnexpectedError {
             message: format!(
-                "Batch size {} exceeds maximum allowed size {}",
-                total_size, MAX_BATCH_SIZE
+                "Batch size {total_size} exceeds maximum allowed size {MAX_BATCH_SIZE}"
             ),
             source: None,
         });
@@ -259,8 +257,7 @@ impl RowAppendRecordBatchBuilder {
                     .with_precision_and_scale(*precision, *scale)
                     .map_err(|e| Error::IllegalArgument {
                         message: format!(
-                            "Invalid decimal precision {} or scale {}: {}",
-                            precision, scale, e
+                            "Invalid decimal precision {precision} or scale {scale}: {e}"
                         ),
                     })?;
                 Ok(Box::new(builder))
@@ -273,8 +270,7 @@ impl RowAppendRecordBatchBuilder {
                 }
                 _ => Err(Error::IllegalArgument {
                     message: format!(
-                        "Time32 only supports Second and Millisecond units, got: {:?}",
-                        unit
+                        "Time32 only supports Second and Millisecond units, got: {unit:?}"
                     ),
                 }),
             },
@@ -285,8 +281,7 @@ impl RowAppendRecordBatchBuilder {
                 arrow_schema::TimeUnit::Nanosecond => Ok(Box::new(Time64NanosecondBuilder::new())),
                 _ => Err(Error::IllegalArgument {
                     message: format!(
-                        "Time64 only supports Microsecond and Nanosecond units, got: {:?}",
-                        unit
+                        "Time64 only supports Microsecond and Nanosecond units, got: {unit:?}"
                     ),
                 }),
             },
@@ -592,10 +587,7 @@ impl FileSource {
         // Validate base_offset to prevent underflow in total_size()
         if base_offset > file_size {
             return Err(Error::UnexpectedError {
-                message: format!(
-                    "base_offset ({}) exceeds file_size ({})",
-                    base_offset, file_size
-                ),
+                message: format!("base_offset ({base_offset}) exceeds file_size ({file_size})"),
                 source: None,
             });
         }
@@ -1044,7 +1036,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
             7..=9 => ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond),
             invalid => {
                 return Err(Error::IllegalArgument {
-                    message: format!("Invalid precision {} for TimeType (must be 0-9)", invalid),
+                    message: format!("Invalid precision {invalid} for TimeType (must be 0-9)"),
                 });
             }
         },
@@ -1055,10 +1047,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
             7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
             invalid => {
                 return Err(Error::IllegalArgument {
-                    message: format!(
-                        "Invalid precision {} for TimestampType (must be 0-9)",
-                        invalid
-                    ),
+                    message: format!("Invalid precision {invalid} for TimestampType (must be 0-9)"),
                 });
             }
         },
@@ -1070,8 +1059,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
             invalid => {
                 return Err(Error::IllegalArgument {
                     message: format!(
-                        "Invalid precision {} for TimestampLTzType (must be 0-9)",
-                        invalid
+                        "Invalid precision {invalid} for TimestampLTzType (must be 0-9)"
                     ),
                 });
             }
@@ -1939,13 +1927,13 @@ mod tests {
             },
         )?;
 
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
         let record = WriteRecord::for_append(table_path.clone(), 1, row);
         builder.append(&record)?;
 
-        let mut row2 = GenericRow::new();
+        let mut row2 = GenericRow::new(2);
         row2.set_field(0, 2_i32);
         row2.set_field(1, "bob");
         let record2 = WriteRecord::for_append(table_path, 2, row2);
