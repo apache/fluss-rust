@@ -50,7 +50,7 @@ impl<'a> CompactedRowDeserializer<'a> {
     }
 
     pub fn deserialize(&self, reader: &CompactedRowReader<'a>) -> GenericRow<'a> {
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(self.row_type.fields().len());
         let mut cursor = reader.initial_position();
         for (col_pos, data_field) in self.row_type.fields().iter().enumerate() {
             let dtype = &data_field.data_type;
@@ -161,10 +161,7 @@ impl<'a> CompactedRowDeserializer<'a> {
                     }
                 }
                 _ => {
-                    panic!(
-                        "Unsupported DataType in CompactedRowDeserializer: {:?}",
-                        dtype
-                    );
+                    panic!("Unsupported DataType in CompactedRowDeserializer: {dtype:?}");
                 }
             };
             cursor = next_cursor;

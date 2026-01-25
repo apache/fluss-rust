@@ -259,13 +259,13 @@ impl AppendWriter {
         // Get the expected Arrow schema from the Fluss table
         let row_type = self.table_info.get_row_type();
         let expected_schema = fcore::record::to_arrow_schema(row_type)
-            .map_err(|e| FlussError::new_err(format!("Failed to get table schema: {}", e)))?;
+            .map_err(|e| FlussError::new_err(format!("Failed to get table schema: {e}")))?;
 
         // Convert Arrow schema to PyArrow schema
         let py_schema = expected_schema
             .as_ref()
             .to_pyarrow(py)
-            .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {}", e)))?;
+            .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
 
         // Import pyarrow module
         let pyarrow = py.import("pyarrow")?;
@@ -570,13 +570,12 @@ fn python_decimal_to_datum(
 
     let decimal_str: String = value.str()?.extract()?;
     let bd = bigdecimal::BigDecimal::from_str(&decimal_str).map_err(|e| {
-        FlussError::new_err(format!("Failed to parse decimal '{}': {}", decimal_str, e))
+        FlussError::new_err(format!("Failed to parse decimal '{decimal_str}': {e}"))
     })?;
 
     let decimal = fcore::row::Decimal::from_big_decimal(bd, precision, scale).map_err(|e| {
         FlussError::new_err(format!(
-            "Failed to convert decimal '{}' to DECIMAL({}, {}): {}",
-            decimal_str, precision, scale, e
+            "Failed to convert decimal '{decimal_str}' to DECIMAL({precision}, {scale}): {e}"
         ))
     })?;
 
@@ -641,10 +640,9 @@ fn python_time_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'sta
     if microsecond % MICROS_PER_MILLI as i32 != 0 {
         return Err(FlussError::new_err(format!(
             "TIME values with sub-millisecond precision are not supported. \
-             Got time with {} microseconds (not divisible by 1000). \
+             Got time with {microsecond} microseconds (not divisible by 1000). \
              Fluss stores TIME as milliseconds since midnight. \
-             Please round to milliseconds before insertion.",
-            microsecond
+             Please round to milliseconds before insertion."
         )));
     }
 
@@ -663,7 +661,7 @@ fn python_datetime_to_timestamp_ntz(value: &Bound<PyAny>) -> PyResult<fcore::row
     let (epoch_millis, nano_of_milli) = extract_datetime_components_ntz(value)?;
 
     let ts = fcore::row::TimestampNtz::from_millis_nanos(epoch_millis, nano_of_milli)
-        .map_err(|e| FlussError::new_err(format!("Failed to create TimestampNtz: {}", e)))?;
+        .map_err(|e| FlussError::new_err(format!("Failed to create TimestampNtz: {e}")))?;
 
     Ok(fcore::row::Datum::TimestampNtz(ts))
 }
@@ -675,7 +673,7 @@ fn python_datetime_to_timestamp_ltz(value: &Bound<PyAny>) -> PyResult<fcore::row
     let (epoch_millis, nano_of_milli) = extract_datetime_components_ltz(value)?;
 
     let ts = fcore::row::TimestampLtz::from_millis_nanos(epoch_millis, nano_of_milli)
-        .map_err(|e| FlussError::new_err(format!("Failed to create TimestampLtz: {}", e)))?;
+        .map_err(|e| FlussError::new_err(format!("Failed to create TimestampLtz: {e}")))?;
 
     Ok(fcore::row::Datum::TimestampLtz(ts))
 }
@@ -803,7 +801,7 @@ fn datetime_to_epoch_millis_as_utc(
 
     let timestamp = jiff::tz::Offset::UTC
         .to_timestamp(civil_dt)
-        .map_err(|e| FlussError::new_err(format!("Invalid datetime: {}", e)))?;
+        .map_err(|e| FlussError::new_err(format!("Invalid datetime: {e}")))?;
 
     let millis = timestamp.as_millisecond();
     let nano_of_milli = (timestamp.subsec_nanosecond() % NANOS_PER_MILLI as i32) as i32;

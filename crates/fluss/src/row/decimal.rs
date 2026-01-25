@@ -129,16 +129,14 @@ impl Decimal {
         // Sanity check that scale matches
         debug_assert_eq!(
             exp, scale as i64,
-            "Scaled decimal exponent ({}) != expected scale ({})",
-            exp, scale
+            "Scaled decimal exponent ({exp}) != expected scale ({scale})"
         );
 
         let actual_precision = Self::compute_precision(&unscaled);
         if actual_precision > precision as usize {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Decimal precision overflow: value has {} digits but precision is {} (value: {})",
-                    actual_precision, precision, scaled
+                    "Decimal precision overflow: value has {actual_precision} digits but precision is {precision} (value: {scaled})"
                 ),
             });
         }
@@ -147,8 +145,7 @@ impl Decimal {
         let long_val = if precision <= MAX_COMPACT_PRECISION {
             Some(i64::try_from(&unscaled).map_err(|_| Error::IllegalArgument {
                 message: format!(
-                    "Decimal mantissa exceeds i64 range for compact precision {}: unscaled={} (value={})",
-                    precision, unscaled, scaled
+                    "Decimal mantissa exceeds i64 range for compact precision {precision}: unscaled={unscaled} (value={scaled})"
                 ),
             })?)
         } else {
@@ -168,8 +165,7 @@ impl Decimal {
         if precision > MAX_COMPACT_PRECISION {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Precision {} exceeds MAX_COMPACT_PRECISION ({})",
-                    precision, MAX_COMPACT_PRECISION
+                    "Precision {precision} exceeds MAX_COMPACT_PRECISION ({MAX_COMPACT_PRECISION})"
                 ),
             });
         }
@@ -178,8 +174,7 @@ impl Decimal {
         if actual_precision > precision as usize {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Decimal precision overflow: unscaled value has {} digits but precision is {}",
-                    actual_precision, precision
+                    "Decimal precision overflow: unscaled value has {actual_precision} digits but precision is {precision}"
                 ),
             });
         }

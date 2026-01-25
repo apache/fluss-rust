@@ -58,7 +58,7 @@ pub async fn main() -> Result<()> {
 
     println!("\n=== Upserting ===");
     for (id, name, age) in [(1, "Verso", 32i64), (2, "Noco", 25), (3, "Esquie", 35)] {
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(3);
         row.set_field(0, id);
         row.set_field(1, name);
         row.set_field(2, age);
@@ -80,7 +80,7 @@ pub async fn main() -> Result<()> {
     }
 
     println!("\n=== Updating ===");
-    let mut row = GenericRow::new();
+    let mut row = GenericRow::new(3);
     row.set_field(0, 1);
     row.set_field(1, "Verso");
     row.set_field(2, 33i64);
@@ -96,12 +96,11 @@ pub async fn main() -> Result<()> {
     );
 
     println!("\n=== Deleting ===");
-    let mut row = GenericRow::new();
+    // For delete, only primary key field needs to be set; other fields can remain null
+    let mut row = GenericRow::new(3);
     row.set_field(0, 2);
-    row.set_field(1, "");
-    row.set_field(2, 0i64);
     upsert_writer.delete(&row).await?;
-    println!("Deleted: {row:?}");
+    println!("Deleted row with id=2");
 
     let result = lookuper.lookup(&make_key(2)).await?;
     if result.get_single_row()?.is_none() {
@@ -112,7 +111,7 @@ pub async fn main() -> Result<()> {
 }
 
 fn make_key(id: i32) -> GenericRow<'static> {
-    let mut row = GenericRow::new();
+    let mut row = GenericRow::new(1);
     row.set_field(0, id);
     row
 }

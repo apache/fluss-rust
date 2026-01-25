@@ -199,10 +199,7 @@ impl InternalRow for ColumnarRow {
         let field = schema.field(pos);
         let arrow_scale = match field.data_type() {
             DataType::Decimal128(_p, s) => *s as i64,
-            dt => panic!(
-                "Expected Decimal128 data type at column {}, found: {:?}",
-                pos, dt
-            ),
+            dt => panic!("Expected Decimal128 data type at column {pos}, found: {dt:?}"),
         };
 
         let i128_val = array.value(self.row_id);

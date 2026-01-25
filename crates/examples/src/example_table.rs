@@ -56,7 +56,7 @@ pub async fn main() -> Result<()> {
     print!("Get created table:\n {table_info}\n");
 
     // write row
-    let mut row = GenericRow::new();
+    let mut row = GenericRow::new(3);
     row.set_field(0, 22222);
     row.set_field(1, "t2t");
     row.set_field(2, 123_456_789_123i64);
@@ -64,7 +64,7 @@ pub async fn main() -> Result<()> {
     let table = conn.get_table(&table_path).await?;
     let append_writer = table.new_append()?.create_writer();
     let f1 = append_writer.append(row);
-    row = GenericRow::new();
+    row = GenericRow::new(3);
     row.set_field(0, 233333);
     row.set_field(1, "tt44");
     row.set_field(2, 987_654_321_987i64);

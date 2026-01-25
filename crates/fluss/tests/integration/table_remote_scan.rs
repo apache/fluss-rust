@@ -146,7 +146,7 @@ mod table_remote_scan_test {
         // append 20 rows, there must be some tiered to remote
         let record_count = 20;
         for i in 0..record_count {
-            let mut row = GenericRow::new();
+            let mut row = GenericRow::new(2);
             row.set_field(0, i as i32);
             let v = format!("v{}", i);
             row.set_field(1, v.as_str());

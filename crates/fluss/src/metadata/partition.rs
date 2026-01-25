@@ -131,8 +131,7 @@ impl ResolvedPartitionSpec {
             if parts.len() != 2 {
                 return Err(Error::IllegalArgument {
                     message: format!(
-                        "Invalid partition name format. Expected key=value, got: {}",
-                        pair
+                        "Invalid partition name format. Expected key=value, got: {pair}"
                     ),
                 });
             }
@@ -199,8 +198,7 @@ impl ResolvedPartitionSpec {
                 None => {
                     return Err(Error::IllegalArgument {
                         message: format!(
-                            "table does not contain partitionKey: {}",
-                            other_partition_key
+                            "table does not contain partitionKey: {other_partition_key}"
                         ),
                     });
                 }
