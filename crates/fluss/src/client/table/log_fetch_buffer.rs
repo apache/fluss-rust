@@ -800,7 +800,7 @@ impl PendingFetch for RemotePendingFetch {
             let pos = self.pos_in_log_segment as usize;
             if pos >= file_size {
                 return Err(Error::UnexpectedError {
-                    message: format!("Position {} exceeds file size {}", pos, file_size),
+                    message: format!("Position {pos} exceeds file size {file_size}"),
                     source: None,
                 });
             }

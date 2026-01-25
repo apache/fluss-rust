@@ -222,7 +222,7 @@ impl SecurityTokenManager {
                 Ok((props, expiration_time)) => {
                     // Send credentials via watch channel (Some indicates fetched)
                     if let Err(e) = credentials_tx.send(Some(props)) {
-                        debug!("No active subscribers for credentials update: {:?}", e);
+                        debug!("No active subscribers for credentials update: {e:?}");
                     }
 
                     // Calculate next renewal delay based on expiration time
@@ -231,22 +231,20 @@ impl SecurityTokenManager {
                     } else {
                         // No expiration time - token never expires, use long refresh interval
                         info!(
-                            "Token has no expiration time (never expires), next refresh in {:?}",
-                            DEFAULT_NON_EXPIRING_REFRESH_INTERVAL
+                            "Token has no expiration time (never expires), next refresh in {DEFAULT_NON_EXPIRING_REFRESH_INTERVAL:?}"
                         );
                         DEFAULT_NON_EXPIRING_REFRESH_INTERVAL
                     }
                 }
                 Err(e) => {
                     warn!(
-                        "Failed to obtain security token: {:?}, will retry in {:?}",
-                        e, renewal_retry_backoff
+                        "Failed to obtain security token: {e:?}, will retry in {renewal_retry_backoff:?}"
                     );
                     renewal_retry_backoff
                 }
             };
 
-            debug!("Next token refresh in {:?}", next_delay);
+            debug!("Next token refresh in {next_delay:?}");
 
             // Wait for either the delay to elapse or shutdown signal
             tokio::select! {
@@ -325,8 +323,7 @@ impl SecurityTokenManager {
         let delay = Duration::from_millis(delay_ms);
 
         debug!(
-            "Calculated renewal delay: {:?} (expiration: {}, now: {}, ratio: {})",
-            delay, expiration_time, now, renewal_ratio
+            "Calculated renewal delay: {delay:?} (expiration: {expiration_time}, now: {now}, ratio: {renewal_ratio})"
         );
 
         delay.clamp(MIN_RENEWAL_DELAY, MAX_RENEWAL_DELAY)
@@ -373,10 +370,7 @@ mod tests {
         let expected_max = Duration::from_secs(2900); // ~48.3 minutes
         assert!(
             delay >= expected_min && delay <= expected_max,
-            "Expected delay between {:?} and {:?}, got {:?}",
-            expected_min,
-            expected_max,
-            delay
+            "Expected delay between {expected_min:?} and {expected_max:?}, got {delay:?}"
         );
     }
 

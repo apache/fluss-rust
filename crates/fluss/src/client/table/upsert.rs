@@ -232,8 +232,7 @@ impl UpsertWriterFactory {
                 None => {
                     return Err(IllegalArgument {
                         message: format!(
-                            "The specified primary key {} is not in row type {}",
-                            primary_key, row_type
+                            "The specified primary key {primary_key} is not in row type {row_type}"
                         ),
                     });
                 }
@@ -250,8 +249,7 @@ impl UpsertWriterFactory {
                 if target_column_set[index] {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Explicitly specifying values for the auto increment column {} is not allowed.",
-                            auto_increment_col_name
+                            "Explicitly specifying values for the auto increment column {auto_increment_col_name} is not allowed."
                         ),
                     });
                 }

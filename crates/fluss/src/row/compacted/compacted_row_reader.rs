@@ -161,10 +161,7 @@ impl<'a> CompactedRowDeserializer<'a> {
                     }
                 }
                 _ => {
-                    panic!(
-                        "Unsupported DataType in CompactedRowDeserializer: {:?}",
-                        dtype
-                    );
+                    panic!("Unsupported DataType in CompactedRowDeserializer: {dtype:?}");
                 }
             };
             cursor = next_cursor;
