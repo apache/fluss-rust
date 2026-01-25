@@ -328,9 +328,29 @@ impl RemoteLogFetcher for ProductionFetcher {
                     None => {
                         // Credentials not yet fetched, wait for first update
                         log::info!("Waiting for credentials to be available...");
-                        let _ = credentials_rx.changed().await;
-                        // After change, unwrap or use empty (should be Some now)
-                        credentials_rx.borrow().clone().unwrap_or_default()
+                        // If the sender side has been dropped (e.g. during shutdown),
+                        // this will return an error. Surface that as a proper error
+                        // instead of silently falling back to empty credentials.
+                        if let Err(e) = credentials_rx.changed().await {
+                            let io_err = io::Error::new(
+                                io::ErrorKind::BrokenPipe,
+                                format!(
+                                    "credentials manager shut down before credentials were obtained: {e}"
+                                ),
+                            );
+                            return Err(io_err.into());
+                        }
+                        // After a successful change notification, credentials should be set.
+                        // If they are still missing, treat this as an error instead of
+                        // defaulting to an empty map (which could break auth flows).
+                        credentials_rx
+                            .borrow()
+                            .clone()
+                            .ok_or_else(|| Error::UnexpectedError {
+                                message: "credentials not available after watch notification"
+                                    .to_string(),
+                                source: None,
+                            })?
                     }
                 }
             };

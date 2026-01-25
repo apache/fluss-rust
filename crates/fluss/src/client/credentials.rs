@@ -31,9 +31,11 @@ use tokio::task::JoinHandle;
 /// Default renewal time ratio - refresh at 80% of token lifetime
 const DEFAULT_TOKEN_RENEWAL_RATIO: f64 = 0.8;
 /// Default retry backoff when token fetch fails
-const DEFAULT_RENEWAL_RETRY_BACKOFF: Duration = Duration::from_secs(60);
+const DEFAULT_RENEWAL_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 /// Minimum delay between refreshes
 const MIN_RENEWAL_DELAY: Duration = Duration::from_secs(1);
+/// Maximum delay between refreshes (24 hours) - prevents overflow and ensures periodic refresh
+const MAX_RENEWAL_DELAY: Duration = Duration::from_secs(24 * 60 * 60);
 /// Default refresh interval for tokens without expiration (never expires)
 const DEFAULT_NON_EXPIRING_REFRESH_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
 
@@ -196,9 +198,8 @@ impl SecurityTokenManager {
         if let Some(tx) = self.shutdown_tx.write().take() {
             let _ = tx.send(());
         }
-        if let Some(handle) = self.task_handle.write().take() {
-            handle.abort();
-        }
+        // Take and drop the task handle so the task can finish gracefully
+        let _ = self.task_handle.write().take();
         info!("SecurityTokenManager stopped");
     }
 
@@ -221,7 +222,7 @@ impl SecurityTokenManager {
                 Ok((props, expiration_time)) => {
                     // Send credentials via watch channel (Some indicates fetched)
                     if let Err(e) = credentials_tx.send(Some(props)) {
-                        log::debug!("No active subscribers for credentials update: {:?}", e);
+                        debug!("No active subscribers for credentials update: {:?}", e);
                     }
 
                     // Calculate next renewal delay based on expiration time
@@ -229,7 +230,7 @@ impl SecurityTokenManager {
                         Self::calculate_renewal_delay(exp_time, token_renewal_ratio)
                     } else {
                         // No expiration time - token never expires, use long refresh interval
-                        log::info!(
+                        info!(
                             "Token has no expiration time (never expires), next refresh in {:?}",
                             DEFAULT_NON_EXPIRING_REFRESH_INTERVAL
                         );
@@ -237,16 +238,15 @@ impl SecurityTokenManager {
                     }
                 }
                 Err(e) => {
-                    log::warn!(
+                    warn!(
                         "Failed to obtain security token: {:?}, will retry in {:?}",
-                        e,
-                        renewal_retry_backoff
+                        e, renewal_retry_backoff
                     );
                     renewal_retry_backoff
                 }
             };
 
-            log::debug!("Next token refresh in {:?}", next_delay);
+            debug!("Next token refresh in {:?}", next_delay);
 
             // Wait for either the delay to elapse or shutdown signal
             tokio::select! {
@@ -254,7 +254,7 @@ impl SecurityTokenManager {
                     // Continue to next iteration to refresh
                 }
                 _ = &mut shutdown_rx => {
-                     log::info!("Token refresh loop received shutdown signal");
+                     info!("Token refresh loop received shutdown signal");
                     break;
                 }
             }
@@ -282,7 +282,7 @@ impl SecurityTokenManager {
 
         // The token may be empty if remote filesystem doesn't require authentication
         if response.token.is_empty() {
-            log::info!("Empty token received, remote filesystem may not require authentication");
+            info!("Empty token received, remote filesystem may not require authentication");
             return Ok((HashMap::new(), response.expiration_time));
         }
 
@@ -297,13 +297,14 @@ impl SecurityTokenManager {
         }
 
         let props = build_remote_fs_props(&credentials, &addition_infos);
-        log::debug!("Security token fetched successfully");
+        debug!("Security token fetched successfully");
 
         Ok((props, response.expiration_time))
     }
 
     /// Calculate the delay before next token renewal.
     /// Uses the renewal ratio to refresh before actual expiration.
+    /// Caps the delay to MAX_RENEWAL_DELAY to prevent overflow and ensure periodic refresh.
     fn calculate_renewal_delay(expiration_time: i64, renewal_ratio: f64) -> Duration {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -316,18 +317,19 @@ impl SecurityTokenManager {
             return MIN_RENEWAL_DELAY;
         }
 
-        let delay_ms = (time_until_expiry as f64 * renewal_ratio) as u64;
+        // Cap time_until_expiry to prevent overflow when casting to f64 and back
+        let max_delay_ms = MAX_RENEWAL_DELAY.as_millis() as i64;
+        let capped_time = time_until_expiry.min(max_delay_ms);
+
+        let delay_ms = (capped_time as f64 * renewal_ratio) as u64;
         let delay = Duration::from_millis(delay_ms);
 
-        log::debug!(
+        debug!(
             "Calculated renewal delay: {:?} (expiration: {}, now: {}, ratio: {})",
-            delay,
-            expiration_time,
-            now,
-            renewal_ratio
+            delay, expiration_time, now, renewal_ratio
         );
 
-        delay.max(MIN_RENEWAL_DELAY)
+        delay.clamp(MIN_RENEWAL_DELAY, MAX_RENEWAL_DELAY)
     }
 }
 
