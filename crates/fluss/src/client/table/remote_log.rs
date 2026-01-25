@@ -14,11 +14,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::client::credentials::CredentialsReceiver;
 use crate::error::{Error, Result};
 use crate::io::{FileIO, Storage};
 use crate::metadata::TableBucket;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use std::{
     cmp::{Ordering, Reverse, min},
     collections::{BinaryHeap, HashMap},
@@ -290,7 +291,7 @@ enum DownloadResult {
 
 /// Production implementation of RemoteLogFetcher that downloads from actual storage
 struct ProductionFetcher {
-    remote_fs_props: Arc<RwLock<HashMap<String, String>>>,
+    credentials_rx: CredentialsReceiver,
     local_log_dir: Arc<TempDir>,
 }
 
@@ -299,7 +300,7 @@ impl RemoteLogFetcher for ProductionFetcher {
         &self,
         request: &RemoteLogDownloadRequest,
     ) -> Pin<Box<dyn Future<Output = Result<FetchResult>> + Send>> {
-        let remote_fs_props = self.remote_fs_props.clone();
+        let mut credentials_rx = self.credentials_rx.clone();
         let local_log_dir = self.local_log_dir.clone();
 
         // Clone data needed for async operation to avoid lifetime issues
@@ -317,14 +318,29 @@ impl RemoteLogFetcher for ProductionFetcher {
                 remote_log_tablet_dir, segment.segment_id, offset_prefix
             );
 
-            let remote_fs_props_map = remote_fs_props.read().clone();
+            // Get credentials from watch channel, waiting if not yet fetched
+            // - None = not yet fetched, wait
+            // - Some(props) = fetched (may be empty if no auth needed)
+            let remote_fs_props = {
+                let maybe_props = credentials_rx.borrow().clone();
+                match maybe_props {
+                    Some(props) => props,
+                    None => {
+                        // Credentials not yet fetched, wait for first update
+                        log::info!("Waiting for credentials to be available...");
+                        let _ = credentials_rx.changed().await;
+                        // After change, unwrap or use empty (should be Some now)
+                        credentials_rx.borrow().clone().unwrap_or_default()
+                    }
+                }
+            };
 
             // Download file to disk (streaming, no memory spike)
             let file_path = RemoteLogDownloader::download_file(
                 &remote_log_tablet_dir,
                 &remote_path,
                 &local_file_path,
-                &remote_fs_props_map,
+                &remote_fs_props,
             )
             .await?;
 
@@ -726,7 +742,6 @@ impl RemoteLogDownloadFuture {
 /// won't wait for completion. Pending futures will fail.
 pub struct RemoteLogDownloader {
     request_sender: Option<mpsc::UnboundedSender<RemoteLogDownloadRequest>>,
-    remote_fs_props: Option<Arc<RwLock<HashMap<String, String>>>>,
 }
 
 impl RemoteLogDownloader {
@@ -734,21 +749,17 @@ impl RemoteLogDownloader {
         local_log_dir: TempDir,
         max_prefetch_segments: usize,
         max_concurrent_downloads: usize,
+        credentials_rx: CredentialsReceiver,
     ) -> Result<Self> {
-        let remote_fs_props = Arc::new(RwLock::new(HashMap::new()));
         let fetcher = Arc::new(ProductionFetcher {
-            remote_fs_props: remote_fs_props.clone(),
+            credentials_rx,
             local_log_dir: Arc::new(local_log_dir),
         });
 
-        let mut downloader =
-            Self::new_with_fetcher(fetcher, max_prefetch_segments, max_concurrent_downloads)?;
-        downloader.remote_fs_props = Some(remote_fs_props);
-        Ok(downloader)
+        Self::new_with_fetcher(fetcher, max_prefetch_segments, max_concurrent_downloads)
     }
 
     /// Create a RemoteLogDownloader with a custom fetcher (for testing).
-    /// The remote_fs_props will be None since custom fetchers typically don't need S3 credentials.
     pub fn new_with_fetcher(
         fetcher: Arc<dyn RemoteLogFetcher>,
         max_prefetch_segments: usize,
@@ -771,14 +782,7 @@ impl RemoteLogDownloader {
 
         Ok(Self {
             request_sender: Some(request_sender),
-            remote_fs_props: None,
         })
-    }
-
-    pub fn set_remote_fs_props(&self, props: HashMap<String, String>) {
-        if let Some(ref remote_fs_props) = self.remote_fs_props {
-            *remote_fs_props.write() = props;
-        }
     }
 
     /// Request to fetch a remote log segment to local. This method is non-blocking.

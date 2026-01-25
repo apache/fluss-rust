@@ -28,7 +28,7 @@ use tempfile::TempDir;
 
 use crate::TableId;
 use crate::client::connection::FlussConnection;
-use crate::client::credentials::CredentialsCache;
+use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
 use crate::client::table::log_fetch_buffer::{
     CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
@@ -462,9 +462,10 @@ struct LogFetcher {
     read_context: ReadContext,
     remote_read_context: ReadContext,
     remote_log_downloader: Arc<RemoteLogDownloader>,
-    // todo: consider schedule a background thread to update
-    // token instead of update in fetch phase
-    credentials_cache: Arc<CredentialsCache>,
+    /// Background security token manager for remote filesystem access.
+    /// Kept alive to run the background refresh task; stopped on drop.
+    #[allow(dead_code)]
+    security_token_manager: Arc<SecurityTokenManager>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
 }
@@ -476,7 +477,6 @@ struct FetchResponseContext {
     read_context: ReadContext,
     remote_read_context: ReadContext,
     remote_log_downloader: Arc<RemoteLogDownloader>,
-    credentials_cache: Arc<CredentialsCache>,
 }
 
 impl LogFetcher {
@@ -497,6 +497,23 @@ impl LogFetcher {
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
         let log_fetch_buffer = Arc::new(LogFetchBuffer::new(read_context.clone()));
 
+        // Create security token manager for background token refresh
+        let security_token_manager =
+            Arc::new(SecurityTokenManager::new(conns.clone(), metadata.clone()));
+
+        // Subscribe to credentials updates and pass to remote log downloader
+        let credentials_rx = security_token_manager.subscribe();
+
+        let remote_log_downloader = Arc::new(RemoteLogDownloader::new(
+            tmp_dir,
+            config.scanner_remote_log_prefetch_num,
+            config.scanner_remote_log_download_threads,
+            credentials_rx,
+        )?);
+
+        // Start the background token refresh task
+        security_token_manager.start();
+
         Ok(LogFetcher {
             conns: conns.clone(),
             metadata: metadata.clone(),
@@ -505,12 +522,8 @@ impl LogFetcher {
             log_scanner_status,
             read_context,
             remote_read_context,
-            remote_log_downloader: Arc::new(RemoteLogDownloader::new(
-                tmp_dir,
-                config.scanner_remote_log_prefetch_num,
-                config.scanner_remote_log_download_threads,
-            )?),
-            credentials_cache: Arc::new(CredentialsCache::new(conns.clone(), metadata.clone())),
+            remote_log_downloader,
+            security_token_manager,
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
         })
@@ -670,7 +683,6 @@ impl LogFetcher {
             let read_context = self.read_context.clone();
             let remote_read_context = self.remote_read_context.clone();
             let remote_log_downloader = Arc::clone(&self.remote_log_downloader);
-            let creds_cache = self.credentials_cache.clone();
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
             let metadata = self.metadata.clone();
             let response_context = FetchResponseContext {
@@ -680,7 +692,6 @@ impl LogFetcher {
                 read_context,
                 remote_read_context,
                 remote_log_downloader,
-                credentials_cache: creds_cache,
             };
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
@@ -755,7 +766,6 @@ impl LogFetcher {
             read_context,
             remote_read_context,
             remote_log_downloader,
-            credentials_cache,
         } = context;
 
         for pb_fetch_log_resp in fetch_response.tables_resp {
@@ -825,10 +835,7 @@ impl LogFetcher {
                 // Check if this is a remote log fetch
                 if let Some(ref remote_log_fetch_info) = fetch_log_for_bucket.remote_log_fetch_info
                 {
-                    // set remote fs props
-                    let remote_fs_props = credentials_cache.get_or_refresh().await.unwrap();
-                    remote_log_downloader.set_remote_fs_props(remote_fs_props);
-
+                    // Remote fs props are already set by the background SecurityTokenManager
                     let remote_fetch_info =
                         RemoteLogFetchInfo::from_proto(remote_log_fetch_info, table_bucket.clone());
 
@@ -1649,7 +1656,6 @@ mod tests {
             read_context: fetcher.read_context.clone(),
             remote_read_context: fetcher.remote_read_context.clone(),
             remote_log_downloader: fetcher.remote_log_downloader.clone(),
-            credentials_cache: fetcher.credentials_cache.clone(),
         };
 
         LogFetcher::handle_fetch_response(response, response_context).await;
@@ -1703,7 +1709,6 @@ mod tests {
             read_context: fetcher.read_context.clone(),
             remote_read_context: fetcher.remote_read_context.clone(),
             remote_log_downloader: fetcher.remote_log_downloader.clone(),
-            credentials_cache: fetcher.credentials_cache.clone(),
         };
 
         LogFetcher::handle_fetch_response(response, response_context).await;
