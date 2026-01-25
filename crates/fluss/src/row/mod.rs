@@ -222,12 +222,6 @@ impl<'a> InternalRow for GenericRow<'a> {
     }
 }
 
-impl<'a> Default for GenericRow<'a> {
-    fn default() -> Self {
-        Self::new(0)
-    }
-}
-
 impl<'a> GenericRow<'a> {
     pub fn from_data(data: Vec<impl Into<Datum<'a>>>) -> GenericRow<'a> {
         GenericRow {
