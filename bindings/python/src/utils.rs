@@ -59,8 +59,39 @@ impl Utils {
             ArrowDataType::Binary | ArrowDataType::LargeBinary => DataTypes::bytes(),
             ArrowDataType::Date32 => DataTypes::date(),
             ArrowDataType::Date64 => DataTypes::date(),
-            ArrowDataType::Time32(_) | ArrowDataType::Time64(_) => DataTypes::time(),
-            ArrowDataType::Timestamp(_, _) => DataTypes::timestamp(),
+            ArrowDataType::Time32(unit) => match unit {
+                arrow_schema::TimeUnit::Second => DataTypes::time_with_precision(0),
+                arrow_schema::TimeUnit::Millisecond => DataTypes::time_with_precision(3),
+                _ => {
+                    return Err(FlussError::new_err(format!(
+                        "Unsupported Time32 unit: {unit:?}"
+                    )));
+                }
+            },
+            ArrowDataType::Time64(unit) => match unit {
+                arrow_schema::TimeUnit::Microsecond => DataTypes::time_with_precision(6),
+                arrow_schema::TimeUnit::Nanosecond => DataTypes::time_with_precision(9),
+                _ => {
+                    return Err(FlussError::new_err(format!(
+                        "Unsupported Time64 unit: {unit:?}"
+                    )));
+                }
+            },
+            ArrowDataType::Timestamp(unit, tz) => {
+                let precision = match unit {
+                    arrow_schema::TimeUnit::Second => 0,
+                    arrow_schema::TimeUnit::Millisecond => 3,
+                    arrow_schema::TimeUnit::Microsecond => 6,
+                    arrow_schema::TimeUnit::Nanosecond => 9,
+                };
+                // Arrow Timestamp with timezone -> Fluss TimestampLtz
+                // Arrow Timestamp without timezone -> Fluss Timestamp (NTZ)
+                if tz.is_some() {
+                    DataTypes::timestamp_ltz_with_precision(precision)
+                } else {
+                    DataTypes::timestamp_with_precision(precision)
+                }
+            }
             ArrowDataType::Decimal128(precision, scale) => {
                 DataTypes::decimal(*precision as u32, *scale as u32)
             }

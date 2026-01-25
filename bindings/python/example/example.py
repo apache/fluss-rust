@@ -17,6 +17,8 @@
 
 import asyncio
 import time
+from datetime import date, time as dt_time, datetime
+from decimal import Decimal
 
 import pandas as pd
 import pyarrow as pa
@@ -45,6 +47,11 @@ async def main():
         pa.field("name", pa.string()),
         pa.field("score", pa.float32()),
         pa.field("age", pa.int32()),
+        pa.field("birth_date", pa.date32()),
+        pa.field("check_in_time", pa.time32("ms")),
+        pa.field("created_at", pa.timestamp("us")),  # TIMESTAMP (NTZ)
+        pa.field("updated_at", pa.timestamp("us", tz="UTC")),  # TIMESTAMP_LTZ
+        pa.field("salary", pa.decimal128(10, 2)),
     ]
 
     # Create a PyArrow schema
@@ -60,7 +67,7 @@ async def main():
     admin = await conn.get_admin()
 
     # Create a Fluss table
-    table_path = fluss.TablePath("fluss", "sample_table")
+    table_path = fluss.TablePath("fluss", "sample_table_types")
 
     try:
         await admin.create_table(table_path, table_descriptor, True)
@@ -96,6 +103,11 @@ async def main():
                 pa.array(["Alice", "Bob", "Charlie"], type=pa.string()),
                 pa.array([95.2, 87.2, 92.1], type=pa.float32()),
                 pa.array([25, 30, 35], type=pa.int32()),
+                pa.array([date(1999, 5, 15), date(1994, 3, 20), date(1989, 11, 8)], type=pa.date32()),
+                pa.array([dt_time(9, 0, 0), dt_time(9, 30, 0), dt_time(10, 0, 0)], type=pa.time32("ms")),
+                pa.array([datetime(2024, 1, 15, 10, 30), datetime(2024, 1, 15, 11, 0), datetime(2024, 1, 15, 11, 30)], type=pa.timestamp("us")),
+                pa.array([datetime(2024, 1, 15, 10, 30), datetime(2024, 1, 15, 11, 0), datetime(2024, 1, 15, 11, 30)], type=pa.timestamp("us", tz="UTC")),
+                pa.array([Decimal("75000.00"), Decimal("82000.50"), Decimal("95000.75")], type=pa.decimal128(10, 2)),
             ],
             schema=schema,
         )
@@ -111,6 +123,11 @@ async def main():
                 pa.array(["David", "Eve"], type=pa.string()),
                 pa.array([88.5, 91.0], type=pa.float32()),
                 pa.array([28, 32], type=pa.int32()),
+                pa.array([date(1996, 7, 22), date(1992, 12, 1)], type=pa.date32()),
+                pa.array([dt_time(14, 15, 0), dt_time(8, 45, 0)], type=pa.time32("ms")),
+                pa.array([datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)], type=pa.timestamp("us")),
+                pa.array([datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)], type=pa.timestamp("us", tz="UTC")),
+                pa.array([Decimal("68000.00"), Decimal("72500.25")], type=pa.decimal128(10, 2)),
             ],
             schema=schema,
         )
@@ -118,15 +135,32 @@ async def main():
         append_writer.write_arrow_batch(pa_record_batch)
         print("Successfully wrote PyArrow RecordBatch")
 
-        # Test 3: Append single rows
-        print("\n--- Testing single row append ---")
-        # Dict input
-        await append_writer.append({"id": 8, "name": "Helen", "score": 93.5, "age": 26})
-        print("Successfully appended row (dict)")
+        # Test 3: Append single rows with Date, Time, Timestamp, Decimal
+        print("\n--- Testing single row append with temporal/decimal types ---")
+        # Dict input with all types including Date, Time, Timestamp, Decimal
+        await append_writer.append({
+            "id": 8,
+            "name": "Helen",
+            "score": 93.5,
+            "age": 26,
+            "birth_date": date(1998, 4, 10),
+            "check_in_time": dt_time(11, 30, 45),
+            "created_at": datetime(2024, 1, 17, 14, 0, 0),
+            "updated_at": datetime(2024, 1, 17, 14, 0, 0),
+            "salary": Decimal("88000.00"),
+        })
+        print("Successfully appended row (dict with Date, Time, Timestamp, Decimal)")
 
-        # List input
-        await append_writer.append([9, "Ivan", 90.0, 31])
-        print("Successfully appended row (list)")
+        # List input with all types
+        await append_writer.append([
+            9, "Ivan", 90.0, 31,
+            date(1993, 8, 25),
+            dt_time(16, 45, 0),
+            datetime(2024, 1, 17, 15, 30, 0),
+            datetime(2024, 1, 17, 15, 30, 0),
+            Decimal("91500.50"),
+        ])
+        print("Successfully appended row (list with Date, Time, Timestamp, Decimal)")
 
         # Test 4: Write Pandas DataFrame
         print("\n--- Testing Pandas DataFrame write ---")
@@ -136,6 +170,11 @@ async def main():
                 "name": ["Frank", "Grace"],
                 "score": [89.3, 94.7],
                 "age": [29, 27],
+                "birth_date": [date(1995, 2, 14), date(1997, 9, 30)],
+                "check_in_time": [dt_time(10, 0, 0), dt_time(10, 30, 0)],
+                "created_at": [datetime(2024, 1, 18, 8, 0), datetime(2024, 1, 18, 8, 30)],
+                "updated_at": [datetime(2024, 1, 18, 8, 0), datetime(2024, 1, 18, 8, 30)],
+                "salary": [Decimal("79000.00"), Decimal("85500.75")],
             }
         )
 
