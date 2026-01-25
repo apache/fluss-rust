@@ -469,7 +469,7 @@ async fn spawn_download_task(
                 result_sender: request.result_sender,
             }
         }
-        Err(e) if request.result_sender.is_closed() => {
+        Err(_e) if request.result_sender.is_closed() => {
             // Receiver dropped (cancelled) - release permit, don't re-queue
             drop(permit);
             DownloadResult::Cancelled
