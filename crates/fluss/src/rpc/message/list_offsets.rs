@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::{
+    BucketId, PartitionId, TableId, impl_read_version_type, impl_write_version_type, proto,
+};
 
 use crate::error::Result as FlussResult;
 use crate::error::{Error, FlussError};
@@ -74,9 +76,9 @@ pub struct ListOffsetsRequest {
 
 impl ListOffsetsRequest {
     pub fn new(
-        table_id: i64,
-        partition_id: Option<i64>,
-        bucket_ids: Vec<i32>,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+        bucket_ids: Vec<BucketId>,
         offset_spec: OffsetSpec,
     ) -> Self {
         ListOffsetsRequest {

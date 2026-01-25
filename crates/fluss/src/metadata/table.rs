@@ -20,6 +20,7 @@ use crate::error::Error::{IllegalArgument, InvalidTableError};
 use crate::error::{Error, Result};
 use crate::metadata::DataLakeFormat;
 use crate::metadata::datatype::{DataField, DataType, RowType};
+use crate::{BucketId, PartitionId, TableId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -697,32 +698,71 @@ impl TablePath {
     }
 }
 
+/// A database name, table name and partition name combo. It's used to represent the physical path of
+/// a bucket. If the bucket belongs to a partition (i.e., the table is a partitioned table),
+/// `partition_name` will be `Some(...)`; otherwise, it will be `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalTablePath {
     table_path: TablePath,
-    #[allow(dead_code)]
-    partition: Option<String>,
+    partition_name: Option<String>,
 }
 
 impl PhysicalTablePath {
     pub fn of(table_path: TablePath) -> Self {
         Self {
             table_path,
-            partition: None,
+            partition_name: None,
         }
     }
 
-    // TODO: support partition
+    pub fn of_partitioned(table_path: TablePath, partition_name: Option<String>) -> Self {
+        Self {
+            table_path,
+            partition_name,
+        }
+    }
+
+    pub fn of_with_names(
+        database_name: String,
+        table_name: String,
+        partition_name: Option<String>,
+    ) -> Self {
+        Self {
+            table_path: TablePath::new(database_name, table_name),
+            partition_name,
+        }
+    }
 
     pub fn get_table_path(&self) -> &TablePath {
         &self.table_path
+    }
+
+    pub fn get_database_name(&self) -> &str {
+        self.table_path.database()
+    }
+
+    pub fn get_table_name(&self) -> &str {
+        self.table_path.table()
+    }
+
+    pub fn get_partition_name(&self) -> Option<&String> {
+        self.partition_name.as_ref()
+    }
+}
+
+impl Display for PhysicalTablePath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.partition_name {
+            Some(partition) => write!(f, "{}(p={})", self.table_path, partition),
+            None => write!(f, "{}", self.table_path),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TableInfo {
     pub table_path: TablePath,
-    pub table_id: i64,
+    pub table_id: TableId,
     pub schema_id: i32,
     pub schema: Schema,
     pub row_type: RowType,
@@ -819,7 +859,7 @@ impl TableInfo {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         table_path: TablePath,
-        table_id: i64,
+        table_id: TableId,
         schema_id: i32,
         schema: Schema,
         bucket_keys: Vec<String>,
@@ -1000,13 +1040,13 @@ impl Display for TableInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct TableBucket {
-    table_id: i64,
-    partition_id: Option<i64>,
-    bucket: i32,
+    table_id: TableId,
+    partition_id: Option<PartitionId>,
+    bucket: BucketId,
 }
 
 impl TableBucket {
-    pub fn new(table_id: i64, bucket: i32) -> Self {
+    pub fn new(table_id: TableId, bucket: BucketId) -> Self {
         TableBucket {
             table_id,
             partition_id: None,
@@ -1014,15 +1054,15 @@ impl TableBucket {
         }
     }
 
-    pub fn table_id(&self) -> i64 {
+    pub fn table_id(&self) -> TableId {
         self.table_id
     }
 
-    pub fn bucket_id(&self) -> i32 {
+    pub fn bucket_id(&self) -> BucketId {
         self.bucket
     }
 
-    pub fn partition_id(&self) -> Option<i64> {
+    pub fn partition_id(&self) -> Option<PartitionId> {
         self.partition_id
     }
 }

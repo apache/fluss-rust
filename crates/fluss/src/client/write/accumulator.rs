@@ -401,7 +401,7 @@ impl RecordAccumulator {
         ready_write_batch.write_batch.re_enqueued();
         let table_path = ready_write_batch.write_batch.table_path().clone();
         let bucket_id = ready_write_batch.table_bucket.bucket_id();
-        let table_id = u64::try_from(ready_write_batch.table_bucket.table_id()).unwrap_or(0);
+        let table_id = ready_write_batch.table_bucket.table_id();
 
         let dq = {
             let mut binding =

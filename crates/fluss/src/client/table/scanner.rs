@@ -27,6 +27,7 @@ use std::{
 };
 use tempfile::TempDir;
 
+use crate::TableId;
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::CredentialsCache;
 use crate::client::metadata::Metadata;
@@ -264,7 +265,7 @@ pub struct RecordBatchLogScanner {
 /// Private shared implementation for both scanner types
 struct LogScannerInner {
     table_path: TablePath,
-    table_id: i64,
+    table_id: TableId,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,

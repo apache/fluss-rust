@@ -37,9 +37,10 @@ mod admin_test {
     use crate::integration::utils::{get_cluster, start_cluster, stop_cluster};
     use fluss::error::FlussError;
     use fluss::metadata::{
-        DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat, Schema, TableDescriptor,
-        TablePath,
+        DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat, PartitionSpec, Schema,
+        TableDescriptor, TablePath,
     };
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn before_all() {
@@ -221,6 +222,146 @@ mod admin_test {
 
         // database shouldn't exist now
         assert_eq!(admin.database_exists(test_db_name).await.unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn test_partition_apis() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection
+            .get_admin()
+            .await
+            .expect("Failed to get admin client");
+
+        let test_db_name = "test_partition_apis_db";
+        let db_descriptor = DatabaseDescriptorBuilder::default()
+            .comment("Database for test_partition_apis")
+            .build();
+
+        admin
+            .create_database(test_db_name, true, Some(&db_descriptor))
+            .await
+            .expect("Failed to create test database");
+
+        let test_table_name = "partitioned_table";
+        let table_path = TablePath::new(test_db_name.to_string(), test_table_name.to_string());
+
+        let table_schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .column("dt", DataTypes::string())
+            .column("region", DataTypes::string())
+            .primary_key(vec![
+                "id".to_string(),
+                "dt".to_string(),
+                "region".to_string(),
+            ])
+            .build()
+            .expect("Failed to build table schema");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(table_schema)
+            .distributed_by(Some(3), vec!["id".to_string()])
+            .partitioned_by(vec!["dt".to_string(), "region".to_string()])
+            .property("table.replication.factor", "1")
+            .log_format(LogFormat::ARROW)
+            .kv_format(KvFormat::COMPACTED)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        admin
+            .create_table(&table_path, &table_descriptor, true)
+            .await
+            .expect("Failed to create partitioned table");
+
+        let partitions = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partitions");
+        assert!(
+            partitions.is_empty(),
+            "Expected no partitions initially, found {}",
+            partitions.len()
+        );
+
+        let mut partition_values = HashMap::new();
+        partition_values.insert("dt".to_string(), "2024-01-15".to_string());
+        partition_values.insert("region".to_string(), "EMEA".to_string());
+        let partition_spec = PartitionSpec::new(partition_values);
+
+        admin
+            .create_partition(&table_path, &partition_spec, false)
+            .await
+            .expect("Failed to create partition");
+
+        let partitions = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partitions");
+        assert_eq!(
+            partitions.len(),
+            1,
+            "Expected exactly one partition after creation"
+        );
+        assert_eq!(
+            partitions[0].get_partition_name(),
+            "2024-01-15$EMEA",
+            "Partition name mismatch"
+        );
+
+        // list with partial spec filter - should find the partition
+        let mut partition_values = HashMap::new();
+        partition_values.insert("dt".to_string(), "2024-01-15".to_string());
+        let partial_partition_spec = PartitionSpec::new(partition_values);
+
+        let partitions_with_spec = admin
+            .list_partition_infos_with_spec(&table_path, Some(&partial_partition_spec))
+            .await
+            .expect("Failed to list partitions with spec");
+        assert_eq!(
+            partitions_with_spec.len(),
+            1,
+            "Expected one partition matching the spec"
+        );
+        assert_eq!(
+            partitions_with_spec[0].get_partition_name(),
+            "2024-01-15$EMEA",
+            "Partition name mismatch with spec filter"
+        );
+
+        // list with non-matching spec - should find no partitions
+        let mut non_matching_values = HashMap::new();
+        non_matching_values.insert("dt".to_string(), "2024-01-16".to_string());
+        let non_matching_spec = PartitionSpec::new(non_matching_values);
+        let partitions_non_matching = admin
+            .list_partition_infos_with_spec(&table_path, Some(&non_matching_spec))
+            .await
+            .expect("Failed to list partitions with non-matching spec");
+        assert!(
+            partitions_non_matching.is_empty(),
+            "Expected no partitions for non-matching spec"
+        );
+
+        admin
+            .drop_partition(&table_path, &partition_spec, false)
+            .await
+            .expect("Failed to drop partition");
+
+        let partitions = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partitions");
+        assert!(
+            partitions.is_empty(),
+            "Expected no partitions after drop, found {}",
+            partitions.len()
+        );
+
+        admin
+            .drop_table(&table_path, true)
+            .await
+            .expect("Failed to drop table");
+        admin.drop_database(test_db_name, true, true).await;
     }
 
     #[tokio::test]
