@@ -718,7 +718,7 @@ mod table_test {
             TimestampLtz::from_millis_nanos(-301234154877, 999_999).unwrap();
 
         // Append a row with all datatypes
-        let mut row = GenericRow::new();
+        let mut row = GenericRow::new(field_count);
         row.set_field(0, col_tinyint);
         row.set_field(1, col_smallint);
         row.set_field(2, col_int);
@@ -754,7 +754,7 @@ mod table_test {
             .expect("Failed to append row with all datatypes");
 
         // Append a row with null values for all columns
-        let mut row_with_nulls = GenericRow::new();
+        let mut row_with_nulls = GenericRow::new(field_count);
         for i in 0..field_count {
             row_with_nulls.set_field(i, Datum::Null);
         }
