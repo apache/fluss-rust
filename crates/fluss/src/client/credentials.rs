@@ -34,10 +34,10 @@ const DEFAULT_TOKEN_RENEWAL_RATIO: f64 = 0.8;
 const DEFAULT_RENEWAL_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 /// Minimum delay between refreshes
 const MIN_RENEWAL_DELAY: Duration = Duration::from_secs(1);
-/// Maximum delay between refreshes (24 hours) - prevents overflow and ensures periodic refresh
-const MAX_RENEWAL_DELAY: Duration = Duration::from_secs(24 * 60 * 60);
+/// Maximum delay between refreshes (7 days) - prevents overflow and ensures periodic refresh
+const MAX_RENEWAL_DELAY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// Default refresh interval for tokens without expiration (never expires)
-const DEFAULT_NON_EXPIRING_REFRESH_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
+const DEFAULT_NON_EXPIRING_REFRESH_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60); // 7 day
 
 /// Type alias for credentials properties receiver
 /// - `None` = not yet fetched, should wait
