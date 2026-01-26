@@ -846,10 +846,7 @@ impl TimestampLtz {
         }
     }
 
-    pub fn from_millis_nanos(
-        epoch_millisecond: i64,
-        nano_of_millisecond: i32,
-    ) -> crate::error::Result<Self> {
+    pub fn from_millis_nanos(epoch_millisecond: i64, nano_of_millisecond: i32) -> Result<Self> {
         if !(0..=MAX_NANO_OF_MILLISECOND).contains(&nano_of_millisecond) {
             return Err(crate::error::Error::IllegalArgument {
                 message: format!(

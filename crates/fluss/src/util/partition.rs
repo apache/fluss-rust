@@ -266,8 +266,8 @@ fn timestamp_to_string<T: Timestamp>(ts: T) -> String {
     let millis = ts.get_milli();
     let nanos = ts.get_nano_of_milli();
 
-    let millis_of_second = millis % MILLIS_PER_SECOND;
-    let total_secs = millis / MILLIS_PER_SECOND;
+    let millis_of_second = millis.rem_euclid(MILLIS_PER_SECOND);
+    let total_secs = millis.div_euclid(MILLIS_PER_SECOND);
 
     let epoch = jiff::Timestamp::UNIX_EPOCH;
     let ts_jiff = epoch + jiff::Span::new().seconds(total_secs);
