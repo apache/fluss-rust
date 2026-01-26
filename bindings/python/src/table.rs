@@ -942,79 +942,72 @@ impl LogScanner {
         let bucket_ids: Vec<i32> = (0..num_buckets).collect();
 
         // todo: after supporting list_offsets with timestamp, we can use start_timestamp and end_timestamp here
-        let mut stopping_offsets: HashMap<i32, i64> = TOKIO_RUNTIME
-            .block_on(async {
-                self.admin
-                    .list_offsets(
-                        &self.table_info.table_path,
-                        bucket_ids.as_slice(),
-                        OffsetSpec::Latest,
-                    )
-                    .await
+        let mut stopping_offsets: HashMap<i32, i64> = py
+            .detach(|| {
+                TOKIO_RUNTIME.block_on(async {
+                    self.admin
+                        .list_offsets(
+                            &self.table_info.table_path,
+                            bucket_ids.as_slice(),
+                            OffsetSpec::Latest,
+                        )
+                        .await
+                })
             })
             .map_err(|e| FlussError::new_err(e.to_string()))?;
 
-        if !stopping_offsets.is_empty() {
-            loop {
-                let batch_result = TOKIO_RUNTIME
-                    .block_on(async { self.inner.poll(Duration::from_millis(500)).await });
+        // Filter out buckets with no records to read (stop_at <= 0)
+        stopping_offsets.retain(|_, &mut v| v > 0);
 
-                match batch_result {
-                    Ok(scan_batches) => {
-                        for scan_batch in scan_batches {
-                            let bucket_id = scan_batch.bucket().bucket_id();
+        while !stopping_offsets.is_empty() {
+            let scan_batches = py
+                .detach(|| {
+                    TOKIO_RUNTIME
+                        .block_on(async { self.inner.poll(Duration::from_millis(500)).await })
+                })
+                .map_err(|e| FlussError::new_err(e.to_string()))?;
 
-                            // Extract stopping_offset once to avoid double unwrap
-                            let stop_exclusive = match stopping_offsets.get(&bucket_id) {
-                                Some(&offset) => offset,
-                                None => {
-                                    // we already reached end offset for this bucket
-                                    continue;
-                                }
-                            };
+            if scan_batches.is_empty() {
+                continue;
+            }
 
-                            // Compute the inclusive last offset we want (stop_exclusive - 1)
-                            let stop_inclusive = match stop_exclusive.checked_sub(1) {
-                                Some(v) => v,
-                                None => {
-                                    // stop_exclusive was 0 or negative - nothing to read
-                                    stopping_offsets.remove(&bucket_id);
-                                    continue;
-                                }
-                            };
+            for scan_batch in scan_batches {
+                let bucket_id = scan_batch.bucket().bucket_id();
 
-                            let base_offset = scan_batch.base_offset();
-                            let last_offset = scan_batch.last_offset();
+                // Check if this bucket is still being tracked; if not, ignore the batch
+                let Some(&stop_at) = stopping_offsets.get(&bucket_id) else {
+                    continue;
+                };
 
-                            // Check if we need to slice this batch to avoid overshoot
-                            let batch = if last_offset > stop_inclusive {
-                                // This batch extends past our stopping point
-                                // Slice to only include records up to stop_inclusive
-                                let records_to_keep = (stop_inclusive - base_offset + 1) as usize;
+                let base_offset = scan_batch.base_offset();
+                let last_offset = scan_batch.last_offset();
 
-                                let full_batch = scan_batch.into_batch();
-                                let actual_rows = full_batch.num_rows();
+                // If the batch starts at or after the stop_at offset, the bucket is exhausted
+                if base_offset >= stop_at {
+                    stopping_offsets.remove(&bucket_id);
+                    continue;
+                }
 
-                                full_batch.slice(0, records_to_keep.min(actual_rows))
-                            } else {
-                                // This batch is entirely before our stopping point
-                                scan_batch.into_batch()
-                            };
+                let batch = if last_offset >= stop_at {
+                    // This batch contains the target offset; slice it to keep only records
+                    // where offset < stop_at.
+                    let num_to_keep = (stop_at - base_offset) as usize;
+                    let b = scan_batch.into_batch();
 
-                            all_batches.push(Arc::new(batch));
+                    // Safety check: ensure we don't attempt to slice more rows than the batch contains
+                    let limit = num_to_keep.min(b.num_rows());
+                    b.slice(0, limit)
+                } else {
+                    // The entire batch is within the desired range (all offsets < stop_at)
+                    scan_batch.into_batch()
+                };
 
-                            // Remove this bucket if we've reached or passed the stopping offset
-                            if last_offset >= stop_inclusive {
-                                stopping_offsets.remove(&bucket_id);
-                            }
-                        }
+                all_batches.push(Arc::new(batch));
 
-                        // we have reached end offsets of all buckets
-                        if stopping_offsets.is_empty() {
-                            break;
-                        }
-                    }
-                    Err(e) => return Err(FlussError::new_err(e.to_string())),
+                // If the batch's last offset reached or passed the inclusive limit (stop_at - 1),
+                // we are done with this bucket.
+                if last_offset >= stop_at - 1 {
+                    stopping_offsets.remove(&bucket_id);
                 }
             }
         }
