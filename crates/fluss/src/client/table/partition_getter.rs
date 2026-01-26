@@ -66,7 +66,7 @@ impl PartitionGetter {
             .map(|ps| ps.get_partition_name())
     }
 
-    pub fn get_partition_spec(&self, row: &dyn InternalRow) -> Result<ResolvedPartitionSpec<'_>> {
+    pub fn get_partition_spec(&self, row: &dyn InternalRow) -> Result<ResolvedPartitionSpec> {
         let mut partition_values = Vec::with_capacity(self.partitions.len());
 
         for (data_type, field_getter) in &self.partitions {
@@ -79,7 +79,7 @@ impl PartitionGetter {
             partition_values.push(partition::convert_value_of_type(&value, data_type)?);
         }
 
-        ResolvedPartitionSpec::new(self.partition_keys.as_slice(), partition_values)
+        ResolvedPartitionSpec::new(self.partition_keys.clone(), partition_values)
     }
 }
 
