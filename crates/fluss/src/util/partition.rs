@@ -713,6 +713,19 @@ mod tests {
         assert_eq!(to_string_result, "2025-05-31-03-42-35_");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
+
+        // Negative millis
+        let datum = Datum::TimestampNtz(
+            TimestampNtz::from_millis_nanos(-1748662955428, 99988)
+                .expect("TimestampNtz init failed"),
+        );
+
+        let to_string_result =
+            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+                .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "1914-08-03-20-17-24_572099988");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
     }
 
     #[test]
@@ -771,6 +784,21 @@ mod tests {
         )
         .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "2025-05-31-03-42-35_");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
+
+        // Negative millis
+        let datum = Datum::TimestampLtz(
+            TimestampLtz::from_millis_nanos(-1748662955428, 99988)
+                .expect("TimestampLtz init failed"),
+        );
+
+        let to_string_result = convert_value_to_string(
+            &datum,
+            &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
+        )
+        .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "1914-08-03-20-17-24_572099988");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
     }
