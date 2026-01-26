@@ -25,7 +25,6 @@ use crate::metadata::{DataType, PartitionSpec, ResolvedPartitionSpec, TablePath}
 use crate::row::{Date, Datum, Time, TimestampLtz, TimestampNtz};
 use jiff::ToSpan;
 use jiff::Zoned;
-use jiff::civil::DateTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoPartitionTimeUnit {
@@ -236,50 +235,70 @@ fn time_to_string(time: Time) -> String {
     milli_to_string(time.get_inner())
 }
 
-/// Always add nanoseconds whether TimestampNtz and TimestampLtz are compact or not.
-fn timestamp_ntz_to_string(ts: TimestampNtz) -> String {
-    let millis = ts.get_millisecond();
-    let nano_of_milli = ts.get_nano_of_millisecond();
+trait Timestamp {
+    fn get_milli(&self) -> i64;
+    fn get_nano_of_milli(&self) -> i32;
+}
 
-    let total_nanos = (millis % MILLIS_PER_SECOND) * NANOS_PER_MILLIS + (nano_of_milli as i64);
+impl Timestamp for TimestampNtz {
+    fn get_milli(&self) -> i64 {
+        self.get_millisecond()
+    }
+
+    fn get_nano_of_milli(&self) -> i32 {
+        self.get_nano_of_millisecond()
+    }
+}
+
+impl Timestamp for TimestampLtz {
+    fn get_milli(&self) -> i64 {
+        self.get_epoch_millisecond()
+    }
+
+    fn get_nano_of_milli(&self) -> i32 {
+        self.get_nano_of_millisecond()
+    }
+}
+
+/// This formats date time while adhering to java side behaviour
+///
+fn timestamp_to_string<T: Timestamp>(ts: T) -> String {
+    let millis = ts.get_milli();
+    let nanos = ts.get_nano_of_milli();
+
+    let millis_of_second = millis % MILLIS_PER_SECOND;
     let total_secs = millis / MILLIS_PER_SECOND;
 
     let epoch = jiff::Timestamp::UNIX_EPOCH;
     let ts_jiff = epoch + jiff::Span::new().seconds(total_secs);
     let dt = ts_jiff.to_zoned(jiff::tz::TimeZone::UTC).datetime();
 
-    format_date_time(total_nanos, dt)
-}
-
-fn timestamp_ltz_to_string(ts: TimestampLtz) -> String {
-    let millis = ts.get_epoch_millisecond();
-    let nano_of_milli = ts.get_nano_of_millisecond();
-
-    let total_nanos = (millis % MILLIS_PER_SECOND) * NANOS_PER_MILLIS + (nano_of_milli as i64);
-    let total_secs = millis / MILLIS_PER_SECOND;
-
-    let epoch = jiff::Timestamp::UNIX_EPOCH;
-    let ts_jiff = epoch + jiff::Span::new().seconds(total_secs);
-    let dt = ts_jiff.to_zoned(jiff::tz::TimeZone::UTC).datetime();
-
-    format_date_time(total_nanos, dt)
-}
-
-fn format_date_time(total_nanos: i64, dt: DateTime) -> String {
-    if total_nanos > 0 {
+    if nanos > 0 {
         format!(
-            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_{}",
+            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_{:03}{:06}",
             dt.year(),
             dt.month(),
             dt.day(),
             dt.hour(),
             dt.minute(),
             dt.second(),
-            total_nanos
+            millis_of_second,
+            nanos
+        )
+    } else if millis_of_second > 0 {
+        format!(
+            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_{:03}",
+            dt.year(),
+            dt.month(),
+            dt.day(),
+            dt.hour(),
+            dt.minute(),
+            dt.second(),
+            millis_of_second
         )
     } else {
         format!(
-            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}",
+            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_",
             dt.year(),
             dt.month(),
             dt.day(),
@@ -304,8 +323,8 @@ pub fn convert_value_to_string(value: &Datum, data_type: &DataType) -> Result<St
         (Datum::Time(t), DataType::Time(_)) => Ok(time_to_string(*t)),
         (Datum::Float32(f), DataType::Float(_)) => Ok(reformat_float(f.into_inner())),
         (Datum::Float64(f), DataType::Double(_)) => Ok(reformat_double(f.into_inner())),
-        (Datum::TimestampLtz(ts), DataType::TimestampLTz(_)) => Ok(timestamp_ltz_to_string(*ts)),
-        (Datum::TimestampNtz(ts), DataType::Timestamp(_)) => Ok(timestamp_ntz_to_string(*ts)),
+        (Datum::TimestampLtz(ts), DataType::TimestampLTz(_)) => Ok(timestamp_to_string(*ts)),
+        (Datum::TimestampNtz(ts), DataType::Timestamp(_)) => Ok(timestamp_to_string(*ts)),
         _ => Err(IllegalArgument {
             message: format!(
                 "Unsupported conversion to partition key from data type: {data_type:?}, value: {value:?}"
@@ -657,6 +676,43 @@ mod tests {
         assert_eq!(to_string_result, "2025-05-31-03-42-35_428099988");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
+
+        // Zero nanos of millis
+        let datum = Datum::TimestampNtz(
+            TimestampNtz::from_millis_nanos(1748662955428, 0).expect("TimestampNtz init failed"),
+        );
+
+        let to_string_result =
+            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+                .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "2025-05-31-03-42-35_428");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
+
+        // Zero millis
+        let datum = Datum::TimestampNtz(
+            TimestampNtz::from_millis_nanos(1748662955000, 99988)
+                .expect("TimestampNtz init failed"),
+        );
+
+        let to_string_result =
+            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+                .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "2025-05-31-03-42-35_000099988");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
+
+        // Zero millis and zero nanos
+        let datum = Datum::TimestampNtz(
+            TimestampNtz::from_millis_nanos(1748662955000, 0).expect("TimestampNtz init failed"),
+        );
+
+        let to_string_result =
+            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+                .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "2025-05-31-03-42-35_");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
     }
 
     #[test]
@@ -672,6 +728,49 @@ mod tests {
         )
         .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "2025-05-31-03-42-35_428099988");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
+
+        // Zero nanos of millis
+        let datum = Datum::TimestampLtz(
+            TimestampLtz::from_millis_nanos(1748662955428, 0).expect("TimestampLtz init failed"),
+        );
+
+        let to_string_result = convert_value_to_string(
+            &datum,
+            &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
+        )
+        .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "2025-05-31-03-42-35_428");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
+
+        // Zero millis
+        let datum = Datum::TimestampLtz(
+            TimestampLtz::from_millis_nanos(1748662955000, 99988)
+                .expect("TimestampLtz init failed"),
+        );
+
+        let to_string_result = convert_value_to_string(
+            &datum,
+            &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
+        )
+        .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "2025-05-31-03-42-35_000099988");
+        let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
+        assert!(detect_invalid.is_none());
+
+        // Zero millis and zero nanos
+        let datum = Datum::TimestampLtz(
+            TimestampLtz::from_millis_nanos(1748662955000, 0).expect("TimestampLtz init failed"),
+        );
+
+        let to_string_result = convert_value_to_string(
+            &datum,
+            &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
+        )
+        .expect("datum conversion to partition string failed");
+        assert_eq!(to_string_result, "2025-05-31-03-42-35_");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
     }
