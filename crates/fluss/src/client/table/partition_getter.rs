@@ -76,7 +76,7 @@ impl PartitionGetter {
                     message: "Partition value shouldn't be null.".to_string(),
                 });
             }
-            partition_values.push(partition::convert_value_to_string(&value, data_type)?);
+            partition_values.push(partition::convert_value_of_type(&value, data_type)?);
         }
 
         ResolvedPartitionSpec::new(self.partition_keys.as_slice(), partition_values)

@@ -15,155 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utils for partition.
-
-#![allow(dead_code)]
-
+/// Utils for partition.
 use crate::error::Error::IllegalArgument;
-use crate::error::{Error, Result};
-use crate::metadata::{DataType, PartitionSpec, ResolvedPartitionSpec, TablePath};
+use crate::error::Result;
+use crate::metadata::DataType;
 use crate::row::{Date, Datum, Time, TimestampLtz, TimestampNtz};
 use jiff::ToSpan;
-use jiff::Zoned;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AutoPartitionTimeUnit {
-    Year,
-    Quarter,
-    Month,
-    Day,
-    Hour,
-}
-
-pub fn validate_partition_spec(
-    table_path: &TablePath,
-    partition_keys: &[String],
-    partition_spec: &PartitionSpec,
-    is_create: bool,
-) -> Result<()> {
-    let partition_spec_map = partition_spec.get_spec_map();
-    if partition_keys.len() != partition_spec_map.len() {
-        return Err(Error::InvalidPartition {
-            message: format!(
-                "PartitionSpec size is not equal to partition keys size for partitioned table {}.",
-                table_path
-            ),
-        });
-    }
-
-    let mut reordered_partition_values: Vec<&str> = Vec::with_capacity(partition_keys.len());
-    for partition_key in partition_keys {
-        if let Some(value) = partition_spec_map.get(partition_key) {
-            reordered_partition_values.push(value);
-        } else {
-            return Err(Error::InvalidPartition {
-                message: format!(
-                    "PartitionSpec {} does not contain partition key '{}' for partitioned table {}.",
-                    partition_spec, partition_key, table_path
-                ),
-            });
-        }
-    }
-
-    validate_partition_values(&reordered_partition_values, is_create)
-}
-
-fn validate_partition_values(partition_values: &[&str], is_create: bool) -> Result<()> {
-    for value in partition_values {
-        let invalid_name_error = TablePath::detect_invalid_name(value);
-        let prefix_error = if is_create {
-            TablePath::validate_prefix(value)
-        } else {
-            None
-        };
-
-        if invalid_name_error.is_some() || prefix_error.is_some() {
-            let error_msg = invalid_name_error.unwrap_or_else(|| prefix_error.unwrap());
-            return Err(Error::InvalidPartition {
-                message: format!("The partition value {} is invalid: {}", value, error_msg),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Generate [`ResolvedPartitionSpec`] for auto partition in server. When we auto creating a
-/// partition, we need to first generate a [`ResolvedPartitionSpec`].
-///
-/// The value is the formatted time with the specified time unit.
-pub fn generate_auto_partition<'a>(
-    partition_keys: &'a [String],
-    current: &Zoned,
-    offset: i32,
-    time_unit: AutoPartitionTimeUnit,
-) -> Result<ResolvedPartitionSpec<'a>> {
-    let auto_partition_field_spec = generate_auto_partition_time(current, offset, time_unit)?;
-    Ok(ResolvedPartitionSpec::from_partition_name(
-        partition_keys,
-        auto_partition_field_spec.as_str(),
-    ))
-}
-
-pub fn generate_auto_partition_time(
-    current: &Zoned,
-    offset: i32,
-    time_unit: AutoPartitionTimeUnit,
-) -> Result<String> {
-    match time_unit {
-        AutoPartitionTimeUnit::Year => {
-            let adjusted = current
-                .checked_add(jiff::Span::new().years(offset))
-                .map_err(|_| IllegalArgument {
-                    message: "Year offset would cause overflow".to_string(),
-                })?;
-            Ok(format!("{}", adjusted.year()))
-        }
-        AutoPartitionTimeUnit::Quarter => {
-            let adjusted = current
-                .checked_add(jiff::Span::new().months(offset * 3))
-                .map_err(|_| IllegalArgument {
-                    message: "Quarter offset would cause overflow".to_string(),
-                })?;
-            let quarter = (adjusted.month() as i32 - 1) / 3 + 1;
-            Ok(format!("{}{}", adjusted.year(), quarter))
-        }
-        AutoPartitionTimeUnit::Month => {
-            let adjusted = current
-                .checked_add(jiff::Span::new().months(offset))
-                .map_err(|_| IllegalArgument {
-                    message: "Month offset would cause overflow".to_string(),
-                })?;
-            Ok(format!("{}{:02}", adjusted.year(), adjusted.month()))
-        }
-        AutoPartitionTimeUnit::Day => {
-            let adjusted = current
-                .checked_add(jiff::Span::new().days(offset))
-                .map_err(|_| IllegalArgument {
-                    message: "Day offset would cause overflow".to_string(),
-                })?;
-            Ok(format!(
-                "{}{:02}{:02}",
-                adjusted.year(),
-                adjusted.month(),
-                adjusted.day()
-            ))
-        }
-        AutoPartitionTimeUnit::Hour => {
-            let adjusted = current
-                .checked_add(jiff::Span::new().hours(offset))
-                .map_err(|_| IllegalArgument {
-                    message: "Hour offset would cause overflow".to_string(),
-                })?;
-            Ok(format!(
-                "{}{:02}{:02}{:02}",
-                adjusted.year(),
-                adjusted.month(),
-                adjusted.day(),
-                adjusted.hour()
-            ))
-        }
-    }
-}
 
 fn hex_string(bytes: &[u8]) -> String {
     let mut hex = String::with_capacity(bytes.len() * 2);
@@ -213,7 +70,6 @@ fn date_to_string(date: Date) -> String {
     day_to_string(date.get_inner())
 }
 
-const NANOS_PER_MILLIS: i64 = 1_000_000;
 const MILLIS_PER_SECOND: i64 = 1_000;
 const MILLIS_PER_MINUTE: i64 = 60 * MILLIS_PER_SECOND;
 const MILLIS_PER_HOUR: i64 = 60 * MILLIS_PER_MINUTE;
@@ -310,7 +166,7 @@ fn timestamp_to_string<T: Timestamp>(ts: T) -> String {
 }
 
 /// Converts a Datum value to its string representation for partition naming.
-pub fn convert_value_to_string(value: &Datum, data_type: &DataType) -> Result<String> {
+pub fn convert_value_of_type(value: &Datum, data_type: &DataType) -> Result<String> {
     match (value, data_type) {
         (Datum::String(s), DataType::Char(_) | DataType::String(_)) => Ok(s.to_string()),
         (Datum::Bool(b), DataType::Boolean(_)) => Ok(b.to_string()),
@@ -346,137 +202,11 @@ mod tests {
     use crate::metadata::TablePath;
 
     #[test]
-    fn test_validate_partition_values() {
-        // Test invalid character '$'
-        let result = validate_partition_values(&["$1", "2"], true);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("The partition value $1 is invalid"));
-        assert!(err_msg.contains(
-            "'$1' contains one or more characters other than ASCII alphanumerics, '_' and '-'"
-        ));
-
-        // Test invalid character '?'
-        let result = validate_partition_values(&["?1", "2"], false);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("The partition value ?1 is invalid"));
-        assert!(err_msg.contains(
-            "'?1' contains one or more characters other than ASCII alphanumerics, '_' and '-'"
-        ));
-
-        // Test reserved prefix '__' with is_create=true
-        let result = validate_partition_values(&["__p1", "2"], true);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("The partition value __p1 is invalid"));
-        assert!(err_msg.contains("'__' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server"));
-
-        // Test reserved prefix '__' with is_create=false (should pass)
-        let result = validate_partition_values(&["__p1", "2"], false);
-        assert!(result.is_ok());
-
-        // Test validate_partition_spec with mismatched size
-        let table_path = TablePath::new("test_db".to_string(), "test_table".to_string());
-        let partition_keys = vec!["b".to_string()];
-        let partition_spec = PartitionSpec::new(std::collections::HashMap::new());
-        let result = validate_partition_spec(&table_path, &partition_keys, &partition_spec, true);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("PartitionSpec size is not equal to partition keys size for partitioned table test_db.test_table"));
-    }
-
-    #[test]
-    fn test_generate_auto_partition_name() {
-        use jiff::civil::date;
-        use jiff::tz::TimeZone;
-
-        // LocalDateTime of 2024-11-11 11:11 with UTC-8 timezone
-        let tz = TimeZone::get("Etc/GMT+8").expect("timezone");
-        let zoned = date(2024, 11, 11)
-            .at(11, 11, 0, 0)
-            .to_zoned(tz)
-            .expect("Zoned datetime creation failed");
-
-        // for year
-        test_generate_auto_partition_name_for(
-            &zoned,
-            AutoPartitionTimeUnit::Year,
-            &[-1, 0, 1, 2, 3],
-            &["2023", "2024", "2025", "2026", "2027"],
-        );
-
-        // for quarter
-        test_generate_auto_partition_name_for(
-            &zoned,
-            AutoPartitionTimeUnit::Quarter,
-            &[-1, 0, 1, 2, 3],
-            &["20243", "20244", "20251", "20252", "20253"],
-        );
-
-        // for month
-        test_generate_auto_partition_name_for(
-            &zoned,
-            AutoPartitionTimeUnit::Month,
-            &[-1, 0, 1, 2, 3],
-            &["202410", "202411", "202412", "202501", "202502"],
-        );
-
-        // for day
-        test_generate_auto_partition_name_for(
-            &zoned,
-            AutoPartitionTimeUnit::Day,
-            &[-1, 0, 1, 2, 3, 20],
-            &[
-                "20241110", "20241111", "20241112", "20241113", "20241114", "20241201",
-            ],
-        );
-
-        // for hour
-        test_generate_auto_partition_name_for(
-            &zoned,
-            AutoPartitionTimeUnit::Hour,
-            &[-2, -1, 0, 1, 2, 3, 13],
-            &[
-                "2024111109",
-                "2024111110",
-                "2024111111",
-                "2024111112",
-                "2024111113",
-                "2024111114",
-                "2024111200",
-            ],
-        );
-    }
-
-    fn test_generate_auto_partition_name_for(
-        zoned: &Zoned,
-        time_unit: AutoPartitionTimeUnit,
-        offsets: &[i32],
-        expected: &[&str],
-    ) {
-        for (i, offset) in offsets.iter().enumerate() {
-            let partition_keys = vec!["dt".to_string()];
-            let resolved_partition_spec =
-                generate_auto_partition(partition_keys.as_slice(), zoned, *offset, time_unit)
-                    .expect("partition generation failed");
-            assert_eq!(
-                resolved_partition_spec.get_partition_name(),
-                expected[i],
-                "{:?} offset {} failed",
-                time_unit,
-                offset
-            );
-        }
-    }
-
-    #[test]
     fn test_string() {
         let datum = Datum::String(Cow::Borrowed("Fluss"));
 
-        let to_string_result =
-            convert_value_to_string(&datum, &DataType::String(StringType::new()))
-                .expect("datum conversion to partition string failed");
+        let to_string_result = convert_value_of_type(&datum, &DataType::String(StringType::new()))
+            .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "Fluss");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
@@ -486,7 +216,7 @@ mod tests {
     fn test_char() {
         let datum = Datum::String(Cow::Borrowed("F"));
 
-        let to_string_result = convert_value_to_string(&datum, &DataType::Char(CharType::new(1)))
+        let to_string_result = convert_value_of_type(&datum, &DataType::Char(CharType::new(1)))
             .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "F");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -498,7 +228,7 @@ mod tests {
         let datum = Datum::Bool(true);
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::Boolean(BooleanType::new()))
+            convert_value_of_type(&datum, &DataType::Boolean(BooleanType::new()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "true");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -509,7 +239,7 @@ mod tests {
     fn test_byte() {
         let datum = Datum::Blob(Cow::Borrowed(&[0x10, 0x20, 0x30, 0x40, 0x50, 0xFF]));
 
-        let to_string_result = convert_value_to_string(&datum, &DataType::Bytes(BytesType::new()))
+        let to_string_result = convert_value_of_type(&datum, &DataType::Bytes(BytesType::new()))
             .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "1020304050ff");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -520,9 +250,8 @@ mod tests {
     fn test_binary() {
         let datum = Datum::Blob(Cow::Borrowed(&[0x10, 0x20, 0x30, 0x40, 0x50, 0xFF]));
 
-        let to_string_result =
-            convert_value_to_string(&datum, &DataType::Binary(BinaryType::new(6)))
-                .expect("datum conversion to partition string failed");
+        let to_string_result = convert_value_of_type(&datum, &DataType::Binary(BinaryType::new(6)))
+            .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "1020304050ff");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
@@ -533,7 +262,7 @@ mod tests {
         let datum = Datum::Int8(100);
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::TinyInt(TinyIntType::new()))
+            convert_value_of_type(&datum, &DataType::TinyInt(TinyIntType::new()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "100");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -545,7 +274,7 @@ mod tests {
         let datum = Datum::Int16(-32760);
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::SmallInt(SmallIntType::new()))
+            convert_value_of_type(&datum, &DataType::SmallInt(SmallIntType::new()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "-32760");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -556,7 +285,7 @@ mod tests {
     fn test_int() {
         let datum = Datum::Int32(299000);
 
-        let to_string_result = convert_value_to_string(&datum, &DataType::Int(IntType::new()))
+        let to_string_result = convert_value_of_type(&datum, &DataType::Int(IntType::new()))
             .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "299000");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -567,9 +296,8 @@ mod tests {
     fn test_big_int() {
         let datum = Datum::Int64(1748662955428);
 
-        let to_string_result =
-            convert_value_to_string(&datum, &DataType::BigInt(BigIntType::new()))
-                .expect("datum conversion to partition string failed");
+        let to_string_result = convert_value_of_type(&datum, &DataType::BigInt(BigIntType::new()))
+            .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "1748662955428");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
@@ -579,7 +307,7 @@ mod tests {
     fn test_date() {
         let datum = Datum::Date(Date::new(20235));
 
-        let to_string_result = convert_value_to_string(&datum, &DataType::Date(DateType::new()))
+        let to_string_result = convert_value_of_type(&datum, &DataType::Date(DateType::new()))
             .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "2025-05-27");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -591,7 +319,7 @@ mod tests {
         let datum = Datum::Time(Time::new(5402199));
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::Time(TimeType::new(3).unwrap()))
+            convert_value_of_type(&datum, &DataType::Time(TimeType::new(3).unwrap()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "01-30-02_199");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -602,7 +330,7 @@ mod tests {
     fn test_float() {
         let datum = Datum::Float32(5.73.into());
 
-        let to_string_result = convert_value_to_string(&datum, &DataType::Float(FloatType::new()))
+        let to_string_result = convert_value_of_type(&datum, &DataType::Float(FloatType::new()))
             .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "5_73");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -610,21 +338,21 @@ mod tests {
 
         let datum = Datum::Float32(f32::NAN.into());
         assert_eq!(
-            convert_value_to_string(&datum, &DataType::Float(FloatType::new()))
+            convert_value_of_type(&datum, &DataType::Float(FloatType::new()))
                 .expect("datum conversion to partition string failed"),
             "NaN"
         );
 
         let datum = Datum::Float32(f32::INFINITY.into());
         assert_eq!(
-            convert_value_to_string(&datum, &DataType::Float(FloatType::new()))
+            convert_value_of_type(&datum, &DataType::Float(FloatType::new()))
                 .expect("datum conversion to partition string failed"),
             "Inf"
         );
 
         let datum = Datum::Float32(f32::NEG_INFINITY.into());
         assert_eq!(
-            convert_value_to_string(&datum, &DataType::Float(FloatType::new()))
+            convert_value_of_type(&datum, &DataType::Float(FloatType::new()))
                 .expect("datum conversion to partition string failed"),
             "-Inf"
         );
@@ -634,30 +362,29 @@ mod tests {
     fn test_double() {
         let datum = Datum::Float64(5.73737.into());
 
-        let to_string_result =
-            convert_value_to_string(&datum, &DataType::Double(DoubleType::new()))
-                .expect("datum conversion to partition string failed");
+        let to_string_result = convert_value_of_type(&datum, &DataType::Double(DoubleType::new()))
+            .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "5_73737");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
         assert!(detect_invalid.is_none());
 
         let datum = Datum::Float64(f64::NAN.into());
         assert_eq!(
-            convert_value_to_string(&datum, &DataType::Double(DoubleType::new()))
+            convert_value_of_type(&datum, &DataType::Double(DoubleType::new()))
                 .expect("datum conversion to partition string failed"),
             "NaN"
         );
 
         let datum = Datum::Float64(f64::INFINITY.into());
         assert_eq!(
-            convert_value_to_string(&datum, &DataType::Double(DoubleType::new()))
+            convert_value_of_type(&datum, &DataType::Double(DoubleType::new()))
                 .expect("datum conversion to partition string failed"),
             "Inf"
         );
 
         let datum = Datum::Float64(f64::NEG_INFINITY.into());
         assert_eq!(
-            convert_value_to_string(&datum, &DataType::Double(DoubleType::new()))
+            convert_value_of_type(&datum, &DataType::Double(DoubleType::new()))
                 .expect("datum conversion to partition string failed"),
             "-Inf"
         );
@@ -671,7 +398,7 @@ mod tests {
         );
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+            convert_value_of_type(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "2025-05-31-03-42-35_428099988");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -683,7 +410,7 @@ mod tests {
         );
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+            convert_value_of_type(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "2025-05-31-03-42-35_428");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -696,7 +423,7 @@ mod tests {
         );
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+            convert_value_of_type(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "2025-05-31-03-42-35_000099988");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -708,7 +435,7 @@ mod tests {
         );
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+            convert_value_of_type(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "2025-05-31-03-42-35_");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -721,7 +448,7 @@ mod tests {
         );
 
         let to_string_result =
-            convert_value_to_string(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
+            convert_value_of_type(&datum, &DataType::Timestamp(TimestampType::new(9).unwrap()))
                 .expect("datum conversion to partition string failed");
         assert_eq!(to_string_result, "1914-08-03-20-17-24_572099988");
         let detect_invalid = TablePath::detect_invalid_name(&to_string_result);
@@ -735,7 +462,7 @@ mod tests {
                 .expect("TimestampLtz init failed"),
         );
 
-        let to_string_result = convert_value_to_string(
+        let to_string_result = convert_value_of_type(
             &datum,
             &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
         )
@@ -749,7 +476,7 @@ mod tests {
             TimestampLtz::from_millis_nanos(1748662955428, 0).expect("TimestampLtz init failed"),
         );
 
-        let to_string_result = convert_value_to_string(
+        let to_string_result = convert_value_of_type(
             &datum,
             &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
         )
@@ -764,7 +491,7 @@ mod tests {
                 .expect("TimestampLtz init failed"),
         );
 
-        let to_string_result = convert_value_to_string(
+        let to_string_result = convert_value_of_type(
             &datum,
             &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
         )
@@ -778,7 +505,7 @@ mod tests {
             TimestampLtz::from_millis_nanos(1748662955000, 0).expect("TimestampLtz init failed"),
         );
 
-        let to_string_result = convert_value_to_string(
+        let to_string_result = convert_value_of_type(
             &datum,
             &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
         )
@@ -793,7 +520,7 @@ mod tests {
                 .expect("TimestampLtz init failed"),
         );
 
-        let to_string_result = convert_value_to_string(
+        let to_string_result = convert_value_of_type(
             &datum,
             &DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
         )
