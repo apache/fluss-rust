@@ -224,6 +224,28 @@ async def main():
 
         # TODO: support to_duckdb()
 
+        # Test the new poll() method for incremental reading
+        print("\n--- Testing poll() method ---")
+        # Reset subscription to start from the beginning
+        log_scanner.subscribe(None, None)
+
+        # Poll with a timeout of 5000ms (5 seconds)
+        # Note: poll() returns an empty table (not an error) on timeout
+        try:
+            poll_result = log_scanner.poll(5000)
+            print(f"Number of rows: {poll_result.num_rows}")
+
+            if poll_result.num_rows > 0:
+                poll_df = poll_result.to_pandas()
+                print(f"Polled data:\n{poll_df}")
+            else:
+                print("Empty result (no records available)")
+                # Empty table still has schema
+                print(f"Schema: {poll_result.schema}")
+
+        except Exception as e:
+            print(f"Error during poll: {e}")
+
     except Exception as e:
         print(f"Error during scanning: {e}")
 
