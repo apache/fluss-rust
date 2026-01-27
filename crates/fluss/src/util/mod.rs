@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod murmur_hash;
+pub mod partition;
 pub mod varint;
 
 use crate::TableId;

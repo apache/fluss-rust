@@ -95,6 +95,12 @@ pub enum Error {
 
     #[snafu(
         visibility(pub(crate)),
+        display("Fluss hitting invalid partition error {}.", message)
+    )]
+    InvalidPartition { message: String },
+
+    #[snafu(
+        visibility(pub(crate)),
         display("Fluss hitting IO not supported error {}.", message)
     )]
     IoUnsupported { message: String },
