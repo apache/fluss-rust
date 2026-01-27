@@ -21,12 +21,12 @@ use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::{Date, Datum, Time, TimestampLtz, TimestampNtz};
 use jiff::ToSpan;
+use std::fmt::Write;
 
 fn hex_string(bytes: &[u8]) -> String {
     let mut hex = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
-        let h = format!("{:02x}", b);
-        hex.push_str(&h);
+        write!(hex, "{:02x}", b).unwrap();
     }
     hex
 }

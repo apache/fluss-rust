@@ -20,6 +20,7 @@ use crate::proto::{PbKeyValue, PbPartitionInfo, PbPartitionSpec};
 use crate::{PartitionId, TableId};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 /// Represents a partition spec in fluss. Partition columns and values are NOT of strict order, and
 /// they need to be re-arranged to the correct order by comparing with a list of strictly ordered
@@ -72,14 +73,14 @@ impl Display for PartitionSpec {
 /// partition keys.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedPartitionSpec {
-    partition_keys: Vec<String>,
+    partition_keys: Arc<[String]>,
     partition_values: Vec<String>,
 }
 
 pub const PARTITION_SPEC_SEPARATOR: &str = "$";
 
 impl ResolvedPartitionSpec {
-    pub fn new(partition_keys: Vec<String>, partition_values: Vec<String>) -> Result<Self> {
+    pub fn new(partition_keys: Arc<[String]>, partition_values: Vec<String>) -> Result<Self> {
         if partition_keys.len() != partition_values.len() {
             return Err(Error::IllegalArgument {
                 message: "The number of partition keys and partition values should be the same."
@@ -94,18 +95,18 @@ impl ResolvedPartitionSpec {
     }
 
     pub fn from_partition_spec(
-        partition_keys: Vec<String>,
+        partition_keys: Arc<[String]>,
         partition_spec: &PartitionSpec,
     ) -> Self {
         let partition_values =
-            Self::get_reordered_partition_values(partition_keys.as_slice(), partition_spec);
+            Self::get_reordered_partition_values(&partition_keys, partition_spec);
         Self {
             partition_keys,
             partition_values,
         }
     }
 
-    pub fn from_partition_name(partition_keys: Vec<String>, partition_name: &str) -> Self {
+    pub fn from_partition_name(partition_keys: Arc<[String]>, partition_name: &str) -> Self {
         let partition_values: Vec<String> = partition_name
             .split(PARTITION_SPEC_SEPARATOR)
             .map(|s| s.to_string())
@@ -135,7 +136,7 @@ impl ResolvedPartitionSpec {
         }
 
         Ok(Self {
-            partition_keys: keys,
+            partition_keys: Arc::from(keys),
             partition_values: values,
         })
     }
@@ -240,7 +241,7 @@ impl ResolvedPartitionSpec {
     }
 
     fn get_reordered_partition_values(
-        partition_keys: &[String],
+        partition_keys: &Arc<[String]>,
         partition_spec: &PartitionSpec,
     ) -> Vec<String> {
         let partition_spec_map = partition_spec.get_spec_map();
@@ -358,7 +359,7 @@ mod tests {
     #[test]
     fn test_resolved_partition_spec_name() {
         let spec = ResolvedPartitionSpec::new(
-            vec!["date".to_string(), "region".to_string()],
+            Arc::from(["date".to_string(), "region".to_string()]),
             vec!["2024-01-15".to_string(), "US".to_string()],
         )
         .unwrap();
@@ -373,7 +374,7 @@ mod tests {
     #[test]
     fn test_resolved_partition_spec_from_partition_name() {
         let spec = ResolvedPartitionSpec::from_partition_name(
-            vec!["date".to_string(), "region".to_string()],
+            Arc::from(["date".to_string(), "region".to_string()]),
             "2024-01-15$US",
         );
 
@@ -393,7 +394,7 @@ mod tests {
     #[test]
     fn test_resolved_partition_spec_mismatched_lengths() {
         let result = ResolvedPartitionSpec::new(
-            vec!["date".to_string(), "region".to_string()],
+            Arc::from(["date".to_string(), "region".to_string()]),
             vec!["2024-01-15".to_string()],
         );
 
@@ -402,9 +403,11 @@ mod tests {
 
     #[test]
     fn test_partition_info() {
-        let spec =
-            ResolvedPartitionSpec::new(vec!["date".to_string()], vec!["2024-01-15".to_string()])
-                .unwrap();
+        let spec = ResolvedPartitionSpec::new(
+            Arc::from(["date".to_string()]),
+            vec!["2024-01-15".to_string()],
+        )
+        .unwrap();
 
         let info = PartitionInfo::new(42, spec);
         assert_eq!(info.get_partition_id(), 42);
@@ -435,9 +438,11 @@ mod tests {
 
     #[test]
     fn test_partition_info_pb_roundtrip() {
-        let spec =
-            ResolvedPartitionSpec::new(vec!["date".to_string()], vec!["2024-01-15".to_string()])
-                .unwrap();
+        let spec = ResolvedPartitionSpec::new(
+            Arc::from(["date".to_string()]),
+            vec!["2024-01-15".to_string()],
+        )
+        .unwrap();
         let info = PartitionInfo::new(42, spec);
 
         let pb = info.to_pb();
@@ -450,14 +455,16 @@ mod tests {
     #[test]
     fn test_contains() {
         let full_spec = ResolvedPartitionSpec::new(
-            vec!["date".to_string(), "region".to_string()],
+            Arc::from(["date".to_string(), "region".to_string()]),
             vec!["2024-01-15".to_string(), "US".to_string()],
         )
         .unwrap();
 
-        let partial_spec =
-            ResolvedPartitionSpec::new(vec!["date".to_string()], vec!["2024-01-15".to_string()])
-                .unwrap();
+        let partial_spec = ResolvedPartitionSpec::new(
+            Arc::from(["date".to_string()]),
+            vec!["2024-01-15".to_string()],
+        )
+        .unwrap();
 
         assert!(full_spec.contains(&partial_spec).unwrap());
     }

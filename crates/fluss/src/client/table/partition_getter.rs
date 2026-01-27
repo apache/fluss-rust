@@ -21,20 +21,21 @@ use crate::metadata::{DataType, ResolvedPartitionSpec, RowType};
 use crate::row::InternalRow;
 use crate::row::field_getter::FieldGetter;
 use crate::util::partition;
+use std::sync::Arc;
 
 /// A getter to get partition name from a row.
 #[allow(dead_code)]
 pub struct PartitionGetter {
-    partition_keys: Vec<String>,
+    partition_keys: Arc<[String]>,
     partitions: Vec<(DataType, FieldGetter)>,
 }
 
 #[allow(dead_code)]
 impl PartitionGetter {
-    pub fn new(row_type: &RowType, partition_keys: Vec<String>) -> Result<Self> {
+    pub fn new(row_type: &RowType, partition_keys: Arc<[String]>) -> Result<Self> {
         let mut partitions = Vec::with_capacity(partition_keys.len());
 
-        for partition_key in &partition_keys {
+        for partition_key in partition_keys.iter() {
             if let Some(partition_col_index) = row_type.get_field_index(partition_key.as_str()) {
                 let data_type = row_type
                     .fields()
@@ -79,7 +80,7 @@ impl PartitionGetter {
             partition_values.push(partition::convert_value_of_type(&value, data_type)?);
         }
 
-        ResolvedPartitionSpec::new(self.partition_keys.clone(), partition_values)
+        ResolvedPartitionSpec::new(Arc::clone(&self.partition_keys), partition_values)
     }
 }
 
@@ -100,8 +101,8 @@ mod tests {
             ),
         ]);
 
-        let getter =
-            PartitionGetter::new(&row_type, vec!["region".to_string()]).expect("should succeed");
+        let getter = PartitionGetter::new(&row_type, Arc::from(["region".to_string()]))
+            .expect("should succeed");
 
         let row = GenericRow::from_data(vec![Datum::Int32(42), Datum::from("US")]);
         let partition_name = getter.get_partition(&row).expect("should succeed");
@@ -124,9 +125,11 @@ mod tests {
             ),
         ]);
 
-        let getter =
-            PartitionGetter::new(&row_type, vec!["date".to_string(), "region".to_string()])
-                .expect("should succeed");
+        let getter = PartitionGetter::new(
+            &row_type,
+            Arc::from(["date".to_string(), "region".to_string()]),
+        )
+        .expect("should succeed");
 
         let row = GenericRow::from_data(vec![
             Datum::Int32(42),
@@ -145,7 +148,7 @@ mod tests {
             None,
         )]);
 
-        let result = PartitionGetter::new(&row_type, vec!["nonexistent".to_string()]);
+        let result = PartitionGetter::new(&row_type, Arc::from(["nonexistent".to_string()]));
         assert!(result.is_err());
     }
 
@@ -160,8 +163,8 @@ mod tests {
             ),
         ]);
 
-        let getter =
-            PartitionGetter::new(&row_type, vec!["region".to_string()]).expect("should succeed");
+        let getter = PartitionGetter::new(&row_type, Arc::from(["region".to_string()]))
+            .expect("should succeed");
 
         let row = GenericRow::from_data(vec![Datum::Int32(42), Datum::Null]);
         let result = getter.get_partition(&row);
@@ -184,9 +187,11 @@ mod tests {
             ),
         ]);
 
-        let getter =
-            PartitionGetter::new(&row_type, vec!["date".to_string(), "region".to_string()])
-                .expect("should succeed");
+        let getter = PartitionGetter::new(
+            &row_type,
+            Arc::from(["date".to_string(), "region".to_string()]),
+        )
+        .expect("should succeed");
 
         let row = GenericRow::from_data(vec![
             Datum::Int32(42),
