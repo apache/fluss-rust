@@ -49,8 +49,7 @@ impl PartitionGetter {
             } else {
                 return Err(IllegalArgument {
                     message: format!(
-                        "The partition column {} is not in the row {}.",
-                        partition_key, row_type
+                        "The partition column {partition_key} is not in the row {row_type}."
                     ),
                 });
             };
