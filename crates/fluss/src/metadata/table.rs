@@ -838,7 +838,7 @@ impl TableInfo {
 pub struct AutoPartitionStrategy {
     auto_partition_enabled: bool,
     auto_partition_key: Option<String>,
-    auto_partition_time_unit: Option<String>,
+    auto_partition_time_unit: String,
     auto_partition_num_precreate: i32,
     auto_partition_num_retention: i32,
     auto_partition_timezone: String,
@@ -848,27 +848,33 @@ impl AutoPartitionStrategy {
     pub fn from(properties: &HashMap<String, String>) -> Self {
         Self {
             auto_partition_enabled: properties
-                .get("table.auto.partition.enabled")
+                .get("table.auto-partition.enabled")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(false),
             auto_partition_key: properties
-                .get("table.auto.partition.key")
+                .get("table.auto-partition.key")
                 .map(|s| s.to_string()),
             auto_partition_time_unit: properties
-                .get("table.auto.partition.time.unit")
-                .map(|s| s.to_string()),
-            auto_partition_num_precreate: properties
-                .get("table.auto.partition.num.precreate")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0),
-            auto_partition_num_retention: properties
-                .get("table.auto.partition.num.retention")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0),
-            auto_partition_timezone: properties
-                .get("table.auto.partition.timezone")
+                .get("table.auto-partition.time-unit")
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| "UTC".to_string()),
+                .unwrap_or_else(|| "DAY".to_string()),
+            auto_partition_num_precreate: properties
+                .get("table.auto-partition.num-precreate")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2),
+            auto_partition_num_retention: properties
+                .get("table.auto-partition.num-retention")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(7),
+            auto_partition_timezone: properties
+                .get("table.auto-partition.time-zone")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    jiff::tz::TimeZone::system()
+                        .iana_name()
+                        .unwrap_or("UTC")
+                        .to_string()
+                }),
         }
     }
 
@@ -880,8 +886,8 @@ impl AutoPartitionStrategy {
         self.auto_partition_key.as_deref()
     }
 
-    pub fn time_unit(&self) -> Option<&str> {
-        self.auto_partition_time_unit.as_deref()
+    pub fn time_unit(&self) -> &str {
+        &self.auto_partition_time_unit
     }
 
     pub fn num_precreate(&self) -> i32 {
@@ -1316,7 +1322,7 @@ mod tests {
 
         // 2. Not partitioned, auto partition enabled
         properties.insert(
-            "table.auto.partition.enabled".to_string(),
+            "table.auto-partition.enabled".to_string(),
             "true".to_string(),
         );
         let table_info = TableInfo::new(
@@ -1337,7 +1343,7 @@ mod tests {
 
         // 3. Partitioned, auto partition disabled
         properties.insert(
-            "table.auto.partition.enabled".to_string(),
+            "table.auto-partition.enabled".to_string(),
             "false".to_string(),
         );
         let table_info = TableInfo::new(
@@ -1358,7 +1364,7 @@ mod tests {
 
         // 4. Partitioned, auto partition enabled
         properties.insert(
-            "table.auto.partition.enabled".to_string(),
+            "table.auto-partition.enabled".to_string(),
             "true".to_string(),
         );
         let table_info = TableInfo::new(
