@@ -228,7 +228,7 @@ impl RecordAccumulator {
 
         for (physical_table_path, is_partitioned_table, mut partition_id, bucket_batches) in entries
         {
-            // For partitioned tables, try to resolve partition_id if not yet known
+            // First check this table has partitionId.
             if is_partitioned_table && partition_id.is_none() {
                 partition_id = cluster.get_partition_id(&physical_table_path);
 
@@ -237,14 +237,26 @@ impl RecordAccumulator {
                     if let Some(mut entry) = self.write_batches.get_mut(&physical_table_path) {
                         entry.partition_id = partition_id;
                     }
+                } else {
+                    log::debug!(
+                        "Partition does not exist for {}, bucket will not be set to ready",
+                        physical_table_path.as_ref()
+                    );
+
+                    // TODO: we shouldn't add unready partitions to unknownLeaderTables,
+                    // because it cases PartitionNotExistException later
+                    unknown_leader_tables.insert(physical_table_path);
+                    return Ok(ReadyCheckResult::new(
+                        ready_nodes,
+                        next_ready_check_delay_ms,
+                        unknown_leader_tables,
+                    ));
                 }
             }
 
             next_ready_check_delay_ms = self
                 .bucket_ready(
                     &physical_table_path,
-                    is_partitioned_table,
-                    partition_id,
                     bucket_batches,
                     &mut ready_nodes,
                     &mut unknown_leader_tables,
@@ -265,8 +277,6 @@ impl RecordAccumulator {
     async fn bucket_ready(
         &self,
         physical_table_path: &Arc<PhysicalTablePath>,
-        is_partitioned_table: bool,
-        partition_id: Option<PartitionId>,
         bucket_batches: BucketBatches,
         ready_nodes: &mut HashSet<ServerNode>,
         unknown_leader_tables: &mut HashSet<Arc<PhysicalTablePath>>,
@@ -274,15 +284,6 @@ impl RecordAccumulator {
         next_ready_check_delay_ms: i64,
     ) -> Result<i64> {
         let mut next_delay = next_ready_check_delay_ms;
-
-        // Skip batch if partition id is not available
-        if is_partitioned_table && partition_id.is_none() {
-            unknown_leader_tables.insert(Arc::clone(physical_table_path));
-            return Ok(next_delay);
-        }
-
-        let table_path = physical_table_path.get_table_path();
-
         for (bucket_id, batch) in bucket_batches {
             let batch_guard = batch.lock().await;
             if batch_guard.is_empty() {
@@ -293,7 +294,7 @@ impl RecordAccumulator {
             let waited_time_ms = batch.waited_time_ms(current_time_ms());
             let deque_size = batch_guard.len();
             let full = deque_size > 1 || batch.is_closed();
-            let table_bucket = cluster.get_table_bucket(table_path, bucket_id)?;
+            let table_bucket = cluster.get_table_bucket(physical_table_path, bucket_id)?;
             if let Some(leader) = cluster.leader_for(&table_bucket) {
                 next_delay =
                     self.batch_ready(leader, waited_time_ms, full, ready_nodes, next_delay);
