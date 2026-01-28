@@ -1932,7 +1932,7 @@ mod tests {
         use crate::compression::{
             ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
         };
-        use crate::metadata::TablePath;
+        use crate::metadata::{PhysicalTablePath, TablePath};
         use crate::row::GenericRow;
         use tempfile::NamedTempFile;
 
@@ -1941,7 +1941,8 @@ mod tests {
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
-        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut builder = MemoryLogRecordsArrowBuilder::new(
             1,
@@ -1956,13 +1957,13 @@ mod tests {
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let record = WriteRecord::for_append(table_path.clone(), 1, row);
+        let record = WriteRecord::for_append(physical_table_path.clone(), 1, row);
         builder.append(&record)?;
 
         let mut row2 = GenericRow::new(2);
         row2.set_field(0, 2_i32);
         row2.set_field(1, "bob");
-        let record2 = WriteRecord::for_append(table_path, 2, row2);
+        let record2 = WriteRecord::for_append(physical_table_path, 2, row2);
         builder.append(&record2)?;
 
         let data = builder.build()?;

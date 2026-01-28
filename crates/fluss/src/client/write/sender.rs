@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::TableId;
 use crate::client::broadcast;
 use crate::client::metadata::Metadata;
 use crate::client::write::batch::WriteBatch;
 use crate::client::{ReadyWriteBatch, RecordAccumulator};
 use crate::error::Error::UnexpectedError;
 use crate::error::{FlussError, Result};
-use crate::metadata::{TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::{
     PbProduceLogRespForBucket, PbPutKvRespForBucket, ProduceLogResponse, PutKvResponse,
 };
 use crate::rpc::ServerConnection;
 use crate::rpc::message::{ProduceLogRequest, PutKvRequest};
+use crate::{PartitionId, TableId};
 use log::warn;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
@@ -82,8 +82,16 @@ impl Sender {
 
         // Update metadata if needed
         if !ready_check_result.unknown_leader_tables.is_empty() {
+            let table_paths: HashSet<&TablePath> = ready_check_result
+                .unknown_leader_tables
+                .iter()
+                .map(|p| p.get_table_path())
+                .collect();
+            let physical_table_paths: HashSet<&Arc<PhysicalTablePath>> =
+                ready_check_result.unknown_leader_tables.iter().collect();
+
             self.metadata
-                .update_tables_metadata(&ready_check_result.unknown_leader_tables.iter().collect())
+                .update_tables_metadata(&table_paths, &physical_table_paths, vec![])
                 .await?;
         }
 
@@ -327,10 +335,15 @@ impl Sender {
         response: R,
     ) -> Result<()> {
         let mut invalid_metadata_tables: HashSet<TablePath> = HashSet::new();
+        let mut invalid_physical_table_paths: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
         let mut pending_buckets: HashSet<TableBucket> = request_buckets.iter().cloned().collect();
 
         for bucket_resp in response.buckets_resp() {
-            let tb = TableBucket::new(table_id, bucket_resp.bucket_id());
+            let tb = TableBucket::new_with_partition(
+                table_id,
+                bucket_resp.partition_id(),
+                bucket_resp.bucket_id(),
+            );
             let Some(ready_batch) = records_by_bucket.remove(&tb) else {
                 panic!("Missing ready batch for table bucket {tb}");
             };
@@ -343,11 +356,12 @@ impl Sender {
                         .error_message()
                         .cloned()
                         .unwrap_or_else(|| error.message().to_string());
-                    if let Some(table_path) = self
+                    if let Some((table_path, physical_table_path)) = self
                         .handle_write_batch_error(ready_batch, error, message)
                         .await?
                     {
                         invalid_metadata_tables.insert(table_path);
+                        invalid_physical_table_paths.insert(physical_table_path);
                     }
                 }
                 _ => self.complete_batch(ready_batch),
@@ -356,7 +370,7 @@ impl Sender {
 
         for bucket in pending_buckets {
             if let Some(ready_batch) = records_by_bucket.remove(&bucket) {
-                if let Some(table_path) = self
+                if let Some((table_path, physical_table_path)) = self
                     .handle_write_batch_error(
                         ready_batch,
                         FlussError::UnknownServerError,
@@ -365,11 +379,12 @@ impl Sender {
                     .await?
                 {
                     invalid_metadata_tables.insert(table_path);
+                    invalid_physical_table_paths.insert(physical_table_path);
                 }
             }
         }
 
-        self.update_metadata_if_needed(invalid_metadata_tables)
+        self.update_metadata_if_needed(invalid_metadata_tables, invalid_physical_table_paths)
             .await;
         Ok(())
     }
@@ -398,15 +413,18 @@ impl Sender {
         message: String,
     ) -> Result<()> {
         let mut invalid_metadata_tables: HashSet<TablePath> = HashSet::new();
+        let mut invalid_physical_table_paths: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
+
         for batch in batches {
-            if let Some(table_path) = self
+            if let Some((table_path, physical_table_path)) = self
                 .handle_write_batch_error(batch, error, message.clone())
                 .await?
             {
                 invalid_metadata_tables.insert(table_path);
+                invalid_physical_table_paths.insert(physical_table_path);
             }
         }
-        self.update_metadata_if_needed(invalid_metadata_tables)
+        self.update_metadata_if_needed(invalid_metadata_tables, invalid_physical_table_paths)
             .await;
         Ok(())
     }
@@ -432,20 +450,27 @@ impl Sender {
         ready_write_batch: ReadyWriteBatch,
         error: FlussError,
         message: String,
-    ) -> Result<Option<TablePath>> {
-        let table_path = ready_write_batch.write_batch.table_path().clone();
+    ) -> Result<Option<(TablePath, Arc<PhysicalTablePath>)>> {
+        let physical_table_path = Arc::clone(ready_write_batch.write_batch.physical_table_path());
+
+        let table_path = physical_table_path.get_table_path().clone();
+
         if self.can_retry(&ready_write_batch, error) {
             warn!(
-                "Retrying write batch for {table_path} on bucket {} after error {error:?}: {message}",
+                "Retrying write batch for {} on bucket {} after error {error:?}: {message}",
+                physical_table_path.as_ref(),
                 ready_write_batch.table_bucket.bucket_id()
             );
             self.re_enqueue_batch(ready_write_batch).await;
-            return Ok(Self::is_invalid_metadata_error(error).then_some(table_path));
+            return Ok(
+                Self::is_invalid_metadata_error(error).then_some((table_path, physical_table_path))
+            );
         }
 
         if error == FlussError::DuplicateSequenceException {
             warn!(
-                "Duplicate sequence for {table_path} on bucket {}: {message}",
+                "Duplicate sequence for {} on bucket {}: {message}",
+                physical_table_path.as_ref(),
                 ready_write_batch.table_bucket.bucket_id()
             );
             self.complete_batch(ready_write_batch);
@@ -459,7 +484,7 @@ impl Sender {
                 message,
             },
         );
-        Ok(Self::is_invalid_metadata_error(error).then_some(table_path))
+        Ok(Self::is_invalid_metadata_error(error).then_some((table_path, physical_table_path)))
     }
 
     async fn re_enqueue_batch(&self, ready_write_batch: ReadyWriteBatch) {
@@ -484,12 +509,22 @@ impl Sender {
             && Self::is_retriable_error(error)
     }
 
-    async fn update_metadata_if_needed(&self, table_paths: HashSet<TablePath>) {
+    async fn update_metadata_if_needed(
+        &self,
+        table_paths: HashSet<TablePath>,
+        physical_table_path: HashSet<Arc<PhysicalTablePath>>,
+    ) {
         if table_paths.is_empty() {
             return;
         }
         let table_path_refs: HashSet<&TablePath> = table_paths.iter().collect();
-        if let Err(e) = self.metadata.update_tables_metadata(&table_path_refs).await {
+        let physical_table_path_refs: HashSet<&Arc<PhysicalTablePath>> =
+            physical_table_path.iter().collect();
+        if let Err(e) = self
+            .metadata
+            .update_tables_metadata(&table_path_refs, &physical_table_path_refs, vec![])
+            .await
+        {
             warn!("Failed to update metadata after write error: {e:?}");
         }
     }
@@ -536,6 +571,8 @@ trait BucketResponse {
     fn bucket_id(&self) -> i32;
     fn error_code(&self) -> Option<i32>;
     fn error_message(&self) -> Option<&String>;
+
+    fn partition_id(&self) -> Option<PartitionId>;
 }
 
 impl BucketResponse for PbProduceLogRespForBucket {
@@ -548,6 +585,10 @@ impl BucketResponse for PbProduceLogRespForBucket {
     fn error_message(&self) -> Option<&String> {
         self.error_message.as_ref()
     }
+
+    fn partition_id(&self) -> Option<PartitionId> {
+        self.partition_id
+    }
 }
 
 impl BucketResponse for PbPutKvRespForBucket {
@@ -559,6 +600,10 @@ impl BucketResponse for PbPutKvRespForBucket {
     }
     fn error_message(&self) -> Option<&String> {
         self.error_message.as_ref()
+    }
+
+    fn partition_id(&self) -> Option<PartitionId> {
+        self.partition_id
     }
 }
 
@@ -587,7 +632,7 @@ mod tests {
     use crate::client::WriteRecord;
     use crate::cluster::Cluster;
     use crate::config::Config;
-    use crate::metadata::TablePath;
+    use crate::metadata::{PhysicalTablePath, TablePath};
     use crate::proto::{PbProduceLogRespForBucket, ProduceLogResponse};
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
@@ -599,8 +644,9 @@ mod tests {
         cluster: Arc<Cluster>,
         table_path: Arc<TablePath>,
     ) -> Result<(ReadyWriteBatch, crate::client::ResultHandle)> {
+        let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
         let record = WriteRecord::for_append(
-            table_path,
+            physical_table_path,
             1,
             GenericRow {
                 values: vec![Datum::Int32(1)],

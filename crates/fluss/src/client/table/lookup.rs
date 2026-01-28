@@ -18,8 +18,9 @@
 use crate::bucketing::BucketingFunction;
 use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
+use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
-use crate::metadata::{RowType, TableBucket, TableInfo};
+use crate::metadata::{PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
 use crate::record::kv::SCHEMA_ID_LENGTH;
 use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
@@ -133,20 +134,43 @@ impl<'a> TableLookup<'a> {
         let data_lake_format = self.table_info.get_table_config().get_datalake_format()?;
         let bucketing_function = <dyn BucketingFunction>::of(data_lake_format.as_ref());
 
-        // Create key encoder for the primary key fields
-        let pk_fields = self.table_info.get_physical_primary_keys().to_vec();
-        let key_encoder = KeyEncoderFactory::of(
-            self.table_info.row_type(),
-            pk_fields.as_slice(),
-            &data_lake_format,
-        )?;
+        let row_type = self.table_info.row_type();
+        let primary_keys = self.table_info.get_primary_keys();
+        let lookup_row_type = row_type.project_with_field_names(primary_keys)?;
+
+        let physical_primary_keys = self.table_info.get_physical_primary_keys().to_vec();
+        let primary_key_encoder =
+            KeyEncoderFactory::of(&lookup_row_type, &physical_primary_keys, &data_lake_format)?;
+
+        let bucket_key_encoder = if self.table_info.is_default_bucket_key() {
+            None
+        } else {
+            let bucket_keys = self.table_info.get_bucket_keys().to_vec();
+            Some(KeyEncoderFactory::of(
+                &lookup_row_type,
+                &bucket_keys,
+                &data_lake_format,
+            )?)
+        };
+
+        let partition_getter = if self.table_info.is_partitioned() {
+            Some(PartitionGetter::new(
+                &lookup_row_type,
+                Arc::clone(self.table_info.get_partition_keys()),
+            )?)
+        } else {
+            None
+        };
 
         Ok(Lookuper {
             conn: self.conn,
+            table_path: Arc::new(self.table_info.table_path.clone()),
             table_info: self.table_info,
             metadata: self.metadata,
             bucketing_function,
-            key_encoder,
+            primary_key_encoder,
+            bucket_key_encoder,
+            partition_getter,
             num_buckets,
         })
     }
@@ -163,13 +187,15 @@ impl<'a> TableLookup<'a> {
 /// let row = GenericRow::new(vec![Datum::Int32(42)]); // lookup key
 /// let result = lookuper.lookup(&row).await?;
 /// ```
-// TODO: Support partitioned tables (extract partition from key)
 pub struct Lookuper<'a> {
     conn: &'a FlussConnection,
     table_info: TableInfo,
+    table_path: Arc<TablePath>,
     metadata: Arc<Metadata>,
     bucketing_function: Box<dyn BucketingFunction>,
-    key_encoder: Box<dyn KeyEncoder>,
+    primary_key_encoder: Box<dyn KeyEncoder>,
+    bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
+    partition_getter: Option<PartitionGetter>,
     num_buckets: i32,
 }
 
@@ -187,26 +213,46 @@ impl<'a> Lookuper<'a> {
     /// * `Err(Error)` - If the lookup fails
     pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult<'_>> {
         // todo: support batch lookup
-        // Encode the key from the row
-        let encoded_key = self.key_encoder.encode_key(row)?;
-        let key_bytes = encoded_key.to_vec();
+        let pk_bytes = self.primary_key_encoder.encode_key(row)?.to_vec();
+        let bk_bytes = match &mut self.bucket_key_encoder {
+            Some(encoder) => &encoder.encode_key(row)?.to_vec(),
+            None => &pk_bytes,
+        };
 
-        // Compute bucket from encoded key
+        let partition_id = if let Some(ref partition_getter) = self.partition_getter {
+            let partition_name = partition_getter.get_partition(row)?;
+            let physical_table_path = PhysicalTablePath::of_partitioned(
+                Arc::clone(&self.table_path),
+                Some(partition_name),
+            );
+            let cluster = self.metadata.get_cluster();
+            match cluster.get_partition_id(&physical_table_path) {
+                Some(id) => Some(id),
+                None => {
+                    // Partition doesn't exist, return empty result (like Java)
+                    return Ok(LookupResult::empty(self.table_info.row_type()));
+                }
+            }
+        } else {
+            None
+        };
+
         let bucket_id = self
             .bucketing_function
-            .bucketing(&key_bytes, self.num_buckets)?;
+            .bucketing(bk_bytes, self.num_buckets)?;
 
         let table_id = self.table_info.get_table_id();
-        let table_bucket = TableBucket::new(table_id, bucket_id);
+        let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
 
         // Find the leader for this bucket
         let cluster = self.metadata.get_cluster();
-        let leader =
-            cluster
-                .leader_for(&table_bucket)
-                .ok_or_else(|| Error::LeaderNotAvailable {
-                    message: format!("No leader found for table bucket: {table_bucket}"),
-                })?;
+        let leader = self
+            .metadata
+            .leader_for(self.table_info.get_table_path(), &table_bucket)
+            .await?
+            .ok_or_else(|| Error::LeaderNotAvailable {
+                message: format!("No leader found for table bucket: {table_bucket}"),
+            })?;
 
         // Get connection to the tablet server
         let tablet_server =
@@ -223,7 +269,7 @@ impl<'a> Lookuper<'a> {
         let connection = connections.get_connection(tablet_server).await?;
 
         // Send lookup request
-        let request = LookupRequest::new(table_id, None, bucket_id, vec![key_bytes]);
+        let request = LookupRequest::new(table_id, partition_id, bucket_id, vec![pk_bytes]);
         let response = connection.request(request).await?;
 
         // Extract the values from response

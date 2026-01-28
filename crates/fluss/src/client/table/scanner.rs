@@ -630,7 +630,7 @@ impl LogFetcher {
         if self.is_partitioned {
             // Fallback to full table metadata refresh until partition-aware updates are available.
             self.metadata
-                .update_tables_metadata(&HashSet::from([&self.table_path]))
+                .update_tables_metadata(&HashSet::from([&self.table_path]), &HashSet::new(), vec![])
                 .await
                 .or_else(|e| {
                     if let Error::RpcError { source, .. } = &e
@@ -649,7 +649,7 @@ impl LogFetcher {
 
         // TODO: Handle PartitionNotExist error
         self.metadata
-            .update_tables_metadata(&HashSet::from([&self.table_path]))
+            .update_tables_metadata(&HashSet::from([&self.table_path]), &HashSet::new(), vec![])
             .await
             .or_else(|e| {
                 if let Error::RpcError { source, .. } = &e
@@ -799,8 +799,9 @@ impl LogFetcher {
                         let table_id = table_bucket.table_id();
                         let cluster = metadata.get_cluster();
                         if let Some(table_path) = cluster.get_table_path_by_id(table_id) {
-                            let physical_tables =
-                                HashSet::from([PhysicalTablePath::of(table_path.clone())]);
+                            let physical_tables = HashSet::from([PhysicalTablePath::of(Arc::new(
+                                table_path.clone(),
+                            ))]);
                             metadata.invalidate_physical_table_meta(&physical_tables);
                         } else {
                             warn!(
@@ -1498,7 +1499,7 @@ mod tests {
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
-    use crate::metadata::{TableInfo, TablePath};
+    use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
@@ -1514,8 +1515,9 @@ mod tests {
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
         )?;
+        let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
         let record = WriteRecord::for_append(
-            table_path,
+            physical_table_path,
             1,
             GenericRow {
                 values: vec![Datum::Int32(1)],
@@ -1684,7 +1686,7 @@ mod tests {
         )?;
 
         let bucket = TableBucket::new(1, 0);
-        assert!(metadata.leader_for(&bucket).is_some());
+        assert!(metadata.leader_for(&table_path, &bucket).await?.is_some());
 
         let response = crate::proto::FetchLogResponse {
             tables_resp: vec![crate::proto::PbFetchLogRespForTable {
@@ -1713,7 +1715,7 @@ mod tests {
 
         LogFetcher::handle_fetch_response(response, response_context).await;
 
-        assert!(metadata.leader_for(&bucket).is_none());
+        assert!(metadata.get_cluster().leader_for(&bucket).is_none());
         Ok(())
     }
 }

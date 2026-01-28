@@ -25,6 +25,7 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -172,7 +173,7 @@ impl SchemaBuilder {
                 self
             }
             _ => {
-                panic!("data type msut be row type")
+                panic!("data type must be row type")
             }
         }
     }
@@ -325,7 +326,7 @@ pub struct TableDescriptorBuilder {
     schema: Option<Schema>,
     properties: HashMap<String, String>,
     custom_properties: HashMap<String, String>,
-    partition_keys: Vec<String>,
+    partition_keys: Arc<[String]>,
     comment: Option<String>,
     table_distribution: Option<TableDistribution>,
 }
@@ -373,7 +374,7 @@ impl TableDescriptorBuilder {
         self
     }
 
-    pub fn partitioned_by(mut self, partition_keys: Vec<String>) -> Self {
+    pub fn partitioned_by(mut self, partition_keys: Arc<[String]>) -> Self {
         self.partition_keys = partition_keys;
         self
     }
@@ -413,7 +414,7 @@ impl TableDescriptorBuilder {
 pub struct TableDescriptor {
     schema: Schema,
     comment: Option<String>,
-    partition_keys: Vec<String>,
+    partition_keys: Arc<[String]>,
     table_distribution: Option<TableDistribution>,
     properties: HashMap<String, String>,
     custom_properties: HashMap<String, String>,
@@ -749,19 +750,19 @@ impl TablePath {
 /// `partition_name` will be `Some(...)`; otherwise, it will be `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalTablePath {
-    table_path: TablePath,
+    table_path: Arc<TablePath>,
     partition_name: Option<String>,
 }
 
 impl PhysicalTablePath {
-    pub fn of(table_path: TablePath) -> Self {
+    pub fn of(table_path: Arc<TablePath>) -> Self {
         Self {
             table_path,
             partition_name: None,
         }
     }
 
-    pub fn of_partitioned(table_path: TablePath, partition_name: Option<String>) -> Self {
+    pub fn of_partitioned(table_path: Arc<TablePath>, partition_name: Option<String>) -> Self {
         Self {
             table_path,
             partition_name,
@@ -774,7 +775,7 @@ impl PhysicalTablePath {
         partition_name: Option<String>,
     ) -> Self {
         Self {
-            table_path: TablePath::new(database_name, table_name),
+            table_path: Arc::new(TablePath::new(database_name, table_name)),
             partition_name,
         }
     }
@@ -815,7 +816,7 @@ pub struct TableInfo {
     pub primary_keys: Vec<String>,
     pub physical_primary_keys: Vec<String>,
     pub bucket_keys: Vec<String>,
-    pub partition_keys: Vec<String>,
+    pub partition_keys: Arc<[String]>,
     pub num_buckets: i32,
     pub properties: HashMap<String, String>,
     pub table_config: TableConfig,
@@ -982,7 +983,7 @@ impl TableInfo {
         schema_id: i32,
         schema: Schema,
         bucket_keys: Vec<String>,
-        partition_keys: Vec<String>,
+        partition_keys: Arc<[String]>,
         num_buckets: i32,
         properties: HashMap<String, String>,
         custom_properties: HashMap<String, String>,
@@ -1080,7 +1081,7 @@ impl TableInfo {
                 .is_auto_partition_enabled()
     }
 
-    pub fn get_partition_keys(&self) -> &[String] {
+    pub fn get_partition_keys(&self) -> &Arc<[String]> {
         &self.partition_keys
     }
 
@@ -1115,7 +1116,7 @@ impl TableInfo {
     pub fn to_table_descriptor(&self) -> Result<TableDescriptor> {
         let mut builder = TableDescriptor::builder()
             .schema(self.schema.clone())
-            .partitioned_by(self.partition_keys.clone())
+            .partitioned_by(Arc::clone(&self.partition_keys))
             .distributed_by(Some(self.num_buckets), self.bucket_keys.clone())
             .properties(self.properties.clone())
             .custom_properties(self.custom_properties.clone());
@@ -1173,6 +1174,18 @@ impl TableBucket {
         TableBucket {
             table_id,
             partition_id: None,
+            bucket,
+        }
+    }
+
+    pub fn new_with_partition(
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+        bucket: BucketId,
+    ) -> Self {
+        TableBucket {
+            table_id,
+            partition_id,
             bucket,
         }
     }
@@ -1308,7 +1321,7 @@ mod tests {
             1,
             schema.clone(),
             vec!["id".to_string()],
-            vec![], // No partition keys
+            Arc::from(vec![]), // No partition keys
             1,
             properties.clone(),
             HashMap::new(),
@@ -1329,7 +1342,7 @@ mod tests {
             1,
             schema.clone(),
             vec!["id".to_string()],
-            vec![], // No partition keys
+            Arc::from(vec![]), // No partition keys
             1,
             properties.clone(),
             HashMap::new(),
@@ -1350,7 +1363,7 @@ mod tests {
             1,
             schema.clone(),
             vec!["id".to_string()],
-            vec!["name".to_string()], // Partition keys
+            Arc::from(vec!["name".to_string()]), // Partition keys
             1,
             properties.clone(),
             HashMap::new(),
@@ -1371,7 +1384,7 @@ mod tests {
             1,
             schema.clone(),
             vec!["id".to_string()],
-            vec!["name".to_string()], // Partition keys
+            Arc::from(vec!["name".to_string()]), // Partition keys
             1,
             properties.clone(),
             HashMap::new(),
