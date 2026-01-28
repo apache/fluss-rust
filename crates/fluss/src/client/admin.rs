@@ -268,7 +268,7 @@ impl FlussAdmin {
         // Convert proto response to LakeSnapshot
         let mut table_buckets_offset = HashMap::new();
         for bucket_snapshot in response.bucket_snapshots {
-            let table_bucket = TableBucket::new(response.table_id, bucket_snapshot.bucket_id);
+            let table_bucket = TableBucket::new(response.table_id, None, bucket_snapshot.bucket_id);
             if let Some(log_offset) = bucket_snapshot.log_offset {
                 table_buckets_offset.insert(table_bucket, log_offset);
             }
@@ -332,7 +332,7 @@ impl FlussAdmin {
         let mut node_for_bucket_list: HashMap<i32, Vec<BucketId>> = HashMap::new();
 
         for bucket_id in buckets {
-            let table_bucket = TableBucket::new(table_id, *bucket_id);
+            let table_bucket = TableBucket::new(table_id, None, *bucket_id);
             let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
                 // todo: consider retry?
                 Error::UnexpectedError {

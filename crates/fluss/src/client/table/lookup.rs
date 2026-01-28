@@ -197,7 +197,7 @@ impl<'a> Lookuper<'a> {
             .bucketing(&key_bytes, self.num_buckets)?;
 
         let table_id = self.table_info.get_table_id();
-        let table_bucket = TableBucket::new(table_id, bucket_id);
+        let table_bucket = TableBucket::new(table_id, None, bucket_id);
 
         // Find the leader for this bucket
         let cluster = self.metadata.get_cluster();
