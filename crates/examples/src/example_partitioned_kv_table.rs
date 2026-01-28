@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use clap::Parser;
 use fluss::client::{FlussAdmin, FlussConnection, UpsertWriter};
 use fluss::config::Config;
 use fluss::error::Result;
 use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableDescriptor, TablePath};
 use fluss::row::{GenericRow, InternalRow};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[tokio::main]
 #[allow(dead_code)]
@@ -39,7 +39,11 @@ pub async fn main() -> Result<()> {
                 .column("region", DataTypes::string())
                 .column("zone", DataTypes::bigint())
                 .column("score", DataTypes::bigint())
-                .primary_key(vec!["id".to_string(), "region".to_string(), "zone".to_string()])
+                .primary_key(vec![
+                    "id".to_string(),
+                    "region".to_string(),
+                    "zone".to_string(),
+                ])
                 .build()?,
         )
         .partitioned_by(Arc::from(["region".to_string(), "zone".to_string()]))
@@ -65,7 +69,11 @@ pub async fn main() -> Result<()> {
     let mut upsert_writer = table_upsert.create_writer()?;
 
     println!("\n=== Upserting ===");
-    for (id, region, zone, score) in [(1001, "APAC", 1i64, 1234i64), (1002, "EMEA", 2, 2234), (1003, "US", 3, 3234)] {
+    for (id, region, zone, score) in [
+        (1001, "APAC", 1i64, 1234i64),
+        (1002, "EMEA", 2, 2234),
+        (1003, "US", 3, 3234),
+    ] {
         let mut row = GenericRow::new(4);
         row.set_field(0, id);
         row.set_field(1, region);
@@ -78,8 +86,11 @@ pub async fn main() -> Result<()> {
     println!("\n=== Looking up ===");
     let mut lookuper = table.new_lookup()?.create_lookuper()?;
 
-    for (id, region, zone) in [(1, "APAC", 1i64), (2, "EMEA", 2), (3, "US", 3)] {
-        let result = lookuper.lookup(&make_key(id, region, zone)).await.expect("lookup");
+    for (id, region, zone) in [(1001, "APAC", 1i64), (1002, "EMEA", 2), (1003, "US", 3)] {
+        let result = lookuper
+            .lookup(&make_key(id, region, zone))
+            .await
+            .expect("lookup");
         let row = result.get_single_row()?.unwrap();
         println!(
             "Found id={id}: region={}, zone={}, score={}",
@@ -91,14 +102,14 @@ pub async fn main() -> Result<()> {
 
     println!("\n=== Updating ===");
     let mut row = GenericRow::new(4);
-    row.set_field(0, 1);
+    row.set_field(0, 1001);
     row.set_field(1, "APAC");
     row.set_field(2, 1i64);
     row.set_field(3, 4321i64);
     upsert_writer.upsert(&row).await?;
     println!("Updated: {row:?}");
 
-    let result = lookuper.lookup(&make_key(1, "APAC", 1)).await?;
+    let result = lookuper.lookup(&make_key(1001, "APAC", 1)).await?;
     let row = result.get_single_row()?.unwrap();
     println!(
         "Verified update: region={}, zone={}",
@@ -108,13 +119,13 @@ pub async fn main() -> Result<()> {
 
     println!("\n=== Deleting ===");
     let mut row = GenericRow::new(4);
-    row.set_field(0, 2);
+    row.set_field(0, 1002);
     row.set_field(1, "EMEA");
     row.set_field(2, 2i64);
     upsert_writer.delete(&row).await?;
     println!("Deleted: {row:?}");
 
-    let result = lookuper.lookup(&make_key(2, "EMEA", 2)).await?;
+    let result = lookuper.lookup(&make_key(1002, "EMEA", 2)).await?;
     if result.get_single_row()?.is_none() {
         println!("Verified deletion");
     }
@@ -129,8 +140,9 @@ async fn create_partition(table_path: &TablePath, admin: &mut FlussAdmin, region
     let partition_spec = PartitionSpec::new(partition_values);
 
     admin
-        .create_partition(&table_path, &partition_spec, false)
-        .await.unwrap_or_else(|a| ());
+        .create_partition(table_path, &partition_spec, true)
+        .await
+        .unwrap();
 }
 
 fn make_key(id: i32, region: &str, zone: i64) -> GenericRow<'static> {
