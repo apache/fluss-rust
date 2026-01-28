@@ -26,7 +26,6 @@ use std::{
 };
 use tempfile::TempDir;
 
-use crate::TableId;
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
@@ -43,6 +42,7 @@ use crate::record::{
 };
 use crate::rpc::{RpcClient, RpcError, message};
 use crate::util::FairBucketStatusMap;
+use crate::{PartitionId, TableId};
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 #[allow(dead_code)]
@@ -54,6 +54,7 @@ pub struct TableScan<'a> {
     conn: &'a FlussConnection,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
+    partition_id: Option<PartitionId>,
     /// Column indices to project. None means all columns, Some(vec) means only the specified columns (non-empty).
     projected_fields: Option<Vec<usize>>,
 }
@@ -64,6 +65,7 @@ impl<'a> TableScan<'a> {
             conn,
             table_info,
             metadata,
+            partition_id: None,
             projected_fields: None,
         }
     }
@@ -88,7 +90,7 @@ impl<'a> TableScan<'a> {
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
     ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
-    ///     let conn = FlussConnection::new(config).await;
+    ///     let conn = FlussConnection::new(config).await?;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
     ///         .schema(
@@ -164,7 +166,7 @@ impl<'a> TableScan<'a> {
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
     ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
-    ///     let conn = FlussConnection::new(config).await;
+    ///     let conn = FlussConnection::new(config).await?;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
     ///         .schema(
@@ -227,6 +229,7 @@ impl<'a> TableScan<'a> {
             self.conn.get_connections(),
             self.conn.config(),
             self.projected_fields,
+            self.partition_id,
         )?;
         Ok(LogScanner {
             inner: Arc::new(inner),
@@ -240,10 +243,16 @@ impl<'a> TableScan<'a> {
             self.conn.get_connections(),
             self.conn.config(),
             self.projected_fields,
+            self.partition_id,
         )?;
         Ok(RecordBatchLogScanner {
             inner: Arc::new(inner),
         })
+    }
+
+    pub fn filter_partition(mut self, partition_id: PartitionId) -> Self {
+        self.partition_id = Some(partition_id);
+        self
     }
 }
 
@@ -270,6 +279,7 @@ struct LogScannerInner {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
+    partition_id: Option<PartitionId>,
 }
 
 impl LogScannerInner {
@@ -279,6 +289,7 @@ impl LogScannerInner {
         connections: Arc<RpcClient>,
         config: &crate::config::Config,
         projected_fields: Option<Vec<usize>>,
+        partition_id: Option<PartitionId>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
         Ok(Self {
@@ -286,6 +297,7 @@ impl LogScannerInner {
             table_id: table_info.table_id,
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
+            partition_id,
             log_fetcher: LogFetcher::new(
                 table_info.clone(),
                 connections.clone(),
@@ -337,7 +349,7 @@ impl LogScannerInner {
     }
 
     async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
-        let table_bucket = TableBucket::new(self.table_id, bucket);
+        let table_bucket = TableBucket::new(self.table_id, self.partition_id, bucket);
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
@@ -359,12 +371,27 @@ impl LogScannerInner {
 
         let mut scan_bucket_offsets = HashMap::new();
         for (bucket_id, offset) in bucket_offsets {
-            let table_bucket = TableBucket::new(self.table_id, *bucket_id);
+            let table_bucket = TableBucket::new(self.table_id, self.partition_id, *bucket_id);
             scan_bucket_offsets.insert(table_bucket, *offset);
         }
 
         self.log_scanner_status
             .assign_scan_buckets(scan_bucket_offsets);
+        Ok(())
+    }
+
+    async fn subscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+        offset: i64,
+    ) -> Result<()> {
+        let table_bucket = TableBucket::new(self.table_id, Some(partition_id), bucket);
+        self.metadata
+            .check_and_update_table_metadata(from_ref(&self.table_path))
+            .await?;
+        self.log_scanner_status
+            .assign_scan_bucket(table_bucket, offset);
         Ok(())
     }
 
@@ -435,6 +462,17 @@ impl LogScanner {
     pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.inner.subscribe_batch(bucket_offsets).await
     }
+
+    pub async fn subscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+        offset: i64,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_partition(partition_id, bucket, offset)
+            .await
+    }
 }
 
 // Implementation for RecordBatchLogScanner (batches mode)
@@ -450,6 +488,17 @@ impl RecordBatchLogScanner {
 
     pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.inner.subscribe_batch(bucket_offsets).await
+    }
+
+    pub async fn subscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+        offset: i64,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_partition(partition_id, bucket, offset)
+            .await
     }
 }
 
@@ -618,12 +667,14 @@ impl LogFetcher {
     }
 
     async fn check_and_update_metadata(&self) -> Result<()> {
-        let need_update = self
+        // Collect buckets that are missing leader information
+        let buckets_needing_leader: Vec<TableBucket> = self
             .fetchable_buckets()
-            .iter()
-            .any(|bucket| self.get_table_bucket_leader(bucket).is_none());
+            .into_iter()
+            .filter(|bucket| self.get_table_bucket_leader(bucket).is_none())
+            .collect();
 
-        if !need_update {
+        if buckets_needing_leader.is_empty() {
             return Ok(());
         }
 
@@ -647,7 +698,7 @@ impl LogFetcher {
             return Ok(());
         }
 
-        // TODO: Handle PartitionNotExist error
+        // Non-partitioned table: standard metadata refresh
         self.metadata
             .update_tables_metadata(&HashSet::from([&self.table_path]), &HashSet::new(), vec![])
             .await
@@ -774,7 +825,7 @@ impl LogFetcher {
 
             for fetch_log_for_bucket in fetch_log_for_buckets {
                 let bucket: i32 = fetch_log_for_bucket.bucket_id;
-                let table_bucket = TableBucket::new(table_id, bucket);
+                let table_bucket = TableBucket::new(table_id, fetch_log_for_bucket.partition_id, bucket);
 
                 // todo: check fetch result code for per-bucket
                 let Some(fetch_offset) = log_scanner_status.get_bucket_offset(&table_bucket) else {
@@ -1302,7 +1353,7 @@ impl LogFetcher {
                         )
                     } else {
                         let fetch_log_req_for_bucket = PbFetchLogReqForBucket {
-                            partition_id: None,
+                            partition_id: bucket.partition_id(),
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
                             // 1M
@@ -1541,7 +1592,7 @@ mod tests {
             None,
         )?;
 
-        let bucket = TableBucket::new(1, 0);
+        let bucket = TableBucket::new(1, None, 0);
         status.assign_scan_bucket(bucket.clone(), 0);
 
         let data = build_records(&table_info, Arc::new(table_path))?;
@@ -1573,7 +1624,7 @@ mod tests {
             None,
         )?;
 
-        let bucket = TableBucket::new(1, 0);
+        let bucket = TableBucket::new(1, None, 0);
         let data = build_records(&table_info, Arc::new(table_path))?;
         let log_records = LogRecordsBatches::new(data.clone());
         let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type())?, false);
@@ -1599,7 +1650,7 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
-        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        status.assign_scan_bucket(TableBucket::new(1, None, 0), 0);
         let fetcher = LogFetcher::new(
             table_info,
             Arc::new(RpcClient::new()),
@@ -1623,7 +1674,7 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
-        status.assign_scan_bucket(TableBucket::new(1, 0), 5);
+        status.assign_scan_bucket(TableBucket::new(1, None, 0), 5);
         let fetcher = LogFetcher::new(
             table_info.clone(),
             Arc::new(RpcClient::new()),
@@ -1673,7 +1724,7 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let status = Arc::new(LogScannerStatus::new());
-        status.assign_scan_bucket(TableBucket::new(1, 0), 5);
+        status.assign_scan_bucket(TableBucket::new(1, None, 0), 5);
         let fetcher = LogFetcher::new(
             table_info.clone(),
             Arc::new(RpcClient::new()),
@@ -1683,7 +1734,7 @@ mod tests {
             None,
         )?;
 
-        let bucket = TableBucket::new(1, 0);
+        let bucket = TableBucket::new(1,None, 0);
         assert!(metadata.leader_for(&table_path, &bucket).await?.is_some());
 
         let response = crate::proto::FetchLogResponse {

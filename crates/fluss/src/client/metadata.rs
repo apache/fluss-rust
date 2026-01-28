@@ -257,10 +257,8 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Metadata::new_for_test(cluster);
         let leader = metadata
-            .leader_for(&table_path, &TableBucket::new(1, 0))
-            .await
-            .expect("leader request should be Ok")
-            .expect("leader should exist");
+            .leader_for(&TableBucket::new(1, None, 0))
+            .expect("leader");
         assert_eq!(leader.id(), 1);
     }
 

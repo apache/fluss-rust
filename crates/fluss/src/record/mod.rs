@@ -274,8 +274,8 @@ mod tests {
 
     #[test]
     fn scan_records_counts_and_iterates() {
-        let bucket0 = TableBucket::new(1, 0);
-        let bucket1 = TableBucket::new(1, 1);
+        let bucket0 = TableBucket::new(1, None, 0);
+        let bucket1 = TableBucket::new(1, None, 1);
         let record0 = ScanRecord::new(make_row(vec![10, 11], 0), 5, 7, ChangeType::Insert);
         let record1 = ScanRecord::new(make_row(vec![10, 11], 1), 6, 8, ChangeType::Delete);
 
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn scan_batch_last_offset() {
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
-        let bucket = TableBucket::new(1, 0);
+        let bucket = TableBucket::new(1, None, 0);
 
         // Batch with 3 records starting at offset 100 -> last_offset = 102
         let batch = RecordBatch::try_new(

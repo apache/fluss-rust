@@ -46,7 +46,7 @@ pub(crate) fn build_cluster(table_path: &TablePath, table_id: i64, buckets: i32)
     let mut bucket_locations = Vec::new();
 
     for bucket_id in 0..buckets {
-        let table_bucket = TableBucket::new(table_id, bucket_id);
+        let table_bucket = TableBucket::new(table_id, None, bucket_id);
         let bucket_location = BucketLocation::new(
             table_bucket.clone(),
             Some(server.clone()),

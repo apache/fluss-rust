@@ -877,7 +877,7 @@ mod tests {
     #[tokio::test]
     async fn await_not_empty_returns_pending_error() {
         let buffer = LogFetchBuffer::new(test_read_context().unwrap());
-        let table_bucket = TableBucket::new(1, 0);
+        let table_bucket = TableBucket::new(1, None, 0);
         buffer.pend(Box::new(ErrorPendingFetch {
             table_bucket: table_bucket.clone(),
         }));
@@ -920,7 +920,7 @@ mod tests {
         let log_records = LogRecordsBatches::new(data.clone());
         let read_context = ReadContext::new(to_arrow_schema(&row_type)?, false);
         let mut fetch = DefaultCompletedFetch::new(
-            TableBucket::new(1, 0),
+            TableBucket::new(1, None, 0),
             log_records,
             data.len(),
             read_context,

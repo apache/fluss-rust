@@ -135,7 +135,7 @@ mod table_test {
             .expect("Failed to poll records");
 
         // Verify the scanned records
-        let table_bucket = TableBucket::new(table.table_info().table_id, 0);
+        let table_bucket = TableBucket::new(table.table_info().table_id, None, 0);
         let records = scan_records.records(&table_bucket);
 
         assert_eq!(records.len(), 6, "Expected 6 records");
