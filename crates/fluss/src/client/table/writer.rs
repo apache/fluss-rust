@@ -15,12 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{WriteRecord, WriterClient};
 use crate::row::{GenericRow, InternalRow};
-use std::sync::Arc;
 
 use crate::error::Result;
-use crate::metadata::{TableInfo, TablePath};
 
 #[allow(dead_code, async_fn_in_trait)]
 pub trait TableWriter {
@@ -47,55 +44,3 @@ pub struct UpsertResult;
 /// Currently this is an empty struct to allow for compatible evolution in the future
 #[derive(Default)]
 pub struct DeleteResult;
-
-#[allow(dead_code)]
-pub struct AbstractTableWriter {
-    table_path: Arc<TablePath>,
-    writer_client: Arc<WriterClient>,
-    field_count: i32,
-    schema_id: i32,
-}
-
-#[allow(dead_code)]
-impl AbstractTableWriter {
-    pub fn new(
-        table_path: TablePath,
-        table_info: &TableInfo,
-        writer_client: Arc<WriterClient>,
-    ) -> Self {
-        // todo: partition
-        Self {
-            table_path: Arc::new(table_path),
-            writer_client,
-            field_count: table_info.row_type().fields().len() as i32,
-            schema_id: table_info.schema_id,
-        }
-    }
-
-    pub async fn send(&self, write_record: &WriteRecord<'_>) -> Result<()> {
-        let result_handle = self.writer_client.send(write_record).await?;
-        let result = result_handle.wait().await?;
-        result_handle.result(result)
-    }
-}
-
-impl TableWriter for AbstractTableWriter {
-    async fn flush(&self) -> Result<()> {
-        todo!()
-    }
-}
-
-// Append writer implementation
-#[allow(dead_code)]
-pub struct AppendWriterImpl {
-    base: AbstractTableWriter,
-}
-
-#[allow(dead_code)]
-impl AppendWriterImpl {
-    pub async fn append(&self, row: GenericRow<'_>) -> Result<()> {
-        let record =
-            WriteRecord::for_append(self.base.table_path.clone(), self.base.schema_id, row);
-        self.base.send(&record).await
-    }
-}

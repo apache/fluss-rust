@@ -20,7 +20,7 @@ use crate::client::write::bucket_assigner::{BucketAssigner, StickyBucketAssigner
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
 use crate::config::Config;
-use crate::metadata::TablePath;
+use crate::metadata::PhysicalTablePath;
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ pub struct WriterClient {
     shutdown_tx: mpsc::Sender<()>,
     sender_join_handle: JoinHandle<()>,
     metadata: Arc<Metadata>,
-    bucket_assigners: DashMap<TablePath, Arc<Box<dyn BucketAssigner>>>,
+    bucket_assigners: DashMap<Arc<PhysicalTablePath>, Arc<Box<dyn BucketAssigner>>>,
 }
 
 impl WriterClient {
@@ -89,11 +89,11 @@ impl WriterClient {
     }
 
     pub async fn send(&self, record: &WriteRecord<'_>) -> Result<ResultHandle> {
-        let table_path = &record.table_path;
+        let physical_table_path = &record.physical_table_path;
         let cluster = self.metadata.get_cluster();
         let bucket_key = record.bucket_key.as_ref();
 
-        let (bucket_assigner, bucket_id) = self.assign_bucket(bucket_key, table_path)?;
+        let (bucket_assigner, bucket_id) = self.assign_bucket(bucket_key, physical_table_path)?;
 
         let mut result = self
             .accumulate
@@ -119,16 +119,16 @@ impl WriterClient {
     fn assign_bucket(
         &self,
         bucket_key: Option<&Bytes>,
-        table_path: &Arc<TablePath>,
+        table_path: &Arc<PhysicalTablePath>,
     ) -> Result<(Arc<Box<dyn BucketAssigner>>, i32)> {
         let cluster = self.metadata.get_cluster();
         let bucket_assigner = {
             if let Some(assigner) = self.bucket_assigners.get(table_path) {
                 assigner.clone()
             } else {
-                let assigner = Arc::new(Self::create_bucket_assigner(table_path.as_ref()));
+                let assigner = Arc::new(Self::create_bucket_assigner(Arc::clone(table_path)));
                 self.bucket_assigners
-                    .insert(table_path.as_ref().clone(), assigner.clone());
+                    .insert(Arc::clone(table_path), assigner.clone());
                 assigner
             }
         };
@@ -160,8 +160,8 @@ impl WriterClient {
         Ok(())
     }
 
-    pub fn create_bucket_assigner(table_path: &TablePath) -> Box<dyn BucketAssigner> {
+    pub fn create_bucket_assigner(table_path: Arc<PhysicalTablePath>) -> Box<dyn BucketAssigner> {
         // always sticky
-        Box::new(StickyBucketAssigner::new(table_path.clone()))
+        Box::new(StickyBucketAssigner::new(table_path))
     }
 }

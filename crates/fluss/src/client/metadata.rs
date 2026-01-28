@@ -58,7 +58,14 @@ impl Metadata {
             ServerType::CoordinatorServer,
         );
         let con = connections.get_connection(&server_node).await?;
-        let response = con.request(UpdateMetadataRequest::new(&[])).await?;
+
+        let response = con
+            .request(UpdateMetadataRequest::new(
+                &HashSet::default(),
+                &HashSet::new(),
+                vec![],
+            ))
+            .await?;
         Cluster::from_metadata_response(response, None)
     }
 
@@ -95,7 +102,12 @@ impl Metadata {
         Ok(())
     }
 
-    pub async fn update_tables_metadata(&self, table_paths: &HashSet<&TablePath>) -> Result<()> {
+    pub async fn update_tables_metadata(
+        &self,
+        table_paths: &HashSet<&TablePath>,
+        physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
+        partition_ids: Vec<i64>,
+    ) -> Result<()> {
         let maybe_server = {
             let guard = self.cluster.read();
             guard.get_one_available_server().cloned()
@@ -114,16 +126,19 @@ impl Metadata {
 
         let conn = self.connections.get_connection(&server).await?;
 
-        let update_table_paths: Vec<&TablePath> = table_paths.iter().copied().collect();
         let response = conn
-            .request(UpdateMetadataRequest::new(update_table_paths.as_slice()))
+            .request(UpdateMetadataRequest::new(
+                table_paths,
+                physical_table_paths,
+                partition_ids,
+            ))
             .await?;
         self.update(response).await?;
         Ok(())
     }
 
     pub async fn update_table_metadata(&self, table_path: &TablePath) -> Result<()> {
-        self.update_tables_metadata(&HashSet::from([table_path]))
+        self.update_tables_metadata(&HashSet::from([table_path]), &HashSet::new(), vec![])
             .await
     }
 
@@ -133,8 +148,9 @@ impl Metadata {
             .iter()
             .filter(|table_path| cluster_binding.opt_get_table(table_path).is_none())
             .collect();
+
         if !need_update_table_paths.is_empty() {
-            self.update_tables_metadata(&need_update_table_paths)
+            self.update_tables_metadata(&need_update_table_paths, &HashSet::new(), vec![])
                 .await?;
         }
         Ok(())
@@ -150,7 +166,48 @@ impl Metadata {
         guard.clone()
     }
 
-    pub fn leader_for(&self, table_bucket: &TableBucket) -> Option<ServerNode> {
+    const MAX_RETRY_TIMES: u8 = 3;
+
+    pub async fn leader_for(
+        &self,
+        table_path: &TablePath,
+        table_bucket: &TableBucket,
+    ) -> Result<Option<ServerNode>> {
+        let leader = self.get_leader_for(table_bucket);
+
+        if leader.is_some() {
+            Ok(leader)
+        } else {
+            for _ in 0..Self::MAX_RETRY_TIMES {
+                if let Some(partition_id) = table_bucket.partition_id() {
+                    self.update_tables_metadata(
+                        &HashSet::from([table_path]),
+                        &HashSet::new(),
+                        vec![partition_id],
+                    )
+                    .await?;
+                } else {
+                    self.update_tables_metadata(
+                        &HashSet::from([table_path]),
+                        &HashSet::new(),
+                        vec![],
+                    )
+                    .await?;
+                }
+
+                let cluster = self.cluster.read();
+                let leader = cluster.leader_for(table_bucket);
+
+                if leader.is_some() {
+                    return Ok(leader.cloned());
+                }
+            }
+
+            Ok(None)
+        }
+    }
+
+    fn get_leader_for(&self, table_bucket: &TableBucket) -> Option<ServerNode> {
         let cluster = self.cluster.read();
         cluster.leader_for(table_bucket).cloned()
     }
@@ -173,14 +230,16 @@ mod tests {
     use crate::metadata::{TableBucket, TablePath};
     use crate::test_utils::build_cluster_arc;
 
-    #[test]
-    fn leader_for_returns_server() {
+    #[tokio::test]
+    async fn leader_for_returns_server() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Metadata::new_for_test(cluster);
         let leader = metadata
-            .leader_for(&TableBucket::new(1, 0))
-            .expect("leader");
+            .leader_for(&table_path, &TableBucket::new(1, 0))
+            .await
+            .expect("leader request should be Ok")
+            .expect("leader should exist");
         assert_eq!(leader.id(), 1);
     }
 

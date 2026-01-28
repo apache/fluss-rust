@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::BucketId;
-use crate::metadata::{TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket};
+use std::sync::Arc;
 
 #[allow(clippy::module_inception)]
 mod cluster;
@@ -69,19 +70,19 @@ pub enum ServerType {
 pub struct BucketLocation {
     pub table_bucket: TableBucket,
     leader: Option<ServerNode>,
-    pub table_path: TablePath,
+    physical_table_path: Arc<PhysicalTablePath>,
 }
 
 impl BucketLocation {
     pub fn new(
         table_bucket: TableBucket,
         leader: Option<ServerNode>,
-        table_path: TablePath,
+        physical_table_path: Arc<PhysicalTablePath>,
     ) -> BucketLocation {
         BucketLocation {
             table_bucket,
             leader,
-            table_path,
+            physical_table_path,
         }
     }
 
@@ -95,5 +96,9 @@ impl BucketLocation {
 
     pub fn bucket_id(&self) -> BucketId {
         self.table_bucket.bucket_id()
+    }
+
+    pub fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
+        &self.physical_table_path
     }
 }
