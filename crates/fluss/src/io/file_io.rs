@@ -39,8 +39,8 @@ pub struct FileIO {
 impl FileIO {
     /// Try to infer file io scheme from path.
     pub fn from_url(path: &str) -> Result<FileIOBuilder> {
-        let url = Url::parse(path).map_err(|_| Error::IllegalArgument {
-            message: format!("Invalid URL: {path}"),
+        let url = Url::parse(path).map_err(|e| Error::IllegalArgument {
+            message: format!("Invalid URL '{path}': {e}"),
         })?;
         Ok(FileIOBuilder::new(url.scheme()))
     }

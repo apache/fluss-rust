@@ -68,19 +68,31 @@ impl FlussConnection {
     }
 
     pub fn get_or_create_writer_client(&self) -> Result<Arc<WriterClient>> {
+        // 1. Fast path: Attempt to acquire a read lock to check if the client already exists.
         if let Some(client) = self.writer_client.read().as_ref() {
             return Ok(client.clone());
         }
 
-        // If not exists, create new one
-        let client = Arc::new(WriterClient::new(self.args.clone(), self.metadata.clone())?);
-        *self.writer_client.write() = Some(client.clone());
-        Ok(client)
+        // 2. Slow path: Acquire the write lock.
+        let mut writer_guard = self.writer_client.write();
+
+        // 3. Double-check: Another thread might have initialized the client
+        // while this thread was waiting for the write lock.
+        if let Some(client) = writer_guard.as_ref() {
+            return Ok(client.clone());
+        }
+
+        // 4. Initialize the client since we are certain it doesn't exist yet.
+        let new_client = Arc::new(WriterClient::new(self.args.clone(), self.metadata.clone())?);
+
+        // 5. Store and return the newly created client.
+        *writer_guard = Some(new_client.clone());
+        Ok(new_client)
     }
 
     pub async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>> {
         self.metadata.update_table_metadata(table_path).await?;
-        let table_info = self.metadata.get_cluster().get_table(table_path).clone();
+        let table_info = self.metadata.get_cluster().get_table(table_path)?.clone();
         if table_info.is_partitioned() {
             return Err(crate::error::Error::UnsupportedOperation {
                 message: "Partitioned tables are not supported".to_string(),

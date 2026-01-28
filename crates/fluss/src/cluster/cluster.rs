@@ -17,7 +17,7 @@
 
 use crate::BucketId;
 use crate::cluster::{BucketLocation, ServerNode, ServerType};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::{
     JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
 };
@@ -188,7 +188,14 @@ impl Cluster {
             let table_id = table_metadata.table_id;
             let table_path = from_pb_table_path(&table_metadata.table_path);
             let table_descriptor = TableDescriptor::deserialize_json(
-                &serde_json::from_slice(table_metadata.table_json.as_slice()).unwrap(),
+                &serde_json::from_slice(table_metadata.table_json.as_slice()).map_err(|e| {
+                    Error::JsonSerdeError {
+                        message: format!(
+                            "Error deserializing table_json into TableDescriptor for table_id {} and table_path {}: {}",
+                            table_id, table_path, e
+                        )
+                    }
+                })?,
             )?;
             let table_info = TableInfo::of(
                 table_path.clone(),
@@ -261,9 +268,13 @@ impl Cluster {
         self.alive_tablet_servers_by_id.get(&id)
     }
 
-    pub fn get_table_bucket(&self, table_path: &TablePath, bucket_id: BucketId) -> TableBucket {
-        let table_info = self.get_table(table_path);
-        TableBucket::new(table_info.table_id, bucket_id)
+    pub fn get_table_bucket(
+        &self,
+        table_path: &TablePath,
+        bucket_id: BucketId,
+    ) -> Result<TableBucket> {
+        let table_info = self.get_table(table_path)?;
+        Ok(TableBucket::new(table_info.table_id, bucket_id))
     }
 
     pub fn get_bucket_locations_by_path(&self) -> &HashMap<TablePath, Vec<BucketLocation>> {
@@ -306,10 +317,12 @@ impl Cluster {
             .num_buckets
     }
 
-    pub fn get_table(&self, table_path: &TablePath) -> &TableInfo {
+    pub fn get_table(&self, table_path: &TablePath) -> Result<&TableInfo> {
         self.table_info_by_path
             .get(table_path)
-            .unwrap_or_else(|| panic!("can't find table info by path {table_path}"))
+            .ok_or_else(|| Error::InvalidTableError {
+                message: format!("Table info not found for {table_path}"),
+            })
     }
 
     pub fn opt_get_table(&self, table_path: &TablePath) -> Option<&TableInfo> {

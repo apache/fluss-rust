@@ -96,9 +96,9 @@ impl RecordAccumulator {
         }
 
         let table_path = &record.table_path;
-        let table_info = cluster.get_table(table_path);
+        let table_info = cluster.get_table(table_path)?;
         let arrow_compression_info = table_info.get_table_config().get_arrow_compression_info()?;
-        let row_type = &cluster.get_table(table_path).row_type;
+        let row_type = &table_info.row_type;
 
         let schema_id = table_info.schema_id;
 
@@ -188,7 +188,7 @@ impl RecordAccumulator {
         self.append_new_batch(cluster, record, bucket_id, &mut dq_guard)
     }
 
-    pub async fn ready(&self, cluster: &Arc<Cluster>) -> ReadyCheckResult {
+    pub async fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
         let entries: Vec<(TablePath, BucketBatches)> = self
             .write_batches
@@ -219,14 +219,14 @@ impl RecordAccumulator {
                     cluster,
                     next_ready_check_delay_ms,
                 )
-                .await
+                .await?
         }
 
-        ReadyCheckResult {
+        Ok(ReadyCheckResult {
             ready_nodes,
             next_ready_check_delay_ms,
             unknown_leader_tables,
-        }
+        })
     }
 
     async fn bucket_ready(
@@ -237,7 +237,7 @@ impl RecordAccumulator {
         unknown_leader_tables: &mut HashSet<TablePath>,
         cluster: &Cluster,
         next_ready_check_delay_ms: i64,
-    ) -> i64 {
+    ) -> Result<i64> {
         let mut next_delay = next_ready_check_delay_ms;
 
         for (bucket_id, batch) in bucket_batches {
@@ -250,7 +250,7 @@ impl RecordAccumulator {
             let waited_time_ms = batch.waited_time_ms(current_time_ms());
             let deque_size = batch_guard.len();
             let full = deque_size > 1 || batch.is_closed();
-            let table_bucket = cluster.get_table_bucket(table_path, bucket_id);
+            let table_bucket = cluster.get_table_bucket(table_path, bucket_id)?;
             if let Some(leader) = cluster.leader_for(&table_bucket) {
                 next_delay =
                     self.batch_ready(leader, waited_time_ms, full, ready_nodes, next_delay);
@@ -258,7 +258,7 @@ impl RecordAccumulator {
                 unknown_leader_tables.insert(table_path.clone());
             }
         }
-        next_delay
+        Ok(next_delay)
     }
 
     fn batch_ready(
