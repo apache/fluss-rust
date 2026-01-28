@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cluster::{BucketLocation, ServerNode, ServerType};
+use crate::error::Error::InvalidPartition;
 use crate::error::{Error, Result};
 use crate::metadata::{
     JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
@@ -292,7 +293,8 @@ impl Cluster {
                 // Process bucket metadata for partitioned tables
                 for bucket_metadata in partition_metadata.bucket_metadata {
                     let bucket_id = bucket_metadata.bucket_id;
-                    let bucket = TableBucket::new_with_partition(table_id, Some(partition_id), bucket_id);
+                    let bucket =
+                        TableBucket::new_with_partition(table_id, Some(partition_id), bucket_id);
                     if let Some(leader_id) = bucket_metadata.leader_id
                         && let Some(server_node) = servers.get(&leader_id)
                     {
@@ -346,11 +348,26 @@ impl Cluster {
 
     pub fn get_table_bucket(
         &self,
-        table_path: &TablePath,
+        physical_table_path: &PhysicalTablePath,
         bucket_id: BucketId,
     ) -> Result<TableBucket> {
-        let table_info = self.get_table(table_path)?;
-        Ok(TableBucket::new(table_info.table_id, bucket_id))
+        let table_info = self.get_table(physical_table_path.get_table_path())?;
+        let partition_id = self.get_partition_id(physical_table_path);
+
+        if physical_table_path.get_partition_name().is_some() && partition_id.is_none() {
+            return Err(InvalidPartition {
+                message: format!(
+                    "The partition {} is not found in cluster",
+                    physical_table_path.get_partition_name().unwrap()
+                ),
+            });
+        }
+
+        Ok(TableBucket::new_with_partition(
+            table_info.table_id,
+            partition_id,
+            bucket_id,
+        ))
     }
 
     pub fn get_partition_id(&self, physical_table_path: &PhysicalTablePath) -> Option<PartitionId> {
