@@ -19,7 +19,7 @@ use crate::compression::ArrowCompressionInfo;
 use crate::error::Error::{IllegalArgument, InvalidTableError};
 use crate::error::{Error, Result};
 use crate::metadata::DataLakeFormat;
-use crate::metadata::datatype::{DataField, DataType, DataTypes, RowType};
+use crate::metadata::datatype::{DataField, DataType, RowType};
 use crate::{BucketId, PartitionId, TableId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
@@ -712,14 +712,12 @@ impl TablePath {
         }
         if identifier.len() > MAX_NAME_LENGTH {
             return Some(format!(
-                "the length of '{}' is longer than the max allowed length {}",
-                identifier, MAX_NAME_LENGTH
+                "the length of '{identifier}' is longer than the max allowed length {MAX_NAME_LENGTH}"
             ));
         }
         if Self::contains_invalid_pattern(identifier) {
             return Some(format!(
-                "'{}' contains one or more characters other than ASCII alphanumerics, '_' and '-'",
-                identifier
+                "'{identifier}' contains one or more characters other than ASCII alphanumerics, '_' and '-'"
             ));
         }
         None
@@ -728,8 +726,7 @@ impl TablePath {
     pub fn validate_prefix(identifier: &str) -> Option<String> {
         if identifier.starts_with(INTERNAL_NAME_PREFIX) {
             return Some(format!(
-                "'{}' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server",
-                INTERNAL_NAME_PREFIX
+                "'{INTERNAL_NAME_PREFIX}' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server"
             ));
         }
         None
@@ -1238,6 +1235,7 @@ impl LakeSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::DataTypes;
 
     #[test]
     fn test_validate() {
@@ -1272,8 +1270,7 @@ mod tests {
         assert_invalid_name(
             &invalid_long_name,
             &format!(
-                "the length of '{}' is longer than the max allowed length {}",
-                invalid_long_name, MAX_NAME_LENGTH
+                "the length of '{invalid_long_name}' is longer than the max allowed length {MAX_NAME_LENGTH}"
             ),
         );
     }
@@ -1282,8 +1279,7 @@ mod tests {
         let result = TablePath::detect_invalid_name(name);
         assert!(
             result.is_some(),
-            "Expected '{}' to be invalid, but it was valid",
-            name
+            "Expected '{name}' to be invalid, but it was valid"
         );
         assert!(
             result.as_ref().unwrap().contains(expected_message),
@@ -1292,7 +1288,8 @@ mod tests {
             result.unwrap()
         );
     }
-        
+
+    #[test]
     fn test_is_auto_partitioned() {
         let schema = Schema::builder()
             .column("id", DataTypes::int())
