@@ -1291,6 +1291,7 @@ mod tests {
             expected_message,
             result.unwrap()
         );
+    }
         
     fn test_is_auto_partitioned() {
         let schema = Schema::builder()
