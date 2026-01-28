@@ -26,6 +26,7 @@ use crate::rpc::message::{
 };
 use crate::rpc::transport::Transport;
 use futures::future::BoxFuture;
+use log::warn;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -66,29 +67,25 @@ impl RpcClient {
         server_node: &ServerNode,
     ) -> Result<ServerConnection, RpcError> {
         let server_id = server_node.uid();
-        let connection = {
+        {
             let connections = self.connections.read();
-            connections.get(server_id).cloned()
-        };
-
-        if let Some(conn) = connection {
-            if !conn.is_poisoned() {
-                return Ok(conn);
+            if let Some(conn) = connections.get(server_id).cloned() {
+                if !conn.is_poisoned() {
+                    return Ok(conn);
+                }
             }
         }
-
-        let new_server = match self.connect(server_node).await {
-            Ok(new_server) => new_server,
-            Err(e) => {
-                self.connections.write().remove(server_id);
-                return Err(e);
+        let new_server = self.connect(server_node).await?;
+        {
+            let mut connections = self.connections.write();
+            if let Some(race_conn) = connections.get(server_id) {
+                if !race_conn.is_poisoned() {
+                    return Ok(race_conn.clone());
+                }
             }
-        };
 
-        self.connections
-            .write()
-            .insert(server_id.clone(), new_server.clone());
-
+            connections.insert(server_id.clone(), new_server.clone());
+        }
         Ok(new_server)
     }
 
@@ -253,7 +250,7 @@ where
         R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
         R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
     {
-        let request_id = self.request_id.fetch_add(1, Ordering::SeqCst);
+        let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
             request_api_version: ApiVersion(0),
@@ -290,7 +287,10 @@ where
 
         self.send_message(buf).await?;
         _cleanup_on_cancel.message_sent();
-        let mut response = rx.await.expect("Who closed this channel?!")?;
+        let mut response = rx.await.map_err(|e| Error::UnexpectedError {
+            message: "Got recvError, some one close the channel".to_string(),
+            source: Some(Box::new(e)),
+        })??;
 
         if let Some(error_response) = response.header.error_response {
             return Err(Error::FlussAPIError {
@@ -391,6 +391,31 @@ where
                 Poll::Ready(res)
             }
             Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<F> Drop for CancellationSafeFuture<F>
+where
+    F: Future + Send + 'static,
+{
+    fn drop(&mut self) {
+        // If the future hasn't finished yet, we must ensure it completes in the background.
+        // This prevents leaving half-sent messages on the wire if the caller cancels the request.
+        if let Some(fut) = self.inner.take() {
+            // Attempt to get a handle to the current Tokio runtime.
+            // This avoids a panic if the runtime has already shut down.
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = fut.await;
+                });
+            } else {
+                // Fallback: If no runtime is active, we cannot spawn.
+                // At this point, the future 'fut' will be dropped.
+                // Since the runtime is likely shutting down anyway,
+                // the underlying connection is probably being closed.
+                warn!("Tokio runtime not found during drop; background task cancelled.");
+            }
         }
     }
 }

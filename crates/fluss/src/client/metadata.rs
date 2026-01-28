@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::cluster::{Cluster, ServerNode, ServerType};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::MetadataResponse;
 use crate::rpc::message::UpdateMetadataRequest;
@@ -45,7 +45,12 @@ impl Metadata {
     }
 
     async fn init_cluster(boot_strap: &str, connections: Arc<RpcClient>) -> Result<Cluster> {
-        let socket_address = boot_strap.parse::<SocketAddr>().unwrap();
+        let socket_address =
+            boot_strap
+                .parse::<SocketAddr>()
+                .map_err(|e| Error::IllegalArgument {
+                    message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
+                })?;
         let server_node = ServerNode::new(
             -1,
             socket_address.ip().to_string(),

@@ -47,14 +47,15 @@ pub struct FlussAdmin {
 
 impl FlussAdmin {
     pub async fn new(connections: Arc<RpcClient>, metadata: Arc<Metadata>) -> Result<Self> {
-        let admin_con = connections
-            .get_connection(
-                metadata
-                    .get_cluster()
-                    .get_coordinator_server()
-                    .expect("Couldn't coordinator server"),
-            )
-            .await?;
+        let admin_con =
+            connections
+                .get_connection(metadata.get_cluster().get_coordinator_server().ok_or_else(
+                    || Error::UnexpectedError {
+                        message: "Coordinator server not found in cluster metadata".to_string(),
+                        source: None,
+                    },
+                )?)
+                .await?;
 
         Ok(FlussAdmin {
             admin_gateway: admin_con,
@@ -211,7 +212,7 @@ impl FlussAdmin {
         database_name: &str,
         ignore_if_not_exists: bool,
         cascade: bool,
-    ) {
+    ) -> Result<()> {
         let _response = self
             .admin_gateway
             .request(DropDatabaseRequest::new(
@@ -219,7 +220,8 @@ impl FlussAdmin {
                 ignore_if_not_exists,
                 cascade,
             ))
-            .await;
+            .await?;
+        Ok(())
     }
 
     /// List all databases
@@ -298,7 +300,7 @@ impl FlussAdmin {
         }
 
         let cluster = self.metadata.get_cluster();
-        let table_id = cluster.get_table(table_path).table_id;
+        let table_id = cluster.get_table(table_path)?.table_id;
 
         // Prepare requests
         let requests_by_server =

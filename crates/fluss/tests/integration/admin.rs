@@ -96,7 +96,10 @@ mod admin_test {
         assert_eq!(db_info.database_descriptor(), &db_descriptor);
 
         // drop database
-        admin.drop_database(db_name, false, true).await;
+        admin
+            .drop_database(db_name, false, true)
+            .await
+            .expect("should drop_database");
 
         // database shouldn't exist now
         assert_eq!(admin.database_exists(db_name).await.unwrap(), false);
@@ -218,7 +221,10 @@ mod admin_test {
         assert_eq!(admin.table_exists(&table_path).await.unwrap(), false);
 
         // drop database
-        admin.drop_database(test_db_name, false, true).await;
+        admin
+            .drop_database(test_db_name, false, true)
+            .await
+            .expect("Should drop database");
 
         // database shouldn't exist now
         assert_eq!(admin.database_exists(test_db_name).await.unwrap(), false);
@@ -361,7 +367,10 @@ mod admin_test {
             .drop_table(&table_path, true)
             .await
             .expect("Failed to drop table");
-        admin.drop_database(test_db_name, true, true).await;
+        admin
+            .drop_database(test_db_name, true, true)
+            .await
+            .expect("Should drop database");
     }
 
     #[tokio::test]

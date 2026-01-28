@@ -18,7 +18,7 @@
 mod compacted_key_encoder;
 mod compacted_row_encoder;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::{DataLakeFormat, KvFormat, RowType};
 use crate::row::encode::compacted_key_encoder::CompactedKeyEncoder;
 use crate::row::encode::compacted_row_encoder::CompactedRowEncoder;
@@ -48,15 +48,15 @@ impl KeyEncoderFactory {
         data_lake_format: &Option<DataLakeFormat>,
     ) -> Result<Box<dyn KeyEncoder>> {
         match data_lake_format {
-            Some(DataLakeFormat::Paimon) => {
-                unimplemented!("KeyEncoder for Paimon format is currently unimplemented")
-            }
+            Some(DataLakeFormat::Paimon) => Err(Error::UnsupportedOperation {
+                message: "KeyEncoder for Paimon format is not yet implemented".to_string(),
+            }),
             Some(DataLakeFormat::Lance) => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
                 row_type, key_fields,
             )?)),
-            Some(DataLakeFormat::Iceberg) => {
-                unimplemented!("KeyEncoder for Iceberg format is currently unimplemented")
-            }
+            Some(DataLakeFormat::Iceberg) => Err(Error::UnsupportedOperation {
+                message: "KeyEncoder for Iceberg format is not yet implemented".to_string(),
+            }),
             None => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
                 row_type, key_fields,
             )?)),

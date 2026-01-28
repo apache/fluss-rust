@@ -78,7 +78,7 @@ impl Sender {
 
     async fn run_once(&self) -> Result<()> {
         let cluster = self.metadata.get_cluster();
-        let ready_check_result = self.accumulator.ready(&cluster).await;
+        let ready_check_result = self.accumulator.ready(&cluster).await?;
 
         // Update metadata if needed
         if !ready_check_result.unknown_leader_tables.is_empty() {

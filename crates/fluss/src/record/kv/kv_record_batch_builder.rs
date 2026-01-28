@@ -29,6 +29,7 @@ use crate::record::kv::kv_record_batch::{
 };
 use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use bytes::{Bytes, BytesMut};
+use log::warn;
 use std::io;
 
 /// Builder for KvRecordBatch.
@@ -305,7 +306,7 @@ impl Drop for KvRecordBatchBuilder {
     fn drop(&mut self) {
         // Warn if the builder has records but was never built or was aborted
         if self.current_record_number > 0 && !self.aborted && self.built_buffer.is_none() {
-            eprintln!(
+            warn!(
                 "Warning: KvRecordBatchBuilder dropped with {} record(s) that were never built. \
                  Call build() to serialize the batch before dropping.",
                 self.current_record_number
