@@ -322,12 +322,15 @@ impl<RE: RowEncoder> UpsertWriterImpl<RE> {
         self.row_encoder.finish_row()
     }
 
-    fn get_physical_path<R: InternalRow>(&self, row: &R) -> PhysicalTablePath {
+    fn get_physical_path<R: InternalRow>(&self, row: &R) -> Result<PhysicalTablePath> {
         if let Some(partition_getter) = &self.partition_field_getter {
             let partition = partition_getter.get_partition(row);
-            PhysicalTablePath::of_partitioned(Arc::clone(&self.table_path), partition.ok())
+            Ok(PhysicalTablePath::of_partitioned(
+                Arc::clone(&self.table_path),
+                Some(partition?),
+            ))
         } else {
-            PhysicalTablePath::of(Arc::clone(&self.table_path))
+            Ok(PhysicalTablePath::of(Arc::clone(&self.table_path)))
         }
     }
 }
@@ -362,7 +365,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         };
 
         let write_record = WriteRecord::for_upsert(
-            Arc::new(self.get_physical_path(row)),
+            Arc::new(self.get_physical_path(row)?),
             self.table_info.schema_id,
             key,
             bucket_key,
@@ -391,7 +394,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         let (key, bucket_key) = self.get_keys(row)?;
 
         let write_record = WriteRecord::for_upsert(
-            Arc::new(self.get_physical_path(row)),
+            Arc::new(self.get_physical_path(row)?),
             self.table_info.schema_id,
             key,
             bucket_key,
