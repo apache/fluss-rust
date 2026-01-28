@@ -712,14 +712,12 @@ impl TablePath {
         }
         if identifier.len() > MAX_NAME_LENGTH {
             return Some(format!(
-                "the length of '{}' is longer than the max allowed length {}",
-                identifier, MAX_NAME_LENGTH
+                "the length of '{identifier}' is longer than the max allowed length {MAX_NAME_LENGTH}"
             ));
         }
         if Self::contains_invalid_pattern(identifier) {
             return Some(format!(
-                "'{}' contains one or more characters other than ASCII alphanumerics, '_' and '-'",
-                identifier
+                "'{identifier}' contains one or more characters other than ASCII alphanumerics, '_' and '-'"
             ));
         }
         None
@@ -728,8 +726,7 @@ impl TablePath {
     pub fn validate_prefix(identifier: &str) -> Option<String> {
         if identifier.starts_with(INTERNAL_NAME_PREFIX) {
             return Some(format!(
-                "'{}' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server",
-                INTERNAL_NAME_PREFIX
+                "'{INTERNAL_NAME_PREFIX}' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server"
             ));
         }
         None
@@ -835,6 +832,75 @@ impl TableInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoPartitionStrategy {
+    auto_partition_enabled: bool,
+    auto_partition_key: Option<String>,
+    auto_partition_time_unit: String,
+    auto_partition_num_precreate: i32,
+    auto_partition_num_retention: i32,
+    auto_partition_timezone: String,
+}
+
+impl AutoPartitionStrategy {
+    pub fn from(properties: &HashMap<String, String>) -> Self {
+        Self {
+            auto_partition_enabled: properties
+                .get("table.auto-partition.enabled")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(false),
+            auto_partition_key: properties
+                .get("table.auto-partition.key")
+                .map(|s| s.to_string()),
+            auto_partition_time_unit: properties
+                .get("table.auto-partition.time-unit")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "DAY".to_string()),
+            auto_partition_num_precreate: properties
+                .get("table.auto-partition.num-precreate")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2),
+            auto_partition_num_retention: properties
+                .get("table.auto-partition.num-retention")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(7),
+            auto_partition_timezone: properties
+                .get("table.auto-partition.time-zone")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    jiff::tz::TimeZone::system()
+                        .iana_name()
+                        .unwrap_or("UTC")
+                        .to_string()
+                }),
+        }
+    }
+
+    pub fn is_auto_partition_enabled(&self) -> bool {
+        self.auto_partition_enabled
+    }
+
+    pub fn key(&self) -> Option<&str> {
+        self.auto_partition_key.as_deref()
+    }
+
+    pub fn time_unit(&self) -> &str {
+        &self.auto_partition_time_unit
+    }
+
+    pub fn num_precreate(&self) -> i32 {
+        self.auto_partition_num_precreate
+    }
+
+    pub fn num_retention(&self) -> i32 {
+        self.auto_partition_num_retention
+    }
+
+    pub fn timezone(&self) -> &str {
+        &self.auto_partition_timezone
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableConfig {
     pub properties: HashMap<String, String>,
 }
@@ -865,6 +931,10 @@ impl TableConfig {
             .map(String::as_str)
             .unwrap_or(DEFAULT_KV_FORMAT);
         kv_format.parse().map_err(Into::into)
+    }
+
+    pub fn get_auto_partition_strategy(&self) -> AutoPartitionStrategy {
+        AutoPartitionStrategy::from(&self.properties)
     }
 }
 
@@ -1003,7 +1073,11 @@ impl TableInfo {
     }
 
     pub fn is_auto_partitioned(&self) -> bool {
-        self.is_partitioned() && todo!()
+        self.is_partitioned()
+            && self
+                .table_config
+                .get_auto_partition_strategy()
+                .is_auto_partition_enabled()
     }
 
     pub fn get_partition_keys(&self) -> &[String] {
@@ -1161,6 +1235,7 @@ impl LakeSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::DataTypes;
 
     #[test]
     fn test_validate() {
@@ -1195,8 +1270,7 @@ mod tests {
         assert_invalid_name(
             &invalid_long_name,
             &format!(
-                "the length of '{}' is longer than the max allowed length {}",
-                invalid_long_name, MAX_NAME_LENGTH
+                "the length of '{invalid_long_name}' is longer than the max allowed length {MAX_NAME_LENGTH}"
             ),
         );
     }
@@ -1205,8 +1279,7 @@ mod tests {
         let result = TablePath::detect_invalid_name(name);
         assert!(
             result.is_some(),
-            "Expected '{}' to be invalid, but it was valid",
-            name
+            "Expected '{name}' to be invalid, but it was valid"
         );
         assert!(
             result.as_ref().unwrap().contains(expected_message),
@@ -1214,5 +1287,98 @@ mod tests {
             expected_message,
             result.unwrap()
         );
+    }
+
+    #[test]
+    fn test_is_auto_partitioned() {
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .primary_key(vec!["id".to_string()])
+            .build()
+            .unwrap();
+
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+
+        // 1. Not partitioned, auto partition disabled
+        let mut properties = HashMap::new();
+        let table_info = TableInfo::new(
+            table_path.clone(),
+            1,
+            1,
+            schema.clone(),
+            vec!["id".to_string()],
+            vec![], // No partition keys
+            1,
+            properties.clone(),
+            HashMap::new(),
+            None,
+            0,
+            0,
+        );
+        assert!(!table_info.is_auto_partitioned());
+
+        // 2. Not partitioned, auto partition enabled
+        properties.insert(
+            "table.auto-partition.enabled".to_string(),
+            "true".to_string(),
+        );
+        let table_info = TableInfo::new(
+            table_path.clone(),
+            1,
+            1,
+            schema.clone(),
+            vec!["id".to_string()],
+            vec![], // No partition keys
+            1,
+            properties.clone(),
+            HashMap::new(),
+            None,
+            0,
+            0,
+        );
+        assert!(!table_info.is_auto_partitioned());
+
+        // 3. Partitioned, auto partition disabled
+        properties.insert(
+            "table.auto-partition.enabled".to_string(),
+            "false".to_string(),
+        );
+        let table_info = TableInfo::new(
+            table_path.clone(),
+            1,
+            1,
+            schema.clone(),
+            vec!["id".to_string()],
+            vec!["name".to_string()], // Partition keys
+            1,
+            properties.clone(),
+            HashMap::new(),
+            None,
+            0,
+            0,
+        );
+        assert!(!table_info.is_auto_partitioned());
+
+        // 4. Partitioned, auto partition enabled
+        properties.insert(
+            "table.auto-partition.enabled".to_string(),
+            "true".to_string(),
+        );
+        let table_info = TableInfo::new(
+            table_path.clone(),
+            1,
+            1,
+            schema.clone(),
+            vec!["id".to_string()],
+            vec!["name".to_string()], // Partition keys
+            1,
+            properties.clone(),
+            HashMap::new(),
+            None,
+            0,
+            0,
+        );
+        assert!(table_info.is_auto_partitioned());
     }
 }

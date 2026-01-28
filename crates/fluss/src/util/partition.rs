@@ -26,7 +26,7 @@ use std::fmt::Write;
 fn hex_string(bytes: &[u8]) -> String {
     let mut hex = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
-        write!(hex, "{:02x}", b).unwrap();
+        write!(hex, "{b:02x}").unwrap();
     }
     hex
 }
@@ -84,7 +84,7 @@ fn milli_to_string(milli: i32) -> String {
         .div_euclid(MILLIS_PER_SECOND as i32);
     let ms = milli.rem_euclid(MILLIS_PER_SECOND as i32);
 
-    format!("{:02}-{:02}-{:02}_{:03}", hour, min, sec, ms)
+    format!("{hour:02}-{min:02}-{sec:02}_{ms:03}")
 }
 
 fn time_to_string(time: Time) -> String {
