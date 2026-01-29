@@ -427,7 +427,7 @@ mod tests {
         let props = build_remote_fs_props(&credentials, &addition_infos);
         assert_eq!(props.get("access_key_id"), Some(&"ak".to_string()));
         assert_eq!(props.get("access_key_secret"), Some(&"sk".to_string()));
-        assert_eq!(props.get("security_token"), Some(&"token".to_string()));
+        assert_eq!(props.get("access_key_secret"), Some(&"sk".to_string()));
         assert_eq!(props.get("security_token"), Some(&"token".to_string()));
         assert_eq!(
             props.get("enable_virtual_host_style"),
