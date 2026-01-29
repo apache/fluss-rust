@@ -20,7 +20,8 @@ mod batch;
 
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
-use crate::metadata::PhysicalTablePath;
+use crate::metadata::{PhysicalTablePath, TableInfo};
+
 use crate::row::GenericRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
@@ -44,6 +45,7 @@ pub struct WriteRecord<'a> {
     bucket_key: Option<Bytes>,
     schema_id: i32,
     write_format: WriteFormat,
+    table_info: Arc<TableInfo>,
 }
 
 impl<'a> WriteRecord<'a> {
@@ -107,11 +109,13 @@ impl<'a> KvWriteRecord<'a> {
 
 impl<'a> WriteRecord<'a> {
     pub fn for_append(
+        table_info: Arc<TableInfo>,
         physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         row: GenericRow<'a>,
     ) -> Self {
         Self {
+            table_info,
             record: Record::Log(LogWriteRecord::Generic(row)),
             physical_table_path,
             bucket_key: None,
@@ -121,11 +125,13 @@ impl<'a> WriteRecord<'a> {
     }
 
     pub fn for_append_record_batch(
+        table_info: Arc<TableInfo>,
         physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         row: RecordBatch,
     ) -> Self {
         Self {
+            table_info,
             record: Record::Log(LogWriteRecord::RecordBatch(Arc::new(row))),
             physical_table_path,
             bucket_key: None,
@@ -134,7 +140,9 @@ impl<'a> WriteRecord<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn for_upsert(
+        table_info: Arc<TableInfo>,
         physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         key: Bytes,
@@ -144,6 +152,7 @@ impl<'a> WriteRecord<'a> {
         row_bytes: Option<RowBytes<'a>>,
     ) -> Self {
         Self {
+            table_info,
             record: Record::Kv(KvWriteRecord::new(key, target_columns, row_bytes)),
             physical_table_path,
             bucket_key,

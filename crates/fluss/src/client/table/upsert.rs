@@ -19,7 +19,7 @@ use crate::client::table::writer::{DeleteResult, TableWriter, UpsertResult, Upse
 use crate::client::{RowBytes, WriteFormat, WriteRecord, WriterClient};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::{KvFormat, PhysicalTablePath, RowType, TableInfo, TablePath};
+use crate::metadata::{PhysicalTablePath, RowType, TableInfo, TablePath};
 use crate::row::InternalRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory, RowEncoder, RowEncoderFactory};
 use crate::row::field_getter::FieldGetter;
@@ -108,7 +108,6 @@ impl TableUpsert {
     }
 }
 
-#[allow(dead_code)]
 struct UpsertWriterImpl<RE>
 where
     RE: RowEncoder,
@@ -120,17 +119,14 @@ where
     target_columns: Option<Arc<Vec<usize>>>,
     // Use primary key encoder as bucket key encoder when None
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
-    kv_format: KvFormat,
     write_format: WriteFormat,
     row_encoder: RE,
     field_getters: Box<[FieldGetter]>,
     table_info: Arc<TableInfo>,
 }
 
-#[allow(dead_code)]
 struct UpsertWriterFactory;
 
-#[allow(dead_code)]
 impl UpsertWriterFactory {
     pub fn create(
         table_path: Arc<TablePath>,
@@ -184,7 +180,6 @@ impl UpsertWriterFactory {
             primary_key_encoder,
             target_columns: partial_update_columns,
             bucket_key_encoder,
-            kv_format: kv_format.clone(),
             write_format,
             row_encoder: RowEncoderFactory::create(kv_format, row_type.clone())?,
             field_getters,
@@ -365,6 +360,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         };
 
         let write_record = WriteRecord::for_upsert(
+            Arc::clone(&self.table_info),
             Arc::new(self.get_physical_path(row)?),
             self.table_info.schema_id,
             key,
@@ -394,6 +390,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         let (key, bucket_key) = self.get_keys(row)?;
 
         let write_record = WriteRecord::for_upsert(
+            Arc::clone(&self.table_info),
             Arc::new(self.get_physical_path(row)?),
             self.table_info.schema_id,
             key,

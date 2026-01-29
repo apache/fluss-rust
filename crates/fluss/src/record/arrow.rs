@@ -1450,6 +1450,7 @@ pub struct MyVec<T>(pub StreamReader<T>);
 mod tests {
     use super::*;
     use crate::metadata::{DataField, DataTypes, RowType};
+    use crate::test_utils::build_table_info;
 
     #[test]
     fn test_to_array_type() {
@@ -1942,6 +1943,7 @@ mod tests {
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut builder = MemoryLogRecordsArrowBuilder::new(
@@ -1957,13 +1959,15 @@ mod tests {
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let record = WriteRecord::for_append(physical_table_path.clone(), 1, row);
+        let record =
+            WriteRecord::for_append(Arc::clone(&table_info), physical_table_path.clone(), 1, row);
         builder.append(&record)?;
 
         let mut row2 = GenericRow::new(2);
         row2.set_field(0, 2_i32);
         row2.set_field(1, "bob");
-        let record2 = WriteRecord::for_append(physical_table_path, 2, row2);
+        let record2 =
+            WriteRecord::for_append(Arc::clone(&table_info), physical_table_path, 2, row2);
         builder.append(&record2)?;
 
         let data = builder.build()?;

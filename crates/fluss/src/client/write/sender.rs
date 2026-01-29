@@ -658,7 +658,7 @@ mod tests {
     use crate::proto::{PbProduceLogRespForBucket, ProduceLogResponse};
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::test_utils::build_cluster_arc;
+    use crate::test_utils::{build_cluster_arc, build_table_info};
     use std::collections::{HashMap, HashSet};
 
     async fn build_ready_batch(
@@ -666,8 +666,10 @@ mod tests {
         cluster: Arc<Cluster>,
         table_path: Arc<TablePath>,
     ) -> Result<(ReadyWriteBatch, crate::client::ResultHandle)> {
+        let table_info = Arc::new(build_table_info(table_path.as_ref().clone(), 1, 1));
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
         let record = WriteRecord::for_append(
+            table_info,
             physical_table_path,
             1,
             GenericRow {

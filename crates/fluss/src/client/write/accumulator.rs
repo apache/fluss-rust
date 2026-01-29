@@ -599,7 +599,7 @@ mod tests {
     use super::*;
     use crate::metadata::TablePath;
     use crate::row::{Datum, GenericRow};
-    use crate::test_utils::build_cluster;
+    use crate::test_utils::{build_cluster, build_table_info};
     use std::sync::Arc;
 
     #[tokio::test]
@@ -608,8 +608,10 @@ mod tests {
         let accumulator = RecordAccumulator::new(config);
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
         let cluster = Arc::new(build_cluster(&table_path, 1, 1));
         let record = WriteRecord::for_append(
+            table_info,
             physical_table_path,
             1,
             GenericRow {
