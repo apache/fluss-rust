@@ -19,7 +19,6 @@ use crate::error;
 use crate::error::Result;
 use crate::io::FileIOBuilder;
 use opendal::{Operator, Scheme};
-use std::collections::HashMap;
 
 /// The storage carries all supported storage services in fluss
 #[derive(Debug)]
@@ -30,6 +29,8 @@ pub enum Storage {
     LocalFs,
     #[cfg(feature = "storage-s3")]
     S3 { props: HashMap<String, String> },
+    #[cfg(feature = "storage-oss")]
+    Oss { props: HashMap<String, String> },
 }
 
 impl Storage {
@@ -44,6 +45,8 @@ impl Storage {
             Scheme::Fs => Ok(Self::LocalFs),
             #[cfg(feature = "storage-s3")]
             Scheme::S3 => Ok(Self::S3 { props }),
+            #[cfg(feature = "storage-oss")]
+            Scheme::Oss => Ok(Self::Oss { props }),
             _ => Err(error::Error::IoUnsupported {
                 message: format!("Unsupported storage feature {scheme_str}"),
             }),
@@ -79,6 +82,14 @@ impl Storage {
                 let op = super::s3_config_build(&s3_props)?;
                 Ok((op, key))
             }
+            #[cfg(feature = "storage-oss")]
+            Storage::Oss { props } => {
+                let (bucket, key) = super::parse_oss_path(path);
+                let mut oss_props = props.clone();
+                oss_props.insert("bucket".to_string(), bucket.to_string());
+                let op = super::oss_config_build(&oss_props)?;
+                Ok((op, key))
+            }
         }
     }
 
@@ -87,6 +98,7 @@ impl Storage {
             "memory" => Ok(Scheme::Memory),
             "file" | "" => Ok(Scheme::Fs),
             "s3" | "s3a" => Ok(Scheme::S3),
+            "oss" => Ok(Scheme::Oss),
             s => Ok(s.parse::<Scheme>()?),
         }
     }
