@@ -1767,4 +1767,85 @@ mod tests {
         assert!(metadata.get_cluster().leader_for(&bucket).is_none());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn subscribe_with_partition_creates_correct_table_bucket() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+
+        let scanner = LogScannerInner::new(
+            &table_info,
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            &crate::config::Config::default(),
+            None,
+            Some(27),
+        )?;
+
+        scanner.subscribe(0, 0).await?;
+
+        let bucket = TableBucket::new(1, Some(27), 0);
+        assert_eq!(
+            scanner.log_scanner_status.get_bucket_offset(&bucket),
+            Some(0)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscribe_partition_overrides_stored_partition() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+
+        let scanner = LogScannerInner::new(
+            &table_info,
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            &crate::config::Config::default(),
+            None,
+            Some(27),
+        )?;
+
+        scanner.subscribe_partition(99, 0, 0).await?;
+
+        let bucket = TableBucket::new(1, Some(99), 0);
+        assert_eq!(
+            scanner.log_scanner_status.get_bucket_offset(&bucket),
+            Some(0)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscribe_without_partition_uses_none() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+
+        let scanner = LogScannerInner::new(
+            &table_info,
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            &crate::config::Config::default(),
+            None,
+            None,
+        )?;
+
+        scanner.subscribe(0, 0).await?;
+
+        let bucket = TableBucket::new(1, None, 0);
+        assert_eq!(
+            scanner.log_scanner_status.get_bucket_offset(&bucket),
+            Some(0)
+        );
+
+        Ok(())
+    }
 }
