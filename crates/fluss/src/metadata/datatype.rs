@@ -930,6 +930,15 @@ impl RowType {
         self.fields.iter().map(|f| f.name.as_str()).collect()
     }
 
+    pub fn project_with_field_names(&self, field_names: &[String]) -> Result<RowType> {
+        let indices: Vec<usize> = field_names
+            .iter()
+            .filter_map(|pk| self.get_field_index(pk))
+            .collect();
+
+        self.project(indices.as_slice())
+    }
+
     pub fn project(&self, project_field_positions: &[usize]) -> Result<RowType> {
         Ok(RowType::with_nullable(
             self.nullable,

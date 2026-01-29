@@ -20,7 +20,7 @@ mod batch;
 
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
-use crate::metadata::TablePath;
+use crate::metadata::PhysicalTablePath;
 use crate::row::GenericRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
@@ -40,7 +40,7 @@ pub use writer_client::WriterClient;
 #[allow(dead_code)]
 pub struct WriteRecord<'a> {
     record: Record<'a>,
-    table_path: Arc<TablePath>,
+    physical_table_path: Arc<PhysicalTablePath>,
     bucket_key: Option<Bytes>,
     schema_id: i32,
     write_format: WriteFormat,
@@ -49,6 +49,10 @@ pub struct WriteRecord<'a> {
 impl<'a> WriteRecord<'a> {
     pub fn record(&self) -> &Record<'a> {
         &self.record
+    }
+
+    pub fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
+        &self.physical_table_path
     }
 }
 
@@ -102,10 +106,14 @@ impl<'a> KvWriteRecord<'a> {
 }
 
 impl<'a> WriteRecord<'a> {
-    pub fn for_append(table_path: Arc<TablePath>, schema_id: i32, row: GenericRow<'a>) -> Self {
+    pub fn for_append(
+        physical_table_path: Arc<PhysicalTablePath>,
+        schema_id: i32,
+        row: GenericRow<'a>,
+    ) -> Self {
         Self {
             record: Record::Log(LogWriteRecord::Generic(row)),
-            table_path,
+            physical_table_path,
             bucket_key: None,
             schema_id,
             write_format: WriteFormat::ArrowLog,
@@ -113,13 +121,13 @@ impl<'a> WriteRecord<'a> {
     }
 
     pub fn for_append_record_batch(
-        table_path: Arc<TablePath>,
+        physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         row: RecordBatch,
     ) -> Self {
         Self {
             record: Record::Log(LogWriteRecord::RecordBatch(Arc::new(row))),
-            table_path,
+            physical_table_path,
             bucket_key: None,
             schema_id,
             write_format: WriteFormat::ArrowLog,
@@ -127,7 +135,7 @@ impl<'a> WriteRecord<'a> {
     }
 
     pub fn for_upsert(
-        table_path: Arc<TablePath>,
+        physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         key: Bytes,
         bucket_key: Option<Bytes>,
@@ -137,7 +145,7 @@ impl<'a> WriteRecord<'a> {
     ) -> Self {
         Self {
             record: Record::Kv(KvWriteRecord::new(key, target_columns, row_bytes)),
-            table_path,
+            physical_table_path,
             bucket_key,
             schema_id,
             write_format,

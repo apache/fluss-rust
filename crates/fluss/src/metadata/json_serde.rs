@@ -21,6 +21,7 @@ use crate::metadata::datatype::{DataField, DataType, DataTypes};
 use crate::metadata::table::{Column, Schema, TableDescriptor};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub trait JsonSerde: Sized {
     fn serialize_json(&self) -> Result<Value>;
@@ -619,7 +620,7 @@ impl JsonSerde for TableDescriptor {
                     .to_owned(),
             );
         }
-        builder = builder.partitioned_by(partition_keys);
+        builder = builder.partitioned_by(Arc::from(partition_keys));
 
         let mut bucket_count = None;
         let mut bucket_keys = vec![];

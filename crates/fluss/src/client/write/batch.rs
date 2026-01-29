@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::BucketId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
-use crate::metadata::{KvFormat, RowType, TablePath};
+use crate::metadata::{KvFormat, PhysicalTablePath, RowType};
 use crate::record::MemoryLogRecordsArrowBuilder;
 use crate::record::kv::KvRecordBatchBuilder;
 use bytes::Bytes;
@@ -28,12 +27,10 @@ use std::cmp::max;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
-#[allow(dead_code)]
 pub struct InnerWriteBatch {
     batch_id: i64,
-    table_path: TablePath,
+    physical_table_path: Arc<PhysicalTablePath>,
     create_ms: i64,
-    bucket_id: BucketId,
     results: BroadcastOnce<BatchWriteResult>,
     completed: AtomicBool,
     attempts: AtomicI32,
@@ -41,12 +38,11 @@ pub struct InnerWriteBatch {
 }
 
 impl InnerWriteBatch {
-    fn new(batch_id: i64, table_path: TablePath, create_ms: i64, bucket_id: BucketId) -> Self {
+    fn new(batch_id: i64, physical_table_path: Arc<PhysicalTablePath>, create_ms: i64) -> Self {
         InnerWriteBatch {
             batch_id,
-            table_path,
+            physical_table_path,
             create_ms,
-            bucket_id,
             results: Default::default(),
             completed: AtomicBool::new(false),
             attempts: AtomicI32::new(0),
@@ -74,8 +70,8 @@ impl InnerWriteBatch {
         self.drained_ms = max(self.drained_ms, now_ms);
     }
 
-    fn table_path(&self) -> &TablePath {
-        &self.table_path
+    fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
+        &self.physical_table_path
     }
 
     fn attempts(&self) -> i32 {
@@ -165,8 +161,8 @@ impl WriteBatch {
         self.inner_batch().batch_id
     }
 
-    pub fn table_path(&self) -> &TablePath {
-        self.inner_batch().table_path()
+    pub fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
+        self.inner_batch().physical_table_path()
     }
 
     pub fn attempts(&self) -> i32 {
@@ -192,15 +188,14 @@ impl ArrowLogWriteBatch {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_id: i64,
-        table_path: TablePath,
+        physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         arrow_compression_info: ArrowCompressionInfo,
         row_type: &RowType,
-        bucket_id: BucketId,
         create_ms: i64,
         to_append_record_batch: bool,
     ) -> Result<Self> {
-        let base = InnerWriteBatch::new(batch_id, table_path, create_ms, bucket_id);
+        let base = InnerWriteBatch::new(batch_id, physical_table_path, create_ms);
         Ok(Self {
             write_batch: base,
             arrow_builder: MemoryLogRecordsArrowBuilder::new(
@@ -273,15 +268,14 @@ impl KvWriteBatch {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_id: i64,
-        table_path: TablePath,
+        physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         write_limit: usize,
         kv_format: KvFormat,
-        bucket_id: BucketId,
         target_columns: Option<Arc<Vec<usize>>>,
         create_ms: i64,
     ) -> Self {
-        let base = InnerWriteBatch::new(batch_id, table_path, create_ms, bucket_id);
+        let base = InnerWriteBatch::new(batch_id, physical_table_path, create_ms);
         Self {
             write_batch: base,
             kv_batch_builder: KvRecordBatchBuilder::new(schema_id, write_limit, kv_format),
@@ -370,16 +364,18 @@ mod tests {
 
     #[test]
     fn complete_only_once() {
-        let batch =
-            InnerWriteBatch::new(1, TablePath::new("db".to_string(), "tbl".to_string()), 0, 0);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_path = PhysicalTablePath::of(Arc::new(table_path));
+        let batch = InnerWriteBatch::new(1, Arc::new(physical_path), 0);
         assert!(batch.complete(Ok(())));
         assert!(!batch.complete(Err(crate::client::broadcast::Error::Dropped)));
     }
 
     #[test]
     fn attempts_increment_on_reenqueue() {
-        let batch =
-            InnerWriteBatch::new(1, TablePath::new("db".to_string(), "tbl".to_string()), 0, 0);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_path = PhysicalTablePath::of(Arc::new(table_path));
+        let batch = InnerWriteBatch::new(1, Arc::new(physical_path), 0);
         assert_eq!(batch.attempts(), 0);
         batch.re_enqueued();
         assert_eq!(batch.attempts(), 1);

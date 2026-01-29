@@ -32,7 +32,7 @@ use crate::rpc::{RpcClient, ServerConnection};
 use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
 use crate::{BucketId, PartitionId, TableId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::slice::from_ref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -111,6 +111,12 @@ impl FlussAdmin {
             .admin_gateway
             .request(GetTableRequest::new(table_path))
             .await?;
+
+        // force update to avoid stale data in cache
+        self.metadata
+            .update_tables_metadata(&HashSet::from([table_path]), &HashSet::new(), vec![])
+            .await?;
+
         let GetTableInfoResponse {
             table_id,
             schema_id,
