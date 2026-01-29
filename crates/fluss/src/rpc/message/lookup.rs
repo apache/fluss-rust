@@ -53,6 +53,29 @@ impl LookupRequest {
             inner_request: request,
         }
     }
+
+    /// Creates a new batched lookup request with multiple buckets.
+    pub fn new_batched(table_id: i64, buckets: Vec<(i32, Option<i64>, Vec<Vec<u8>>)>) -> Self {
+        let buckets_req: Vec<proto::PbLookupReqForBucket> = buckets
+            .into_iter()
+            .map(
+                |(bucket_id, partition_id, keys)| proto::PbLookupReqForBucket {
+                    partition_id,
+                    bucket_id,
+                    key: keys,
+                },
+            )
+            .collect();
+
+        let request = proto::LookupRequest {
+            table_id,
+            buckets_req,
+        };
+
+        Self {
+            inner_request: request,
+        }
+    }
 }
 
 impl RequestBody for LookupRequest {
