@@ -78,8 +78,17 @@ fn build_remote_fs_props(
         "access_key_id".to_string(),
         credentials.access_key_id.clone(),
     );
+
+    // S3 specific configurations
     props.insert(
         "secret_access_key".to_string(),
+        credentials.access_key_secret.clone(),
+    );
+
+    // OSS specific configurations, todo: consider refactor it
+    // to handle different conversion for different scheme in different method
+    props.insert(
+        "access_key_secret".to_string(),
         credentials.access_key_secret.clone(),
     );
 
