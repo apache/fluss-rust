@@ -330,7 +330,7 @@ impl Sender {
         let mut pending_buckets: HashSet<TableBucket> = request_buckets.iter().cloned().collect();
 
         for bucket_resp in response.buckets_resp() {
-            let tb = TableBucket::new(table_id, bucket_resp.bucket_id());
+            let tb = TableBucket::new(table_id, None, bucket_resp.bucket_id());
             let Some(ready_batch) = records_by_bucket.remove(&tb) else {
                 panic!("Missing ready batch for table bucket {tb}");
             };

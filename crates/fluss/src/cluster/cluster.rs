@@ -213,7 +213,7 @@ impl Cluster {
             let mut bucket_for_table = vec![];
             for bucket_metadata in table_metadata.bucket_metadata {
                 let bucket_id = bucket_metadata.bucket_id;
-                let bucket = TableBucket::new(table_id, bucket_id);
+                let bucket = TableBucket::new(table_id, None, bucket_id);
                 let bucket_location;
                 if let Some(leader_id) = bucket_metadata.leader_id
                     && let Some(server_node) = servers.get(&leader_id)
@@ -273,7 +273,7 @@ impl Cluster {
         bucket_id: BucketId,
     ) -> Result<TableBucket> {
         let table_info = self.get_table(table_path)?;
-        Ok(TableBucket::new(table_info.table_id, bucket_id))
+        Ok(TableBucket::new(table_info.table_id, None, bucket_id))
     }
 
     pub fn get_bucket_locations_by_path(&self) -> &HashMap<TablePath, Vec<BucketLocation>> {
