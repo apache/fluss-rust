@@ -34,6 +34,7 @@ pub enum Storage {
 }
 
 impl Storage {
+    #[allow(unused_variables)]
     pub(crate) fn build(file_io_builder: FileIOBuilder) -> Result<Self> {
         let (scheme_str, props) = file_io_builder.into_parts();
         let scheme = Self::parse_scheme(&scheme_str)?;
