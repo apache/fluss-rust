@@ -213,9 +213,10 @@ impl<'a> Lookuper<'a> {
     /// * `Err(Error)` - If the lookup fails
     pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult<'_>> {
         // todo: support batch lookup
-        let pk_bytes = self.primary_key_encoder.encode_key(row)?.to_vec();
+        let pk_bytes = self.primary_key_encoder.encode_key(row)?;
+        let pk_bytes_vec = pk_bytes.to_vec();
         let bk_bytes = match &mut self.bucket_key_encoder {
-            Some(encoder) => &encoder.encode_key(row)?.to_vec(),
+            Some(encoder) => &encoder.encode_key(row)?,
             None => &pk_bytes,
         };
 
@@ -269,7 +270,7 @@ impl<'a> Lookuper<'a> {
         let connection = connections.get_connection(tablet_server).await?;
 
         // Send lookup request
-        let request = LookupRequest::new(table_id, partition_id, bucket_id, vec![pk_bytes]);
+        let request = LookupRequest::new(table_id, partition_id, bucket_id, vec![pk_bytes_vec]);
         let response = connection.request(request).await?;
 
         // Extract the values from response
