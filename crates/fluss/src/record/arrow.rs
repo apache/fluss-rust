@@ -175,6 +175,9 @@ pub trait ArrowRecordBatchInnerBuilder: Send + Sync {
     fn records_count(&self) -> i32;
 
     fn is_full(&self) -> bool;
+
+    /// Get an estimate of the size in bytes of the arrow data.
+    fn estimated_size_in_bytes(&self) -> usize;
 }
 
 #[derive(Default)]
@@ -213,6 +216,13 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
     fn is_full(&self) -> bool {
         // full if has one record batch
         self.arrow_record_batch.is_some()
+    }
+
+    fn estimated_size_in_bytes(&self) -> usize {
+        self.arrow_record_batch
+            .as_ref()
+            .map(|batch| batch.get_array_memory_size())
+            .unwrap_or(0)
     }
 }
 
@@ -361,6 +371,16 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
     fn is_full(&self) -> bool {
         self.records_count() >= DEFAULT_MAX_RECORD
     }
+
+    fn estimated_size_in_bytes(&self) -> usize {
+        // Returns the uncompressed Arrow array memory size (same as Java's arrowWriter.estimatedSizeInBytes()).
+        // Note: This is the size before compression. After build(), the actual size may be smaller
+        // if compression is enabled.
+        self.arrow_column_builders
+            .iter()
+            .map(|builder| builder.finish_cloned().get_array_memory_size())
+            .sum()
+    }
 }
 
 impl MemoryLogRecordsArrowBuilder {
@@ -480,6 +500,12 @@ impl MemoryLogRecordsArrowBuilder {
         cursor.write_i32::<LittleEndian>(self.batch_sequence)?;
         cursor.write_i32::<LittleEndian>(record_count)?;
         Ok(())
+    }
+
+    /// Get an estimate of the number of bytes written to the underlying buffer.
+    /// This includes the batch header size plus the estimated arrow data size.
+    pub fn estimated_size_in_bytes(&self) -> usize {
+        RECORD_BATCH_HEADER_SIZE + self.arrow_record_batch_builder.estimated_size_in_bytes()
     }
 }
 

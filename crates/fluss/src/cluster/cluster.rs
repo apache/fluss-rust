@@ -191,8 +191,7 @@ impl Cluster {
                 &serde_json::from_slice(table_metadata.table_json.as_slice()).map_err(|e| {
                     Error::JsonSerdeError {
                         message: format!(
-                            "Error deserializing table_json into TableDescriptor for table_id {} and table_path {}: {}",
-                            table_id, table_path, e
+                            "Error deserializing table_json into TableDescriptor for table_id {table_id} and table_path {table_path}: {e}"
                         )
                     }
                 })?,

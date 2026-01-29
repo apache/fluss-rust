@@ -311,7 +311,7 @@ impl RecordAccumulator {
         node: &ServerNode,
         max_size: i32,
     ) -> Result<Vec<ReadyWriteBatch>> {
-        let mut size = 0;
+        let mut size: usize = 0;
         let buckets = self.get_all_buckets_in_current_node(node, cluster);
         let mut ready = Vec::new();
 
@@ -354,7 +354,7 @@ impl RecordAccumulator {
                     if !batch_lock.is_empty() {
                         let first_batch = batch_lock.front().unwrap();
 
-                        if size + first_batch.estimated_size_in_bytes() > max_size as i64
+                        if size + first_batch.estimated_size_in_bytes() > max_size as usize
                             && !ready.is_empty()
                         {
                             // there is a rare case that a single batch size is larger than the request size

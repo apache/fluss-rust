@@ -132,9 +132,11 @@ impl WriteBatch {
         }
     }
 
-    pub fn estimated_size_in_bytes(&self) -> i64 {
-        0
-        // todo: calculate estimated_size_in_bytes
+    pub fn estimated_size_in_bytes(&self) -> usize {
+        match self {
+            WriteBatch::ArrowLog(batch) => batch.estimated_size_in_bytes(),
+            WriteBatch::Kv(batch) => batch.estimated_size_in_bytes(),
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -245,6 +247,18 @@ impl ArrowLogWriteBatch {
     pub fn close(&mut self) {
         self.arrow_builder.close()
     }
+
+    /// Get an estimate of the number of bytes written to the underlying buffer.
+    /// The returned value is exactly correct if the batch has been built.
+    pub fn estimated_size_in_bytes(&self) -> usize {
+        if let Some(ref bytes) = self.built_records {
+            // Return actual size if already built
+            bytes.len()
+        } else {
+            // Delegate to arrow builder for estimated size
+            self.arrow_builder.estimated_size_in_bytes()
+        }
+    }
 }
 
 pub struct KvWriteBatch {
@@ -340,11 +354,18 @@ impl KvWriteBatch {
     pub fn target_columns(&self) -> Option<&Arc<Vec<usize>>> {
         self.target_columns.as_ref()
     }
+
+    /// Get an estimate of the number of bytes written to the underlying buffer.
+    /// This returns the current size including header and all appended records.
+    pub fn estimated_size_in_bytes(&self) -> usize {
+        self.kv_batch_builder.get_size_in_bytes()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::{RowBytes, WriteFormat};
     use crate::metadata::TablePath;
 
     #[test]
@@ -362,5 +383,150 @@ mod tests {
         assert_eq!(batch.attempts(), 0);
         batch.re_enqueued();
         assert_eq!(batch.attempts(), 1);
+    }
+
+    #[test]
+    fn test_arrow_log_write_batch_estimated_size() {
+        use crate::client::WriteRecord;
+        use crate::compression::{
+            ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+        };
+        use crate::metadata::{DataField, DataTypes, RowType};
+        use crate::row::GenericRow;
+        use arrow::array::{Int32Array, RecordBatch, StringArray};
+        use std::sync::Arc;
+
+        let row_type = RowType::new(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+
+        // Test 1: RowAppendRecordBatchBuilder (to_append_record_batch=false)
+        {
+            let mut batch = ArrowLogWriteBatch::new(
+                1,
+                table_path.clone(),
+                1,
+                ArrowCompressionInfo {
+                    compression_type: ArrowCompressionType::None,
+                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+                },
+                &row_type,
+                0,
+                0,
+                false,
+            )
+            .unwrap();
+
+            // Append rows
+            for _ in 0..200 {
+                let mut row = GenericRow::new(2);
+                row.set_field(0, 1_i32);
+                row.set_field(1, "hello");
+                let record = WriteRecord::for_append(Arc::new(table_path.clone()), 1, row);
+                batch.try_append(&record).unwrap();
+            }
+
+            let estimated_size = batch.estimated_size_in_bytes();
+            assert!(estimated_size > 0);
+
+            let built_data = batch.build().unwrap();
+            let actual_size = built_data.len();
+
+            let diff = actual_size - estimated_size;
+            let threshold = actual_size / 10; // 10% tolerance
+            assert!(
+                diff <= threshold,
+                "RowAppend: estimated_size {estimated_size} and actual_size {actual_size} differ by more than 10%"
+            );
+        }
+
+        // Test 2: PrebuiltRecordBatchBuilder (to_append_record_batch=true)
+        {
+            let mut batch = ArrowLogWriteBatch::new(
+                1,
+                table_path.clone(),
+                1,
+                ArrowCompressionInfo {
+                    compression_type: ArrowCompressionType::None,
+                    compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+                },
+                &row_type,
+                0,
+                0,
+                true,
+            )
+            .unwrap();
+
+            // Create a pre-built RecordBatch
+            let schema = crate::record::to_arrow_schema(&row_type).unwrap();
+            let ids: Vec<i32> = (0..200).collect();
+            let names: Vec<&str> = (0..200).map(|_| "hello").collect();
+            let record_batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(ids)),
+                    Arc::new(StringArray::from(names)),
+                ],
+            )
+            .unwrap();
+
+            let record =
+                WriteRecord::for_append_record_batch(Arc::new(table_path.clone()), 1, record_batch);
+            batch.try_append(&record).unwrap();
+
+            let estimated_size = batch.estimated_size_in_bytes();
+            assert!(estimated_size > 0);
+
+            let built_data = batch.build().unwrap();
+            let actual_size = built_data.len();
+
+            let diff = actual_size - estimated_size;
+            let threshold = actual_size / 10; // 10% tolerance
+            assert!(
+                diff <= threshold,
+                "Prebuilt: estimated_size {estimated_size} and actual_size {actual_size} differ by more than 10%"
+            );
+        }
+    }
+
+    #[test]
+    fn test_kv_write_batch_estimated_size() {
+        use crate::metadata::KvFormat;
+
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+
+        let mut batch = KvWriteBatch::new(
+            1,
+            table_path.clone(),
+            1,
+            KvWriteBatch::DEFAULT_WRITE_LIMIT,
+            KvFormat::COMPACTED,
+            0,
+            None,
+            0,
+        );
+
+        for _ in 0..200 {
+            let record = WriteRecord::for_upsert(
+                Arc::new(table_path.clone()),
+                1,
+                Bytes::from(vec![1_u8, 2_u8, 3_u8]),
+                None,
+                WriteFormat::CompactedKv,
+                None,
+                Some(RowBytes::Owned(Bytes::from(vec![1_u8, 2_u8, 3_u8]))),
+            );
+            batch.try_append(&record).unwrap();
+        }
+
+        let estimated_size = batch.estimated_size_in_bytes();
+        let actual_size = batch.build().unwrap().len();
+
+        assert_eq!(
+            actual_size, estimated_size,
+            "estimated size {estimated_size} is not equal to actual size"
+        );
     }
 }

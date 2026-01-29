@@ -385,9 +385,15 @@ where
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Self::Output> {
-        match self.inner.as_mut().expect("no dropped").as_mut().poll(cx) {
+        let inner = self
+            .inner
+            .as_mut()
+            .expect("CancellationSafeFuture polled after completion");
+
+        match inner.as_mut().poll(cx) {
             Poll::Ready(res) => {
                 self.done = true;
+                self.inner = None; // Prevent re-polling
                 Poll::Ready(res)
             }
             Poll::Pending => Poll::Pending,
