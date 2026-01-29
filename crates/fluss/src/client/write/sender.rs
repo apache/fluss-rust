@@ -28,7 +28,7 @@ use crate::proto::{
 use crate::rpc::ServerConnection;
 use crate::rpc::message::{ProduceLogRequest, PutKvRequest};
 use crate::{PartitionId, TableId};
-use log::warn;
+use log::{debug, warn};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -82,17 +82,39 @@ impl Sender {
 
         // Update metadata if needed
         if !ready_check_result.unknown_leader_tables.is_empty() {
-            let table_paths: HashSet<&TablePath> = ready_check_result
-                .unknown_leader_tables
-                .iter()
-                .map(|p| p.get_table_path())
-                .collect();
-            let physical_table_paths: HashSet<&Arc<PhysicalTablePath>> =
-                ready_check_result.unknown_leader_tables.iter().collect();
+            let mut table_paths: HashSet<&TablePath> = HashSet::new();
+            let mut physical_table_paths: HashSet<&Arc<PhysicalTablePath>> = HashSet::new();
 
-            self.metadata
+            for unknown_paths in ready_check_result.unknown_leader_tables.iter() {
+                if unknown_paths.get_partition_name().is_some() {
+                    physical_table_paths.insert(unknown_paths);
+                } else {
+                    table_paths.insert(unknown_paths.get_table_path());
+                }
+            }
+
+            if let Err(e) = self
+                .metadata
                 .update_tables_metadata(&table_paths, &physical_table_paths, vec![])
-                .await?;
+                .await
+            {
+                match &e {
+                    crate::error::Error::FlussAPIError { api_error }
+                        if api_error.code == FlussError::PartitionNotExists.code() =>
+                    {
+                        debug!(
+                            "Partition does not exist during metadata update, continuing: {}",
+                            api_error
+                        );
+                    }
+                    _ => return Err(e),
+                }
+            }
+
+            debug!(
+                "Client update metadata due to unknown leader tables from the batched records: {:?}",
+                ready_check_result.unknown_leader_tables
+            );
         }
 
         if ready_check_result.ready_nodes.is_empty() {
