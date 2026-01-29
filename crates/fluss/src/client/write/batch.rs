@@ -361,6 +361,7 @@ mod tests {
     use super::*;
     use crate::client::{RowBytes, WriteFormat};
     use crate::metadata::TablePath;
+    use crate::test_utils::build_table_info;
 
     #[test]
     fn complete_only_once() {
@@ -397,19 +398,20 @@ mod tests {
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         // Test 1: RowAppendRecordBatchBuilder (to_append_record_batch=false)
         {
             let mut batch = ArrowLogWriteBatch::new(
                 1,
-                table_path.clone(),
+                Arc::clone(&physical_table_path),
                 1,
                 ArrowCompressionInfo {
                     compression_type: ArrowCompressionType::None,
                     compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
                 },
                 &row_type,
-                0,
                 0,
                 false,
             )
@@ -420,7 +422,12 @@ mod tests {
                 let mut row = GenericRow::new(2);
                 row.set_field(0, 1_i32);
                 row.set_field(1, "hello");
-                let record = WriteRecord::for_append(Arc::new(table_path.clone()), 1, row);
+                let record = WriteRecord::for_append(
+                    Arc::clone(&table_info),
+                    Arc::clone(&physical_table_path),
+                    1,
+                    row,
+                );
                 batch.try_append(&record).unwrap();
             }
 
@@ -442,14 +449,13 @@ mod tests {
         {
             let mut batch = ArrowLogWriteBatch::new(
                 1,
-                table_path.clone(),
+                physical_table_path.clone(),
                 1,
                 ArrowCompressionInfo {
                     compression_type: ArrowCompressionType::None,
                     compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
                 },
                 &row_type,
-                0,
                 0,
                 true,
             )
@@ -468,8 +474,12 @@ mod tests {
             )
             .unwrap();
 
-            let record =
-                WriteRecord::for_append_record_batch(Arc::new(table_path.clone()), 1, record_batch);
+            let record = WriteRecord::for_append_record_batch(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_table_path),
+                1,
+                record_batch,
+            );
             batch.try_append(&record).unwrap();
 
             let estimated_size = batch.estimated_size_in_bytes();
@@ -492,21 +502,23 @@ mod tests {
         use crate::metadata::KvFormat;
 
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut batch = KvWriteBatch::new(
             1,
-            table_path.clone(),
+            Arc::clone(&physical_path),
             1,
             KvWriteBatch::DEFAULT_WRITE_LIMIT,
             KvFormat::COMPACTED,
-            0,
             None,
             0,
         );
 
         for _ in 0..200 {
             let record = WriteRecord::for_upsert(
-                Arc::new(table_path.clone()),
+                Arc::clone(&table_info),
+                Arc::clone(&physical_path),
                 1,
                 Bytes::from(vec![1_u8, 2_u8, 3_u8]),
                 None,
