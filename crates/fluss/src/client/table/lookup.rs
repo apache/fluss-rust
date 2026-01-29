@@ -249,7 +249,7 @@ impl<'a> Lookuper<'a> {
         let cluster = self.metadata.get_cluster();
         let leader = self
             .metadata
-            .leader_for(self.table_info.get_table_path(), &table_bucket)
+            .leader_for(self.table_path.as_ref(), &table_bucket)
             .await?
             .ok_or_else(|| Error::LeaderNotAvailable {
                 message: format!("No leader found for table bucket: {table_bucket}"),

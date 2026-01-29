@@ -268,7 +268,7 @@ mod admin_test {
         let table_descriptor = TableDescriptor::builder()
             .schema(table_schema)
             .distributed_by(Some(3), vec!["id".to_string()])
-            .partitioned_by(Arc::new(["dt".to_string(), "region".to_string()]))
+            .partitioned_by(vec!["dt".to_string(), "region".to_string()])
             .property("table.replication.factor", "1")
             .log_format(LogFormat::ARROW)
             .kv_format(KvFormat::COMPACTED)

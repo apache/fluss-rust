@@ -195,17 +195,11 @@ impl RecordAccumulator {
 
     pub async fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
-        let entries: Vec<(
-            Arc<PhysicalTablePath>,
-            bool,
-            Option<PartitionId>,
-            BucketBatches,
-        )> = self
+        let entries: Vec<(Arc<PhysicalTablePath>, Option<PartitionId>, BucketBatches)> = self
             .write_batches
             .iter()
             .map(|entry| {
                 let physical_table_path = Arc::clone(entry.key());
-                let is_partitioned_table = entry.value().is_partitioned_table;
                 let partition_id = entry.value().partition_id;
                 let bucket_batches: Vec<_> = entry
                     .value()
@@ -213,12 +207,7 @@ impl RecordAccumulator {
                     .iter()
                     .map(|(bucket_id, batch_arc)| (*bucket_id, batch_arc.clone()))
                     .collect();
-                (
-                    physical_table_path,
-                    is_partitioned_table,
-                    partition_id,
-                    bucket_batches,
-                )
+                (physical_table_path, partition_id, bucket_batches)
             })
             .collect();
 
@@ -226,12 +215,11 @@ impl RecordAccumulator {
         let mut next_ready_check_delay_ms = self.batch_timeout_ms;
         let mut unknown_leader_tables = HashSet::new();
 
-        for (physical_table_path, is_partitioned_table, mut partition_id, bucket_batches) in entries
-        {
+        for (physical_table_path, mut partition_id, bucket_batches) in entries {
             next_ready_check_delay_ms = self
                 .bucket_ready(
                     &physical_table_path,
-                    is_partitioned_table,
+                    physical_table_path.get_partition_name().is_some(),
                     &mut partition_id,
                     bucket_batches,
                     &mut ready_nodes,

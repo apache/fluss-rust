@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::cluster::{BucketLocation, ServerNode, ServerType};
-use crate::error::Error::InvalidPartition;
+use crate::error::Error::PartitionNotExist;
 use crate::error::{Error, Result};
 use crate::metadata::{
     JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
 };
-use crate::proto::MetadataResponse;
+use crate::proto::{MetadataResponse, PbBucketMetadata};
 use crate::rpc::{from_pb_server_node, from_pb_table_path};
 use crate::{BucketId, PartitionId, TableId};
 use rand::random_range;
@@ -207,6 +207,7 @@ impl Cluster {
             tmp_available_location_by_bucket.extend(origin.available_locations_by_bucket.clone());
         }
 
+        // iterate all table metadata
         for table_metadata in metadata_response.table_metadata {
             let table_id = table_metadata.table_id;
             let table_path = from_pb_table_path(&table_metadata.table_path);
@@ -230,90 +231,52 @@ impl Cluster {
             table_info_by_path.insert(table_path.clone(), table_info);
             table_id_by_path.insert(table_path.clone(), table_id);
 
-            // now, get bucket matadata
-            let mut found_unavailable_bucket = false;
-            let mut available_bucket_for_table = vec![];
-            let mut bucket_for_table = vec![];
-            for bucket_metadata in table_metadata.bucket_metadata {
-                let bucket_id = bucket_metadata.bucket_id;
-                let bucket = TableBucket::new(table_id, bucket_id);
-                let bucket_location;
-                let physical_table_path =
-                    Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+            let bucket_metadata = table_metadata.bucket_metadata;
+            let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
 
-                if let Some(leader_id) = bucket_metadata.leader_id
-                    && let Some(server_node) = servers.get(&leader_id)
-                {
-                    bucket_location = BucketLocation::new(
-                        bucket.clone(),
-                        Some(server_node.clone()),
-                        physical_table_path,
-                    );
-                    available_bucket_for_table.push(bucket_location.clone());
-                    tmp_available_location_by_bucket
-                        .insert(bucket.clone(), bucket_location.clone());
-                } else {
-                    found_unavailable_bucket = true;
-                    bucket_location =
-                        BucketLocation::new(bucket.clone(), None, physical_table_path);
-                }
-                bucket_for_table.push(bucket_location.clone());
-            }
-
-            if found_unavailable_bucket {
-                tmp_available_locations_by_path.insert(
-                    Arc::new(PhysicalTablePath::of(Arc::new(table_path))),
-                    available_bucket_for_table.clone(),
-                );
-            } else {
-                tmp_available_locations_by_path.insert(
-                    Arc::new(PhysicalTablePath::of(Arc::new(table_path))),
-                    bucket_for_table,
-                );
-            }
+            let bucket_locations = get_bucket_locations(
+                &mut servers,
+                bucket_metadata.as_slice(),
+                table_id,
+                None,
+                &physical_table_path,
+            );
+            tmp_available_locations_by_path.insert(physical_table_path, bucket_locations);
         }
 
-        // Process partition metadata
+        // iterate all partition metadata
         for partition_metadata in metadata_response.partition_metadata {
             let table_id = partition_metadata.table_id;
-            let partition_name = partition_metadata.partition_name;
-            let partition_id = partition_metadata.partition_id as PartitionId;
 
-            if let Some(table_path) = table_id_by_path
-                .iter()
-                .find(|&(_, &id)| id == table_id)
-                .map(|(path, _)| path.clone())
-            {
+            if let Some(cluster) = origin_cluster {
+                let partition_name = partition_metadata.partition_name;
+                let table_path = cluster.get_table_path_by_id(table_id).unwrap();
+                let partition_id = partition_metadata.partition_id;
+
                 let physical_table_path = Arc::new(PhysicalTablePath::of_partitioned(
                     Arc::new(table_path.clone()),
                     Some(partition_name),
                 ));
+
                 partitions_id_by_path.insert(Arc::clone(&physical_table_path), partition_id);
 
-                // Process bucket metadata for partitioned tables
-                for bucket_metadata in partition_metadata.bucket_metadata {
-                    let bucket_id = bucket_metadata.bucket_id;
-                    let bucket =
-                        TableBucket::new_with_partition(table_id, Some(partition_id), bucket_id);
-                    if let Some(leader_id) = bucket_metadata.leader_id
-                        && let Some(server_node) = servers.get(&leader_id)
-                    {
-                        let bucket_location = BucketLocation::new(
-                            bucket.clone(),
-                            Some(server_node.clone()),
-                            Arc::clone(&physical_table_path),
-                        );
-                        tmp_available_location_by_bucket.insert(bucket, bucket_location.clone());
+                let bucket_locations = get_bucket_locations(
+                    &mut servers,
+                    partition_metadata.bucket_metadata.as_slice(),
+                    table_id,
+                    Some(partition_id),
+                    &physical_table_path,
+                );
 
-                        if let Some(locations) =
-                            tmp_available_locations_by_path.get_mut(&physical_table_path)
-                        {
-                            locations.push(bucket_location);
-                        } else {
-                            tmp_available_locations_by_path
-                                .insert(Arc::clone(&physical_table_path), vec![bucket_location]);
-                        }
-                    }
+                tmp_available_locations_by_path.insert(physical_table_path, bucket_locations);
+            }
+        }
+
+        for bucket_locations in &mut tmp_available_locations_by_path.values() {
+            for location in bucket_locations {
+                if location.leader().is_some() {
+                    tmp_available_location_by_bucket
+                        .insert(location.table_bucket.clone(), location.clone());
                 }
             }
         }
@@ -355,7 +318,7 @@ impl Cluster {
         let partition_id = self.get_partition_id(physical_table_path);
 
         if physical_table_path.get_partition_name().is_some() && partition_id.is_none() {
-            return Err(InvalidPartition {
+            return Err(PartitionNotExist {
                 message: format!(
                     "The partition {} is not found in cluster",
                     physical_table_path.get_partition_name().unwrap()
@@ -439,4 +402,33 @@ impl Cluster {
     pub fn get_partition_id_by_path(&self) -> &HashMap<Arc<PhysicalTablePath>, PartitionId> {
         &self.partitions_id_by_path
     }
+}
+
+fn get_bucket_locations(
+    servers: &mut HashMap<i32, ServerNode>,
+    bucket_metadata: &[PbBucketMetadata],
+    table_id: i64,
+    partition_id: Option<PartitionId>,
+    physical_table_path: &Arc<PhysicalTablePath>,
+) -> Vec<BucketLocation> {
+    let mut bucket_locations = Vec::new();
+    for metadata in bucket_metadata {
+        let bucket_id = metadata.bucket_id;
+        let bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
+
+        let server = if let Some(leader_id) = metadata.leader_id
+            && let Some(server_node) = servers.get(&leader_id)
+        {
+            Some(server_node.clone())
+        } else {
+            None
+        };
+
+        bucket_locations.push(BucketLocation::new(
+            bucket.clone(),
+            server,
+            Arc::clone(physical_table_path),
+        ));
+    }
+    bucket_locations
 }

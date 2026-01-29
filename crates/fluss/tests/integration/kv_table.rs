@@ -460,7 +460,7 @@ mod kv_table_test {
                     .build()
                     .expect("Failed to build schema"),
             )
-            .partitioned_by(Arc::new(["region".to_string()]))
+            .partitioned_by(vec!["region".to_string()])
             .build()
             .expect("Failed to build table");
 

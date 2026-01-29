@@ -18,7 +18,6 @@
 use crate::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Represents a table path with database and table name
 #[pyclass]
@@ -269,7 +268,7 @@ impl TableDescriptor {
             .schema(fluss_schema)
             .properties(properties)
             .custom_properties(custom_properties)
-            .partitioned_by(Arc::from(partition_keys))
+            .partitioned_by(partition_keys)
             .distributed_by(bucket_count, bucket_keys);
 
         if let Some(comment) = comment {

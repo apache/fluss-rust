@@ -26,7 +26,6 @@ use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use fcore::row::InternalRow;
 use fluss as fcore;
 use std::borrow::Cow;
-use std::sync::Arc;
 
 pub const DATA_TYPE_BOOLEAN: i32 = 1;
 pub const DATA_TYPE_TINYINT: i32 = 2;
@@ -110,7 +109,7 @@ pub fn ffi_descriptor_to_core(
 
     let mut builder = fcore::metadata::TableDescriptor::builder()
         .schema(schema)
-        .partitioned_by(Arc::from(descriptor.partition_keys.clone()));
+        .partitioned_by(descriptor.partition_keys.clone());
 
     if descriptor.bucket_count > 0 {
         builder = builder.distributed_by(

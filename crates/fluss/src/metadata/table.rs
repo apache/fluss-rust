@@ -374,8 +374,8 @@ impl TableDescriptorBuilder {
         self
     }
 
-    pub fn partitioned_by(mut self, partition_keys: Arc<[String]>) -> Self {
-        self.partition_keys = partition_keys;
+    pub fn partitioned_by(mut self, partition_keys: Vec<String>) -> Self {
+        self.partition_keys = Arc::from(partition_keys);
         self
     }
 
@@ -1116,7 +1116,7 @@ impl TableInfo {
     pub fn to_table_descriptor(&self) -> Result<TableDescriptor> {
         let mut builder = TableDescriptor::builder()
             .schema(self.schema.clone())
-            .partitioned_by(Arc::clone(&self.partition_keys))
+            .partitioned_by(self.partition_keys.to_vec())
             .distributed_by(Some(self.num_buckets), self.bucket_keys.clone())
             .properties(self.properties.clone())
             .custom_properties(self.custom_properties.clone());

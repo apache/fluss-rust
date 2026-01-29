@@ -22,7 +22,6 @@ use fluss::error::Result;
 use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableDescriptor, TablePath};
 use fluss::row::{GenericRow, InternalRow};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[tokio::main]
 #[allow(dead_code)]
@@ -46,7 +45,7 @@ pub async fn main() -> Result<()> {
                 ])
                 .build()?,
         )
-        .partitioned_by(Arc::from(["region".to_string(), "zone".to_string()]))
+        .partitioned_by(vec!["region".to_string(), "zone".to_string()])
         .build()?;
 
     let table_path = TablePath::new("fluss".to_owned(), "partitioned_kv_example".to_owned());

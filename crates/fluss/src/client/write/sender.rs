@@ -102,7 +102,7 @@ impl Sender {
                     crate::error::Error::FlussAPIError { api_error }
                         if api_error.code == FlussError::PartitionNotExists.code() =>
                     {
-                        debug!(
+                        warn!(
                             "Partition does not exist during metadata update, continuing: {}",
                             api_error
                         );
@@ -378,11 +378,12 @@ impl Sender {
                         .error_message()
                         .cloned()
                         .unwrap_or_else(|| error.message().to_string());
-                    if let Some((table_path, physical_table_path)) = self
+                    if let Some(physical_table_path) = self
                         .handle_write_batch_error(ready_batch, error, message)
                         .await?
                     {
-                        invalid_metadata_tables.insert(table_path);
+                        invalid_metadata_tables
+                            .insert(physical_table_path.get_table_path().clone());
                         invalid_physical_table_paths.insert(physical_table_path);
                     }
                 }
@@ -392,7 +393,7 @@ impl Sender {
 
         for bucket in pending_buckets {
             if let Some(ready_batch) = records_by_bucket.remove(&bucket) {
-                if let Some((table_path, physical_table_path)) = self
+                if let Some(physical_table_path) = self
                     .handle_write_batch_error(
                         ready_batch,
                         FlussError::UnknownServerError,
@@ -400,7 +401,7 @@ impl Sender {
                     )
                     .await?
                 {
-                    invalid_metadata_tables.insert(table_path);
+                    invalid_metadata_tables.insert(physical_table_path.get_table_path().clone());
                     invalid_physical_table_paths.insert(physical_table_path);
                 }
             }
@@ -438,11 +439,11 @@ impl Sender {
         let mut invalid_physical_table_paths: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
 
         for batch in batches {
-            if let Some((table_path, physical_table_path)) = self
+            if let Some(physical_table_path) = self
                 .handle_write_batch_error(batch, error, message.clone())
                 .await?
             {
-                invalid_metadata_tables.insert(table_path);
+                invalid_metadata_tables.insert(physical_table_path.get_table_path().clone());
                 invalid_physical_table_paths.insert(physical_table_path);
             }
         }
@@ -472,11 +473,8 @@ impl Sender {
         ready_write_batch: ReadyWriteBatch,
         error: FlussError,
         message: String,
-    ) -> Result<Option<(TablePath, Arc<PhysicalTablePath>)>> {
+    ) -> Result<Option<Arc<PhysicalTablePath>>> {
         let physical_table_path = Arc::clone(ready_write_batch.write_batch.physical_table_path());
-
-        let table_path = physical_table_path.get_table_path().clone();
-
         if self.can_retry(&ready_write_batch, error) {
             warn!(
                 "Retrying write batch for {} on bucket {} after error {error:?}: {message}",
@@ -484,9 +482,7 @@ impl Sender {
                 ready_write_batch.table_bucket.bucket_id()
             );
             self.re_enqueue_batch(ready_write_batch).await;
-            return Ok(
-                Self::is_invalid_metadata_error(error).then_some((table_path, physical_table_path))
-            );
+            return Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path));
         }
 
         if error == FlussError::DuplicateSequenceException {
@@ -506,7 +502,7 @@ impl Sender {
                 message,
             },
         );
-        Ok(Self::is_invalid_metadata_error(error).then_some((table_path, physical_table_path)))
+        Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path))
     }
 
     async fn re_enqueue_batch(&self, ready_write_batch: ReadyWriteBatch) {
