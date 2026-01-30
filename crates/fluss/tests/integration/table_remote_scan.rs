@@ -31,7 +31,7 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 #[before_all]
 #[after_all]
 mod table_remote_scan_test {
-    use super::SHARED_FLUSS_CLUSTER;
+    use std :: sync :: atomic :: AtomicUsize ;use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
     use crate::integration::utils::{
         create_table, get_cluster, stop_cluster, wait_for_cluster_ready,
@@ -43,7 +43,6 @@ mod table_remote_scan_test {
     use std::thread;
     use std::time::Duration;
     use uuid::Uuid;
-
     fn before_all() {
         // Create a new tokio runtime in a separate thread
         let cluster_lock = SHARED_FLUSS_CLUSTER.clone();
@@ -141,7 +140,8 @@ mod table_remote_scan_test {
         let append_writer = table
             .new_append()
             .expect("Failed to create append")
-            .create_writer();
+            .create_writer()
+            .expect("Failed to create writer");
 
         // append 20 rows, there must be some tiered to remote
         let record_count = 20;
@@ -151,7 +151,7 @@ mod table_remote_scan_test {
             let v = format!("v{}", i);
             row.set_field(1, v.as_str());
             append_writer
-                .append(row)
+                .append(&row)
                 .await
                 .expect("Failed to append row");
         }

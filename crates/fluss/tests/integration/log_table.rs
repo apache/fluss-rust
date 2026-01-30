@@ -34,16 +34,20 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 mod table_test {
     use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::FlussTestingCluster;
-    use crate::integration::utils::{create_table, get_cluster, start_cluster, stop_cluster};
+    use crate::integration::utils::{
+        create_partitions, create_table, get_cluster, start_cluster, stop_cluster,
+    };
     use arrow::array::record_batch;
     use fluss::client::{FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::record::ScanRecord;
-    use fluss::row::InternalRow;
+    use fluss::row::{InternalRow};
     use fluss::rpc::message::OffsetSpec;
     use jiff::Timestamp;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     fn before_all() {
@@ -91,7 +95,8 @@ mod table_test {
         let append_writer = table
             .new_append()
             .expect("Failed to create append")
-            .create_writer();
+            .create_writer()
+            .expect("Failed to create writer");
 
         let batch1 =
             record_batch!(("c1", Int32, [1, 2, 3]), ("c2", Utf8, ["a1", "a2", "a3"])).unwrap();
@@ -217,7 +222,8 @@ mod table_test {
             .expect("Failed to get table")
             .new_append()
             .expect("Failed to create append")
-            .create_writer();
+            .create_writer()
+            .expect("Failed to create writer");
 
         let batch = record_batch!(
             ("id", Int32, [1, 2, 3]),
@@ -314,7 +320,8 @@ mod table_test {
         let append_writer = table
             .new_append()
             .expect("Failed to create append")
-            .create_writer();
+            .create_writer()
+            .expect("Failed to create writer");
 
         let batch = record_batch!(
             ("col_a", Int32, [1, 2, 3]),
@@ -472,7 +479,7 @@ mod table_test {
                 .is_empty()
         );
 
-        let writer = table.new_append().unwrap().create_writer();
+        let writer = table.new_append().unwrap().create_writer().unwrap();
         writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
@@ -676,7 +683,8 @@ mod table_test {
         let append_writer = table
             .new_append()
             .expect("Failed to create append")
-            .create_writer();
+            .create_writer()
+            .expect("Failed to create writer");
 
         // Test data for all datatypes
         let col_tinyint = 127i8;
@@ -749,7 +757,7 @@ mod table_test {
         row.set_field(27, col_timestamp_ltz_ns_neg.clone());
 
         append_writer
-            .append(row)
+            .append(&row)
             .await
             .expect("Failed to append row with all datatypes");
 
@@ -760,7 +768,7 @@ mod table_test {
         }
 
         append_writer
-            .append(row_with_nulls)
+            .append(&row_with_nulls)
             .await
             .expect("Failed to append row with nulls");
 
@@ -966,5 +974,109 @@ mod table_test {
             .drop_table(&table_path, false)
             .await
             .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn partitioned_table_append() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new(
+            "fluss".to_string(),
+            "test_partitioned_log_append".to_string(),
+        );
+
+        // Create a partitioned log table
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("region", DataTypes::string())
+                    .column("value", DataTypes::bigint())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region".to_string()])
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        // Create partitions
+        create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
+
+        // Wait for partitions to be available
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Create append writer - this should now work for partitioned tables
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Append records with different partitions
+        let test_data = [
+            (1, "US", 100i64),
+            (2, "US", 200i64),
+            (3, "EU", 300i64),
+            (4, "EU", 400i64),
+        ];
+
+        for (id, region, value) in &test_data {
+            let mut row = fluss::row::GenericRow::new(3);
+            row.set_field(0, *id);
+            row.set_field(1, *region);
+            row.set_field(2, *value);
+            append_writer
+                .append(&row)
+                .await
+                .expect("Failed to append row");
+        }
+
+        append_writer.flush().await.expect("Failed to flush");
+
+        // Test append_arrow_batch for partitioned tables
+        // Each batch must contain rows from the same partition
+        let us_batch = record_batch!(
+            ("id", Int32, [5, 6]),
+            ("region", Utf8, ["US", "US"]),
+            ("value", Int64, [500, 600])
+        )
+        .unwrap();
+        append_writer
+            .append_arrow_batch(us_batch)
+            .await
+            .expect("Failed to append US batch");
+
+        let eu_batch = record_batch!(
+            ("id", Int32, [7, 8]),
+            ("region", Utf8, ["EU", "EU"]),
+            ("value", Int64, [700, 800])
+        )
+        .unwrap();
+        append_writer
+            .append_arrow_batch(eu_batch)
+            .await
+            .expect("Failed to append EU batch");
+
+        append_writer
+            .flush()
+            .await
+            .expect("Failed to flush batches");
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+
+        // todo: add scan test in 203
     }
 }

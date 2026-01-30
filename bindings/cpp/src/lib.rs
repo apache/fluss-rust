@@ -508,7 +508,10 @@ impl Table {
             Err(e) => return Err(format!("Failed to create append: {e}")),
         };
 
-        let writer = table_append.create_writer();
+        let writer = match table_append.create_writer() {
+            Ok(w) => w,
+            Err(e) => return Err(format!("Failed to create writer: {e}")),
+        };
         let writer = Box::into_raw(Box::new(AppendWriter { inner: writer }));
         Ok(writer)
     }
@@ -580,7 +583,7 @@ impl AppendWriter {
     fn append(&mut self, row: &ffi::FfiGenericRow) -> ffi::FfiResult {
         let generic_row = types::ffi_row_to_core(row);
 
-        let result = RUNTIME.block_on(async { self.inner.append(generic_row).await });
+        let result = RUNTIME.block_on(async { self.inner.append(&generic_row).await });
 
         match result {
             Ok(_) => ok_result(),

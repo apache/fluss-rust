@@ -31,16 +31,14 @@ mod partition_getter;
 mod remote_log;
 mod scanner;
 mod upsert;
-mod writer;
 
-use crate::client::table::upsert::TableUpsert;
 pub use append::{AppendWriter, TableAppend};
 pub use lookup::{LookupResult, Lookuper, TableLookup};
 pub use remote_log::{
     DEFAULT_SCANNER_REMOTE_LOG_DOWNLOAD_THREADS, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
-pub use writer::{TableWriter, UpsertWriter};
+pub use upsert::{TableUpsert, UpsertWriter};
 
 #[allow(dead_code)]
 pub struct FlussTable<'a> {

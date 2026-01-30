@@ -599,14 +599,10 @@ mod tests {
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
         let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
         let cluster = Arc::new(build_cluster(&table_path, 1, 1));
-        let record = WriteRecord::for_append(
-            table_info,
-            physical_table_path,
-            1,
-            GenericRow {
-                values: vec![Datum::Int32(1)],
-            },
-        );
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
 
         accumulator.append(&record, 0, &cluster, false).await?;
 

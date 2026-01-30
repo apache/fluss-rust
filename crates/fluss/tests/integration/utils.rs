@@ -17,8 +17,9 @@
  */
 use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
 use fluss::client::FlussAdmin;
-use fluss::metadata::{TableDescriptor, TablePath};
+use fluss::metadata::{PartitionSpec, TableDescriptor, TablePath};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -101,4 +102,27 @@ pub fn get_cluster(cluster_lock: &RwLock<Option<FlussTestingCluster>>) -> Arc<Fl
             .expect("Fluss cluster not initialized. Make sure before_all() was called.")
             .clone(),
     )
+}
+
+/// Creates partitions for a partitioned table.
+///
+/// # Arguments
+/// * `admin` - The FlussAdmin instance
+/// * `table_path` - The table path
+/// * `partition_column` - The partition column name
+/// * `partition_values` - The partition values to create
+pub async fn create_partitions(
+    admin: &FlussAdmin,
+    table_path: &TablePath,
+    partition_column: &str,
+    partition_values: &[&str],
+) {
+    for value in partition_values {
+        let mut partition_map = HashMap::new();
+        partition_map.insert(partition_column.to_string(), value.to_string());
+        admin
+            .create_partition(table_path, &PartitionSpec::new(partition_map), true)
+            .await
+            .expect("Failed to create partition");
+    }
 }

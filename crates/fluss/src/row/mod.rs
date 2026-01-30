@@ -55,7 +55,7 @@ impl<'a> BinaryRow<'a> {
 }
 
 // TODO make functions return Result<?> for better error handling
-pub trait InternalRow {
+pub trait InternalRow: Send + Sync {
     /// Returns the number of fields in this row
     fn get_field_count(&self) -> usize;
 

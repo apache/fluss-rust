@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
 use crate::client::{WriteRecord, WriterClient};
 use crate::error::Result;
 use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
-use crate::row::GenericRow;
+use crate::row::{ColumnarRow, InternalRow};
 use arrow::array::RecordBatch;
 use std::sync::Arc;
 
-#[allow(dead_code)]
 pub struct TableAppend {
-    table_path: TablePath,
+    table_path: Arc<TablePath>,
     table_info: Arc<TableInfo>,
     writer_client: Arc<WriterClient>,
 }
@@ -36,32 +36,48 @@ impl TableAppend {
         writer_client: Arc<WriterClient>,
     ) -> Self {
         Self {
-            table_path,
+            table_path: Arc::new(table_path),
             table_info,
             writer_client,
         }
     }
 
-    pub fn create_writer(&self) -> AppendWriter {
-        AppendWriter {
-            physical_table_path: Arc::new(PhysicalTablePath::of(Arc::new(self.table_path.clone()))),
+    pub fn create_writer(&self) -> Result<AppendWriter> {
+        let partition_getter = if self.table_info.is_partitioned() {
+            Some(PartitionGetter::new(
+                self.table_info.row_type(),
+                Arc::clone(self.table_info.get_partition_keys()),
+            )?)
+        } else {
+            None
+        };
+
+        Ok(AppendWriter {
+            table_path: Arc::clone(&self.table_path),
+            partition_getter,
             writer_client: self.writer_client.clone(),
             table_info: Arc::clone(&self.table_info),
-        }
+        })
     }
 }
 
 pub struct AppendWriter {
-    physical_table_path: Arc<PhysicalTablePath>,
+    table_path: Arc<TablePath>,
+    partition_getter: Option<PartitionGetter>,
     writer_client: Arc<WriterClient>,
     table_info: Arc<TableInfo>,
 }
 
 impl AppendWriter {
-    pub async fn append(&self, row: GenericRow<'_>) -> Result<()> {
+    pub async fn append<R: InternalRow>(&self, row: &R) -> Result<()> {
+        let physical_table_path = Arc::new(get_physical_path(
+            &self.table_path,
+            self.partition_getter.as_ref(),
+            row,
+        )?);
         let record = WriteRecord::for_append(
             Arc::clone(&self.table_info),
-            Arc::clone(&self.physical_table_path),
+            physical_table_path,
             self.table_info.schema_id,
             row,
         );
@@ -70,10 +86,25 @@ impl AppendWriter {
         result_handle.result(result)
     }
 
+    /// Appends an Arrow RecordBatch to the table.
+    ///
+    /// For partitioned tables, the partition is derived from the **first row** of the batch.
+    /// Callers must ensure all rows in the batch belong to the same partition.
     pub async fn append_arrow_batch(&self, batch: RecordBatch) -> Result<()> {
+        let physical_table_path = if self.partition_getter.is_some() && batch.num_rows() > 0 {
+            let first_row = ColumnarRow::new(Arc::new(batch.clone()));
+            Arc::new(get_physical_path(
+                &self.table_path,
+                self.partition_getter.as_ref(),
+                &first_row,
+            )?)
+        } else {
+            Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)))
+        };
+
         let record = WriteRecord::for_append_record_batch(
             Arc::clone(&self.table_info),
-            Arc::clone(&self.physical_table_path),
+            physical_table_path,
             self.table_info.schema_id,
             batch,
         );

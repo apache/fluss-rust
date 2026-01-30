@@ -23,7 +23,7 @@ mod integration {
     mod admin;
     mod fluss_cluster;
     mod kv_table;
-    mod table;
+    mod log_table;
 
     mod utils;
 

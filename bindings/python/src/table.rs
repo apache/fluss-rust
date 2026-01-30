@@ -68,7 +68,9 @@ impl FlussTable {
                 .new_append()
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
 
-            let rust_writer = table_append.create_writer();
+            let rust_writer = table_append
+                .create_writer()
+                .map_err(|e| FlussError::new_err(e.to_string()))?;
 
             let py_writer = AppendWriter::from_core(rust_writer, table_info);
 
@@ -251,7 +253,7 @@ impl AppendWriter {
 
         future_into_py(py, async move {
             inner
-                .append(generic_row)
+                .append(&generic_row)
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))
         })

@@ -63,13 +63,13 @@ pub async fn main() -> Result<()> {
     row.set_field(2, 123_456_789_123i64);
 
     let table = conn.get_table(&table_path).await?;
-    let append_writer = table.new_append()?.create_writer();
-    let f1 = append_writer.append(row);
-    row = GenericRow::new(3);
+    let append_writer = table.new_append()?.create_writer()?;
+    let f1 = append_writer.append(&row);
+    let mut row = GenericRow::new(3);
     row.set_field(0, 233333);
     row.set_field(1, "tt44");
     row.set_field(2, 987_654_321_987i64);
-    let f2 = append_writer.append(row);
+    let f2 = append_writer.append(&row);
     try_join!(f1, f2, append_writer.flush())?;
 
     // scan rows

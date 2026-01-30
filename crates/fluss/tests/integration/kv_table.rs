@@ -34,9 +34,10 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 mod kv_table_test {
     use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::FlussTestingCluster;
-    use crate::integration::utils::{create_table, get_cluster, start_cluster, stop_cluster};
-    use fluss::client::UpsertWriter;
-    use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableDescriptor, TablePath};
+    use crate::integration::utils::{
+        create_partitions, create_table, get_cluster, start_cluster, stop_cluster,
+    };
+    use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::{GenericRow, InternalRow};
     use std::sync::Arc;
 
@@ -467,15 +468,7 @@ mod kv_table_test {
         create_table(&admin, &table_path, &table_descriptor).await;
 
         // Create partitions for each region before inserting data
-        for region in &["US", "EU", "APAC"] {
-            let mut partition_map = std::collections::HashMap::new();
-            partition_map.insert("region".to_string(), region.to_string());
-            let partition_spec = PartitionSpec::new(partition_map);
-            admin
-                .create_partition(&table_path, &partition_spec, false)
-                .await
-                .expect("Failed to create partition");
-        }
+        create_partitions(&admin, &table_path, "region", &["US", "EU", "APAC"]).await;
 
         let connection = cluster.get_fluss_connection().await;
 

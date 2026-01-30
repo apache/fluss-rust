@@ -22,7 +22,7 @@ use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, Broad
 use crate::error::Error;
 use crate::metadata::{PhysicalTablePath, TableInfo};
 
-use crate::row::GenericRow;
+use crate::row::InternalRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
 use bytes::Bytes;
@@ -64,7 +64,7 @@ pub enum Record<'a> {
 }
 
 pub enum LogWriteRecord<'a> {
-    Generic(GenericRow<'a>),
+    InternalRow(&'a dyn InternalRow),
     RecordBatch(Arc<RecordBatch>),
 }
 
@@ -112,11 +112,11 @@ impl<'a> WriteRecord<'a> {
         table_info: Arc<TableInfo>,
         physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
-        row: GenericRow<'a>,
+        row: &'a dyn InternalRow,
     ) -> Self {
         Self {
             table_info,
-            record: Record::Log(LogWriteRecord::Generic(row)),
+            record: Record::Log(LogWriteRecord::InternalRow(row)),
             physical_table_path,
             bucket_key: None,
             schema_id,
