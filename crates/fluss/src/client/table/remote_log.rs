@@ -869,6 +869,7 @@ impl RemoteLogDownloader {
         // For S3/S3A URLs, inject S3 credentials from props
         let file_io_builder = if remote_log_tablet_dir.starts_with("s3://")
             || remote_log_tablet_dir.starts_with("s3a://")
+            || remote_log_tablet_dir.starts_with("oss://")
         {
             file_io_builder.with_props(
                 remote_fs_props

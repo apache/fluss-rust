@@ -37,3 +37,8 @@ use storage_memory::*;
 mod storage_s3;
 #[cfg(feature = "storage-s3")]
 use storage_s3::*;
+
+#[cfg(feature = "storage-oss")]
+mod storage_oss;
+#[cfg(feature = "storage-oss")]
+use storage_oss::*;

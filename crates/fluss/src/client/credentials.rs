@@ -55,10 +55,14 @@ struct Credentials {
 /// needs_inversion is true for path_style_access -> enable_virtual_host_style conversion
 fn convert_hadoop_key_to_opendal(hadoop_key: &str) -> Option<(String, bool)> {
     match hadoop_key {
+        // S3 specific configurations
         "fs.s3a.endpoint" => Some(("endpoint".to_string(), false)),
         "fs.s3a.endpoint.region" => Some(("region".to_string(), false)),
         "fs.s3a.path.style.access" => Some(("enable_virtual_host_style".to_string(), true)),
         "fs.s3a.connection.ssl.enabled" => None,
+        // OSS specific configurations
+        "fs.oss.endpoint" => Some(("endpoint".to_string(), false)),
+        "fs.oss.region" => Some(("region".to_string(), false)),
         _ => None,
     }
 }
@@ -74,8 +78,17 @@ fn build_remote_fs_props(
         "access_key_id".to_string(),
         credentials.access_key_id.clone(),
     );
+
+    // S3 specific configurations
     props.insert(
         "secret_access_key".to_string(),
+        credentials.access_key_secret.clone(),
+    );
+
+    // OSS specific configurations, todo: consider refactor it
+    // to handle different conversion for different scheme in different method
+    props.insert(
+        "access_key_secret".to_string(),
         credentials.access_key_secret.clone(),
     );
 
@@ -342,6 +355,7 @@ mod tests {
 
     #[test]
     fn convert_hadoop_key_to_opendal_maps_known_keys() {
+        // S3 keys
         let (key, invert) = convert_hadoop_key_to_opendal("fs.s3a.endpoint").expect("key");
         assert_eq!(key, "endpoint");
         assert!(!invert);
@@ -351,6 +365,17 @@ mod tests {
         assert!(invert);
 
         assert!(convert_hadoop_key_to_opendal("fs.s3a.connection.ssl.enabled").is_none());
+
+        // OSS keys
+        let (key, invert) = convert_hadoop_key_to_opendal("fs.oss.endpoint").expect("key");
+        assert_eq!(key, "endpoint");
+        assert!(!invert);
+
+        let (key, invert) = convert_hadoop_key_to_opendal("fs.oss.region").expect("key");
+        assert_eq!(key, "region");
+        assert!(!invert);
+
+        // Unknown key
         assert!(convert_hadoop_key_to_opendal("unknown.key").is_none());
     }
 
@@ -401,7 +426,8 @@ mod tests {
 
         let props = build_remote_fs_props(&credentials, &addition_infos);
         assert_eq!(props.get("access_key_id"), Some(&"ak".to_string()));
-        assert_eq!(props.get("secret_access_key"), Some(&"sk".to_string()));
+        assert_eq!(props.get("access_key_secret"), Some(&"sk".to_string()));
+        assert_eq!(props.get("access_key_secret"), Some(&"sk".to_string()));
         assert_eq!(props.get("security_token"), Some(&"token".to_string()));
         assert_eq!(
             props.get("enable_virtual_host_style"),
