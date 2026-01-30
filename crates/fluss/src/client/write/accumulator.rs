@@ -21,7 +21,7 @@ use crate::client::{LogWriteRecord, Record, ResultHandle, WriteRecord};
 use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::config::Config;
 use crate::error::Result;
-use crate::metadata::{TableBucket, TablePath};
+use crate::metadata::{PhysicalTablePath, TableBucket};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
 use dashmap::DashMap;
@@ -37,7 +37,7 @@ type BucketBatches = Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>;
 #[allow(dead_code)]
 pub struct RecordAccumulator {
     config: Config,
-    write_batches: DashMap<TablePath, BucketAndWriteBatches>,
+    write_batches: DashMap<Arc<PhysicalTablePath>, BucketAndWriteBatches>,
     // batch_id -> complete callback
     incomplete_batches: RwLock<HashMap<i64, ResultHandle>>,
     batch_timeout_ms: i64,
@@ -88,14 +88,14 @@ impl RecordAccumulator {
         &self,
         cluster: &Cluster,
         record: &WriteRecord,
-        bucket_id: BucketId,
         dq: &mut VecDeque<WriteBatch>,
     ) -> Result<RecordAppendResult> {
         if let Some(append_result) = self.try_append(record, dq)? {
             return Ok(append_result);
         }
 
-        let table_path = &record.table_path;
+        let physical_table_path = &record.physical_table_path;
+        let table_path = physical_table_path.get_table_path();
         let table_info = cluster.get_table(table_path)?;
         let arrow_compression_info = table_info.get_table_config().get_arrow_compression_info()?;
         let row_type = &table_info.row_type;
@@ -105,22 +105,20 @@ impl RecordAccumulator {
         let mut batch: WriteBatch = match record.record() {
             Record::Log(_) => ArrowLog(ArrowLogWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
-                table_path.as_ref().clone(),
+                Arc::clone(physical_table_path),
                 schema_id,
                 arrow_compression_info,
                 row_type,
-                bucket_id,
                 current_time_ms(),
                 matches!(&record.record, Record::Log(LogWriteRecord::RecordBatch(_))),
             )?),
             Record::Kv(kv_record) => Kv(KvWriteBatch::new(
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
-                table_path.as_ref().clone(),
+                Arc::clone(physical_table_path),
                 schema_id,
                 // TODO: Decide how to derive write limit in the absence of java's equivalent of PreAllocatedPagedOutputView
                 KvWriteBatch::DEFAULT_WRITE_LIMIT,
                 record.write_format.to_kv_format()?,
-                bucket_id,
                 kv_record.target_columns.clone(),
                 current_time_ms(),
             )),
@@ -153,18 +151,25 @@ impl RecordAccumulator {
         cluster: &Cluster,
         abort_if_batch_full: bool,
     ) -> Result<RecordAppendResult> {
-        let table_path = &record.table_path;
+        let physical_table_path = &record.physical_table_path;
+        let table_path = physical_table_path.get_table_path();
+        let table_info = cluster.get_table(table_path)?;
+        let is_partitioned_table = table_info.is_partitioned();
 
-        // TODO: Implement partitioning
+        let partition_id = if is_partitioned_table {
+            cluster.get_partition_id(physical_table_path)
+        } else {
+            None
+        };
 
         let dq = {
             let mut binding = self
                 .write_batches
-                .entry(table_path.as_ref().clone())
+                .entry(Arc::clone(physical_table_path))
                 .or_insert_with(|| BucketAndWriteBatches {
-                    table_id: 0,
-                    is_partitioned_table: false,
-                    partition_id: None,
+                    table_id: table_info.table_id,
+                    is_partitioned_table,
+                    partition_id,
                     batches: Default::default(),
                 });
             let bucket_and_batches = binding.value_mut();
@@ -185,23 +190,24 @@ impl RecordAccumulator {
                 true, false, true,
             ));
         }
-        self.append_new_batch(cluster, record, bucket_id, &mut dq_guard)
+        self.append_new_batch(cluster, record, &mut dq_guard)
     }
 
     pub async fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
-        let entries: Vec<(TablePath, BucketBatches)> = self
+        let entries: Vec<(Arc<PhysicalTablePath>, Option<PartitionId>, BucketBatches)> = self
             .write_batches
             .iter()
             .map(|entry| {
-                let table_path = entry.key().clone();
+                let physical_table_path = Arc::clone(entry.key());
+                let partition_id = entry.value().partition_id;
                 let bucket_batches: Vec<_> = entry
                     .value()
                     .batches
                     .iter()
                     .map(|(bucket_id, batch_arc)| (*bucket_id, batch_arc.clone()))
                     .collect();
-                (table_path, bucket_batches)
+                (physical_table_path, partition_id, bucket_batches)
             })
             .collect();
 
@@ -209,10 +215,12 @@ impl RecordAccumulator {
         let mut next_ready_check_delay_ms = self.batch_timeout_ms;
         let mut unknown_leader_tables = HashSet::new();
 
-        for (table_path, bucket_batches) in entries {
+        for (physical_table_path, mut partition_id, bucket_batches) in entries {
             next_ready_check_delay_ms = self
                 .bucket_ready(
-                    &table_path,
+                    &physical_table_path,
+                    physical_table_path.get_partition_name().is_some(),
+                    &mut partition_id,
                     bucket_batches,
                     &mut ready_nodes,
                     &mut unknown_leader_tables,
@@ -229,16 +237,41 @@ impl RecordAccumulator {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn bucket_ready(
         &self,
-        table_path: &TablePath,
+        physical_table_path: &Arc<PhysicalTablePath>,
+        is_partitioned_table: bool,
+        partition_id: &mut Option<PartitionId>,
         bucket_batches: BucketBatches,
         ready_nodes: &mut HashSet<ServerNode>,
-        unknown_leader_tables: &mut HashSet<TablePath>,
+        unknown_leader_tables: &mut HashSet<Arc<PhysicalTablePath>>,
         cluster: &Cluster,
         next_ready_check_delay_ms: i64,
     ) -> Result<i64> {
         let mut next_delay = next_ready_check_delay_ms;
+
+        // First check this table has partitionId.
+        if is_partitioned_table && partition_id.is_none() {
+            let partition_id = cluster.get_partition_id(physical_table_path);
+
+            if partition_id.is_some() {
+                // Update the cached partition_id
+                if let Some(mut entry) = self.write_batches.get_mut(physical_table_path) {
+                    entry.partition_id = partition_id;
+                }
+            } else {
+                log::debug!(
+                    "Partition does not exist for {}, bucket will not be set to ready",
+                    physical_table_path.as_ref()
+                );
+
+                // TODO: we shouldn't add unready partitions to unknownLeaderTables,
+                // because it cases PartitionNotExistException later
+                unknown_leader_tables.insert(Arc::clone(physical_table_path));
+                return Ok(next_delay);
+            }
+        }
 
         for (bucket_id, batch) in bucket_batches {
             let batch_guard = batch.lock().await;
@@ -250,12 +283,12 @@ impl RecordAccumulator {
             let waited_time_ms = batch.waited_time_ms(current_time_ms());
             let deque_size = batch_guard.len();
             let full = deque_size > 1 || batch.is_closed();
-            let table_bucket = cluster.get_table_bucket(table_path, bucket_id)?;
+            let table_bucket = cluster.get_table_bucket(physical_table_path, bucket_id)?;
             if let Some(leader) = cluster.leader_for(&table_bucket) {
                 next_delay =
                     self.batch_ready(leader, waited_time_ms, full, ready_nodes, next_delay);
             } else {
-                unknown_leader_tables.insert(table_path.clone());
+                unknown_leader_tables.insert(Arc::clone(physical_table_path));
             }
         }
         Ok(next_delay)
@@ -332,14 +365,14 @@ impl RecordAccumulator {
 
         loop {
             let bucket = &buckets[current_index];
-            let table_path = bucket.table_path.clone();
+            let table_path = bucket.physical_table_path();
             let table_bucket = bucket.table_bucket.clone();
             last_processed_index = current_index;
             current_index = (current_index + 1) % buckets.len();
 
             let deque = self
                 .write_batches
-                .get(&table_path)
+                .get(table_path)
                 .and_then(|bucket_and_write_batches| {
                     bucket_and_write_batches
                         .batches
@@ -399,20 +432,22 @@ impl RecordAccumulator {
 
     pub async fn re_enqueue(&self, ready_write_batch: ReadyWriteBatch) {
         ready_write_batch.write_batch.re_enqueued();
-        let table_path = ready_write_batch.write_batch.table_path().clone();
+        let physical_table_path = ready_write_batch.write_batch.physical_table_path();
         let bucket_id = ready_write_batch.table_bucket.bucket_id();
         let table_id = ready_write_batch.table_bucket.table_id();
+        let partition_id = ready_write_batch.table_bucket.partition_id();
+        let is_partitioned_table = partition_id.is_some();
 
         let dq = {
-            let mut binding =
-                self.write_batches
-                    .entry(table_path)
-                    .or_insert_with(|| BucketAndWriteBatches {
-                        table_id,
-                        is_partitioned_table: false,
-                        partition_id: None,
-                        batches: Default::default(),
-                    });
+            let mut binding = self
+                .write_batches
+                .entry(Arc::clone(physical_table_path))
+                .or_insert_with(|| BucketAndWriteBatches {
+                    table_id,
+                    is_partitioned_table,
+                    partition_id,
+                    batches: Default::default(),
+                });
             let bucket_and_batches = binding.value_mut();
             bucket_and_batches
                 .batches
@@ -478,6 +513,12 @@ pub struct ReadyWriteBatch {
     pub write_batch: WriteBatch,
 }
 
+impl ReadyWriteBatch {
+    pub fn write_batch(&self) -> &WriteBatch {
+        &self.write_batch
+    }
+}
+
 #[allow(dead_code)]
 struct BucketAndWriteBatches {
     table_id: TableId,
@@ -525,14 +566,14 @@ impl RecordAppendResult {
 pub struct ReadyCheckResult {
     pub ready_nodes: HashSet<ServerNode>,
     pub next_ready_check_delay_ms: i64,
-    pub unknown_leader_tables: HashSet<TablePath>,
+    pub unknown_leader_tables: HashSet<Arc<PhysicalTablePath>>,
 }
 
 impl ReadyCheckResult {
     pub fn new(
         ready_nodes: HashSet<ServerNode>,
         next_ready_check_delay_ms: i64,
-        unknown_leader_tables: HashSet<TablePath>,
+        unknown_leader_tables: HashSet<Arc<PhysicalTablePath>>,
     ) -> Self {
         ReadyCheckResult {
             ready_nodes,
@@ -547,17 +588,20 @@ mod tests {
     use super::*;
     use crate::metadata::TablePath;
     use crate::row::{Datum, GenericRow};
-    use crate::test_utils::build_cluster;
+    use crate::test_utils::{build_cluster, build_table_info};
     use std::sync::Arc;
 
     #[tokio::test]
     async fn re_enqueue_increments_attempts() -> Result<()> {
         let config = Config::default();
         let accumulator = RecordAccumulator::new(config);
-        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
-        let cluster = Arc::new(build_cluster(table_path.as_ref(), 1, 1));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
         let record = WriteRecord::for_append(
-            table_path.clone(),
+            table_info,
+            physical_table_path,
             1,
             GenericRow {
                 values: vec![Datum::Int32(1)],

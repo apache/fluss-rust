@@ -19,12 +19,13 @@ use crate::client::table::writer::{DeleteResult, TableWriter, UpsertResult, Upse
 use crate::client::{RowBytes, WriteFormat, WriteRecord, WriterClient};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::{KvFormat, RowType, TableInfo, TablePath};
+use crate::metadata::{PhysicalTablePath, RowType, TableInfo, TablePath};
 use crate::row::InternalRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory, RowEncoder, RowEncoderFactory};
 use crate::row::field_getter::FieldGetter;
 use std::sync::Arc;
 
+use crate::client::table::partition_getter::PartitionGetter;
 use bitvec::prelude::bitvec;
 use bytes::Bytes;
 
@@ -107,30 +108,25 @@ impl TableUpsert {
     }
 }
 
-#[allow(dead_code)]
 struct UpsertWriterImpl<RE>
 where
     RE: RowEncoder,
 {
     table_path: Arc<TablePath>,
     writer_client: Arc<WriterClient>,
-    // TODO: Partitioning
-    // partition_field_getter: Option<Box<dyn KeyEncoder>>,
+    partition_field_getter: Option<PartitionGetter>,
     primary_key_encoder: Box<dyn KeyEncoder>,
     target_columns: Option<Arc<Vec<usize>>>,
     // Use primary key encoder as bucket key encoder when None
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
-    kv_format: KvFormat,
     write_format: WriteFormat,
     row_encoder: RE,
     field_getters: Box<[FieldGetter]>,
     table_info: Arc<TableInfo>,
 }
 
-#[allow(dead_code)]
 struct UpsertWriterFactory;
 
-#[allow(dead_code)]
 impl UpsertWriterFactory {
     pub fn create(
         table_path: Arc<TablePath>,
@@ -168,13 +164,22 @@ impl UpsertWriterFactory {
 
         let field_getters = FieldGetter::create_field_getters(row_type);
 
+        let partition_field_getter = if table_info.is_partitioned() {
+            Some(PartitionGetter::new(
+                row_type,
+                Arc::clone(table_info.get_partition_keys()),
+            )?)
+        } else {
+            None
+        };
+
         Ok(UpsertWriterImpl {
             table_path,
+            partition_field_getter,
             writer_client,
             primary_key_encoder,
             target_columns: partial_update_columns,
             bucket_key_encoder,
-            kv_format: kv_format.clone(),
             write_format,
             row_encoder: RowEncoderFactory::create(kv_format, row_type.clone())?,
             field_getters,
@@ -311,6 +316,18 @@ impl<RE: RowEncoder> UpsertWriterImpl<RE> {
         }
         self.row_encoder.finish_row()
     }
+
+    fn get_physical_path<R: InternalRow>(&self, row: &R) -> Result<PhysicalTablePath> {
+        if let Some(partition_getter) = &self.partition_field_getter {
+            let partition = partition_getter.get_partition(row);
+            Ok(PhysicalTablePath::of_partitioned(
+                Arc::clone(&self.table_path),
+                Some(partition?),
+            ))
+        } else {
+            Ok(PhysicalTablePath::of(Arc::clone(&self.table_path)))
+        }
+    }
 }
 
 impl<RE: RowEncoder> TableWriter for UpsertWriterImpl<RE> {
@@ -343,7 +360,8 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         };
 
         let write_record = WriteRecord::for_upsert(
-            Arc::clone(&self.table_path),
+            Arc::clone(&self.table_info),
+            Arc::new(self.get_physical_path(row)?),
             self.table_info.schema_id,
             key,
             bucket_key,
@@ -372,7 +390,8 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
         let (key, bucket_key) = self.get_keys(row)?;
 
         let write_record = WriteRecord::for_upsert(
-            Arc::clone(&self.table_path),
+            Arc::clone(&self.table_info),
+            Arc::new(self.get_physical_path(row)?),
             self.table_info.schema_id,
             key,
             bucket_key,

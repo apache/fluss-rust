@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::proto::{MetadataResponse, PbTablePath};
+use crate::metadata::{PhysicalTablePath, TablePath};
+use crate::proto::{MetadataResponse, PbPhysicalTablePath, PbTablePath};
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
+use crate::rpc::frame::ReadError;
 use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-
-use crate::metadata::TablePath;
-use crate::rpc::frame::ReadError;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::{impl_read_version_type, impl_write_version_type, proto};
 use bytes::{Buf, BufMut};
@@ -33,7 +34,11 @@ pub struct UpdateMetadataRequest {
 }
 
 impl UpdateMetadataRequest {
-    pub fn new(table_paths: &[&TablePath]) -> Self {
+    pub fn new(
+        table_paths: &HashSet<&TablePath>,
+        physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
+        partition_ids: Vec<i64>,
+    ) -> Self {
         UpdateMetadataRequest {
             inner_request: proto::MetadataRequest {
                 table_path: table_paths
@@ -43,8 +48,15 @@ impl UpdateMetadataRequest {
                         table_name: path.table().to_string(),
                     })
                     .collect(),
-                partitions_path: vec![],
-                partitions_id: vec![],
+                partitions_path: physical_table_paths
+                    .iter()
+                    .map(|path| PbPhysicalTablePath {
+                        database_name: path.get_database_name().to_string(),
+                        table_name: path.get_table_name().to_string(),
+                        partition_name: path.get_partition_name().map(|pn| pn.to_string()),
+                    })
+                    .collect(),
+                partitions_id: partition_ids,
             },
         }
     }

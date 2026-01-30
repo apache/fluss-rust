@@ -36,7 +36,7 @@ mod kv_table_test {
     use crate::integration::fluss_cluster::FlussTestingCluster;
     use crate::integration::utils::{create_table, get_cluster, start_cluster, stop_cluster};
     use fluss::client::UpsertWriter;
-    use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableDescriptor, TablePath};
     use fluss::row::{GenericRow, InternalRow};
     use std::sync::Arc;
 
@@ -431,6 +431,179 @@ mod kv_table_test {
         );
         assert_eq!(found_row.get_long(2), 32, "age should remain unchanged");
         assert_eq!(found_row.get_long(3), 420, "score should be updated to 420");
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn partitioned_table_upsert_and_lookup() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path =
+            TablePath::new("fluss".to_string(), "test_partitioned_kv_table".to_string());
+
+        // Create a partitioned KV table with region as partition key
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("region", DataTypes::string())
+                    .column("user_id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("score", DataTypes::bigint())
+                    .primary_key(vec!["region".to_string(), "user_id".to_string()])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region".to_string()])
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        // Create partitions for each region before inserting data
+        for region in &["US", "EU", "APAC"] {
+            let mut partition_map = std::collections::HashMap::new();
+            partition_map.insert("region".to_string(), region.to_string());
+            let partition_spec = PartitionSpec::new(partition_map);
+            admin
+                .create_partition(&table_path, &partition_spec, false)
+                .await
+                .expect("Failed to create partition");
+        }
+
+        let connection = cluster.get_fluss_connection().await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+
+        let mut upsert_writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Insert records with different partitions
+        let test_data = [
+            ("US", 1, "Gustave", 100i64),
+            ("US", 2, "Lune", 200i64),
+            ("EU", 1, "Sciel", 150i64),
+            ("EU", 2, "Maelle", 250i64),
+            ("APAC", 1, "Noco", 300i64),
+        ];
+
+        for (region, user_id, name, score) in &test_data {
+            let mut row = GenericRow::new(4);
+            row.set_field(0, *region);
+            row.set_field(1, *user_id);
+            row.set_field(2, *name);
+            row.set_field(3, *score);
+            upsert_writer.upsert(&row).await.expect("Failed to upsert");
+        }
+
+        // Create lookuper
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        // Lookup records - the lookup key includes partition key columns
+        for (region, user_id, expected_name, expected_score) in &test_data {
+            let mut key = GenericRow::new(4);
+            key.set_field(0, *region);
+            key.set_field(1, *user_id);
+
+            let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+            let row = result
+                .get_single_row()
+                .expect("Failed to get row")
+                .expect("Row should exist");
+
+            assert_eq!(row.get_string(0), *region, "region mismatch");
+            assert_eq!(row.get_int(1), *user_id, "user_id mismatch");
+            assert_eq!(row.get_string(2), *expected_name, "name mismatch");
+            assert_eq!(row.get_long(3), *expected_score, "score mismatch");
+        }
+
+        // Test update within a partition
+        let mut updated_row = GenericRow::new(4);
+        updated_row.set_field(0, "US");
+        updated_row.set_field(1, 1);
+        updated_row.set_field(2, "Gustave Updated");
+        updated_row.set_field(3, 999i64);
+        upsert_writer
+            .upsert(&updated_row)
+            .await
+            .expect("Failed to upsert updated row");
+
+        // Verify the update
+        let mut key = GenericRow::new(4);
+        key.set_field(0, "US");
+        key.set_field(1, 1);
+        let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+        let row = result
+            .get_single_row()
+            .expect("Failed to get row")
+            .expect("Row should exist");
+        assert_eq!(row.get_string(2), "Gustave Updated");
+        assert_eq!(row.get_long(3), 999);
+
+        // Lookup in non-existent partition should return empty result
+        let mut non_existent_key = GenericRow::new(4);
+        non_existent_key.set_field(0, "UNKNOWN_REGION");
+        non_existent_key.set_field(1, 1);
+        let result = lookuper
+            .lookup(&non_existent_key)
+            .await
+            .expect("Failed to lookup non-existent partition");
+        assert!(
+            result
+                .get_single_row()
+                .expect("Failed to get row")
+                .is_none(),
+            "Lookup in non-existent partition should return None"
+        );
+
+        // Delete a record within a partition
+        let mut delete_key = GenericRow::new(4);
+        delete_key.set_field(0, "EU");
+        delete_key.set_field(1, 1);
+        upsert_writer
+            .delete(&delete_key)
+            .await
+            .expect("Failed to delete");
+
+        // Verify deletion
+        let mut key = GenericRow::new(4);
+        key.set_field(0, "EU");
+        key.set_field(1, 1);
+        let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+        assert!(
+            result
+                .get_single_row()
+                .expect("Failed to get row")
+                .is_none(),
+            "Deleted record should not exist"
+        );
+
+        // Verify other records in the same partition still exist
+        let mut key = GenericRow::new(4);
+        key.set_field(0, "EU");
+        key.set_field(1, 2);
+        let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+        let row = result
+            .get_single_row()
+            .expect("Failed to get row")
+            .expect("Row should exist");
+        assert_eq!(row.get_string(2), "Maelle");
 
         admin
             .drop_table(&table_path, false)

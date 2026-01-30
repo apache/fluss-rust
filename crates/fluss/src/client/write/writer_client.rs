@@ -15,19 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::BucketId;
+use crate::bucketing::BucketingFunction;
 use crate::client::metadata::Metadata;
-use crate::client::write::bucket_assigner::{BucketAssigner, StickyBucketAssigner};
+use crate::client::write::bucket_assigner::{
+    BucketAssigner, HashBucketAssigner, StickyBucketAssigner,
+};
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
 use crate::config::Config;
-use crate::metadata::TablePath;
+use crate::error::{Error, Result};
+use crate::metadata::{PhysicalTablePath, TableInfo};
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-
-use crate::error::{Error, Result};
 
 #[allow(dead_code)]
 pub struct WriterClient {
@@ -37,7 +40,7 @@ pub struct WriterClient {
     shutdown_tx: mpsc::Sender<()>,
     sender_join_handle: JoinHandle<()>,
     metadata: Arc<Metadata>,
-    bucket_assigners: DashMap<TablePath, Arc<Box<dyn BucketAssigner>>>,
+    bucket_assigners: DashMap<Arc<PhysicalTablePath>, Arc<dyn BucketAssigner>>,
 }
 
 impl WriterClient {
@@ -89,11 +92,12 @@ impl WriterClient {
     }
 
     pub async fn send(&self, record: &WriteRecord<'_>) -> Result<ResultHandle> {
-        let table_path = &record.table_path;
+        let physical_table_path = &record.physical_table_path;
         let cluster = self.metadata.get_cluster();
         let bucket_key = record.bucket_key.as_ref();
 
-        let (bucket_assigner, bucket_id) = self.assign_bucket(bucket_key, table_path)?;
+        let (bucket_assigner, bucket_id) =
+            self.assign_bucket(&record.table_info, bucket_key, physical_table_path)?;
 
         let mut result = self
             .accumulate
@@ -118,17 +122,19 @@ impl WriterClient {
     }
     fn assign_bucket(
         &self,
+        table_info: &Arc<TableInfo>,
         bucket_key: Option<&Bytes>,
-        table_path: &Arc<TablePath>,
-    ) -> Result<(Arc<Box<dyn BucketAssigner>>, i32)> {
+        table_path: &Arc<PhysicalTablePath>,
+    ) -> Result<(Arc<dyn BucketAssigner>, BucketId)> {
         let cluster = self.metadata.get_cluster();
         let bucket_assigner = {
             if let Some(assigner) = self.bucket_assigners.get(table_path) {
                 assigner.clone()
             } else {
-                let assigner = Arc::new(Self::create_bucket_assigner(table_path.as_ref()));
+                let assigner =
+                    Self::create_bucket_assigner(table_info, Arc::clone(table_path), bucket_key)?;
                 self.bucket_assigners
-                    .insert(table_path.as_ref().clone(), assigner.clone());
+                    .insert(Arc::clone(table_path), Arc::clone(&assigner.clone()));
                 assigner
             }
         };
@@ -160,8 +166,21 @@ impl WriterClient {
         Ok(())
     }
 
-    pub fn create_bucket_assigner(table_path: &TablePath) -> Box<dyn BucketAssigner> {
-        // always sticky
-        Box::new(StickyBucketAssigner::new(table_path.clone()))
+    pub fn create_bucket_assigner(
+        table_info: &Arc<TableInfo>,
+        table_path: Arc<PhysicalTablePath>,
+        bucket_key: Option<&Bytes>,
+    ) -> Result<Arc<dyn BucketAssigner>> {
+        if bucket_key.is_some() {
+            let datalake_format = table_info.get_table_config().get_datalake_format()?;
+            let function = <dyn BucketingFunction>::of(datalake_format.as_ref());
+            Ok(Arc::new(HashBucketAssigner::new(
+                table_info.num_buckets,
+                function,
+            )))
+        } else {
+            // TODO: Wire up toi use round robin/sticky according to ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER
+            Ok(Arc::new(StickyBucketAssigner::new(table_path)))
+        }
     }
 }

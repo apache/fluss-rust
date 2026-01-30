@@ -69,7 +69,7 @@ impl<'a> FlussTable<'a> {
     pub fn new_append(&self) -> Result<TableAppend> {
         Ok(TableAppend::new(
             self.table_path.clone(),
-            self.table_info.clone(),
+            Arc::new(self.table_info.clone()),
             self.conn.get_or_create_writer_client()?,
         ))
     }

@@ -17,7 +17,7 @@
 
 use crate::client::{WriteRecord, WriterClient};
 use crate::error::Result;
-use crate::metadata::{TableInfo, TablePath};
+use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
 use crate::row::GenericRow;
 use arrow::array::RecordBatch;
 use std::sync::Arc;
@@ -25,14 +25,14 @@ use std::sync::Arc;
 #[allow(dead_code)]
 pub struct TableAppend {
     table_path: TablePath,
-    table_info: TableInfo,
+    table_info: Arc<TableInfo>,
     writer_client: Arc<WriterClient>,
 }
 
 impl TableAppend {
     pub(super) fn new(
         table_path: TablePath,
-        table_info: TableInfo,
+        table_info: Arc<TableInfo>,
         writer_client: Arc<WriterClient>,
     ) -> Self {
         Self {
@@ -44,23 +44,27 @@ impl TableAppend {
 
     pub fn create_writer(&self) -> AppendWriter {
         AppendWriter {
-            table_path: Arc::new(self.table_path.clone()),
+            physical_table_path: Arc::new(PhysicalTablePath::of(Arc::new(self.table_path.clone()))),
             writer_client: self.writer_client.clone(),
-            table_info: Arc::new(self.table_info.clone()),
+            table_info: Arc::clone(&self.table_info),
         }
     }
 }
 
 pub struct AppendWriter {
-    table_path: Arc<TablePath>,
+    physical_table_path: Arc<PhysicalTablePath>,
     writer_client: Arc<WriterClient>,
     table_info: Arc<TableInfo>,
 }
 
 impl AppendWriter {
     pub async fn append(&self, row: GenericRow<'_>) -> Result<()> {
-        let record =
-            WriteRecord::for_append(self.table_path.clone(), self.table_info.schema_id, row);
+        let record = WriteRecord::for_append(
+            Arc::clone(&self.table_info),
+            Arc::clone(&self.physical_table_path),
+            self.table_info.schema_id,
+            row,
+        );
         let result_handle = self.writer_client.send(&record).await?;
         let result = result_handle.wait().await?;
         result_handle.result(result)
@@ -68,7 +72,8 @@ impl AppendWriter {
 
     pub async fn append_arrow_batch(&self, batch: RecordBatch) -> Result<()> {
         let record = WriteRecord::for_append_record_batch(
-            self.table_path.clone(),
+            Arc::clone(&self.table_info),
+            Arc::clone(&self.physical_table_path),
             self.table_info.schema_id,
             batch,
         );

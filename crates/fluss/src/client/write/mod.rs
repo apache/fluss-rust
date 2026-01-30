@@ -20,7 +20,8 @@ mod batch;
 
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
-use crate::metadata::TablePath;
+use crate::metadata::{PhysicalTablePath, TableInfo};
+
 use crate::row::GenericRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
@@ -40,15 +41,20 @@ pub use writer_client::WriterClient;
 #[allow(dead_code)]
 pub struct WriteRecord<'a> {
     record: Record<'a>,
-    table_path: Arc<TablePath>,
+    physical_table_path: Arc<PhysicalTablePath>,
     bucket_key: Option<Bytes>,
     schema_id: i32,
     write_format: WriteFormat,
+    table_info: Arc<TableInfo>,
 }
 
 impl<'a> WriteRecord<'a> {
     pub fn record(&self) -> &Record<'a> {
         &self.record
+    }
+
+    pub fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
+        &self.physical_table_path
     }
 }
 
@@ -102,10 +108,16 @@ impl<'a> KvWriteRecord<'a> {
 }
 
 impl<'a> WriteRecord<'a> {
-    pub fn for_append(table_path: Arc<TablePath>, schema_id: i32, row: GenericRow<'a>) -> Self {
+    pub fn for_append(
+        table_info: Arc<TableInfo>,
+        physical_table_path: Arc<PhysicalTablePath>,
+        schema_id: i32,
+        row: GenericRow<'a>,
+    ) -> Self {
         Self {
+            table_info,
             record: Record::Log(LogWriteRecord::Generic(row)),
-            table_path,
+            physical_table_path,
             bucket_key: None,
             schema_id,
             write_format: WriteFormat::ArrowLog,
@@ -113,21 +125,25 @@ impl<'a> WriteRecord<'a> {
     }
 
     pub fn for_append_record_batch(
-        table_path: Arc<TablePath>,
+        table_info: Arc<TableInfo>,
+        physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         row: RecordBatch,
     ) -> Self {
         Self {
+            table_info,
             record: Record::Log(LogWriteRecord::RecordBatch(Arc::new(row))),
-            table_path,
+            physical_table_path,
             bucket_key: None,
             schema_id,
             write_format: WriteFormat::ArrowLog,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn for_upsert(
-        table_path: Arc<TablePath>,
+        table_info: Arc<TableInfo>,
+        physical_table_path: Arc<PhysicalTablePath>,
         schema_id: i32,
         key: Bytes,
         bucket_key: Option<Bytes>,
@@ -136,8 +152,9 @@ impl<'a> WriteRecord<'a> {
         row_bytes: Option<RowBytes<'a>>,
     ) -> Self {
         Self {
+            table_info,
             record: Record::Kv(KvWriteRecord::new(key, target_columns, row_bytes)),
-            table_path,
+            physical_table_path,
             bucket_key,
             schema_id,
             write_format,

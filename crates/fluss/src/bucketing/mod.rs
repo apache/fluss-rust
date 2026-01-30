@@ -24,7 +24,6 @@ pub trait BucketingFunction: Sync + Send {
     fn bucketing(&self, bucket_key: &[u8], num_buckets: i32) -> Result<i32>;
 }
 
-#[allow(dead_code)]
 impl dyn BucketingFunction {
     /// Provides the bucketing function for a given [DataLakeFormat]
     ///

@@ -101,6 +101,12 @@ pub enum Error {
 
     #[snafu(
         visibility(pub(crate)),
+        display("Fluss hitting partition not exist error {}.", message)
+    )]
+    PartitionNotExist { message: String },
+
+    #[snafu(
+        visibility(pub(crate)),
         display("Fluss hitting IO not supported error {}.", message)
     )]
     IoUnsupported { message: String },

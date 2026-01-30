@@ -16,6 +16,7 @@
 // under the License.
 
 mod example_kv_table;
+mod example_partitioned_kv_table;
 
 use clap::Parser;
 use fluss::client::FlussConnection;

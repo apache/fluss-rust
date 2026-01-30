@@ -833,9 +833,10 @@ mod tests {
     use crate::compression::{
         ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
-    use crate::metadata::{DataField, DataTypes, RowType, TablePath};
+    use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
     use crate::record::{MemoryLogRecordsArrowBuilder, ReadContext, to_arrow_schema};
     use crate::row::GenericRow;
+    use crate::test_utils::build_table_info;
     use std::sync::Arc;
 
     fn test_read_context() -> Result<ReadContext> {
@@ -899,7 +900,9 @@ mod tests {
             DataField::new("id".to_string(), DataTypes::int(), None),
             DataField::new("name".to_string(), DataTypes::string(), None),
         ]);
-        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
 
         let mut builder = MemoryLogRecordsArrowBuilder::new(
             1,
@@ -914,7 +917,7 @@ mod tests {
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let record = WriteRecord::for_append(table_path, 1, row);
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, row);
         builder.append(&record)?;
 
         let data = builder.build()?;
