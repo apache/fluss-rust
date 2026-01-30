@@ -1516,14 +1516,11 @@ mod tests {
             },
         )?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
-        let record = WriteRecord::for_append(
-            Arc::new(table_info.clone()),
-            physical_table_path,
-            1,
-            GenericRow {
-                values: vec![Datum::Int32(1)],
-            },
-        );
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record =
+            WriteRecord::for_append(Arc::new(table_info.clone()), physical_table_path, 1, &row);
         builder.append(&record)?;
         builder.build()
     }

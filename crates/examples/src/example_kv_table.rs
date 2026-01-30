@@ -16,7 +16,7 @@
 // under the License.
 
 use clap::Parser;
-use fluss::client::{FlussConnection, UpsertWriter};
+use fluss::client::FlussConnection;
 use fluss::config::Config;
 use fluss::error::Result;
 use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};

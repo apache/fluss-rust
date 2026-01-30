@@ -76,7 +76,6 @@ impl<'a> CompactedRow<'a> {
     }
 }
 
-#[allow(dead_code)]
 impl<'a> InternalRow for CompactedRow<'a> {
     fn get_field_count(&self) -> usize {
         self.arity
@@ -125,14 +124,6 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.decoded_row().get_string(pos)
     }
 
-    fn get_binary(&self, pos: usize, length: usize) -> &[u8] {
-        self.decoded_row().get_binary(pos, length)
-    }
-
-    fn get_bytes(&self, pos: usize) -> &[u8] {
-        self.decoded_row().get_bytes(pos)
-    }
-
     fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> crate::row::Decimal {
         self.decoded_row().get_decimal(pos, precision, scale)
     }
@@ -151,6 +142,14 @@ impl<'a> InternalRow for CompactedRow<'a> {
 
     fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampLtz {
         self.decoded_row().get_timestamp_ltz(pos, precision)
+    }
+
+    fn get_binary(&self, pos: usize, length: usize) -> &[u8] {
+        self.decoded_row().get_binary(pos, length)
+    }
+
+    fn get_bytes(&self, pos: usize) -> &[u8] {
+        self.decoded_row().get_bytes(pos)
     }
 
     fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {

@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::table::writer::{DeleteResult, TableWriter, UpsertResult, UpsertWriter};
 use crate::client::{RowBytes, WriteFormat, WriteRecord, WriterClient};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::{PhysicalTablePath, RowType, TableInfo, TablePath};
+use crate::metadata::{RowType, TableInfo, TablePath};
 use crate::row::InternalRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory, RowEncoder, RowEncoderFactory};
 use crate::row::field_getter::FieldGetter;
 use std::sync::Arc;
 
-use crate::client::table::partition_getter::PartitionGetter;
+use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
 use bitvec::prelude::bitvec;
 use bytes::Bytes;
 
@@ -98,7 +97,7 @@ impl TableUpsert {
         self.partial_update(Some(valid_col_indices))
     }
 
-    pub fn create_writer(&self) -> Result<impl UpsertWriter> {
+    pub fn create_writer(&self) -> Result<UpsertWriter> {
         UpsertWriterFactory::create(
             Arc::new(self.table_path.clone()),
             Arc::new(self.table_info.clone()),
@@ -108,10 +107,7 @@ impl TableUpsert {
     }
 }
 
-struct UpsertWriterImpl<RE>
-where
-    RE: RowEncoder,
-{
+pub struct UpsertWriter {
     table_path: Arc<TablePath>,
     writer_client: Arc<WriterClient>,
     partition_field_getter: Option<PartitionGetter>,
@@ -120,7 +116,7 @@ where
     // Use primary key encoder as bucket key encoder when None
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
     write_format: WriteFormat,
-    row_encoder: RE,
+    row_encoder: Box<dyn RowEncoder>,
     field_getters: Box<[FieldGetter]>,
     table_info: Arc<TableInfo>,
 }
@@ -133,7 +129,7 @@ impl UpsertWriterFactory {
         table_info: Arc<TableInfo>,
         partial_update_columns: Option<Arc<Vec<usize>>>,
         writer_client: Arc<WriterClient>,
-    ) -> Result<impl UpsertWriter> {
+    ) -> Result<UpsertWriter> {
         let data_lake_format = &table_info.table_config.get_datalake_format()?;
         let row_type = table_info.row_type();
         let physical_pks = table_info.get_physical_primary_keys();
@@ -173,7 +169,7 @@ impl UpsertWriterFactory {
             None
         };
 
-        Ok(UpsertWriterImpl {
+        Ok(UpsertWriter {
             table_path,
             partition_field_getter,
             writer_client,
@@ -181,7 +177,7 @@ impl UpsertWriterFactory {
             target_columns: partial_update_columns,
             bucket_key_encoder,
             write_format,
-            row_encoder: RowEncoderFactory::create(kv_format, row_type.clone())?,
+            row_encoder: Box::new(RowEncoderFactory::create(kv_format, row_type.clone())?),
             field_getters,
             table_info: table_info.clone(),
         })
@@ -283,8 +279,7 @@ impl UpsertWriterFactory {
     }
 }
 
-#[allow(dead_code)]
-impl<RE: RowEncoder> UpsertWriterImpl<RE> {
+impl UpsertWriter {
     fn check_field_count<R: InternalRow>(&self, row: &R) -> Result<()> {
         let expected = self.table_info.get_row_type().fields().len();
         if row.get_field_count() != expected {
@@ -317,31 +312,15 @@ impl<RE: RowEncoder> UpsertWriterImpl<RE> {
         self.row_encoder.finish_row()
     }
 
-    fn get_physical_path<R: InternalRow>(&self, row: &R) -> Result<PhysicalTablePath> {
-        if let Some(partition_getter) = &self.partition_field_getter {
-            let partition = partition_getter.get_partition(row);
-            Ok(PhysicalTablePath::of_partitioned(
-                Arc::clone(&self.table_path),
-                Some(partition?),
-            ))
-        } else {
-            Ok(PhysicalTablePath::of(Arc::clone(&self.table_path)))
-        }
-    }
-}
-
-impl<RE: RowEncoder> TableWriter for UpsertWriterImpl<RE> {
     /// Flush data written that have not yet been sent to the server, forcing the client to send the
     /// requests to server and blocks on the completion of the requests associated with these
     /// records. A request is considered completed when it is successfully acknowledged according to
     /// the CLIENT_WRITER_ACKS configuration option you have specified or else it
     /// results in an error.
-    async fn flush(&self) -> Result<()> {
+    pub async fn flush(&self) -> Result<()> {
         self.writer_client.flush().await
     }
-}
 
-impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     /// Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
     ///
     /// # Arguments
@@ -349,7 +328,7 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     ///
     /// # Returns
     /// Ok(UpsertResult) when completed normally
-    async fn upsert<R: InternalRow>(&mut self, row: &R) -> Result<UpsertResult> {
+    pub async fn upsert<R: InternalRow>(&mut self, row: &R) -> Result<UpsertResult> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
@@ -361,7 +340,11 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
 
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_info),
-            Arc::new(self.get_physical_path(row)?),
+            Arc::new(get_physical_path(
+                &self.table_path,
+                self.partition_field_getter.as_ref(),
+                row,
+            )?),
             self.table_info.schema_id,
             key,
             bucket_key,
@@ -384,14 +367,18 @@ impl<RE: RowEncoder> UpsertWriter for UpsertWriterImpl<RE> {
     ///
     /// # Returns
     /// Ok(DeleteResult) when completed normally
-    async fn delete<R: InternalRow>(&mut self, row: &R) -> Result<DeleteResult> {
+    pub async fn delete<R: InternalRow>(&mut self, row: &R) -> Result<DeleteResult> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
 
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_info),
-            Arc::new(self.get_physical_path(row)?),
+            Arc::new(get_physical_path(
+                &self.table_path,
+                self.partition_field_getter.as_ref(),
+                row,
+            )?),
             self.table_info.schema_id,
             key,
             bucket_key,
@@ -537,3 +524,13 @@ mod tests {
         ));
     }
 }
+
+/// The result of upserting a record
+/// Currently this is an empty struct to allow for compatible evolution in the future
+#[derive(Default)]
+pub struct UpsertResult;
+
+/// The result of deleting a record
+/// Currently this is an empty struct to allow for compatible evolution in the future
+#[derive(Default)]
+pub struct DeleteResult;

@@ -17,11 +17,28 @@
 
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::{DataType, ResolvedPartitionSpec, RowType};
+use crate::metadata::{DataType, PhysicalTablePath, ResolvedPartitionSpec, RowType, TablePath};
 use crate::row::InternalRow;
 use crate::row::field_getter::FieldGetter;
 use crate::util::partition;
 use std::sync::Arc;
+
+/// Get the physical table path for a row, handling partitioned vs non-partitioned tables.
+pub fn get_physical_path<R: InternalRow>(
+    table_path: &Arc<TablePath>,
+    partition_getter: Option<&PartitionGetter>,
+    row: &R,
+) -> Result<PhysicalTablePath> {
+    if let Some(getter) = partition_getter {
+        let partition = getter.get_partition(row)?;
+        Ok(PhysicalTablePath::of_partitioned(
+            Arc::clone(table_path),
+            Some(partition),
+        ))
+    } else {
+        Ok(PhysicalTablePath::of(Arc::clone(table_path)))
+    }
+}
 
 /// A getter to get partition name from a row.
 #[allow(dead_code)]

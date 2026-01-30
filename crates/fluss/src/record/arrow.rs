@@ -20,7 +20,8 @@ use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
-use crate::row::{ColumnarRow, GenericRow};
+use crate::row::field_getter::FieldGetter;
+use crate::row::{ColumnarRow, InternalRow};
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     Float32Builder, Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
@@ -166,7 +167,7 @@ pub struct MemoryLogRecordsArrowBuilder {
 pub trait ArrowRecordBatchInnerBuilder: Send + Sync {
     fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>>;
 
-    fn append(&mut self, row: &GenericRow) -> Result<bool>;
+    fn append(&mut self, row: &dyn InternalRow) -> Result<bool>;
 
     fn append_batch(&mut self, record_batch: Arc<RecordBatch>) -> Result<bool>;
 
@@ -191,7 +192,7 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
         Ok(self.arrow_record_batch.as_ref().unwrap().clone())
     }
 
-    fn append(&mut self, _row: &GenericRow) -> Result<bool> {
+    fn append(&mut self, _row: &dyn InternalRow) -> Result<bool> {
         // append one single row is not supported, return false directly
         Ok(false)
     }
@@ -229,6 +230,7 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
 pub struct RowAppendRecordBatchBuilder {
     table_schema: SchemaRef,
     arrow_column_builders: Vec<Box<dyn ArrayBuilder>>,
+    field_getters: Box<[FieldGetter]>,
     records_count: i32,
 }
 
@@ -240,9 +242,11 @@ impl RowAppendRecordBatchBuilder {
             .iter()
             .map(|field| Self::create_builder(field.data_type()))
             .collect();
+        let field_getters = FieldGetter::create_field_getters(row_type);
         Ok(Self {
             table_schema: schema_ref.clone(),
             arrow_column_builders: builders?,
+            field_getters,
             records_count: 0,
         })
     }
@@ -346,11 +350,18 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
         )?))
     }
 
-    fn append(&mut self, row: &GenericRow) -> Result<bool> {
-        for (idx, value) in row.values.iter().enumerate() {
+    fn append(&mut self, row: &dyn InternalRow) -> Result<bool> {
+        for (idx, getter) in self.field_getters.iter().enumerate() {
+            let datum = getter.get_field(row);
             let field_type = self.table_schema.field(idx).data_type();
-            let builder = self.arrow_column_builders.get_mut(idx).unwrap();
-            value.append_to(builder.as_mut(), field_type)?;
+            let builder =
+                self.arrow_column_builders
+                    .get_mut(idx)
+                    .ok_or_else(|| Error::UnexpectedError {
+                        message: format!("Column builder at index {idx} not found."),
+                        source: None,
+                    })?;
+            datum.append_to(builder, field_type)?;
         }
         self.records_count += 1;
         Ok(true)
@@ -412,7 +423,9 @@ impl MemoryLogRecordsArrowBuilder {
     pub fn append(&mut self, record: &WriteRecord) -> Result<bool> {
         match &record.record() {
             Record::Log(log_write_record) => match log_write_record {
-                LogWriteRecord::Generic(row) => Ok(self.arrow_record_batch_builder.append(row)?),
+                LogWriteRecord::InternalRow(row) => {
+                    Ok(self.arrow_record_batch_builder.append(*row)?)
+                }
                 LogWriteRecord::RecordBatch(record_batch) => Ok(self
                     .arrow_record_batch_builder
                     .append_batch(record_batch.clone())?),
@@ -1715,9 +1728,10 @@ mod tests {
         )]);
         let mut builder = RowAppendRecordBatchBuilder::new(&row_type)?;
         let decimal = Decimal::from_big_decimal(BigDecimal::from_str("123.456").unwrap(), 10, 3)?;
-        builder.append(&GenericRow {
+        let row = GenericRow {
             values: vec![Datum::Decimal(decimal)],
-        })?;
+        };
+        builder.append(&row)?;
         let batch = builder.build_arrow_record_batch()?;
         let array = batch
             .column(0)
@@ -1735,9 +1749,10 @@ mod tests {
         )]);
         let mut builder = RowAppendRecordBatchBuilder::new(&row_type)?;
         let decimal = Decimal::from_big_decimal(BigDecimal::from_str("123456.78").unwrap(), 10, 2)?;
-        let result = builder.append(&GenericRow {
+        let row = GenericRow {
             values: vec![Datum::Decimal(decimal)],
-        });
+        };
+        let result = builder.append(&row);
         assert!(result.is_err());
         assert!(
             result
@@ -1832,7 +1847,7 @@ mod tests {
         let mut builder = RowAppendRecordBatchBuilder::new(&row_type)?;
 
         // Append rows with various data types
-        builder.append(&GenericRow {
+        let row = GenericRow {
             values: vec![
                 Datum::Int32(1),
                 Datum::Decimal(Decimal::from_big_decimal(
@@ -1851,7 +1866,8 @@ mod tests {
                 // 1609459200000 ms = 2021-01-01 00:00:00 UTC, with 987654 additional nanoseconds
                 Datum::TimestampLtz(TimestampLtz::from_millis_nanos(1609459200000, 987654)?),
             ],
-        })?;
+        };
+        builder.append(&row)?;
 
         let batch = builder.build_arrow_record_batch()?;
 
@@ -1959,15 +1975,19 @@ mod tests {
         let mut row = GenericRow::new(2);
         row.set_field(0, 1_i32);
         row.set_field(1, "alice");
-        let record =
-            WriteRecord::for_append(Arc::clone(&table_info), physical_table_path.clone(), 1, row);
+        let record = WriteRecord::for_append(
+            Arc::clone(&table_info),
+            physical_table_path.clone(),
+            1,
+            &row,
+        );
         builder.append(&record)?;
 
         let mut row2 = GenericRow::new(2);
         row2.set_field(0, 2_i32);
         row2.set_field(1, "bob");
         let record2 =
-            WriteRecord::for_append(Arc::clone(&table_info), physical_table_path, 2, row2);
+            WriteRecord::for_append(Arc::clone(&table_info), physical_table_path, 2, &row2);
         builder.append(&record2)?;
 
         let data = builder.build()?;

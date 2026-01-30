@@ -103,8 +103,7 @@ impl Sender {
                         if api_error.code == FlussError::PartitionNotExists.code() =>
                     {
                         warn!(
-                            "Partition does not exist during metadata update, continuing: {}",
-                            api_error
+                            "Partition does not exist during metadata update, continuing: {api_error}"
                         );
                     }
                     _ => return Err(e),
@@ -664,14 +663,10 @@ mod tests {
     ) -> Result<(ReadyWriteBatch, crate::client::ResultHandle)> {
         let table_info = Arc::new(build_table_info(table_path.as_ref().clone(), 1, 1));
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
-        let record = WriteRecord::for_append(
-            table_info,
-            physical_table_path,
-            1,
-            GenericRow {
-                values: vec![Datum::Int32(1)],
-            },
-        );
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
         let result = accumulator.append(&record, 0, &cluster, false).await?;
         let result_handle = result.result_handle.expect("result handle");
         let server = cluster.get_tablet_server(1).expect("server");

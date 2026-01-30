@@ -426,7 +426,7 @@ mod tests {
                     Arc::clone(&table_info),
                     Arc::clone(&physical_table_path),
                     1,
-                    row,
+                    &row,
                 );
                 batch.try_append(&record).unwrap();
             }

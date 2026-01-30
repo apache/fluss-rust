@@ -248,6 +248,24 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id)
     }
 
+    fn get_char(&self, pos: usize, _length: usize) -> &str {
+        self.record_batch
+            .column(pos)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected String array for char type")
+            .value(self.row_id)
+    }
+
+    fn get_string(&self, pos: usize) -> &str {
+        self.record_batch
+            .column(pos)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected String array.")
+            .value(self.row_id)
+    }
+
     fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> crate::row::Decimal {
         use arrow::datatypes::DataType;
 
@@ -325,24 +343,6 @@ impl InternalRow for ColumnarRow {
             crate::row::datum::TimestampLtz::new,
             crate::row::datum::TimestampLtz::from_millis_nanos,
         )
-    }
-
-    fn get_char(&self, pos: usize, _length: usize) -> &str {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Expected String array for char type")
-            .value(self.row_id)
-    }
-
-    fn get_string(&self, pos: usize) -> &str {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Expected String array.")
-            .value(self.row_id)
     }
 
     fn get_binary(&self, pos: usize, _length: usize) -> &[u8] {

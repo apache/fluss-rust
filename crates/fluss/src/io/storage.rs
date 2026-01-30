@@ -19,6 +19,8 @@ use crate::error;
 use crate::error::Result;
 use crate::io::FileIOBuilder;
 use opendal::{Operator, Scheme};
+#[cfg(any(feature = "storage-s3", feature = "storage-oss"))]
+use std::collections::HashMap;
 
 /// The storage carries all supported storage services in fluss
 #[derive(Debug)]
