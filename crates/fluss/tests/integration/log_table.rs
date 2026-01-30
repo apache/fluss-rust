@@ -41,7 +41,7 @@ mod table_test {
     use fluss::client::{FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::record::ScanRecord;
-    use fluss::row::{InternalRow};
+    use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
     use jiff::Timestamp;
     use std::collections::HashMap;

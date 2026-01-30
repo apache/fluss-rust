@@ -31,7 +31,7 @@ static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> 
 #[before_all]
 #[after_all]
 mod table_remote_scan_test {
-    use std :: sync :: atomic :: AtomicUsize ;use super::SHARED_FLUSS_CLUSTER;
+    use super::SHARED_FLUSS_CLUSTER;
     use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
     use crate::integration::utils::{
         create_table, get_cluster, stop_cluster, wait_for_cluster_ready,
@@ -40,6 +40,7 @@ mod table_remote_scan_test {
     use fluss::row::{GenericRow, InternalRow};
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
     use std::thread;
     use std::time::Duration;
     use uuid::Uuid;

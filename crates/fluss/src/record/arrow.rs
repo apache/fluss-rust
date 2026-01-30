@@ -354,8 +354,14 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
         for (idx, getter) in self.field_getters.iter().enumerate() {
             let datum = getter.get_field(row);
             let field_type = self.table_schema.field(idx).data_type();
-            let builder = self.arrow_column_builders.get_mut(idx).unwrap();
-            datum.append_to(builder.as_mut(), field_type)?;
+            let builder =
+                self.arrow_column_builders
+                    .get_mut(idx)
+                    .ok_or_else(|| Error::UnexpectedError {
+                        message: format!("Column builder at index {idx} not found."),
+                        source: None,
+                    })?;
+            datum.append_to(builder, field_type)?;
         }
         self.records_count += 1;
         Ok(true)
