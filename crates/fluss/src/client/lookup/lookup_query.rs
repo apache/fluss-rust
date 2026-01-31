@@ -53,7 +53,6 @@ impl LookupQuery {
     }
 
     /// Returns the table path.
-    #[allow(dead_code)]
     pub fn table_path(&self) -> &TablePath {
         &self.table_path
     }

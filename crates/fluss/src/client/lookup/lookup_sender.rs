@@ -26,6 +26,7 @@ use crate::error::{Error, FlussError, Result};
 use crate::metadata::TableBucket;
 use crate::proto::LookupResponse;
 use crate::rpc::message::LookupRequest;
+use crate::{BucketId, PartitionId, TableId};
 use log::{debug, error, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -136,12 +137,14 @@ impl LookupSender {
         debug!("Beginning shutdown of lookup sender, sending remaining lookups");
 
         // Process remaining lookups during shutdown
+        // TODO: Check the in flight request count in the accumulator.
         if !self.force_close.load(Ordering::Acquire) && self.queue.has_undrained() {
             if let Err(e) = self.run_once(true).await {
                 error!("Error during lookup sender shutdown: {}", e);
             }
         }
 
+        // TODO: If force close failed, add logic to abort incomplete lookup requests.
         debug!("Lookup sender shutdown complete");
     }
 
@@ -165,8 +168,10 @@ impl LookupSender {
         // Group by leader
         let lookup_batches = self.group_by_leader(lookups);
 
+        // If no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
+        // no leader for all the lookup request in queue.
         if lookup_batches.is_empty() && !self.queue.has_undrained() {
-            // No lookups to send and queue is empty, sleep to avoid busy loop
+            // TODO: May use wait/notify mechanism to avoid active sleep, and use a dynamic sleep time based on the request waited time.
             tokio::time::sleep(Duration::from_millis(100)).await;
             return Ok(());
         }
@@ -190,7 +195,9 @@ impl LookupSender {
         for lookup in lookups {
             let table_bucket = lookup.table_bucket().clone();
 
-            // Find leader for this bucket
+            // TODO: Metadata requests are being sent too frequently here. consider first
+            // collecting the tables that need to be updated and then sending them together in
+            // one request.
             let leader = match cluster.leader_for(&table_bucket) {
                 Some(leader) => leader.id(),
                 None => {
@@ -221,7 +228,7 @@ impl LookupSender {
         batches_by_bucket: HashMap<TableBucket, LookupBatch>,
     ) {
         // Group by table_id for request batching
-        let mut batches_by_table: HashMap<i64, Vec<LookupBatch>> = HashMap::new();
+        let mut batches_by_table: HashMap<TableId, Vec<LookupBatch>> = HashMap::new();
         for (table_bucket, batch) in batches_by_bucket {
             batches_by_table
                 .entry(table_bucket.table_id())
@@ -260,7 +267,8 @@ impl LookupSender {
         for (table_id, mut batches) in batches_by_table {
             // Build the request with all buckets for this table
             // Use std::mem::take to move keys instead of cloning to avoid deep copy overhead
-            let mut all_keys_by_bucket: Vec<(i32, Option<i64>, Vec<Vec<u8>>)> = Vec::new();
+            let mut all_keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Vec<u8>>)> =
+                Vec::new();
             for batch in &mut batches {
                 all_keys_by_bucket.push((
                     batch.table_bucket.bucket_id(),
@@ -320,7 +328,7 @@ impl LookupSender {
         batches: &mut [LookupBatch],
     ) {
         // Create a map from bucket_id to batch index for quick lookup
-        let bucket_to_index: HashMap<i32, usize> = batches
+        let bucket_to_index: HashMap<BucketId, usize> = batches
             .iter()
             .enumerate()
             .map(|(idx, batch)| (batch.table_bucket.bucket_id(), idx))

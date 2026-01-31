@@ -137,9 +137,18 @@ impl LookupClient {
         self.lookup_tx
             .send(query)
             .await
-            .map_err(|_| Error::UnexpectedError {
-                message: "Failed to queue lookup: channel closed".to_string(),
-                source: None,
+            .map_err(|e| {
+                let failed_query = e.0;
+                error!(
+                    "Failed to queue lookup: channel closed. table_path: {}, table_bucket: {:?}, key_len: {}",
+                    failed_query.table_path(),
+                    failed_query.table_bucket(),
+                    failed_query.key().len()
+                );
+                Error::UnexpectedError {
+                    message: "Failed to queue lookup: channel closed".to_string(),
+                    source: None,
+                }
             })?;
 
         // Wait for result

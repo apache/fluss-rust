@@ -72,21 +72,25 @@ impl LookupQueue {
         let mut lookups = Vec::with_capacity(self.max_batch_size);
         let deadline = tokio::time::Instant::now() + self.batch_timeout;
 
-        // First, drain re-enqueued lookups (prioritized)
-        while lookups.len() < self.max_batch_size {
-            match self.re_enqueue_rx.try_recv() {
-                Ok(lookup) => lookups.push(lookup),
-                Err(_) => break,
-            }
-        }
-
-        // Then drain from main queue
-        while lookups.len() < self.max_batch_size {
+        loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
                 break;
             }
 
+            // First drain re-enqueued lookups (prioritized)
+            while lookups.len() < self.max_batch_size {
+                match self.re_enqueue_rx.try_recv() {
+                    Ok(lookup) => lookups.push(lookup),
+                    Err(_) => break,
+                }
+            }
+
+            if lookups.len() >= self.max_batch_size {
+                break;
+            }
+
+            // Then try to get from main queue with timeout
             match timeout(remaining, self.lookup_rx.recv()).await {
                 Ok(Some(lookup)) => {
                     lookups.push(lookup);
@@ -100,6 +104,10 @@ impl LookupQueue {
                 }
                 Ok(None) => break, // Channel closed
                 Err(_) => break,   // Timeout
+            }
+
+            if lookups.len() >= self.max_batch_size {
+                break;
             }
         }
 
