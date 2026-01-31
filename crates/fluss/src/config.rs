@@ -46,6 +46,31 @@ pub struct Config {
     /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
     #[arg(long, default_value_t = 3)]
     pub scanner_remote_log_download_threads: usize,
+
+    /// Maximum number of pending lookup operations
+    /// Default: 25600 (matching Java CLIENT_LOOKUP_QUEUE_SIZE)
+    #[arg(long, default_value_t = 25600)]
+    pub lookup_queue_size: usize,
+
+    /// Maximum batch size of merging lookup operations to one lookup request
+    /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_BATCH_SIZE)
+    #[arg(long, default_value_t = 128)]
+    pub lookup_max_batch_size: usize,
+
+    /// Maximum time to wait for the lookup batch to fill (in milliseconds)
+    /// Default: 100 (matching Java CLIENT_LOOKUP_BATCH_TIMEOUT)
+    #[arg(long, default_value_t = 100)]
+    pub lookup_batch_timeout_ms: u64,
+
+    /// Maximum number of unacknowledged lookup requests
+    /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_INFLIGHT_SIZE)
+    #[arg(long, default_value_t = 128)]
+    pub lookup_max_inflight_requests: usize,
+
+    /// Maximum number of lookup retries
+    /// Default: i32::MAX (matching Java CLIENT_LOOKUP_MAX_RETRIES)
+    #[arg(long, default_value_t = i32::MAX)]
+    pub lookup_max_retries: i32,
 }
 
 impl Default for Config {
@@ -58,6 +83,11 @@ impl Default for Config {
             writer_batch_size: 2 * 1024 * 1024,
             scanner_remote_log_prefetch_num: 4,
             scanner_remote_log_download_threads: 3,
+            lookup_queue_size: 25600,
+            lookup_max_batch_size: 128,
+            lookup_batch_timeout_ms: 100,
+            lookup_max_inflight_requests: 128,
+            lookup_max_retries: i32::MAX,
         }
     }
 }
