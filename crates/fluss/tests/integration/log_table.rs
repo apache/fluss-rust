@@ -1072,6 +1072,29 @@ mod table_test {
             .await
             .expect("Failed to flush batches");
 
+        // Test list_offsets_for_partition
+        // US partition has 4 records: 2 from row append + 2 from batch append
+        let us_offsets = admin
+            .list_partition_offsets(&table_path, "US", &[0], OffsetSpec::Latest)
+            .await
+            .expect("Failed to list offsets for US partition");
+        assert_eq!(
+            us_offsets.get(&0),
+            Some(&4),
+            "US partition should have 4 records"
+        );
+
+        // EU partition has 4 records: 2 from row append + 2 from batch append
+        let eu_offsets = admin
+            .list_partition_offsets(&table_path, "EU", &[0], OffsetSpec::Latest)
+            .await
+            .expect("Failed to list offsets for EU partition");
+        assert_eq!(
+            eu_offsets.get(&0),
+            Some(&4),
+            "EU partition should have 4 records"
+        );
+
         admin
             .drop_table(&table_path, false)
             .await
