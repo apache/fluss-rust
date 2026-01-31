@@ -1072,6 +1072,38 @@ mod table_test {
             .await
             .expect("Failed to flush batches");
 
+        // Test list_offsets_for_partition
+        // US partition has 4 records: 2 from row append + 2 from batch append
+        let us_offsets = admin
+            .list_partition_offsets(&table_path, "US", &[0], OffsetSpec::Latest)
+            .await
+            .expect("Failed to list offsets for US partition");
+        assert_eq!(
+            us_offsets.get(&0),
+            Some(&4),
+            "US partition should have 4 records"
+        );
+
+        // EU partition has 4 records: 2 from row append + 2 from batch append
+        let eu_offsets = admin
+            .list_partition_offsets(&table_path, "EU", &[0], OffsetSpec::Latest)
+            .await
+            .expect("Failed to list offsets for EU partition");
+        assert_eq!(
+            eu_offsets.get(&0),
+            Some(&4),
+            "EU partition should have 4 records"
+        );
+
+        // test list a not exist partition should return error
+        let result = admin
+            .list_partition_offsets(&table_path, "NOT Exists", &[0], OffsetSpec::Latest)
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(
+            "Table partition 'fluss.test_partitioned_log_append(p=NOT Exists)' does not exist."
+        ));
+
         admin
             .drop_table(&table_path, false)
             .await
