@@ -120,8 +120,9 @@ impl<'a> FlussTable<'a> {
                 message: "Lookup is only supported for primary key tables".to_string(),
             });
         }
+        let lookup_client = self.conn.get_or_create_lookup_client()?;
         Ok(TableLookup::new(
-            self.conn.get_connections(),
+            lookup_client,
             self.table_info.clone(),
             self.metadata.clone(),
         ))
