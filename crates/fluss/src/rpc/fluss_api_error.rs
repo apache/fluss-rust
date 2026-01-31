@@ -283,6 +283,25 @@ impl FlussError {
         }
     }
 
+    /// Returns true if this error is retriable.
+    /// Based on Java client's RetriableException hierarchy.
+    pub fn is_retriable(&self) -> bool {
+        matches!(
+            self,
+            FlussError::NetworkException
+                | FlussError::NotLeaderOrFollower
+                | FlussError::UnknownTableOrBucketException
+                | FlussError::LeaderNotAvailableException
+                | FlussError::CorruptMessage
+                | FlussError::CorruptRecordException
+                | FlussError::RequestTimeOut
+                | FlussError::StorageException
+                | FlussError::NotEnoughReplicasAfterAppendException
+                | FlussError::NotEnoughReplicasException
+                | FlussError::SchemaNotExist
+        )
+    }
+
     /// Get the FlussError for the given error code.
     /// Returns `UnknownServerError` if the code is not recognized.
     pub fn for_code(code: i32) -> Self {

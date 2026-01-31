@@ -851,4 +851,255 @@ mod kv_table_test {
             .await
             .expect("Failed to drop table");
     }
+
+    /// Integration test for concurrent batched lookups.
+    #[tokio::test]
+    async fn batched_concurrent_lookups() {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_batched_lookups".to_string());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("value", DataTypes::bigint())
+                    .primary_key(vec!["id".to_string()])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let mut upsert_writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Insert 100 records
+        let num_records = 100i32;
+        for i in 0..num_records {
+            let mut row = GenericRow::new(3);
+            row.set_field(0, i);
+            row.set_field(1, format!("name_{}", i));
+            row.set_field(2, (i * 100) as i64);
+            upsert_writer.upsert(&row).await.expect("Failed to upsert");
+        }
+
+        // Create multiple lookupers for concurrent lookups
+        let num_lookups = 50i32;
+        let mut lookupers: Vec<_> = (0..num_lookups)
+            .map(|_| {
+                table
+                    .new_lookup()
+                    .expect("Failed to create lookup")
+                    .create_lookuper()
+                    .expect("Failed to create lookuper")
+            })
+            .collect();
+
+        // Run all lookups concurrently
+        let mut futures = FuturesUnordered::new();
+        for (i, lookuper) in lookupers.iter_mut().enumerate() {
+            let id = i as i32;
+            futures.push(async move {
+                let key = make_key(id);
+                let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+                let row = result
+                    .get_single_row()
+                    .expect("Failed to get row")
+                    .expect("Row should exist");
+
+                assert_eq!(row.get_int(0), id, "id mismatch for key {}", id);
+                assert_eq!(
+                    row.get_string(1),
+                    format!("name_{}", id),
+                    "name mismatch for key {}",
+                    id
+                );
+                assert_eq!(
+                    row.get_long(2),
+                    (id * 100) as i64,
+                    "value mismatch for key {}",
+                    id
+                );
+                id
+            });
+        }
+
+        // Collect all results
+        let mut results = Vec::with_capacity(num_lookups as usize);
+        while let Some(id) = futures.next().await {
+            results.push(id);
+        }
+
+        // Verify all lookups completed successfully
+        assert_eq!(
+            results.len(),
+            num_lookups as usize,
+            "Not all lookups completed"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Integration test for lookups with mixed existing and non-existing keys.
+    #[tokio::test]
+    async fn lookups_mixed_existing_and_nonexisting_keys() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_batched_mixed_keys".to_string());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("data", DataTypes::string())
+                    .primary_key(vec!["id".to_string()])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let mut upsert_writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Insert only even-numbered records (0, 2, 4, 6, ...)
+        for i in (0..20).step_by(2) {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, i as i32);
+            row.set_field(1, format!("data_{}", i));
+            upsert_writer.upsert(&row).await.expect("Failed to upsert");
+        }
+
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        // Lookup all keys 0-19 (half exist, half don't)
+        for i in 0..20 {
+            let mut key = GenericRow::new(2);
+            key.set_field(0, i as i32);
+            let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+            let row_opt = result.get_single_row().expect("Failed to get row");
+
+            if i % 2 == 0 {
+                // Even keys should exist
+                let row = row_opt.unwrap_or_else(|| panic!("Row {} should exist", i));
+                assert_eq!(row.get_int(0), i as i32, "id mismatch");
+                assert_eq!(row.get_string(1), format!("data_{}", i), "data mismatch");
+            } else {
+                // Odd keys should not exist
+                assert!(row_opt.is_none(), "Row {} should not exist", i);
+            }
+        }
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Integration test for lookups with repeated keys.
+    /// Multiple lookups for the same key should all return the correct result.
+    #[tokio::test]
+    async fn lookups_same_key_multiple_times() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path =
+            TablePath::new("fluss".to_string(), "test_repeated_key_lookups".to_string());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("counter", DataTypes::bigint())
+                    .primary_key(vec!["id".to_string()])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let mut upsert_writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Insert a single record
+        let target_id = 42i32;
+        let target_counter = 12345i64;
+        let mut row = GenericRow::new(2);
+        row.set_field(0, target_id);
+        row.set_field(1, target_counter);
+        upsert_writer.upsert(&row).await.expect("Failed to upsert");
+
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        // Perform 100 lookups for the same key
+        let num_lookups = 100;
+        for _ in 0..num_lookups {
+            let mut key = GenericRow::new(2);
+            key.set_field(0, target_id);
+
+            let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+            let row = result
+                .get_single_row()
+                .expect("Failed to get row")
+                .expect("Row should exist");
+
+            assert_eq!(row.get_int(0), target_id, "id mismatch");
+            assert_eq!(row.get_long(1), target_counter, "counter mismatch");
+        }
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
 }

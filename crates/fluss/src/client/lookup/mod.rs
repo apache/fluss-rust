@@ -15,18 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod admin;
-mod connection;
-mod credentials;
-pub mod lookup;
-mod metadata;
-mod table;
-mod write;
+//! Lookup client implementation with batching and queuing support.
+//!
+//! This module provides a high-throughput lookup client that batches multiple
+//! lookup operations together to reduce network round trips, achieving parity
+//! with the Java client implementation.
+//!
+//! # Example
+//!
+//! ```ignore
+//! let lookup_client = LookupClient::new(config, metadata);
+//! let future = lookup_client.lookup(table_path, table_bucket, key_bytes);
+//! let result = future.await?;
+//! ```
 
-pub use admin::*;
-pub use connection::*;
-pub use credentials::*;
-pub use lookup::LookupClient;
-pub use metadata::*;
-pub use table::*;
-pub use write::*;
+mod lookup_client;
+mod lookup_query;
+mod lookup_queue;
+mod lookup_sender;
+
+pub use lookup_client::LookupClient;
+pub(crate) use lookup_query::LookupQuery;
+pub(crate) use lookup_queue::LookupQueue;
