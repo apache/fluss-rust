@@ -220,10 +220,9 @@ impl Lookuper {
     /// * `Err(Error)` - If the lookup fails
     pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult<'_>> {
         let pk_bytes = self.primary_key_encoder.encode_key(row)?;
-        let pk_bytes_vec = pk_bytes.to_vec();
         let bk_bytes = match &mut self.bucket_key_encoder {
-            Some(encoder) => &encoder.encode_key(row)?,
-            None => &pk_bytes,
+            Some(encoder) => encoder.encode_key(row)?,
+            None => pk_bytes.clone(),
         };
 
         let partition_id = if let Some(ref partition_getter) = self.partition_getter {
@@ -246,7 +245,7 @@ impl Lookuper {
 
         let bucket_id = self
             .bucketing_function
-            .bucketing(bk_bytes, self.num_buckets)?;
+            .bucketing(&bk_bytes, self.num_buckets)?;
 
         let table_id = self.table_info.get_table_id();
         let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
@@ -254,7 +253,7 @@ impl Lookuper {
         // Use the batched lookup client
         let result = self
             .lookup_client
-            .lookup(self.table_path.as_ref().clone(), table_bucket, pk_bytes_vec)
+            .lookup(self.table_path.as_ref().clone(), table_bucket, pk_bytes)
             .await?;
 
         match result {

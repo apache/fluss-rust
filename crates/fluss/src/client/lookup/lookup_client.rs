@@ -28,6 +28,7 @@ use crate::client::metadata::Metadata;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TablePath};
+use bytes::Bytes;
 use log::{debug, error};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,7 +120,7 @@ impl LookupClient {
         &self,
         table_path: TablePath,
         table_bucket: TableBucket,
-        key_bytes: Vec<u8>,
+        key_bytes: Bytes,
     ) -> Result<Option<Vec<u8>>> {
         // Check if the client is closed
         if self.closed.load(Ordering::Acquire) {

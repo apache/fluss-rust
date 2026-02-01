@@ -23,6 +23,7 @@ use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
 use crate::{impl_read_version_type, impl_write_version_type, proto};
+use bytes::Bytes;
 use prost::Message;
 
 use bytes::{Buf, BufMut};
@@ -55,14 +56,14 @@ impl LookupRequest {
     }
 
     /// Creates a new batched lookup request with multiple buckets.
-    pub fn new_batched(table_id: i64, buckets: Vec<(i32, Option<i64>, Vec<Vec<u8>>)>) -> Self {
+    pub fn new_batched(table_id: i64, buckets: Vec<(i32, Option<i64>, Vec<Bytes>)>) -> Self {
         let buckets_req: Vec<proto::PbLookupReqForBucket> = buckets
             .into_iter()
             .map(
                 |(bucket_id, partition_id, keys)| proto::PbLookupReqForBucket {
                     partition_id,
                     bucket_id,
-                    key: keys,
+                    key: keys.into_iter().map(|b| b.to_vec()).collect(),
                 },
             )
             .collect();

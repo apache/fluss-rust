@@ -18,6 +18,7 @@
 //! Lookup query representation for batching lookup operations.
 
 use crate::metadata::{TableBucket, TablePath};
+use bytes::Bytes;
 use std::sync::atomic::{AtomicI32, Ordering};
 use tokio::sync::oneshot;
 
@@ -28,7 +29,7 @@ pub struct LookupQuery {
     /// The table bucket for this lookup
     table_bucket: TableBucket,
     /// The encoded primary key bytes
-    key: Vec<u8>,
+    key: Bytes,
     /// Channel to send the result back to the caller
     result_tx: Option<oneshot::Sender<Result<Option<Vec<u8>>, crate::error::Error>>>,
     /// Number of retry attempts
@@ -40,7 +41,7 @@ impl LookupQuery {
     pub fn new(
         table_path: TablePath,
         table_bucket: TableBucket,
-        key: Vec<u8>,
+        key: Bytes,
         result_tx: oneshot::Sender<Result<Option<Vec<u8>>, crate::error::Error>>,
     ) -> Self {
         Self {
@@ -63,7 +64,7 @@ impl LookupQuery {
     }
 
     /// Returns the encoded key bytes.
-    pub fn key(&self) -> &[u8] {
+    pub fn key(&self) -> &Bytes {
         &self.key
     }
 

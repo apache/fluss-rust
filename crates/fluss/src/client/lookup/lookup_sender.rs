@@ -27,6 +27,7 @@ use crate::metadata::TableBucket;
 use crate::proto::LookupResponse;
 use crate::rpc::message::LookupRequest;
 use crate::{BucketId, PartitionId, TableId};
+use bytes::Bytes;
 use log::{debug, error, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,7 +57,7 @@ pub struct LookupSender {
 struct LookupBatch {
     table_bucket: TableBucket,
     lookups: Vec<LookupQuery>,
-    keys: Vec<Vec<u8>>,
+    keys: Vec<Bytes>,
 }
 
 impl LookupBatch {
@@ -69,7 +70,7 @@ impl LookupBatch {
     }
 
     fn add_lookup(&mut self, lookup: LookupQuery) {
-        self.keys.push(lookup.key().to_vec());
+        self.keys.push(lookup.key().clone());
         self.lookups.push(lookup);
     }
 
@@ -267,7 +268,7 @@ impl LookupSender {
         for (table_id, mut batches) in batches_by_table {
             // Build the request with all buckets for this table
             // Use std::mem::take to move keys instead of cloning to avoid deep copy overhead
-            let mut all_keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Vec<u8>>)> =
+            let mut all_keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)> =
                 Vec::new();
             for batch in &mut batches {
                 all_keys_by_bucket.push((
