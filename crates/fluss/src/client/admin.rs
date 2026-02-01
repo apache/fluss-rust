@@ -18,7 +18,7 @@
 use crate::client::metadata::Metadata;
 use crate::metadata::{
     DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, PartitionInfo, PartitionSpec,
-    TableBucket, TableDescriptor, TableInfo, TablePath,
+    PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
 };
 use crate::rpc::message::{
     CreateDatabaseRequest, CreatePartitionRequest, CreateTableRequest, DatabaseExistsRequest,
@@ -33,7 +33,6 @@ use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
 use crate::{BucketId, PartitionId, TableId};
 use std::collections::{HashMap, HashSet};
-use std::slice::from_ref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
@@ -294,23 +293,69 @@ impl FlussAdmin {
         buckets_id: &[BucketId],
         offset_spec: OffsetSpec,
     ) -> Result<HashMap<i32, i64>> {
-        self.metadata
-            .check_and_update_table_metadata(from_ref(table_path))
-            .await?;
+        self.do_list_offsets(table_path, None, buckets_id, offset_spec)
+            .await
+    }
 
+    /// List offset for the specified buckets in a partition. This operation enables to find
+    /// the beginning offset, end offset as well as the offset matching a timestamp in buckets.
+    pub async fn list_partition_offsets(
+        &self,
+        table_path: &TablePath,
+        partition_name: &str,
+        buckets_id: &[BucketId],
+        offset_spec: OffsetSpec,
+    ) -> Result<HashMap<i32, i64>> {
+        self.do_list_offsets(table_path, Some(partition_name), buckets_id, offset_spec)
+            .await
+    }
+
+    async fn do_list_offsets(
+        &self,
+        table_path: &TablePath,
+        partition_name: Option<&str>,
+        buckets_id: &[BucketId],
+        offset_spec: OffsetSpec,
+    ) -> Result<HashMap<i32, i64>> {
         if buckets_id.is_empty() {
-            return Err(Error::UnexpectedError {
+            return Err(Error::IllegalArgument {
                 message: "Buckets are empty.".to_string(),
-                source: None,
             });
         }
+
+        // force to update table metadata like java side
+        self.metadata.update_table_metadata(table_path).await?;
 
         let cluster = self.metadata.get_cluster();
         let table_id = cluster.get_table(table_path)?.table_id;
 
+        // Resolve partition_id from partition_name if provided
+        let partition_id = if let Some(name) = partition_name {
+            let physical_table_path = Arc::new(PhysicalTablePath::of_partitioned(
+                Arc::new(table_path.clone()),
+                Some(name.to_string()),
+            ));
+
+            // Update partition metadata like java side
+            self.metadata
+                .update_physical_table_metadata(std::slice::from_ref(&physical_table_path))
+                .await?;
+
+            let cluster = self.metadata.get_cluster();
+            Some(
+                cluster
+                    .get_partition_id(&physical_table_path)
+                    .ok_or_else(|| Error::PartitionNotExist {
+                        message: format!("Partition '{name}' not found for table '{table_path}'"),
+                    })?,
+            )
+        } else {
+            None
+        };
+
         // Prepare requests
         let requests_by_server =
-            self.prepare_list_offsets_requests(table_id, None, buckets_id, offset_spec)?;
+            self.prepare_list_offsets_requests(table_id, partition_id, buckets_id, offset_spec)?;
 
         // Send Requests
         let response_futures = self.send_list_offsets_request(requests_by_server).await?;
@@ -338,7 +383,7 @@ impl FlussAdmin {
         let mut node_for_bucket_list: HashMap<i32, Vec<BucketId>> = HashMap::new();
 
         for bucket_id in buckets {
-            let table_bucket = TableBucket::new(table_id, *bucket_id);
+            let table_bucket = TableBucket::new_with_partition(table_id, partition_id, *bucket_id);
             let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
                 // todo: consider retry?
                 Error::UnexpectedError {

@@ -142,6 +142,27 @@ impl Metadata {
             .await
     }
 
+    pub async fn update_physical_table_metadata(
+        &self,
+        physical_table_paths: &[Arc<PhysicalTablePath>],
+    ) -> Result<()> {
+        let mut update_table_paths = HashSet::new();
+        let mut update_partition_paths = HashSet::new();
+        for physical_table_path in physical_table_paths {
+            match physical_table_path.get_partition_name() {
+                Some(_) => {
+                    update_partition_paths.insert(physical_table_path);
+                }
+                None => {
+                    update_table_paths.insert(physical_table_path.get_table_path());
+                }
+            }
+        }
+
+        self.update_tables_metadata(&update_table_paths, &update_partition_paths, vec![])
+            .await
+    }
+
     pub async fn check_and_update_table_metadata(&self, table_paths: &[TablePath]) -> Result<()> {
         let cluster_binding = self.cluster.read().clone();
         let need_update_table_paths: HashSet<&TablePath> = table_paths
