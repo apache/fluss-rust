@@ -25,6 +25,12 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <memory>  // for shared_ptr
+
+// Forward declare Arrow classes to avoid including heavy Arrow headers in header
+namespace arrow {
+    class RecordBatch;
+}
 
 namespace fluss {
 
@@ -336,6 +342,52 @@ struct ScanRecords {
     auto end() const { return records.end(); }
 };
 
+class ArrowRecordBatch {
+public:
+
+    std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
+
+    bool Available() const;
+
+    // Get number of rows in the batch
+    int64_t NumRows() const;
+    
+    // Get ScanBatch metadata
+    int64_t GetTableId() const;
+    int64_t GetPartitionId() const;
+    int32_t GetBucketId() const;
+    int64_t GetBaseOffset() const;
+    int64_t GetLastOffset() const;
+
+private:
+    friend class LogScanner;
+    explicit ArrowRecordBatch(
+        std::shared_ptr<arrow::RecordBatch> batch,
+        int64_t table_id,
+        int64_t partition_id,
+        int32_t bucket_id,
+        int64_t base_offset) noexcept;
+
+    std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
+
+    int64_t table_id_;
+    int64_t partition_id_;
+    int32_t bucket_id_;
+    int64_t base_offset_;
+};
+
+
+struct ArrowRecordBatches {
+    std::vector<std::unique_ptr<ArrowRecordBatch>> batches;
+
+    size_t Size() const { return batches.size(); }
+    bool Empty() const { return batches.empty(); }
+    const std::unique_ptr<ArrowRecordBatch>& operator[](size_t idx) const { return batches[idx]; }
+
+    auto begin() const { return batches.begin(); }
+    auto end() const { return batches.end(); }
+};
+
 struct BucketOffset {
     int64_t table_id;
     int64_t partition_id;
@@ -430,6 +482,8 @@ public:
     Result NewAppendWriter(AppendWriter& out);
     Result NewLogScanner(LogScanner& out);
     Result NewLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out);
+    Result NewRecordBatchLogScanner(LogScanner& out);
+    Result NewRecordBatchLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out);
 
     TableInfo GetTableInfo() const;
     TablePath GetTablePath() const;
@@ -481,6 +535,7 @@ public:
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
+    Result PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) const;
 
 private:
     friend class Table;

@@ -27,7 +27,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 anyhow = "1.0"
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["ffi"] }
 cxx = "1.0"
 fluss = { path = "../../crates/fluss" }
 tokio = { version = "1.27", features = ["rt-multi-thread", "macros"] }

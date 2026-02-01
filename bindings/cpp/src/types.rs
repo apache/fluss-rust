@@ -23,9 +23,12 @@ use arrow::array::{
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use fcore::row::InternalRow;
 use fluss as fcore;
 use std::borrow::Cow;
+
+use arrow::array::Array;
 
 pub const DATA_TYPE_BOOLEAN: i32 = 1;
 pub const DATA_TYPE_TINYINT: i32 = 2;
@@ -476,5 +479,32 @@ pub fn core_lake_snapshot_to_ffi(snapshot: &fcore::metadata::LakeSnapshot) -> ff
     ffi::FfiLakeSnapshot {
         snapshot_id: snapshot.snapshot_id,
         bucket_offsets,
+    }
+}
+
+pub fn core_scan_batches_to_ffi(
+    batches: &[fcore::record::ScanBatch],
+) -> ffi::FfiArrowRecordBatches {
+    let mut ffi_batches = Vec::new();
+    for batch in batches {
+        let record_batch = batch.batch();
+        // Convert RecordBatch to StructArray first, then get the data
+        let struct_array = arrow::array::StructArray::from(record_batch.clone());
+        let ffi_array = Box::new(FFI_ArrowArray::new(&struct_array.into_data()));
+        let ffi_schema =
+            Box::new(FFI_ArrowSchema::try_from(record_batch.schema().as_ref()).unwrap());
+        // Export as raw pointers
+        ffi_batches.push(ffi::FfiArrowRecordBatch {
+            array_ptr: Box::into_raw(ffi_array) as usize,
+            schema_ptr: Box::into_raw(ffi_schema) as usize,
+            table_id: batch.bucket().table_id(),
+            partition_id: batch.bucket().partition_id().unwrap_or(-1),
+            bucket_id: batch.bucket().bucket_id(),
+            base_offset: batch.base_offset(),
+        });
+    }
+
+    ffi::FfiArrowRecordBatches {
+        batches: ffi_batches,
     }
 }

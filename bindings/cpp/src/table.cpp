@@ -21,6 +21,8 @@
 #include "lib.rs.h"
 #include "ffi_converter.hpp"
 #include "rust/cxx.h"
+#include <arrow/c/bridge.h>
+#include <arrow/record_batch.h>
 
 namespace fluss {
 
@@ -93,6 +95,40 @@ Result Table::NewLogScannerWithProjection(const std::vector<size_t>& column_indi
             rust_indices.push_back(idx);
         }
         out.scanner_ = table_->new_log_scanner_with_projection(std::move(rust_indices));
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+Result Table::NewRecordBatchLogScanner(LogScanner& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        out.scanner_ = table_->new_record_batch_log_scanner();
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+Result Table::NewRecordBatchLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        rust::Vec<size_t> rust_indices;
+        for (size_t idx : column_indices) {
+            rust_indices.push_back(idx);
+        }
+        out.scanner_ = table_->new_record_batch_log_scanner_with_projection(std::move(rust_indices));
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -239,6 +275,91 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     }
 
     out = utils::from_ffi_scan_records(ffi_result.scan_records);
+    return utils::make_ok();
+}
+
+ArrowRecordBatch::ArrowRecordBatch(
+    std::shared_ptr<arrow::RecordBatch> batch,
+    int64_t table_id,
+    int64_t partition_id,
+    int32_t bucket_id,
+    int64_t base_offset) noexcept
+    : batch_(std::move(batch)),
+      table_id_(table_id),
+      partition_id_(partition_id),
+      bucket_id_(bucket_id),
+      base_offset_(base_offset) {}
+
+bool ArrowRecordBatch::Available() const { return batch_ != nullptr; }
+
+int64_t ArrowRecordBatch::NumRows() const {
+    if (!Available()) return 0;
+    return batch_->num_rows();
+}
+
+
+int64_t ArrowRecordBatch::GetTableId() const {
+    if (!Available()) return 0;
+    return this->table_id_;
+}
+
+int64_t ArrowRecordBatch::GetPartitionId() const {
+    if (!Available()) return -1;
+    return this->partition_id_;
+}
+
+int32_t ArrowRecordBatch::GetBucketId() const {
+    if (!Available()) return -1;
+    return this->bucket_id_;
+}
+
+int64_t ArrowRecordBatch::GetBaseOffset() const {
+    if (!Available()) return -1;
+    return this->base_offset_;
+}
+
+int64_t ArrowRecordBatch::GetLastOffset() const {
+    if (!Available()) return -1;
+    return this->NumRows() + this->base_offset_;
+}
+
+Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) const {
+    if (!Available()) {
+        return utils::make_error(1, "LogScanner not available");
+    }
+
+    auto ffi_result = scanner_->poll_record_batch(timeout_ms);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
+    }
+
+    // Convert the FFI Arrow record batches to C++ ArrowRecordBatch objects
+    out.batches.clear();
+    for (const auto& ffi_batch : ffi_result.arrow_batches.batches) {
+        auto* c_array = reinterpret_cast<struct ArrowArray*>(ffi_batch.array_ptr);
+        auto* c_schema = reinterpret_cast<struct ArrowSchema*>(ffi_batch.schema_ptr);
+
+        auto import_result = arrow::ImportRecordBatch(c_array, c_schema);
+        if (import_result.ok()) {
+            auto batch_ptr = import_result.ValueOrDie();
+            auto batch_wrapper = std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
+                std::move(batch_ptr),
+                ffi_batch.table_id,
+                ffi_batch.partition_id,
+                ffi_batch.bucket_id,
+                ffi_batch.base_offset
+            ));
+            out.batches.push_back(std::move(batch_wrapper));
+            
+            // Free the container structures that were allocated in Rust after successful import
+            ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
+        } else {
+            // Even if import failed, we should free the container structures to avoid leaks
+            ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
+        }
+    }
+    
     return utils::make_ok();
 }
 

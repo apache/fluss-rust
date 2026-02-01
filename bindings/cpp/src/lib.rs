@@ -119,6 +119,24 @@ mod ffi {
         scan_records: FfiScanRecords,
     }
 
+    struct FfiArrowRecordBatch {
+        array_ptr: usize,
+        schema_ptr: usize,
+        table_id: i64,
+        partition_id: i64,
+        bucket_id: i32,
+        base_offset: i64,
+    }
+
+    struct FfiArrowRecordBatches {
+        batches: Vec<FfiArrowRecordBatch>,
+    }
+
+    struct FfiArrowRecordBatchesResult {
+        result: FfiResult,
+        arrow_batches: FfiArrowRecordBatches,
+    }
+
     struct FfiLakeSnapshot {
         snapshot_id: i64,
         bucket_offsets: Vec<FfiBucketOffset>,
@@ -202,6 +220,11 @@ mod ffi {
             self: &Table,
             column_indices: Vec<usize>,
         ) -> Result<*mut LogScanner>;
+        fn new_record_batch_log_scanner(self: &Table) -> Result<*mut LogScanner>;
+        fn new_record_batch_log_scanner_with_projection(
+            self: &Table,
+            column_indices: Vec<usize>,
+        ) -> Result<*mut LogScanner>;
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
@@ -219,6 +242,8 @@ mod ffi {
             subscriptions: Vec<FfiBucketSubscription>,
         ) -> FfiResult;
         fn poll(self: &LogScanner, timeout_ms: i64) -> FfiScanRecordsResult;
+        fn poll_record_batch(self: &LogScanner, timeout_ms: i64) -> FfiArrowRecordBatchesResult;
+        fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize);
     }
 }
 
@@ -245,7 +270,8 @@ pub struct AppendWriter {
 }
 
 pub struct LogScanner {
-    inner: fcore::client::LogScanner,
+    inner: Option<fcore::client::LogScanner>,
+    inner_batch: Option<fcore::client::RecordBatchLogScanner>,
 }
 
 fn ok_result() -> ffi::FfiResult {
@@ -517,41 +543,101 @@ impl Table {
     }
 
     fn new_log_scanner(&self) -> Result<*mut LogScanner, String> {
-        let fluss_table = fcore::client::FlussTable::new(
-            &self.connection,
-            self.metadata.clone(),
-            self.table_info.clone(),
-        );
+        RUNTIME.block_on(async {
+            let fluss_table = fcore::client::FlussTable::new(
+                &self.connection,
+                self.metadata.clone(),
+                self.table_info.clone(),
+            );
 
-        let scanner = match fluss_table.new_scan().create_log_scanner() {
-            Ok(a) => a,
-            Err(e) => return Err(format!("Failed to create log scanner: {e}")),
-        };
-        let scanner = Box::into_raw(Box::new(LogScanner { inner: scanner }));
-        Ok(scanner)
+            let scanner = match fluss_table.new_scan().create_log_scanner() {
+                Ok(a) => a,
+                Err(e) => return Err(format!("Failed to create log scanner: {e}")),
+            };
+
+            let scanner_ptr = Box::into_raw(Box::new(LogScanner {
+                inner: Some(scanner),
+                inner_batch: None,
+            }));
+
+            Ok(scanner_ptr)
+        })
     }
 
     fn new_log_scanner_with_projection(
         &self,
         column_indices: Vec<usize>,
     ) -> Result<*mut LogScanner, String> {
-        let fluss_table = fcore::client::FlussTable::new(
-            &self.connection,
-            self.metadata.clone(),
-            self.table_info.clone(),
-        );
+        RUNTIME.block_on(async {
+            let fluss_table = fcore::client::FlussTable::new(
+                &self.connection,
+                self.metadata.clone(),
+                self.table_info.clone(),
+            );
 
-        let scan = fluss_table.new_scan();
-        let scan = match scan.project(&column_indices) {
-            Ok(s) => s,
-            Err(e) => return Err(format!("Failed to project columns: {e}")),
-        };
-        let scanner = match scan.create_log_scanner() {
-            Ok(a) => a,
-            Err(e) => return Err(format!("Failed to create log scanner: {e}")),
-        };
-        let scanner = Box::into_raw(Box::new(LogScanner { inner: scanner }));
-        Ok(scanner)
+            let scan = fluss_table.new_scan();
+            let scan = match scan.project(&column_indices) {
+                Ok(s) => s,
+                Err(e) => return Err(format!("Failed to project columns: {e}")),
+            };
+            let scanner = match scan.create_log_scanner() {
+                Ok(a) => a,
+                Err(e) => return Err(format!("Failed to create log scanner: {e}")),
+            };
+            let scanner = Box::into_raw(Box::new(LogScanner {
+                inner: Some(scanner),
+                inner_batch: None,
+            }));
+            Ok(scanner)
+        })
+    }
+
+    fn new_record_batch_log_scanner(&self) -> Result<*mut LogScanner, String> {
+        RUNTIME.block_on(async {
+            let fluss_table = fcore::client::FlussTable::new(
+                &self.connection,
+                self.metadata.clone(),
+                self.table_info.clone(),
+            );
+
+            let scanner = match fluss_table.new_scan().create_record_batch_log_scanner() {
+                Ok(a) => a,
+                Err(e) => return Err(format!("Failed to create record batch log scanner: {e}")),
+            };
+            let scanner = Box::into_raw(Box::new(LogScanner {
+                inner: None,
+                inner_batch: Some(scanner),
+            }));
+            Ok(scanner)
+        })
+    }
+
+    fn new_record_batch_log_scanner_with_projection(
+        &self,
+        column_indices: Vec<usize>,
+    ) -> Result<*mut LogScanner, String> {
+        RUNTIME.block_on(async {
+            let fluss_table = fcore::client::FlussTable::new(
+                &self.connection,
+                self.metadata.clone(),
+                self.table_info.clone(),
+            );
+
+            let scan = fluss_table.new_scan();
+            let scan = match scan.project(&column_indices) {
+                Ok(s) => s,
+                Err(e) => return Err(format!("Failed to project columns: {e}")),
+            };
+            let scanner = match scan.create_record_batch_log_scanner() {
+                Ok(a) => a,
+                Err(e) => return Err(format!("Failed to create record batch log scanner: {e}")),
+            };
+            let scanner = Box::into_raw(Box::new(LogScanner {
+                inner: None,
+                inner_batch: Some(scanner),
+            }));
+            Ok(scanner)
+        })
     }
 
     fn get_table_info_from_table(&self) -> ffi::FfiTableInfo {
@@ -610,14 +696,36 @@ unsafe fn delete_log_scanner(scanner: *mut LogScanner) {
     }
 }
 
+// Helper function to free the Arrow FFI structures separately (for use after ImportRecordBatch)
+pub extern "C" fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize) {
+    use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+    if array_ptr != 0 {
+        let _array = unsafe { Box::from_raw(array_ptr as *mut FFI_ArrowArray) };
+    }
+    if schema_ptr != 0 {
+        let _schema = unsafe { Box::from_raw(schema_ptr as *mut FFI_ArrowSchema) };
+    }
+}
+
 impl LogScanner {
     fn subscribe(&self, bucket_id: i32, start_offset: i64) -> ffi::FfiResult {
-        let result =
-            RUNTIME.block_on(async { self.inner.subscribe(bucket_id, start_offset).await });
+        if let Some(ref inner) = self.inner {
+            let result = RUNTIME.block_on(async { inner.subscribe(bucket_id, start_offset).await });
 
-        match result {
-            Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            match result {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else if let Some(ref inner_batch) = self.inner_batch {
+            let result =
+                RUNTIME.block_on(async { inner_batch.subscribe(bucket_id, start_offset).await });
+
+            match result {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else {
+            err_result(1, "LogScanner not initialized".to_string())
         }
     }
 
@@ -628,27 +736,69 @@ impl LogScanner {
             bucket_offsets.insert(sub.bucket_id, sub.offset);
         }
 
-        let result = RUNTIME.block_on(async { self.inner.subscribe_batch(&bucket_offsets).await });
+        if let Some(ref inner) = self.inner {
+            let result = RUNTIME.block_on(async { inner.subscribe_batch(&bucket_offsets).await });
 
-        match result {
-            Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            match result {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else if let Some(ref inner_batch) = self.inner_batch {
+            let result =
+                RUNTIME.block_on(async { inner_batch.subscribe_batch(&bucket_offsets).await });
+
+            match result {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else {
+            err_result(1, "LogScanner not initialized".to_string())
         }
     }
 
     fn poll(&self, timeout_ms: i64) -> ffi::FfiScanRecordsResult {
-        let timeout = Duration::from_millis(timeout_ms as u64);
-        let result = RUNTIME.block_on(async { self.inner.poll(timeout).await });
+        if let Some(ref inner) = self.inner {
+            let timeout = Duration::from_millis(timeout_ms as u64);
+            let result = RUNTIME.block_on(async { inner.poll(timeout).await });
 
-        match result {
-            Ok(records) => ffi::FfiScanRecordsResult {
-                result: ok_result(),
-                scan_records: types::core_scan_records_to_ffi(&records),
-            },
-            Err(e) => ffi::FfiScanRecordsResult {
-                result: err_result(1, e.to_string()),
+            match result {
+                Ok(records) => ffi::FfiScanRecordsResult {
+                    result: ok_result(),
+                    scan_records: types::core_scan_records_to_ffi(&records),
+                },
+                Err(e) => ffi::FfiScanRecordsResult {
+                    result: err_result(1, e.to_string()),
+                    scan_records: ffi::FfiScanRecords { records: vec![] },
+                },
+            }
+        } else {
+            ffi::FfiScanRecordsResult {
+                result: err_result(1, "Record-based scanner not available".to_string()),
                 scan_records: ffi::FfiScanRecords { records: vec![] },
-            },
+            }
+        }
+    }
+
+    fn poll_record_batch(&self, timeout_ms: i64) -> ffi::FfiArrowRecordBatchesResult {
+        if let Some(ref inner_batch) = self.inner_batch {
+            let timeout = Duration::from_millis(timeout_ms as u64);
+            let result = RUNTIME.block_on(async { inner_batch.poll(timeout).await });
+
+            match result {
+                Ok(batches) => ffi::FfiArrowRecordBatchesResult {
+                    result: ok_result(),
+                    arrow_batches: types::core_scan_batches_to_ffi(&batches),
+                },
+                Err(e) => ffi::FfiArrowRecordBatchesResult {
+                    result: err_result(1, e.to_string()),
+                    arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+                },
+            }
+        } else {
+            ffi::FfiArrowRecordBatchesResult {
+                result: err_result(1, "Batch-based scanner not available".to_string()),
+                arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+            }
         }
     }
 }
