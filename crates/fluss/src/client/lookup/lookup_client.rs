@@ -33,7 +33,7 @@ use log::{debug, error};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 /// A client that lookups values from the server with batching support.
@@ -53,8 +53,8 @@ pub struct LookupClient {
     lookup_tx: mpsc::Sender<LookupQuery>,
     /// Handle to the sender task
     sender_handle: Option<JoinHandle<()>>,
-    /// Shutdown signal sender
-    shutdown_tx: mpsc::Sender<()>,
+    /// Watch channel for internal shutdown handling
+    shutdown_tx: watch::Sender<bool>,
     /// Whether the client is closed
     closed: AtomicBool,
 }
@@ -73,24 +73,23 @@ impl LookupClient {
         let (queue, lookup_tx, re_enqueue_tx) =
             LookupQueue::new(queue_size, max_batch_size, batch_timeout_ms);
 
-        // Create sender
-        let mut sender =
-            LookupSender::new(metadata, queue, re_enqueue_tx, max_inflight, max_retries);
-
         // Create shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-        // Spawn sender task
+        // Create sender with shutdown receiver
+        let mut sender = LookupSender::new(
+            metadata,
+            queue,
+            re_enqueue_tx,
+            max_inflight,
+            max_retries,
+            shutdown_rx,
+        );
+
+        // Spawn sender task - sender handles shutdown internally
         let sender_handle = tokio::spawn(async move {
-            tokio::select! {
-                _ = sender.run() => {
-                    debug!("Lookup sender completed");
-                }
-                _ = shutdown_rx.recv() => {
-                    debug!("Lookup sender received shutdown signal");
-                    sender.initiate_close();
-                }
-            }
+            sender.run().await;
+            debug!("Lookup sender completed");
         });
 
         Self {
@@ -166,8 +165,8 @@ impl LookupClient {
         // Mark as closed to reject new lookups
         self.closed.store(true, Ordering::Release);
 
-        // Send shutdown signal
-        let _ = self.shutdown_tx.send(()).await;
+        // Send shutdown signal via watch channel
+        let _ = self.shutdown_tx.send(true);
 
         // Wait for sender to complete with timeout
         if let Some(handle) = self.sender_handle.take() {

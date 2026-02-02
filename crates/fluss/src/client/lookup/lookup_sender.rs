@@ -23,17 +23,17 @@
 use super::{LookupQuery, LookupQueue};
 use crate::client::metadata::Metadata;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::TableBucket;
+use crate::metadata::{TableBucket, TablePath};
 use crate::proto::LookupResponse;
 use crate::rpc::message::LookupRequest;
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
 use log::{debug, error, warn};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, watch};
 
 /// Lookup sender that batches and sends lookup requests.
 pub struct LookupSender {
@@ -51,6 +51,8 @@ pub struct LookupSender {
     running: AtomicBool,
     /// Whether to force close (abandon pending lookups)
     force_close: AtomicBool,
+    /// Shutdown signal receiver
+    shutdown_rx: watch::Receiver<bool>,
 }
 
 /// A batch of lookups going to the same table bucket.
@@ -113,6 +115,7 @@ impl LookupSender {
         re_enqueue_tx: mpsc::UnboundedSender<LookupQuery>,
         max_inflight_requests: usize,
         max_retries: i32,
+        shutdown_rx: watch::Receiver<bool>,
     ) -> Self {
         Self {
             metadata,
@@ -122,6 +125,7 @@ impl LookupSender {
             max_retries,
             running: AtomicBool::new(true),
             force_close: AtomicBool::new(false),
+            shutdown_rx,
         }
     }
 
@@ -129,9 +133,33 @@ impl LookupSender {
     pub async fn run(&mut self) {
         debug!("Starting Fluss lookup sender");
 
+        let mut shutdown_rx = self.shutdown_rx.clone();
+
         while self.running.load(Ordering::Acquire) {
-            if let Err(e) = self.run_once(false).await {
-                error!("Error in lookup sender: {}", e);
+            // Check for shutdown signal before entering select
+            if *shutdown_rx.borrow() {
+                debug!("Lookup sender received shutdown signal");
+                self.initiate_close();
+                break;
+            }
+
+            tokio::select! {
+                biased;
+
+                // Check shutdown signal
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        debug!("Lookup sender received shutdown signal during select");
+                        self.initiate_close();
+                    }
+                }
+
+                // Process lookups
+                result = self.run_once(false) => {
+                    if let Err(e) = result {
+                        error!("Error in lookup sender: {}", e);
+                    }
+                }
             }
         }
 
@@ -167,7 +195,27 @@ impl LookupSender {
         }
 
         // Group by leader
-        let lookup_batches = self.group_by_leader(lookups);
+        let (lookup_batches, unknown_leader_tables, unknown_leader_partition_ids) =
+            self.group_by_leader(lookups);
+
+        // Update metadata for tables with unknown leaders
+        if !unknown_leader_tables.is_empty() {
+            let table_paths_refs: HashSet<&TablePath> = unknown_leader_tables.iter().collect();
+            let partition_ids: Vec<PartitionId> =
+                unknown_leader_partition_ids.into_iter().collect();
+            if let Err(e) = self
+                .metadata
+                .update_tables_metadata(&table_paths_refs, &HashSet::new(), partition_ids)
+                .await
+            {
+                warn!("Failed to update metadata for unknown leader tables: {}", e);
+            } else {
+                debug!(
+                    "Updated metadata due to unknown leader tables during lookup: {:?}",
+                    unknown_leader_tables
+                );
+            }
+        }
 
         // If no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
         // no leader for all the lookup request in queue.
@@ -189,16 +237,19 @@ impl LookupSender {
     fn group_by_leader(
         &self,
         lookups: Vec<LookupQuery>,
-    ) -> HashMap<i32, HashMap<TableBucket, LookupBatch>> {
+    ) -> (
+        HashMap<i32, HashMap<TableBucket, LookupBatch>>,
+        HashSet<TablePath>,
+        HashSet<PartitionId>,
+    ) {
         let cluster = self.metadata.get_cluster();
         let mut batches_by_leader: HashMap<i32, HashMap<TableBucket, LookupBatch>> = HashMap::new();
+        let mut unknown_leader_tables: HashSet<TablePath> = HashSet::new();
+        let mut unknown_leader_partition_ids: HashSet<PartitionId> = HashSet::new();
 
         for lookup in lookups {
             let table_bucket = lookup.table_bucket().clone();
 
-            // TODO: Metadata requests are being sent too frequently here. consider first
-            // collecting the tables that need to be updated and then sending them together in
-            // one request.
             let leader = match cluster.leader_for(&table_bucket) {
                 Some(leader) => leader.id(),
                 None => {
@@ -206,6 +257,11 @@ impl LookupSender {
                         "No leader found for table bucket {} during lookup",
                         table_bucket
                     );
+                    // Collect tables with unknown leaders for metadata update
+                    unknown_leader_tables.insert(lookup.table_path().clone());
+                    if let Some(partition_id) = table_bucket.partition_id() {
+                        unknown_leader_partition_ids.insert(partition_id);
+                    }
                     self.re_enqueue_lookup(lookup);
                     continue;
                 }
@@ -219,7 +275,11 @@ impl LookupSender {
                 .add_lookup(lookup);
         }
 
-        batches_by_leader
+        (
+            batches_by_leader,
+            unknown_leader_tables,
+            unknown_leader_partition_ids,
+        )
     }
 
     /// Sends lookup requests to a specific destination server.
@@ -435,7 +495,13 @@ impl LookupSender {
     /// Re-enqueues a lookup for retry.
     fn re_enqueue_lookup(&self, lookup: LookupQuery) {
         if let Err(e) = self.re_enqueue_tx.send(lookup) {
+            // Ensure the caller does not hang by completing the lookup with an error.
             error!("Failed to re-enqueue lookup: {}", e);
+            let mut failed_lookup = e.0;
+            failed_lookup.complete(Err(Error::UnexpectedError {
+                message: "Failed to re-enqueue lookup: channel closed".to_string(),
+                source: None,
+            }));
         }
     }
 
