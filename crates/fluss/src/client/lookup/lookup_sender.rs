@@ -35,6 +35,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::{Semaphore, mpsc, watch};
 
+/// Server ID type alias for clarity.
+type ServerId = i32;
+
+/// Batches grouped by table bucket, keyed by server.
+type BatchesByLeader = HashMap<ServerId, HashMap<TableBucket, LookupBatch>>;
+
+/// Result of grouping lookups by leader.
+struct GroupByLeaderResult {
+    /// Lookup batches grouped by leader server.
+    batches_by_leader: BatchesByLeader,
+    /// Tables with unknown leaders that need metadata refresh.
+    unknown_leader_tables: HashSet<TablePath>,
+    /// Partition IDs with unknown leaders.
+    unknown_leader_partition_ids: HashSet<PartitionId>,
+}
+
 /// Lookup sender that batches and sends lookup requests.
 pub struct LookupSender {
     /// Metadata for leader lookup
@@ -195,8 +211,11 @@ impl LookupSender {
         }
 
         // Group by leader
-        let (lookup_batches, unknown_leader_tables, unknown_leader_partition_ids) =
-            self.group_by_leader(lookups);
+        let GroupByLeaderResult {
+            batches_by_leader: lookup_batches,
+            unknown_leader_tables,
+            unknown_leader_partition_ids,
+        } = self.group_by_leader(lookups);
 
         // Update metadata for tables with unknown leaders
         if !unknown_leader_tables.is_empty() {
@@ -234,16 +253,9 @@ impl LookupSender {
     }
 
     /// Groups lookups by leader server.
-    fn group_by_leader(
-        &self,
-        lookups: Vec<LookupQuery>,
-    ) -> (
-        HashMap<i32, HashMap<TableBucket, LookupBatch>>,
-        HashSet<TablePath>,
-        HashSet<PartitionId>,
-    ) {
+    fn group_by_leader(&self, lookups: Vec<LookupQuery>) -> GroupByLeaderResult {
         let cluster = self.metadata.get_cluster();
-        let mut batches_by_leader: HashMap<i32, HashMap<TableBucket, LookupBatch>> = HashMap::new();
+        let mut batches_by_leader: BatchesByLeader = HashMap::new();
         let mut unknown_leader_tables: HashSet<TablePath> = HashSet::new();
         let mut unknown_leader_partition_ids: HashSet<PartitionId> = HashSet::new();
 
@@ -275,11 +287,11 @@ impl LookupSender {
                 .add_lookup(lookup);
         }
 
-        (
+        GroupByLeaderResult {
             batches_by_leader,
             unknown_leader_tables,
             unknown_leader_partition_ids,
-        )
+        }
     }
 
     /// Sends lookup requests to a specific destination server.
