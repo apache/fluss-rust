@@ -885,19 +885,24 @@ mod kv_table_test {
             .expect("Failed to get table");
 
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
-            .create_writer()
-            .expect("Failed to create writer");
 
-        // Insert only even-numbered records (0, 2, 4, ..., 98)
+        // Insert only even-numbered records (0, 2, 4, ..., 98) in parallel
         let num_records = 100i32;
+        let mut upsert_futures = FuturesUnordered::new();
         for i in (0..num_records).step_by(2) {
-            let mut row = GenericRow::new(3);
-            row.set_field(0, i);
-            row.set_field(1, format!("name_{}", i));
-            row.set_field(2, (i * 100) as i64);
-            upsert_writer.upsert(&row).await.expect("Failed to upsert");
+            let mut writer = table_upsert
+                .create_writer()
+                .expect("Failed to create writer");
+            upsert_futures.push(async move {
+                let mut row = GenericRow::new(3);
+                row.set_field(0, i);
+                row.set_field(1, format!("name_{}", i));
+                row.set_field(2, (i * 100) as i64);
+                writer.upsert(&row).await.expect("Failed to upsert");
+            });
         }
+        // Wait for all upserts to complete
+        while upsert_futures.next().await.is_some() {}
 
         // Create multiple lookupers for concurrent lookups
         let num_lookupers = 50i32;
