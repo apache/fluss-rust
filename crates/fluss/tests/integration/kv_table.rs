@@ -851,4 +851,131 @@ mod kv_table_test {
             .await
             .expect("Failed to drop table");
     }
+
+    /// Integration test for concurrent batched lookups.
+    #[tokio::test]
+    async fn batched_concurrent_lookups() {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss".to_string(), "test_batched_lookups".to_string());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("value", DataTypes::bigint())
+                    .primary_key(vec!["id".to_string()])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+
+        // Insert only even-numbered records (0, 2, 4, ..., 98) in parallel
+        let num_records = 100i32;
+        let mut upsert_futures = FuturesUnordered::new();
+        for i in (0..num_records).step_by(2) {
+            let mut writer = table_upsert
+                .create_writer()
+                .expect("Failed to create writer");
+            upsert_futures.push(async move {
+                let mut row = GenericRow::new(3);
+                row.set_field(0, i);
+                row.set_field(1, format!("name_{}", i));
+                row.set_field(2, (i * 100) as i64);
+                writer.upsert(&row).await.expect("Failed to upsert");
+            });
+        }
+        // Wait for all upserts to complete
+        while upsert_futures.next().await.is_some() {}
+
+        // Create multiple lookupers for concurrent lookups
+        let num_lookupers = 50i32;
+        let mut lookupers: Vec<_> = (0..num_lookupers)
+            .map(|_| {
+                table
+                    .new_lookup()
+                    .expect("Failed to create lookup")
+                    .create_lookuper()
+                    .expect("Failed to create lookuper")
+            })
+            .collect();
+
+        // Run concurrent lookups
+        let mut futures = FuturesUnordered::new();
+        for (i, lookuper) in lookupers.iter_mut().enumerate() {
+            // First 10 lookupers all lookup id=0 (same key multiple times)
+            let id = if i < 10 { 0 } else { i as i32 };
+            let expects_result = id % 2 == 0; // Even IDs exist
+
+            futures.push(async move {
+                let key = make_key(id);
+                let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+                let row_opt = result.get_single_row().expect("Failed to get row");
+
+                if expects_result {
+                    let row = row_opt.unwrap_or_else(|| panic!("Row {} should exist", id));
+                    assert_eq!(row.get_int(0), id, "id mismatch for key {}", id);
+                    assert_eq!(
+                        row.get_string(1),
+                        format!("name_{}", id),
+                        "name mismatch for key {}",
+                        id
+                    );
+                    assert_eq!(
+                        row.get_long(2),
+                        (id * 100) as i64,
+                        "value mismatch for key {}",
+                        id
+                    );
+                } else {
+                    assert!(row_opt.is_none(), "Row {} should not exist", id);
+                }
+                (id, expects_result)
+            });
+        }
+
+        // Collect all results and verify
+        let mut results = Vec::with_capacity(num_lookupers as usize);
+        while let Some(result) = futures.next().await {
+            results.push(result);
+        }
+
+        // Verify all lookups completed successfully
+        assert_eq!(
+            results.len(),
+            num_lookupers as usize,
+            "Not all lookups completed"
+        );
+
+        // Verify we had the expected mix of scenarios
+        let same_key_lookups = results.iter().filter(|(id, _)| *id == 0).count();
+        assert_eq!(same_key_lookups, 10, "Should have 10 lookups for same key");
+
+        let non_existing_lookups = results.iter().filter(|(_, exists)| !exists).count();
+        assert!(
+            non_existing_lookups > 0,
+            "Should have some non-existing key lookups"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
 }

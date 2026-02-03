@@ -17,6 +17,7 @@
 
 use crate::bucketing::BucketingFunction;
 use crate::client::connection::FlussConnection;
+use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
 use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
@@ -25,8 +26,6 @@ use crate::record::kv::SCHEMA_ID_LENGTH;
 use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
-use crate::rpc::ApiError;
-use crate::rpc::message::LookupRequest;
 use std::sync::Arc;
 
 /// The result of a lookup operation.
@@ -127,7 +126,11 @@ impl<'a> TableLookup<'a> {
     ///
     /// The lookuper will automatically encode the key and compute the bucket
     /// for each lookup using the appropriate bucketing function.
-    pub fn create_lookuper(self) -> Result<Lookuper<'a>> {
+    ///
+    /// The lookuper uses a shared `LookupClient` that batches multiple lookup
+    /// operations together to reduce network round trips. This achieves parity
+    /// with the Java client implementation for improved throughput.
+    pub fn create_lookuper(self) -> Result<Lookuper> {
         let num_buckets = self.table_info.get_num_buckets();
 
         // Get data lake format from table config for bucketing function
@@ -162,11 +165,14 @@ impl<'a> TableLookup<'a> {
             None
         };
 
+        // Get or create the shared lookup client
+        let lookup_client = self.conn.get_or_create_lookup_client()?;
+
         Ok(Lookuper {
-            conn: self.conn,
             table_path: Arc::new(self.table_info.table_path.clone()),
             table_info: self.table_info,
             metadata: self.metadata,
+            lookup_client,
             bucketing_function,
             primary_key_encoder,
             bucket_key_encoder,
@@ -179,7 +185,7 @@ impl<'a> TableLookup<'a> {
 /// Performs key-based lookups against a primary key table.
 ///
 /// The `Lookuper` automatically encodes the lookup key, computes the target
-/// bucket, finds the appropriate tablet server, and retrieves the value.
+/// bucket, and retrieves the value using the batched `LookupClient`.
 ///
 /// # Example
 /// ```ignore
@@ -187,11 +193,11 @@ impl<'a> TableLookup<'a> {
 /// let row = GenericRow::new(vec![Datum::Int32(42)]); // lookup key
 /// let result = lookuper.lookup(&row).await?;
 /// ```
-pub struct Lookuper<'a> {
-    conn: &'a FlussConnection,
-    table_info: TableInfo,
+pub struct Lookuper {
     table_path: Arc<TablePath>,
+    table_info: TableInfo,
     metadata: Arc<Metadata>,
+    lookup_client: Arc<LookupClient>,
     bucketing_function: Box<dyn BucketingFunction>,
     primary_key_encoder: Box<dyn KeyEncoder>,
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
@@ -199,11 +205,12 @@ pub struct Lookuper<'a> {
     num_buckets: i32,
 }
 
-impl<'a> Lookuper<'a> {
+impl Lookuper {
     /// Looks up a value by its primary key.
     ///
     /// The key is encoded and the bucket is automatically computed using
-    /// the table's bucketing function.
+    /// the table's bucketing function. The lookup is queued and batched
+    /// with other lookups for improved throughput.
     ///
     /// # Arguments
     /// * `row` - The row containing the primary key field values
@@ -212,12 +219,10 @@ impl<'a> Lookuper<'a> {
     /// * `Ok(LookupResult)` - The lookup result (may be empty if key not found)
     /// * `Err(Error)` - If the lookup fails
     pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult<'_>> {
-        // todo: support batch lookup
         let pk_bytes = self.primary_key_encoder.encode_key(row)?;
-        let pk_bytes_vec = pk_bytes.to_vec();
         let bk_bytes = match &mut self.bucket_key_encoder {
-            Some(encoder) => &encoder.encode_key(row)?,
-            None => &pk_bytes,
+            Some(encoder) => encoder.encode_key(row)?,
+            None => pk_bytes.clone(),
         };
 
         let partition_id = if let Some(ref partition_getter) = self.partition_getter {
@@ -240,64 +245,24 @@ impl<'a> Lookuper<'a> {
 
         let bucket_id = self
             .bucketing_function
-            .bucketing(bk_bytes, self.num_buckets)?;
+            .bucketing(&bk_bytes, self.num_buckets)?;
 
         let table_id = self.table_info.get_table_id();
         let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
 
-        // Find the leader for this bucket
-        let cluster = self.metadata.get_cluster();
-        let leader = self
-            .metadata
-            .leader_for(self.table_path.as_ref(), &table_bucket)
-            .await?
-            .ok_or_else(|| Error::LeaderNotAvailable {
-                message: format!("No leader found for table bucket: {table_bucket}"),
-            })?;
+        // Use the batched lookup client
+        let result = self
+            .lookup_client
+            .lookup(self.table_path.as_ref().clone(), table_bucket, pk_bytes)
+            .await?;
 
-        // Get connection to the tablet server
-        let tablet_server =
-            cluster
-                .get_tablet_server(leader.id())
-                .ok_or_else(|| Error::LeaderNotAvailable {
-                    message: format!(
-                        "Tablet server {} is not found in metadata cache",
-                        leader.id()
-                    ),
-                })?;
-
-        let connections = self.conn.get_connections();
-        let connection = connections.get_connection(tablet_server).await?;
-
-        // Send lookup request
-        let request = LookupRequest::new(table_id, partition_id, bucket_id, vec![pk_bytes_vec]);
-        let response = connection.request(request).await?;
-
-        // Extract the values from response
-        if let Some(bucket_resp) = response.buckets_resp.into_iter().next() {
-            // Check for errors
-            if let Some(error_code) = bucket_resp.error_code {
-                if error_code != 0 {
-                    return Err(Error::FlussAPIError {
-                        api_error: ApiError {
-                            code: error_code,
-                            message: bucket_resp.error_message.unwrap_or_default(),
-                        },
-                    });
-                }
-            }
-
-            // Collect all values
-            let rows: Vec<Vec<u8>> = bucket_resp
-                .values
-                .into_iter()
-                .filter_map(|pb_value| pb_value.values)
-                .collect();
-
-            return Ok(LookupResult::new(rows, self.table_info.row_type()));
+        match result {
+            Some(value_bytes) => Ok(LookupResult::new(
+                vec![value_bytes],
+                self.table_info.row_type(),
+            )),
+            None => Ok(LookupResult::empty(self.table_info.row_type())),
         }
-
-        Ok(LookupResult::empty(self.table_info.row_type()))
     }
 
     /// Returns a reference to the table info.
