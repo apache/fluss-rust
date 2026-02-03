@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "fluss.hpp"
+#include <arrow/record_batch.h>
 
-#include <iostream>
-#include <vector>
-#include <unordered_map>
 #include <chrono>
+#include <iostream>
+#include <unordered_map>
+#include <vector>
+
+#include "fluss.hpp"
 
 static void check(const char* step, const fluss::Result& r) {
     if (!r.Ok()) {
@@ -179,6 +181,7 @@ int main() {
     
     // 8.1) Query earliest offsets for all buckets
     std::vector<int32_t> all_bucket_ids;
+    all_bucket_ids.reserve(buckets);
     for (int b = 0; b < buckets; ++b) {
         all_bucket_ids.push_back(b);
     }
@@ -248,6 +251,55 @@ int main() {
     }
     if (batch_records.Size() > 5) {
         std::cout << "  ... and " << (batch_records.Size() - 5) << " more records" << std::endl;
+    }
+
+    // 9) Test the new Arrow record batch polling functionality
+    std::cout << "\n=== Testing Arrow Record Batch Polling ===" << std::endl;
+    
+    fluss::LogScanner arrow_scanner;
+    check("new_record_batch_log_scanner", table.NewRecordBatchLogScanner(arrow_scanner));
+    
+    // Subscribe to all buckets starting from offset 0
+    for (int b = 0; b < buckets; ++b) {
+        check("subscribe_arrow", arrow_scanner.Subscribe(b, 0));
+    }
+    
+    fluss::ArrowRecordBatches arrow_batches;
+    check("poll_record_batch", arrow_scanner.PollRecordBatch(5000, arrow_batches));
+    
+    std::cout << "Polled " << arrow_batches.Size() << " Arrow record batches" << std::endl;
+    for (size_t i = 0; i < arrow_batches.Size(); ++i) {
+        const auto& batch = arrow_batches[i];
+        if (batch->Available()) {
+            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows() << " rows. " << std::endl;
+        } else {
+            std::cout << "  Batch " << i << ": not available" << std::endl;
+        }
+    }
+    
+    // 10) Test the new Arrow record batch polling with projection
+    std::cout << "\n=== Testing Arrow Record Batch Polling with Projection ===" << std::endl;
+    
+    fluss::LogScanner projected_arrow_scanner;
+    check("new_record_batch_log_scanner_with_projection", 
+          table.NewRecordBatchLogScannerWithProjection(projected_columns, projected_arrow_scanner));
+    
+    // Subscribe to all buckets starting from offset 0
+    for (int b = 0; b < buckets; ++b) {
+        check("subscribe_projected_arrow", projected_arrow_scanner.Subscribe(b, 0));
+    }
+    
+    fluss::ArrowRecordBatches projected_arrow_batches;
+    check("poll_projected_record_batch", projected_arrow_scanner.PollRecordBatch(5000, projected_arrow_batches));
+    
+    std::cout << "Polled " << projected_arrow_batches.Size() << " projected Arrow record batches" << std::endl;
+    for (size_t i = 0; i < projected_arrow_batches.Size(); ++i) {
+        const auto& batch = projected_arrow_batches[i];
+        if (batch->Available()) {
+            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows() << " rows " << std::endl;
+        } else {
+            std::cout << "  Batch " << i << ": not available" << std::endl;
+        }
     }
 
     return 0;

@@ -29,6 +29,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Threads REQUIRED)
 
+find_package(Arrow REQUIRED)
+
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
@@ -88,12 +90,16 @@ target_sources(fluss_cpp PRIVATE ${RUST_HEADER_FILE})
 target_include_directories(fluss_cpp PUBLIC ${CPP_INCLUDE_DIR})
 target_link_libraries(fluss_cpp PUBLIC ${RUST_LIB})
 target_link_libraries(fluss_cpp PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+target_link_libraries(fluss_cpp PUBLIC Arrow::arrow_shared)
+target_compile_definitions(fluss_cpp PRIVATE ARROW_FOUND)
 if(APPLE)
     target_link_libraries(fluss_cpp PUBLIC "-framework CoreFoundation" "-framework Security")
 endif()
 
 add_executable(fluss_cpp_example examples/example.cpp)
-target_link_libraries(fluss_cpp_example fluss_cpp)
+target_link_libraries(fluss_cpp_example PRIVATE fluss_cpp)
+target_link_libraries(fluss_cpp_example PRIVATE Arrow::arrow_shared)
+target_compile_definitions(fluss_cpp_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_example PUBLIC ${CPP_INCLUDE_DIR})
 
 set_target_properties(fluss_cpp
