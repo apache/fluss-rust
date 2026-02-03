@@ -1590,8 +1590,8 @@ mod tests {
 
         assert_eq!(
             to_arrow_type(&DataTypes::row(vec![
-                DataTypes::field("f1".to_string(), DataTypes::int()),
-                DataTypes::field("f2".to_string(), DataTypes::string()),
+                DataTypes::field("f1", DataTypes::int()),
+                DataTypes::field("f2", DataTypes::string()),
             ]))
             .unwrap(),
             ArrowDataType::Struct(arrow_schema::Fields::from(vec![
@@ -1654,8 +1654,8 @@ mod tests {
     #[test]
     fn projection_rejects_out_of_bounds_index() {
         let row_type = RowType::new(vec![
-            DataField::new("id".to_string(), DataTypes::int(), None),
-            DataField::new("name".to_string(), DataTypes::string(), None),
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("name", DataTypes::string(), None),
         ]);
         let schema = to_arrow_schema(&row_type).unwrap();
         let result = ReadContext::with_projection_pushdown(schema, vec![0, 2], false);
@@ -1722,7 +1722,7 @@ mod tests {
 
         // Test 1: Rescaling from scale 3 to scale 2
         let row_type = RowType::new(vec![DataField::new(
-            "amount".to_string(),
+            "amount",
             DataTypes::decimal(10, 2),
             None,
         )]);
@@ -1743,7 +1743,7 @@ mod tests {
 
         // Test 2: Precision overflow (should error)
         let row_type = RowType::new(vec![DataField::new(
-            "amount".to_string(),
+            "amount",
             DataTypes::decimal(5, 2),
             None,
         )]);

@@ -64,13 +64,7 @@ mod admin_test {
 
         let db_descriptor = DatabaseDescriptorBuilder::default()
             .comment("test_db")
-            .custom_properties(
-                [
-                    ("k1".to_string(), "v1".to_string()),
-                    ("k2".to_string(), "v2".to_string()),
-                ]
-                .into(),
-            )
+            .custom_properties([("k1", "v1"), ("k2", "v2")].into())
             .build();
 
         let db_name = "test_create_database";
@@ -128,7 +122,7 @@ mod admin_test {
             .expect("Failed to create test database");
 
         let test_table_name = "test_user_table";
-        let table_path = TablePath::new(test_db_name.to_string(), test_table_name.to_string());
+        let table_path = TablePath::new(test_db_name, test_table_name);
 
         // build table schema
         let table_schema = Schema::builder()
@@ -250,25 +244,21 @@ mod admin_test {
             .expect("Failed to create test database");
 
         let test_table_name = "partitioned_table";
-        let table_path = TablePath::new(test_db_name.to_string(), test_table_name.to_string());
+        let table_path = TablePath::new(test_db_name, test_table_name);
 
         let table_schema = Schema::builder()
             .column("id", DataTypes::int())
             .column("name", DataTypes::string())
             .column("dt", DataTypes::string())
             .column("region", DataTypes::string())
-            .primary_key(vec![
-                "id".to_string(),
-                "dt".to_string(),
-                "region".to_string(),
-            ])
+            .primary_key(vec!["id", "dt", "region"])
             .build()
             .expect("Failed to build table schema");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(table_schema)
             .distributed_by(Some(3), vec!["id".to_string()])
-            .partitioned_by(vec!["dt".to_string(), "region".to_string()])
+            .partitioned_by(vec!["dt", "region"])
             .property("table.replication.factor", "1")
             .log_format(LogFormat::ARROW)
             .kv_format(KvFormat::COMPACTED)
@@ -291,8 +281,8 @@ mod admin_test {
         );
 
         let mut partition_values = HashMap::new();
-        partition_values.insert("dt".to_string(), "2024-01-15".to_string());
-        partition_values.insert("region".to_string(), "EMEA".to_string());
+        partition_values.insert("dt", "2024-01-15");
+        partition_values.insert("region", "EMEA");
         let partition_spec = PartitionSpec::new(partition_values);
 
         admin
@@ -317,7 +307,7 @@ mod admin_test {
 
         // list with partial spec filter - should find the partition
         let mut partition_values = HashMap::new();
-        partition_values.insert("dt".to_string(), "2024-01-15".to_string());
+        partition_values.insert("dt", "2024-01-15");
         let partial_partition_spec = PartitionSpec::new(partition_values);
 
         let partitions_with_spec = admin
@@ -337,7 +327,7 @@ mod admin_test {
 
         // list with non-matching spec - should find no partitions
         let mut non_matching_values = HashMap::new();
-        non_matching_values.insert("dt".to_string(), "2024-01-16".to_string());
+        non_matching_values.insert("dt", "2024-01-16");
         let non_matching_spec = PartitionSpec::new(non_matching_values);
         let partitions_non_matching = admin
             .list_partition_infos_with_spec(&table_path, Some(&non_matching_spec))
@@ -382,7 +372,7 @@ mod admin_test {
             .await
             .expect("Failed to get admin client");
 
-        let table_path = TablePath::new("fluss".to_string(), "not_exist".to_string());
+        let table_path = TablePath::new("fluss", "not_exist");
 
         let result = admin.get_table(&table_path).await;
         assert!(result.is_err(), "Expected error but got Ok");

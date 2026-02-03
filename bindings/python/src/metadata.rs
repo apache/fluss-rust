@@ -218,11 +218,11 @@ impl TableDescriptor {
         schema: &Schema, // fluss schema
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        let mut partition_keys = Vec::new();
+        let mut partition_keys: Vec<String> = Vec::new();
         let mut bucket_count = None;
         let mut bucket_keys = Vec::new();
-        let mut properties = std::collections::HashMap::new();
-        let mut custom_properties = std::collections::HashMap::new();
+        let mut properties: HashMap<String, String> = HashMap::new();
+        let mut custom_properties: HashMap<String, String> = HashMap::new();
         let mut comment: Option<String> = None;
         let mut log_format = None;
         let mut kv_format = None;

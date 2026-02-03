@@ -66,7 +66,7 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_upsert_and_lookup".to_string());
+        let table_path = TablePath::new("fluss", "test_upsert_and_lookup");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -74,7 +74,7 @@ mod kv_table_test {
                     .column("id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .column("age", DataTypes::bigint())
-                    .primary_key(vec!["id".to_string()])
+                    .primary_key(vec!["id"])
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -223,7 +223,7 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_composite_pk".to_string());
+        let table_path = TablePath::new("fluss", "test_composite_pk");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -231,7 +231,7 @@ mod kv_table_test {
                     .column("region", DataTypes::string())
                     .column("user_id", DataTypes::int())
                     .column("score", DataTypes::bigint())
-                    .primary_key(vec!["region".to_string(), "user_id".to_string()])
+                    .primary_key(vec!["region", "user_id"])
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -335,7 +335,7 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_partial_update".to_string());
+        let table_path = TablePath::new("fluss", "test_partial_update");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -344,7 +344,7 @@ mod kv_table_test {
                     .column("name", DataTypes::string())
                     .column("age", DataTypes::bigint())
                     .column("score", DataTypes::bigint())
-                    .primary_key(vec!["id".to_string()])
+                    .primary_key(vec!["id"])
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -446,8 +446,7 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path =
-            TablePath::new("fluss".to_string(), "test_partitioned_kv_table".to_string());
+        let table_path = TablePath::new("fluss", "test_partitioned_kv_table");
 
         // Create a partitioned KV table with region as partition key
         let table_descriptor = TableDescriptor::builder()
@@ -457,11 +456,11 @@ mod kv_table_test {
                     .column("user_id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .column("score", DataTypes::bigint())
-                    .primary_key(vec!["region".to_string(), "user_id".to_string()])
+                    .primary_key(vec!["region", "user_id"])
                     .build()
                     .expect("Failed to build schema"),
             )
-            .partitioned_by(vec!["region".to_string()])
+            .partitioned_by(vec!["region"])
             .build()
             .expect("Failed to build table");
 
@@ -614,7 +613,7 @@ mod kv_table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_all_datatypes".to_string());
+        let table_path = TablePath::new("fluss", "test_all_datatypes");
 
         // Create a table with all supported primitive datatypes
         let table_descriptor = TableDescriptor::builder()
@@ -645,7 +644,7 @@ mod kv_table_test {
                     // Binary types
                     .column("col_bytes", DataTypes::bytes())
                     .column("col_binary", DataTypes::binary(20))
-                    .primary_key(vec!["pk_int".to_string()])
+                    .primary_key(vec!["pk_int"])
                     .build()
                     .expect("Failed to build schema"),
             )

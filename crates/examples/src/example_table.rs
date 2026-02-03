@@ -44,7 +44,7 @@ pub async fn main() -> Result<()> {
         )
         .build()?;
 
-    let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
+    let table_path = TablePath::new("fluss", "rust_test_long");
 
     let admin = conn.get_admin().await?;
 

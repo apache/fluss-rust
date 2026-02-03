@@ -403,8 +403,8 @@ mod tests {
     fn sanity_check() {
         // No target columns specified but table has auto-increment column
         let fields = vec![
-            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
-            DataField::new("name".to_string(), DataTypes::string(), None),
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string(), None),
         ];
         let row_type = RowType::new(fields);
         let primary_keys = vec!["id".to_string()];
@@ -424,9 +424,9 @@ mod tests {
 
         // Target columns do not contain primary key
         let fields = vec![
-            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
-            DataField::new("name".to_string(), DataTypes::string(), None),
-            DataField::new("value".to_string(), DataTypes::int(), None),
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string(), None),
+            DataField::new("value", DataTypes::int(), None),
         ];
         let row_type = RowType::new(fields);
         let primary_keys = vec!["id".to_string()];
@@ -449,8 +449,8 @@ mod tests {
 
         // Primary key column not found in row type
         let fields = vec![
-            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
-            DataField::new("name".to_string(), DataTypes::string(), None),
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string(), None),
         ];
         let row_type = RowType::new(fields);
         let primary_keys = vec!["nonexistent_pk".to_string()];
@@ -473,13 +473,9 @@ mod tests {
 
         // Target columns include auto-increment column
         let fields = vec![
-            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
-            DataField::new(
-                "seq".to_string(),
-                DataTypes::bigint().as_non_nullable(),
-                None,
-            ),
-            DataField::new("name".to_string(), DataTypes::string(), None),
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
+            DataField::new("seq", DataTypes::bigint().as_non_nullable(), None),
+            DataField::new("name", DataTypes::string(), None),
         ];
         let row_type = RowType::new(fields);
         let primary_keys = vec!["id".to_string()];
@@ -499,13 +495,13 @@ mod tests {
 
         // Non-nullable column not in target columns (partial update requires nullable)
         let fields = vec![
-            DataField::new("id".to_string(), DataTypes::int().as_non_nullable(), None),
+            DataField::new("id", DataTypes::int().as_non_nullable(), None),
             DataField::new(
-                "required_field".to_string(),
+                "required_field",
                 DataTypes::string().as_non_nullable(),
                 None,
             ),
-            DataField::new("optional_field".to_string(), DataTypes::int(), None),
+            DataField::new("optional_field", DataTypes::int(), None),
         ];
         let row_type = RowType::new(fields);
         let primary_keys = vec!["id".to_string()];
