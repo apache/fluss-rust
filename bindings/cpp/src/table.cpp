@@ -22,6 +22,8 @@
 #include "ffi_converter.hpp"
 #include "rust/cxx.h"
 #include <arrow/c/bridge.h>
+// todo:  bindings/cpp/BUILD.bazel still doesn’t declare Arrow include/link dependencies.
+// In environments where Bazel does not already have Arrow available, this will fail at compile/link time.
 #include <arrow/record_batch.h>
 
 namespace fluss {
@@ -320,10 +322,10 @@ int64_t ArrowRecordBatch::GetBaseOffset() const {
 
 int64_t ArrowRecordBatch::GetLastOffset() const {
     if (!Available()) return -1;
-    return this->NumRows() + this->base_offset_;
+    return this->base_offset_ + this->NumRows() - 1;
 }
 
-Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) const {
+Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) {
     if (!Available()) {
         return utils::make_error(1, "LogScanner not available");
     }
@@ -355,8 +357,12 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
             // Free the container structures that were allocated in Rust after successful import
             ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
         } else {
-            // Even if import failed, we should free the container structures to avoid leaks
+            // Import failed, free the container structures to avoid leaks and return error
             ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
+            
+            // Return an error indicating that the import failed
+            std::string error_msg = "Failed to import Arrow record batch: " + import_result.status().ToString();
+            return utils::make_error(1, error_msg);
         }
     }
     

@@ -271,8 +271,7 @@ int main() {
     for (size_t i = 0; i < arrow_batches.Size(); ++i) {
         const auto& batch = arrow_batches[i];
         if (batch->Available()) {
-            std::cout << "  Batch " << i << ": " << batch->NumRows() << " rows, " 
-                      <<batch->GetArrowRecordBatch()->num_rows() << " bytes of serialized data" << std::endl;
+            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows() << " rows. " << std::endl;
         } else {
             std::cout << "  Batch " << i << ": not available" << std::endl;
         }
@@ -297,8 +296,7 @@ int main() {
     for (size_t i = 0; i < projected_arrow_batches.Size(); ++i) {
         const auto& batch = projected_arrow_batches[i];
         if (batch->Available()) {
-            std::cout << "  Batch " << i << ": " << batch->NumRows() << " rows, " 
-                      << batch->GetArrowRecordBatch()->num_rows() << " bytes of serialized data" << std::endl;
+            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows() << " rows " << std::endl;
         } else {
             std::cout << "  Batch " << i << ": not available" << std::endl;
         }

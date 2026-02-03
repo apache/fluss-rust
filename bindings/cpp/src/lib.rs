@@ -785,9 +785,15 @@ impl LogScanner {
             let result = RUNTIME.block_on(async { inner_batch.poll(timeout).await });
 
             match result {
-                Ok(batches) => ffi::FfiArrowRecordBatchesResult {
-                    result: ok_result(),
-                    arrow_batches: types::core_scan_batches_to_ffi(&batches),
+                Ok(batches) => match types::core_scan_batches_to_ffi(&batches) {
+                    Ok(arrow_batches) => ffi::FfiArrowRecordBatchesResult {
+                        result: ok_result(),
+                        arrow_batches,
+                    },
+                    Err(e) => ffi::FfiArrowRecordBatchesResult {
+                        result: err_result(1, e),
+                        arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+                    },
                 },
                 Err(e) => ffi::FfiArrowRecordBatchesResult {
                     result: err_result(1, e.to_string()),

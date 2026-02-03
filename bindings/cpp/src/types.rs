@@ -484,15 +484,16 @@ pub fn core_lake_snapshot_to_ffi(snapshot: &fcore::metadata::LakeSnapshot) -> ff
 
 pub fn core_scan_batches_to_ffi(
     batches: &[fcore::record::ScanBatch],
-) -> ffi::FfiArrowRecordBatches {
+) -> Result<ffi::FfiArrowRecordBatches, String> {
     let mut ffi_batches = Vec::new();
     for batch in batches {
         let record_batch = batch.batch();
         // Convert RecordBatch to StructArray first, then get the data
         let struct_array = arrow::array::StructArray::from(record_batch.clone());
         let ffi_array = Box::new(FFI_ArrowArray::new(&struct_array.into_data()));
-        let ffi_schema =
-            Box::new(FFI_ArrowSchema::try_from(record_batch.schema().as_ref()).unwrap());
+        let ffi_schema = Box::new(
+            FFI_ArrowSchema::try_from(record_batch.schema().as_ref()).map_err(|e| e.to_string())?,
+        );
         // Export as raw pointers
         ffi_batches.push(ffi::FfiArrowRecordBatch {
             array_ptr: Box::into_raw(ffi_array) as usize,
@@ -504,7 +505,7 @@ pub fn core_scan_batches_to_ffi(
         });
     }
 
-    ffi::FfiArrowRecordBatches {
+    Ok(ffi::FfiArrowRecordBatches {
         batches: ffi_batches,
-    }
+    })
 }

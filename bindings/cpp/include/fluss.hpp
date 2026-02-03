@@ -19,13 +19,11 @@
 
 #pragma once
 
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <memory>  // for shared_ptr
 
 // Forward declare Arrow classes to avoid including heavy Arrow headers in header
 namespace arrow {
@@ -535,7 +533,7 @@ public:
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
-    Result PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) const;
+    Result PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out);
 
 private:
     friend class Table;
