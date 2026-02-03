@@ -120,7 +120,7 @@ mod tests {
         fn new(data_types: Vec<crate::metadata::DataType>) -> Self {
             let mut builder = Schema::builder();
             for (i, dt) in data_types.iter().enumerate() {
-                builder = builder.column(&format!("field{i}"), dt.clone());
+                builder = builder.column(format!("field{i}"), dt.clone());
             }
             let schema = builder.build().expect("Failed to build schema");
 

@@ -36,12 +36,12 @@ pub async fn main() -> Result<()> {
                 .column("id", DataTypes::int())
                 .column("name", DataTypes::string())
                 .column("age", DataTypes::bigint())
-                .primary_key(vec!["id".to_string()])
+                .primary_key(vec!["id"])
                 .build()?,
         )
         .build()?;
 
-    let table_path = TablePath::new("fluss".to_owned(), "rust_upsert_lookup_example".to_owned());
+    let table_path = TablePath::new("fluss", "rust_upsert_lookup_example");
 
     let admin = conn.get_admin().await?;
     admin

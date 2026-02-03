@@ -36,16 +36,16 @@ pub struct Column {
 }
 
 impl Column {
-    pub fn new(name: &str, data_type: DataType) -> Self {
+    pub fn new<N: Into<String>>(name: N, data_type: DataType) -> Self {
         Self {
-            name: name.to_string(),
+            name: name.into(),
             data_type,
             comment: None,
         }
     }
 
-    pub fn with_comment(mut self, comment: &str) -> Self {
-        self.comment = Some(comment.to_string());
+    pub fn with_comment<C: Into<String>>(mut self, comment: C) -> Self {
+        self.comment = Some(comment.into());
         self
     }
 
@@ -78,9 +78,9 @@ pub struct PrimaryKey {
 }
 
 impl PrimaryKey {
-    pub fn new(constraint_name: &str, column_names: Vec<String>) -> Self {
+    pub fn new<N: Into<String>>(constraint_name: N, column_names: Vec<String>) -> Self {
         Self {
-            constraint_name: constraint_name.to_string(),
+            constraint_name: constraint_name.into(),
             column_names,
         }
     }
@@ -178,8 +178,8 @@ impl SchemaBuilder {
         }
     }
 
-    pub fn column(mut self, name: &str, data_type: DataType) -> Self {
-        self.columns.push(Column::new(name, data_type));
+    pub fn column<N: Into<String>>(mut self, name: N, data_type: DataType) -> Self {
+        self.columns.push(Column::new(name.into(), data_type));
         self
     }
 
@@ -188,20 +188,34 @@ impl SchemaBuilder {
         self
     }
 
-    pub fn with_comment(mut self, comment: &str) -> Self {
+    pub fn with_comment<C: Into<String>>(mut self, comment: C) -> Self {
         if let Some(last) = self.columns.last_mut() {
-            *last = last.clone().with_comment(comment);
+            *last = last.clone().with_comment(comment.into());
         }
         self
     }
 
-    pub fn primary_key(self, column_names: Vec<String>) -> Self {
-        let constraint_name = format!("PK_{}", column_names.join("_"));
-        self.primary_key_named(&constraint_name, column_names)
+    pub fn primary_key<I, S>(self, column_names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let names: Vec<String> = column_names.into_iter().map(|s| s.into()).collect();
+
+        let constraint_name = format!("PK_{}", names.join("_"));
+
+        self.primary_key_named(&constraint_name, names)
     }
 
-    pub fn primary_key_named(mut self, constraint_name: &str, column_names: Vec<String>) -> Self {
-        self.primary_key = Some(PrimaryKey::new(constraint_name, column_names));
+    pub fn primary_key_named<N: Into<String>, P: Into<String>>(
+        mut self,
+        constraint_name: N,
+        column_names: Vec<P>,
+    ) -> Self {
+        self.primary_key = Some(PrimaryKey::new(
+            constraint_name.into(),
+            column_names.into_iter().map(|s| s.into()).collect(),
+        ));
         self
     }
 
@@ -209,14 +223,14 @@ impl SchemaBuilder {
     /// whenever a new row is inserted into the table, the new row will be assigned with the next
     /// available value from the auto-increment sequence. A table can have at most one auto
     /// increment column.
-    pub fn enable_auto_increment(mut self, column_name: &str) -> Result<Self> {
+    pub fn enable_auto_increment<N: Into<String>>(mut self, column_name: N) -> Result<Self> {
         if !self.auto_increment_col_names.is_empty() {
             return Err(IllegalArgument {
                 message: "Multiple auto increment columns are not supported yet.".to_string(),
             });
         }
 
-        self.auto_increment_col_names.push(column_name.to_string());
+        self.auto_increment_col_names.push(column_name.into());
         Ok(self)
     }
 
@@ -353,29 +367,43 @@ impl TableDescriptorBuilder {
         self
     }
 
-    pub fn property<T: ToString>(mut self, key: &str, value: T) -> Self {
-        self.properties.insert(key.to_string(), value.to_string());
+    pub fn property<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
+        self.properties.insert(key.into(), value.into());
         self
     }
 
-    pub fn properties(mut self, properties: HashMap<String, String>) -> Self {
-        self.properties.extend(properties);
+    pub fn properties<K: Into<String>, V: Into<String>>(
+        mut self,
+        properties: HashMap<K, V>,
+    ) -> Self {
+        for (k, v) in properties {
+            self.properties.insert(k.into(), v.into());
+        }
         self
     }
 
-    pub fn custom_property(mut self, key: &str, value: &str) -> Self {
-        self.custom_properties
-            .insert(key.to_string(), value.to_string());
+    pub fn custom_property<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
+        self.custom_properties.insert(key.into(), value.into());
         self
     }
 
-    pub fn custom_properties(mut self, custom_properties: HashMap<String, String>) -> Self {
-        self.custom_properties.extend(custom_properties);
+    pub fn custom_properties<K: Into<String>, V: Into<String>>(
+        mut self,
+        custom_properties: HashMap<K, V>,
+    ) -> Self {
+        for (k, v) in custom_properties {
+            self.custom_properties.insert(k.into(), v.into());
+        }
         self
     }
 
-    pub fn partitioned_by(mut self, partition_keys: Vec<String>) -> Self {
-        self.partition_keys = Arc::from(partition_keys);
+    pub fn partitioned_by<P: Into<String>>(mut self, partition_keys: Vec<P>) -> Self {
+        self.partition_keys = Arc::from(
+            partition_keys
+                .into_iter()
+                .map(|s| s.into())
+                .collect::<Vec<String>>(),
+        );
         self
     }
 
@@ -387,8 +415,8 @@ impl TableDescriptorBuilder {
         self
     }
 
-    pub fn comment(mut self, comment: &str) -> Self {
-        self.comment = Some(comment.to_string());
+    pub fn comment<S: Into<String>>(mut self, comment: S) -> Self {
+        self.comment = Some(comment.into());
         self
     }
 
@@ -487,9 +515,16 @@ impl TableDescriptor {
             })
     }
 
-    pub fn with_properties(&self, new_properties: HashMap<String, String>) -> Self {
+    pub fn with_properties<K: Into<String>, V: Into<String>>(
+        &self,
+        new_properties: HashMap<K, V>,
+    ) -> Self {
+        let mut properties = HashMap::new();
+        for (k, v) in new_properties {
+            properties.insert(k.into(), v.into());
+        }
         Self {
-            properties: new_properties,
+            properties,
             ..self.clone()
         }
     }
@@ -684,10 +719,10 @@ const MAX_NAME_LENGTH: usize = 200;
 const INTERNAL_NAME_PREFIX: &str = "__";
 
 impl TablePath {
-    pub fn new(db: String, tbl: String) -> Self {
+    pub fn new<D: Into<String>, T: Into<String>>(db: D, tbl: T) -> Self {
         TablePath {
-            database: db,
-            table: tbl,
+            database: db.into(),
+            table: tbl.into(),
         }
     }
 
@@ -769,14 +804,14 @@ impl PhysicalTablePath {
         }
     }
 
-    pub fn of_with_names(
-        database_name: String,
-        table_name: String,
-        partition_name: Option<String>,
+    pub fn of_with_names<D: Into<String>, T: Into<String>, P: Into<String>>(
+        database_name: D,
+        table_name: T,
+        partition_name: Option<P>,
     ) -> Self {
         Self {
             table_path: Arc::new(TablePath::new(database_name, table_name)),
-            partition_name,
+            partition_name: partition_name.map(|p| p.into()),
         }
     }
 
@@ -1122,7 +1157,7 @@ impl TableInfo {
             .custom_properties(self.custom_properties.clone());
 
         if let Some(comment) = &self.comment {
-            builder = builder.comment(&comment.clone());
+            builder = builder.comment(comment.clone());
         }
 
         builder.build()
