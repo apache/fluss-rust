@@ -31,8 +31,14 @@ pub struct PartitionSpec {
 }
 
 impl PartitionSpec {
-    pub fn new(partition_spec: HashMap<String, String>) -> Self {
-        Self { partition_spec }
+    pub fn new<K: Into<String>, V: Into<String>>(partition_spec: HashMap<K, V>) -> Self {
+        let mut new_map = HashMap::new();
+        for (k, v) in partition_spec {
+            new_map.insert(k.into(), v.into());
+        }
+        Self {
+            partition_spec: new_map,
+        }
     }
 
     pub fn get_spec_map(&self) -> &HashMap<String, String> {

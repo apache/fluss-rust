@@ -115,10 +115,7 @@ mod table_remote_scan_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new(
-            "fluss".to_string(),
-            "test_append_record_batch_and_scan".to_string(),
-        );
+        let table_path = TablePath::new("fluss", "test_append_record_batch_and_scan");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(

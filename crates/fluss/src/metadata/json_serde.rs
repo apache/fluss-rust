@@ -403,8 +403,7 @@ impl JsonSerde for Column {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::JsonSerdeError {
                 message: format!("Missing required field: {}", Self::NAME),
-            })?
-            .to_string();
+            })?;
 
         let data_type_node = node
             .get(Self::DATA_TYPE)
@@ -414,7 +413,7 @@ impl JsonSerde for Column {
 
         let data_type = DataType::deserialize_json(data_type_node)?;
 
-        let mut column = Column::new(&name, data_type);
+        let mut column = Column::new(name, data_type);
 
         if let Some(comment) = node.get(Self::COMMENT).and_then(|v| v.as_str()) {
             column = column.with_comment(comment);
@@ -483,14 +482,9 @@ impl JsonSerde for Schema {
 
             let mut primary_keys = Vec::with_capacity(pk_array.len());
             for name_node in pk_array {
-                primary_keys.push(
-                    name_node
-                        .as_str()
-                        .ok_or_else(|| Error::InvalidTableError {
-                            message: "Primary key element must be a string".to_string(),
-                        })?
-                        .to_string(),
-                );
+                primary_keys.push(name_node.as_str().ok_or_else(|| Error::InvalidTableError {
+                    message: "Primary key element must be a string".to_string(),
+                })?);
             }
 
             schema_builder = schema_builder.primary_key(primary_keys);

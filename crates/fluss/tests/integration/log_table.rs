@@ -69,10 +69,7 @@ mod table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new(
-            "fluss".to_string(),
-            "test_append_record_batch_and_scan".to_string(),
-        );
+        let table_path = TablePath::new("fluss", "test_append_record_batch_and_scan");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -171,7 +168,7 @@ mod table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_list_offsets".to_string());
+        let table_path = TablePath::new("fluss", "test_list_offsets");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -295,7 +292,7 @@ mod table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_project".to_string());
+        let table_path = TablePath::new("fluss", "test_project");
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -451,7 +448,7 @@ mod table_test {
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_poll_batches".to_string());
+        let table_path = TablePath::new("fluss", "test_poll_batches");
         let schema = Schema::builder()
             .column("id", DataTypes::int())
             .column("name", DataTypes::string())
@@ -595,7 +592,7 @@ mod table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss".to_string(), "test_log_all_datatypes".to_string());
+        let table_path = TablePath::new("fluss", "test_log_all_datatypes");
 
         // Create a log table with all supported datatypes for append/scan
         let table_descriptor = TableDescriptor::builder()
@@ -983,10 +980,7 @@ mod table_test {
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
-        let table_path = TablePath::new(
-            "fluss".to_string(),
-            "test_partitioned_log_append".to_string(),
-        );
+        let table_path = TablePath::new("fluss", "test_partitioned_log_append");
 
         // Create a partitioned log table
         let table_descriptor = TableDescriptor::builder()
@@ -998,7 +992,7 @@ mod table_test {
                     .build()
                     .expect("Failed to build schema"),
             )
-            .partitioned_by(vec!["region".to_string()])
+            .partitioned_by(vec!["region"])
             .build()
             .expect("Failed to build table");
 

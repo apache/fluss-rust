@@ -119,7 +119,7 @@ pub async fn create_partitions(
 ) {
     for value in partition_values {
         let mut partition_map = HashMap::new();
-        partition_map.insert(partition_column.to_string(), value.to_string());
+        partition_map.insert(partition_column, *value);
         admin
             .create_partition(table_path, &PartitionSpec::new(partition_map), true)
             .await

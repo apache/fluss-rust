@@ -89,19 +89,23 @@ impl DatabaseDescriptor {
 }
 
 impl DatabaseDescriptorBuilder {
-    pub fn comment(mut self, comment: &str) -> Self {
-        self.comment = Some(comment.to_string());
+    pub fn comment<C: Into<String>>(mut self, comment: C) -> Self {
+        self.comment = Some(comment.into());
         self
     }
 
-    pub fn custom_properties(mut self, properties: HashMap<String, String>) -> Self {
-        self.custom_properties = properties;
+    pub fn custom_properties<K: Into<String>, V: Into<String>>(
+        mut self,
+        properties: HashMap<K, V>,
+    ) -> Self {
+        for (k, v) in properties {
+            self.custom_properties.insert(k.into(), v.into());
+        }
         self
     }
 
-    pub fn custom_property(mut self, key: &str, value: &str) -> Self {
-        self.custom_properties
-            .insert(key.to_string(), value.to_string());
+    pub fn custom_property<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
+        self.custom_properties.insert(key.into(), value.into());
         self
     }
 
