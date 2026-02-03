@@ -24,11 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) fn build_table_info(table_path: TablePath, table_id: i64, buckets: i32) -> TableInfo {
-    let row_type = DataTypes::row(vec![DataField::new(
-        "id".to_string(),
-        DataTypes::int(),
-        None,
-    )]);
+    let row_type = DataTypes::row(vec![DataField::new("id", DataTypes::int(), None)]);
     let mut schema_builder = Schema::builder().with_row_type(&row_type);
     let schema = schema_builder.build().expect("schema build");
     let table_descriptor = TableDescriptor::builder()

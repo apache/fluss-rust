@@ -1114,13 +1114,13 @@ impl DataTypes {
     }
 
     /// Field definition with field name and data type.
-    pub fn field(name: String, data_type: DataType) -> DataField {
+    pub fn field<N: Into<String>>(name: N, data_type: DataType) -> DataField {
         DataField::new(name, data_type, None)
     }
 
     /// Field definition with field name, data type, and a description.
-    pub fn field_with_description(
-        name: String,
+    pub fn field_with_description<N: Into<String>>(
+        name: N,
         data_type: DataType,
         description: String,
     ) -> DataField {
@@ -1151,9 +1151,13 @@ pub struct DataField {
 }
 
 impl DataField {
-    pub fn new(name: String, data_type: DataType, description: Option<String>) -> DataField {
+    pub fn new<N: Into<String>>(
+        name: N,
+        data_type: DataType,
+        description: Option<String>,
+    ) -> DataField {
         DataField {
-            name,
+            name: name.into(),
             data_type,
             description,
         }
@@ -1318,13 +1322,13 @@ fn test_map_display() {
 #[test]
 fn test_row_display() {
     let fields = vec![
-        DataTypes::field("id".to_string(), DataTypes::int()),
-        DataTypes::field("name".to_string(), DataTypes::string()),
+        DataTypes::field("id", DataTypes::int()),
+        DataTypes::field("name", DataTypes::string()),
     ];
     let row_type = RowType::new(fields);
     assert_eq!(row_type.to_string(), "ROW<id INT, name STRING>");
 
-    let fields_non_null = vec![DataTypes::field("age".to_string(), DataTypes::bigint())];
+    let fields_non_null = vec![DataTypes::field("age", DataTypes::bigint())];
     let row_type_non_null = RowType::with_nullable(false, fields_non_null);
     assert_eq!(row_type_non_null.to_string(), "ROW<age BIGINT> NOT NULL");
 }
@@ -1354,23 +1358,23 @@ fn test_datatype_display() {
 
 #[test]
 fn test_datafield_display() {
-    let field = DataTypes::field("user_id".to_string(), DataTypes::bigint());
+    let field = DataTypes::field("user_id", DataTypes::bigint());
     assert_eq!(field.to_string(), "user_id BIGINT");
 
-    let field2 = DataTypes::field("email".to_string(), DataTypes::string());
+    let field2 = DataTypes::field("email", DataTypes::string());
     assert_eq!(field2.to_string(), "email STRING");
 
-    let field3 = DataTypes::field("score".to_string(), DataTypes::decimal(10, 2));
+    let field3 = DataTypes::field("score", DataTypes::decimal(10, 2));
     assert_eq!(field3.to_string(), "score DECIMAL(10, 2)");
 }
 
 #[test]
 fn test_complex_nested_display() {
     let row_type = DataTypes::row(vec![
-        DataTypes::field("id".to_string(), DataTypes::int()),
-        DataTypes::field("tags".to_string(), DataTypes::array(DataTypes::string())),
+        DataTypes::field("id", DataTypes::int()),
+        DataTypes::field("tags", DataTypes::array(DataTypes::string())),
         DataTypes::field(
-            "metadata".to_string(),
+            "metadata",
             DataTypes::map(DataTypes::string(), DataTypes::string()),
         ),
     ]);
@@ -1394,8 +1398,8 @@ fn test_deeply_nested_types() {
     let nested = DataTypes::array(DataTypes::map(
         DataTypes::string(),
         DataTypes::row(vec![
-            DataTypes::field("x".to_string(), DataTypes::int()),
-            DataTypes::field("y".to_string(), DataTypes::int()),
+            DataTypes::field("x", DataTypes::int()),
+            DataTypes::field("y", DataTypes::int()),
         ]),
     ));
     assert_eq!(nested.to_string(), "ARRAY<MAP<STRING, ROW<x INT, y INT>>>");

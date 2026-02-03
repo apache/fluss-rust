@@ -840,11 +840,7 @@ mod tests {
     use std::sync::Arc;
 
     fn test_read_context() -> Result<ReadContext> {
-        let row_type = RowType::new(vec![DataField::new(
-            "id".to_string(),
-            DataTypes::int(),
-            None,
-        )]);
+        let row_type = RowType::new(vec![DataField::new("id", DataTypes::int(), None)]);
         Ok(ReadContext::new(to_arrow_schema(&row_type)?, false))
     }
 
@@ -897,8 +893,8 @@ mod tests {
     #[test]
     fn default_completed_fetch_reads_records() -> Result<()> {
         let row_type = RowType::new(vec![
-            DataField::new("id".to_string(), DataTypes::int(), None),
-            DataField::new("name".to_string(), DataTypes::string(), None),
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("name", DataTypes::string(), None),
         ]);
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
