@@ -407,7 +407,19 @@ public:
                        const OffsetQuery& offset_query,
                        std::unordered_map<int32_t, int64_t>& out);
 
+    Result ListPartitionOffsets(const TablePath& table_path,
+                              const std::string& partition_name,
+                              const std::vector<int32_t>& bucket_ids,
+                              const OffsetQuery& offset_query,
+                              std::unordered_map<int32_t, int64_t>& out);
+
 private:
+    Result DoListOffsets(const TablePath& table_path,
+                       const std::vector<int32_t>& bucket_ids,
+                       const OffsetQuery& offset_query,
+                       std::unordered_map<int32_t, int64_t>& out,
+                       const std::string* partition_name = nullptr);
+
     friend class Connection;
     Admin(ffi::Admin* admin) noexcept;
 

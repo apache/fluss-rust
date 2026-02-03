@@ -108,10 +108,12 @@ Result Admin::GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& o
     return result;
 }
 
-Result Admin::ListOffsets(const TablePath& table_path,
-                          const std::vector<int32_t>& bucket_ids,
-                          const OffsetQuery& offset_query,
-                          std::unordered_map<int32_t, int64_t>& out) {
+// function for common list offsets functionality
+Result Admin::DoListOffsets(const TablePath& table_path,
+                         const std::vector<int32_t>& bucket_ids,
+                         const OffsetQuery& offset_query,
+                         std::unordered_map<int32_t, int64_t>& out,
+                         const std::string* partition_name) {
     if (!Available()) {
         return utils::make_error(1, "Admin not available");
     }
@@ -127,7 +129,12 @@ Result Admin::ListOffsets(const TablePath& table_path,
     ffi_query.offset_type = static_cast<int32_t>(offset_query.spec);
     ffi_query.timestamp = offset_query.timestamp;
 
-    auto ffi_result = admin_->list_offsets(ffi_path, std::move(rust_bucket_ids), ffi_query);
+    ffi::FfiListOffsetsResult ffi_result;
+    if (partition_name != nullptr) {
+        ffi_result = admin_->list_partition_offsets(ffi_path, rust::String(*partition_name), std::move(rust_bucket_ids), ffi_query);
+    } else {
+        ffi_result = admin_->list_offsets(ffi_path, std::move(rust_bucket_ids), ffi_query);
+    }
     
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
@@ -138,6 +145,21 @@ Result Admin::ListOffsets(const TablePath& table_path,
     }
 
     return result;
+}
+
+Result Admin::ListOffsets(const TablePath& table_path,
+                          const std::vector<int32_t>& bucket_ids,
+                          const OffsetQuery& offset_query,
+                          std::unordered_map<int32_t, int64_t>& out) {
+    return DoListOffsets(table_path, bucket_ids, offset_query, out);
+}
+
+Result Admin::ListPartitionOffsets(const TablePath& table_path,
+                                const std::string& partition_name,
+                                const std::vector<int32_t>& bucket_ids,
+                                const OffsetQuery& offset_query,
+                                std::unordered_map<int32_t, int64_t>& out) {
+    return DoListOffsets(table_path, bucket_ids, offset_query, out, &partition_name);
 }
 
 }  // namespace fluss

@@ -193,6 +193,13 @@ mod ffi {
             bucket_ids: Vec<i32>,
             offset_query: &FfiOffsetQuery,
         ) -> FfiListOffsetsResult;
+        fn list_partition_offsets(
+            self: &Admin,
+            table_path: &FfiTablePath,
+            partition_name: String,
+            bucket_ids: Vec<i32>,
+            offset_query: &FfiOffsetQuery,
+        ) -> FfiListOffsetsResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
@@ -431,9 +438,11 @@ impl Admin {
         }
     }
 
-    fn list_offsets(
+    // Helper function for common list offsets functionality
+    fn do_list_offsets(
         &self,
         table_path: &ffi::FfiTablePath,
+        partition_name: Option<&str>,
         bucket_ids: Vec<i32>,
         offset_query: &ffi::FfiOffsetQuery,
     ) -> ffi::FfiListOffsetsResult {
@@ -460,9 +469,15 @@ impl Admin {
         };
 
         let result = RUNTIME.block_on(async {
-            self.inner
-                .list_offsets(&path, &bucket_ids, offset_spec)
-                .await
+            if let Some(part_name) = partition_name {
+                self.inner
+                    .list_partition_offsets(&path, part_name, &bucket_ids, offset_spec)
+                    .await
+            } else {
+                self.inner
+                    .list_offsets(&path, &bucket_ids, offset_spec)
+                    .await
+            }
         });
 
         match result {
@@ -481,6 +496,25 @@ impl Admin {
                 bucket_offsets: vec![],
             },
         }
+    }
+
+    fn list_offsets(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        bucket_ids: Vec<i32>,
+        offset_query: &ffi::FfiOffsetQuery,
+    ) -> ffi::FfiListOffsetsResult {
+        self.do_list_offsets(table_path, None, bucket_ids, offset_query)
+    }
+
+    fn list_partition_offsets(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        partition_name: String,
+        bucket_ids: Vec<i32>,
+        offset_query: &ffi::FfiOffsetQuery,
+    ) -> ffi::FfiListOffsetsResult {
+        self.do_list_offsets(table_path, Some(&partition_name), bucket_ids, offset_query)
     }
 }
 
