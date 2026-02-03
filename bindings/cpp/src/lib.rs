@@ -298,7 +298,7 @@ fn err_result(code: i32, msg: String) -> ffi::FfiResult {
 // Connection implementation
 fn new_connection(bootstrap_server: &str) -> Result<*mut Connection, String> {
     let config = fluss::config::Config {
-        bootstrap_server: Some(bootstrap_server.to_string()),
+        bootstrap_server: bootstrap_server.to_string(),
         ..Default::default()
     };
 

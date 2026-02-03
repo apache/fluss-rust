@@ -18,46 +18,54 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_BOOTSTRAP_SERVER: &str = "127.0.0.1:9123";
+const DEFAULT_REQUEST_MAX_SIZE: i32 = 10 * 1024 * 1024;
+const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
+const DEFAULT_RETRIES: i32 = i32::MAX;
+const DEFAULT_PREFETCH_NUM: usize = 4;
+const DEFAULT_DOWNLOAD_THREADS: usize = 3;
+
+const DEFAULT_ACKS: &str = "all";
+
 #[derive(Parser, Debug, Clone, Deserialize, Serialize)]
 #[command(author, version, about, long_about = None)]
 pub struct Config {
-    #[arg(long)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bootstrap_server: Option<String>,
+    #[arg(long, default_value_t = String::from(DEFAULT_BOOTSTRAP_SERVER))]
+    pub bootstrap_server: String,
 
-    #[arg(long, default_value_t = 10 * 1024 * 1024)]
+    #[arg(long, default_value_t = DEFAULT_REQUEST_MAX_SIZE)]
     pub request_max_size: i32,
 
-    #[arg(long, default_value_t = String::from("all"))]
+    #[arg(long, default_value_t = String::from(DEFAULT_ACKS))]
     pub writer_acks: String,
 
-    #[arg(long, default_value_t = i32::MAX)]
+    #[arg(long, default_value_t = DEFAULT_RETRIES)]
     pub writer_retries: i32,
 
-    #[arg(long, default_value_t = 2 * 1024 * 1024)]
+    #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_SIZE)]
     pub writer_batch_size: i32,
 
     /// Maximum number of remote log segments to prefetch
     /// Default: 4 (matching Java CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM)
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = DEFAULT_PREFETCH_NUM)]
     pub scanner_remote_log_prefetch_num: usize,
 
     /// Maximum concurrent remote log downloads
     /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
     pub scanner_remote_log_download_threads: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            bootstrap_server: None,
-            request_max_size: 10 * 1024 * 1024,
-            writer_acks: String::from("all"),
+            bootstrap_server: String::from(DEFAULT_BOOTSTRAP_SERVER),
+            request_max_size: DEFAULT_REQUEST_MAX_SIZE,
+            writer_acks: String::from(DEFAULT_ACKS),
             writer_retries: i32::MAX,
-            writer_batch_size: 2 * 1024 * 1024,
-            scanner_remote_log_prefetch_num: 4,
-            scanner_remote_log_download_threads: 3,
+            writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
+            scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
+            scanner_remote_log_download_threads: DEFAULT_DOWNLOAD_THREADS,
         }
     }
 }

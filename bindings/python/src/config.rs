@@ -40,7 +40,7 @@ impl Config {
 
                 match key.as_str() {
                     "bootstrap.servers" => {
-                        config.bootstrap_server = Some(value);
+                        config.bootstrap_server = value;
                     }
                     "request.max.size" => {
                         if let Ok(size) = value.parse::<i32>() {
@@ -72,14 +72,14 @@ impl Config {
 
     /// Get the bootstrap server
     #[getter]
-    fn bootstrap_server(&self) -> Option<String> {
+    fn bootstrap_server(&self) -> String {
         self.inner.bootstrap_server.clone()
     }
 
     /// Set the bootstrap server
     #[setter]
     fn set_bootstrap_server(&mut self, server: String) {
-        self.inner.bootstrap_server = Some(server);
+        self.inner.bootstrap_server = server;
     }
 
     /// Get the request max size
