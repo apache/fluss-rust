@@ -87,8 +87,8 @@ impl<'a> TableScan<'a> {
     ///
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
-    ///     config.bootstrap_server = Some("127.0.0.1:9123".to_string());
-    ///     let conn = FlussConnection::new(config).await?;
+    ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
+    ///     let conn = FlussConnection::new(config).await;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
     ///         .schema(
@@ -163,8 +163,8 @@ impl<'a> TableScan<'a> {
     ///
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
-    ///     config.bootstrap_server = Some("127.0.0.1:9123".to_string());
-    ///     let conn = FlussConnection::new(config).await?;
+    ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
+    ///     let conn = FlussConnection::new(config).await;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
     ///         .schema(

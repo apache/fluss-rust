@@ -26,7 +26,7 @@ use fluss::row::{GenericRow, InternalRow};
 #[allow(dead_code)]
 pub async fn main() -> Result<()> {
     let mut config = Config::parse();
-    config.bootstrap_server = Some("127.0.0.1:9123".to_string());
+    config.bootstrap_server = "127.0.0.1:9123".to_string();
 
     let conn = FlussConnection::new(config).await?;
 
