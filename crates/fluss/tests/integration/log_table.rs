@@ -119,7 +119,6 @@ mod table_test {
         let num_buckets = table.table_info().get_num_buckets();
         let log_scanner = table
             .new_scan()
-            .expect("Failed to create table scan")
             .create_log_scanner()
             .expect("Failed to create log scanner");
         for bucket_id in 0..num_buckets {
@@ -400,20 +399,14 @@ mod table_test {
         }
 
         // Test error case: empty column names should fail
-        let result = table
-            .new_scan()
-            .expect("Failed to create table scan")
-            .project_by_name(&[]);
+        let result = table.new_scan().project_by_name(&[]);
         assert!(
             result.is_err(),
             "project_by_name with empty names should fail"
         );
 
         // Test error case: non-existent column should fail
-        let result = table
-            .new_scan()
-            .expect("Failed to create table scan")
-            .project_by_name(&["nonexistent_column"]);
+        let result = table.new_scan().project_by_name(&["nonexistent_column"]);
         assert!(
             result.is_err(),
             "project_by_name with non-existent column should fail"
@@ -425,7 +418,7 @@ mod table_test {
         setup_scan: impl FnOnce(TableScan) -> TableScan,
     ) -> Vec<ScanRecord> {
         // 1. build log scanner
-        let log_scanner = setup_scan(table.new_scan().expect("Failed to create table scan"))
+        let log_scanner = setup_scan(table.new_scan())
             .create_log_scanner()
             .expect("Failed to create log scanner");
 
@@ -471,11 +464,7 @@ mod table_test {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         let table = connection.get_table(&table_path).await.unwrap();
-        let scanner = table
-            .new_scan()
-            .expect("Failed to create table scan")
-            .create_record_batch_log_scanner()
-            .unwrap();
+        let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
         scanner.subscribe(0, 0).await.unwrap();
 
         // Test 1: Empty table should return empty result
@@ -557,11 +546,7 @@ mod table_test {
 
         // Test 4: Subscribing from mid-offset should truncate batch (Arrow batch slicing)
         // Server returns all records from start of batch, but client truncates to subscription offset
-        let trunc_scanner = table
-            .new_scan()
-            .unwrap()
-            .create_record_batch_log_scanner()
-            .unwrap();
+        let trunc_scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
         trunc_scanner.subscribe(0, 3).await.unwrap();
         let trunc_batches = trunc_scanner.poll(Duration::from_secs(10)).await.unwrap();
         let trunc_ids: Vec<i32> = trunc_batches
@@ -585,7 +570,6 @@ mod table_test {
         // Test 5: Projection should only return requested columns
         let proj = table
             .new_scan()
-            .unwrap()
             .project_by_name(&["id"])
             .unwrap()
             .create_record_batch_log_scanner()
@@ -1116,7 +1100,6 @@ mod table_test {
 
         let log_scanner = table
             .new_scan()
-            .expect("Failed to create table scan")
             .create_log_scanner()
             .expect("Failed to create log scanner");
         let partition_info = admin

@@ -593,7 +593,6 @@ impl Table {
 
             let scanner = fluss_table
                 .new_scan()
-                .map_err(|e| format!("Failed to create table scan: {e}"))?
                 .create_log_scanner()
                 .map_err(|e| format!("Failed to create log scanner: {e}"))?;
 
@@ -619,7 +618,6 @@ impl Table {
 
             let log_scanner = fluss_table
                 .new_scan()
-                .map_err(|e| format!("Failed to create table scan: {e}"))?
                 .project(&column_indices)
                 .map_err(|e| format!("Failed to project columns: {e}"))?
                 .create_log_scanner()
@@ -643,7 +641,6 @@ impl Table {
 
             let batch_scanner = fluss_table
                 .new_scan()
-                .map_err(|e| format!("Failed to create table scan: {e}"))?
                 .create_record_batch_log_scanner()
                 .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
 
@@ -668,7 +665,6 @@ impl Table {
 
             let batch_scanner = fluss_table
                 .new_scan()
-                .map_err(|e| format!("Failed to create table scan: {e}"))?
                 .project(&column_indices)
                 .map_err(|e| format!("Failed to project columns: {e}"))?
                 .create_record_batch_log_scanner()

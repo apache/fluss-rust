@@ -169,9 +169,7 @@ impl FlussTable {
             let fluss_table =
                 fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
 
-            let mut table_scan = fluss_table
-                .new_scan()
-                .map_err(|e| FlussError::new_err(format!("Failed to create table scan: {e}")))?;
+            let mut table_scan = fluss_table.new_scan();
 
             // Apply projection if specified
             if let Some(proj) = projection {

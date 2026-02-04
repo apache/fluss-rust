@@ -18,7 +18,7 @@
 use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, Result};
-use crate::metadata::{LogFormat, TableInfo, TablePath};
+use crate::metadata::{TableInfo, TablePath};
 use std::sync::Arc;
 
 pub const EARLIEST_OFFSET: i64 = -2;
@@ -32,7 +32,6 @@ mod remote_log;
 mod scanner;
 mod upsert;
 
-use crate::error::Error::UnsupportedOperation;
 pub use append::{AppendWriter, TableAppend};
 pub use lookup::{LookupResult, Lookuper, TableLookup};
 pub use remote_log::{
@@ -73,17 +72,8 @@ impl<'a> FlussTable<'a> {
         ))
     }
 
-    pub fn new_scan(&self) -> Result<TableScan<'_>> {
-        let table_path = &self.table_path;
-        let table_info = &self.table_info;
-
-        validate_scan_support(table_path, table_info)?;
-
-        Ok(TableScan::new(
-            self.conn,
-            self.table_info.clone(),
-            self.metadata.clone(),
-        ))
+    pub fn new_scan(&self) -> TableScan<'_> {
+        TableScan::new(self.conn, self.table_info.clone(), self.metadata.clone())
     }
 
     pub fn metadata(&self) -> &Arc<Metadata> {
@@ -150,106 +140,8 @@ impl<'a> FlussTable<'a> {
     }
 }
 
-fn validate_scan_support(table_path: &TablePath, table_info: &TableInfo) -> Result<()> {
-    if table_info.schema.primary_key().is_some() {
-        return Err(UnsupportedOperation {
-            message: format!("Table {table_path} is not a Log Table and doesn't support scan."),
-        });
-    }
-
-    let log_format = table_info.table_config.get_log_format()?;
-    if LogFormat::ARROW != log_format {
-        return Err(UnsupportedOperation {
-            message: format!(
-                "Scan is only supported for ARROW format and table {table_path} uses {log_format} format"
-            ),
-        });
-    }
-
-    Ok(())
-}
-
 impl<'a> Drop for FlussTable<'a> {
     fn drop(&mut self) {
         // do-nothing now
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metadata::{DataTypes, Schema, TableInfo, TablePath};
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    fn create_test_table_info(
-        has_primary_key: bool,
-        log_format: Option<&str>,
-    ) -> (TableInfo, TablePath) {
-        let mut schema_builder = Schema::builder()
-            .column("id", DataTypes::int())
-            .column("name", DataTypes::string());
-
-        if has_primary_key {
-            schema_builder = schema_builder.primary_key(vec!["id"]);
-        }
-
-        let schema = schema_builder.build().unwrap();
-        let table_path = TablePath::new("test_db", "test_table");
-
-        let mut properties = HashMap::new();
-        if let Some(format) = log_format {
-            properties.insert("table.log.format".to_string(), format.to_string());
-        }
-
-        let table_info = TableInfo::new(
-            table_path.clone(),
-            1,
-            1,
-            schema,
-            vec![],
-            Arc::from(vec![]),
-            1,
-            properties,
-            HashMap::new(),
-            None,
-            0,
-            0,
-        );
-
-        (table_info, table_path)
-    }
-
-    #[test]
-    fn test_validate_scan_support() {
-        // Primary key table
-        let (table_info, table_path) = create_test_table_info(true, Some("ARROW"));
-        let result = validate_scan_support(&table_path, &table_info);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, UnsupportedOperation { .. }));
-        assert!(err.to_string().contains(
-            format!("Table {table_path} is not a Log Table and doesn't support scan.").as_str()
-        ));
-
-        // Indexed format
-        let (table_info, table_path) = create_test_table_info(false, Some("INDEXED"));
-        let result = validate_scan_support(&table_path, &table_info);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, UnsupportedOperation { .. }));
-        assert!(err.to_string().contains(format!("Scan is only supported for ARROW format and table {table_path} uses INDEXED format").as_str()));
-
-        // Default format
-        let (table_info, table_path) = create_test_table_info(false, None);
-        let result = validate_scan_support(&table_path, &table_info);
-        assert!(result.is_ok());
-
-        // Arrow format
-        let (table_info, table_path) = create_test_table_info(false, Some("ARROW"));
-        let result = validate_scan_support(&table_path, &table_info);
-        assert!(result.is_ok());
     }
 }
