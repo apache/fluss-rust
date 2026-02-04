@@ -16,8 +16,9 @@
 # under the License.
 
 import asyncio
-import time
-from datetime import date, time as dt_time, datetime
+import traceback
+from datetime import date, datetime
+from datetime import time as dt_time
 from decimal import Decimal
 
 import pandas as pd
@@ -103,11 +104,34 @@ async def main():
                 pa.array(["Alice", "Bob", "Charlie"], type=pa.string()),
                 pa.array([95.2, 87.2, 92.1], type=pa.float32()),
                 pa.array([25, 30, 35], type=pa.int32()),
-                pa.array([date(1999, 5, 15), date(1994, 3, 20), date(1989, 11, 8)], type=pa.date32()),
-                pa.array([dt_time(9, 0, 0), dt_time(9, 30, 0), dt_time(10, 0, 0)], type=pa.time32("ms")),
-                pa.array([datetime(2024, 1, 15, 10, 30), datetime(2024, 1, 15, 11, 0), datetime(2024, 1, 15, 11, 30)], type=pa.timestamp("us")),
-                pa.array([datetime(2024, 1, 15, 10, 30), datetime(2024, 1, 15, 11, 0), datetime(2024, 1, 15, 11, 30)], type=pa.timestamp("us", tz="UTC")),
-                pa.array([Decimal("75000.00"), Decimal("82000.50"), Decimal("95000.75")], type=pa.decimal128(10, 2)),
+                pa.array(
+                    [date(1999, 5, 15), date(1994, 3, 20), date(1989, 11, 8)],
+                    type=pa.date32(),
+                ),
+                pa.array(
+                    [dt_time(9, 0, 0), dt_time(9, 30, 0), dt_time(10, 0, 0)],
+                    type=pa.time32("ms"),
+                ),
+                pa.array(
+                    [
+                        datetime(2024, 1, 15, 10, 30),
+                        datetime(2024, 1, 15, 11, 0),
+                        datetime(2024, 1, 15, 11, 30),
+                    ],
+                    type=pa.timestamp("us"),
+                ),
+                pa.array(
+                    [
+                        datetime(2024, 1, 15, 10, 30),
+                        datetime(2024, 1, 15, 11, 0),
+                        datetime(2024, 1, 15, 11, 30),
+                    ],
+                    type=pa.timestamp("us", tz="UTC"),
+                ),
+                pa.array(
+                    [Decimal("75000.00"), Decimal("82000.50"), Decimal("95000.75")],
+                    type=pa.decimal128(10, 2),
+                ),
             ],
             schema=schema,
         )
@@ -125,9 +149,18 @@ async def main():
                 pa.array([28, 32], type=pa.int32()),
                 pa.array([date(1996, 7, 22), date(1992, 12, 1)], type=pa.date32()),
                 pa.array([dt_time(14, 15, 0), dt_time(8, 45, 0)], type=pa.time32("ms")),
-                pa.array([datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)], type=pa.timestamp("us")),
-                pa.array([datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)], type=pa.timestamp("us", tz="UTC")),
-                pa.array([Decimal("68000.00"), Decimal("72500.25")], type=pa.decimal128(10, 2)),
+                pa.array(
+                    [datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)],
+                    type=pa.timestamp("us"),
+                ),
+                pa.array(
+                    [datetime(2024, 1, 16, 9, 0), datetime(2024, 1, 16, 9, 30)],
+                    type=pa.timestamp("us", tz="UTC"),
+                ),
+                pa.array(
+                    [Decimal("68000.00"), Decimal("72500.25")],
+                    type=pa.decimal128(10, 2),
+                ),
             ],
             schema=schema,
         )
@@ -138,28 +171,35 @@ async def main():
         # Test 3: Append single rows with Date, Time, Timestamp, Decimal
         print("\n--- Testing single row append with temporal/decimal types ---")
         # Dict input with all types including Date, Time, Timestamp, Decimal
-        await append_writer.append({
-            "id": 8,
-            "name": "Helen",
-            "score": 93.5,
-            "age": 26,
-            "birth_date": date(1998, 4, 10),
-            "check_in_time": dt_time(11, 30, 45),
-            "created_at": datetime(2024, 1, 17, 14, 0, 0),
-            "updated_at": datetime(2024, 1, 17, 14, 0, 0),
-            "salary": Decimal("88000.00"),
-        })
+        await append_writer.append(
+            {
+                "id": 8,
+                "name": "Helen",
+                "score": 93.5,
+                "age": 26,
+                "birth_date": date(1998, 4, 10),
+                "check_in_time": dt_time(11, 30, 45),
+                "created_at": datetime(2024, 1, 17, 14, 0, 0),
+                "updated_at": datetime(2024, 1, 17, 14, 0, 0),
+                "salary": Decimal("88000.00"),
+            }
+        )
         print("Successfully appended row (dict with Date, Time, Timestamp, Decimal)")
 
         # List input with all types
-        await append_writer.append([
-            9, "Ivan", 90.0, 31,
-            date(1993, 8, 25),
-            dt_time(16, 45, 0),
-            datetime(2024, 1, 17, 15, 30, 0),
-            datetime(2024, 1, 17, 15, 30, 0),
-            Decimal("91500.50"),
-        ])
+        await append_writer.append(
+            [
+                9,
+                "Ivan",
+                90.0,
+                31,
+                date(1993, 8, 25),
+                dt_time(16, 45, 0),
+                datetime(2024, 1, 17, 15, 30, 0),
+                datetime(2024, 1, 17, 15, 30, 0),
+                Decimal("91500.50"),
+            ]
+        )
         print("Successfully appended row (list with Date, Time, Timestamp, Decimal)")
 
         # Test 4: Write Pandas DataFrame
@@ -172,8 +212,14 @@ async def main():
                 "age": [29, 27],
                 "birth_date": [date(1995, 2, 14), date(1997, 9, 30)],
                 "check_in_time": [dt_time(10, 0, 0), dt_time(10, 30, 0)],
-                "created_at": [datetime(2024, 1, 18, 8, 0), datetime(2024, 1, 18, 8, 30)],
-                "updated_at": [datetime(2024, 1, 18, 8, 0), datetime(2024, 1, 18, 8, 30)],
+                "created_at": [
+                    datetime(2024, 1, 18, 8, 0),
+                    datetime(2024, 1, 18, 8, 30),
+                ],
+                "updated_at": [
+                    datetime(2024, 1, 18, 8, 0),
+                    datetime(2024, 1, 18, 8, 30),
+                ],
                 "salary": [Decimal("79000.00"), Decimal("85500.75")],
             }
         )
@@ -249,6 +295,199 @@ async def main():
     except Exception as e:
         print(f"Error during scanning: {e}")
 
+    # =====================================================
+    # Demo: Primary Key Table with Lookup and Upsert
+    # =====================================================
+    print("\n" + "=" * 60)
+    print("--- Testing Primary Key Table (Lookup & Upsert) ---")
+    print("=" * 60)
+
+    # Create a primary key table for lookup/upsert tests
+    # Include temporal and decimal types to test full conversion
+    pk_table_fields = [
+        pa.field("user_id", pa.int32()),
+        pa.field("name", pa.string()),
+        pa.field("email", pa.string()),
+        pa.field("age", pa.int32()),
+        pa.field("birth_date", pa.date32()),
+        pa.field("login_time", pa.time32("ms")),
+        pa.field("created_at", pa.timestamp("us")),  # TIMESTAMP (NTZ)
+        pa.field("updated_at", pa.timestamp("us", tz="UTC")),  # TIMESTAMP_LTZ
+        pa.field("balance", pa.decimal128(10, 2)),
+    ]
+    pk_schema = pa.schema(pk_table_fields)
+    fluss_pk_schema = fluss.Schema(pk_schema, primary_keys=["user_id"])
+
+    # Create table descriptor
+    pk_table_descriptor = fluss.TableDescriptor(
+        fluss_pk_schema,
+        num_buckets=3,
+    )
+
+    pk_table_path = fluss.TablePath("fluss", "users_pk_table_v3")
+
+    try:
+        await admin.create_table(pk_table_path, pk_table_descriptor, True)
+        print(f"Created PK table: {pk_table_path}")
+    except Exception as e:
+        print(f"PK Table creation failed (may already exist): {e}")
+
+    # Get the PK table
+    pk_table = await conn.get_table(pk_table_path)
+    print(f"Got PK table: {pk_table}")
+    print(f"Has primary key: {pk_table.has_primary_key()}")
+
+    # --- Test Upsert ---
+    print("\n--- Testing Upsert ---")
+    try:
+        upsert_writer = pk_table.new_upsert()
+        print(f"Created upsert writer: {upsert_writer}")
+
+        await upsert_writer.upsert(
+            {
+                "user_id": 1,
+                "name": "Alice",
+                "email": "alice@example.com",
+                "age": 25,
+                "birth_date": date(1999, 5, 15),
+                "login_time": dt_time(9, 30, 45, 123000),  # 09:30:45.123
+                "created_at": datetime(
+                    2024, 1, 15, 10, 30, 45, 123456
+                ),  # with microseconds
+                "updated_at": datetime(2024, 1, 15, 10, 30, 45, 123456),
+                "balance": Decimal("1234.56"),
+            }
+        )
+        print("Upserted user_id=1 (Alice)")
+
+        await upsert_writer.upsert(
+            {
+                "user_id": 2,
+                "name": "Bob",
+                "email": "bob@example.com",
+                "age": 30,
+                "birth_date": date(1994, 3, 20),
+                "login_time": dt_time(14, 15, 30, 500000),  # 14:15:30.500
+                "created_at": datetime(2024, 1, 16, 11, 22, 33, 444555),
+                "updated_at": datetime(2024, 1, 16, 11, 22, 33, 444555),
+                "balance": Decimal("5678.91"),
+            }
+        )
+        print("Upserted user_id=2 (Bob)")
+
+        await upsert_writer.upsert(
+            {
+                "user_id": 3,
+                "name": "Charlie",
+                "email": "charlie@example.com",
+                "age": 35,
+                "birth_date": date(1989, 11, 8),
+                "login_time": dt_time(16, 45, 59, 999000),  # 16:45:59.999
+                "created_at": datetime(2024, 1, 17, 23, 59, 59, 999999),
+                "updated_at": datetime(2024, 1, 17, 23, 59, 59, 999999),
+                "balance": Decimal("9876.54"),
+            }
+        )
+        print("Upserted user_id=3 (Charlie)")
+
+        # Update an existing row (same PK, different values)
+        await upsert_writer.upsert(
+            {
+                "user_id": 1,
+                "name": "Alice Updated",
+                "email": "alice.new@example.com",
+                "age": 26,
+                "birth_date": date(1999, 5, 15),
+                "login_time": dt_time(10, 11, 12, 345000),  # 10:11:12.345
+                "created_at": datetime(2024, 1, 15, 10, 30, 45, 123456),  # unchanged
+                "updated_at": datetime(
+                    2024, 1, 20, 15, 45, 30, 678901
+                ),  # new update time
+                "balance": Decimal("2345.67"),
+            }
+        )
+        print("Updated user_id=1 (Alice -> Alice Updated)")
+
+        # Explicit flush to ensure all upserts are acknowledged
+        await upsert_writer.flush()
+        print("Flushed all upserts")
+
+    except Exception as e:
+        print(f"Error during upsert: {e}")
+        traceback.print_exc()
+
+    # --- Test Lookup ---
+    print("\n--- Testing Lookup ---")
+    try:
+        lookuper = pk_table.new_lookup()
+        print(f"Created lookuper: {lookuper}")
+
+        result = await lookuper.lookup({"user_id": 1})
+        if result:
+            print("Lookup user_id=1: Found!")
+            print(f"  name: {result['name']}")
+            print(f"  email: {result['email']}")
+            print(f"  age: {result['age']}")
+            print(
+                f"  birth_date: {result['birth_date']} (type: {type(result['birth_date']).__name__})"
+            )
+            print(
+                f"  login_time: {result['login_time']} (type: {type(result['login_time']).__name__})"
+            )
+            print(
+                f"  created_at: {result['created_at']} (type: {type(result['created_at']).__name__})"
+            )
+            print(
+                f"  updated_at: {result['updated_at']} (type: {type(result['updated_at']).__name__})"
+            )
+            print(
+                f"  balance: {result['balance']} (type: {type(result['balance']).__name__})"
+            )
+        else:
+            print("Lookup user_id=1: Not found")
+
+        # Lookup another row
+        result = await lookuper.lookup({"user_id": 2})
+        if result:
+            print(f"Lookup user_id=2: Found! -> {result}")
+        else:
+            print("Lookup user_id=2: Not found")
+
+        # Lookup non-existent row
+        result = await lookuper.lookup({"user_id": 999})
+        if result:
+            print(f"Lookup user_id=999: Found! -> {result}")
+        else:
+            print("Lookup user_id=999: Not found (as expected)")
+
+    except Exception as e:
+        print(f"Error during lookup: {e}")
+        traceback.print_exc()
+
+    # --- Test Delete ---
+    print("\n--- Testing Delete ---")
+    try:
+        upsert_writer = pk_table.new_upsert()
+
+        # Delete only needs PK columns - much simpler API!
+        await upsert_writer.delete({"user_id": 3})
+        print("Deleted user_id=3")
+
+        # Explicit flush to ensure delete is acknowledged
+        await upsert_writer.flush()
+        print("Flushed delete")
+
+        lookuper = pk_table.new_lookup()
+        result = await lookuper.lookup({"user_id": 3})
+        if result:
+            print(f"Lookup user_id=3 after delete: Still found! -> {result}")
+        else:
+            print("Lookup user_id=3 after delete: Not found (deletion confirmed)")
+
+    except Exception as e:
+        print(f"Error during delete: {e}")
+        traceback.print_exc()
+
     # Demo: Column projection
     print("\n--- Testing Column Projection ---")
     try:
@@ -258,7 +497,9 @@ async def main():
         scanner_index.subscribe(None, None)
         df_projected = scanner_index.to_pandas()
         print(df_projected.head())
-        print(f"   Projected {df_projected.shape[1]} columns: {list(df_projected.columns)}")
+        print(
+            f"   Projected {df_projected.shape[1]} columns: {list(df_projected.columns)}"
+        )
 
         # Project specific columns by name (Pythonic!)
         print("\n2. Projection by name ['name', 'score'] (Pythonic):")

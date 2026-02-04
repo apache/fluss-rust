@@ -25,16 +25,20 @@ mod admin;
 mod config;
 mod connection;
 mod error;
+mod lookup;
 mod metadata;
 mod table;
+mod upsert;
 mod utils;
 
 pub use admin::*;
 pub use config::*;
 pub use connection::*;
 pub use error::*;
+pub use lookup::*;
 pub use metadata::*;
 pub use table::*;
+pub use upsert::*;
 pub use utils::*;
 
 static TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
@@ -55,6 +59,8 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FlussAdmin>()?;
     m.add_class::<FlussTable>()?;
     m.add_class::<AppendWriter>()?;
+    m.add_class::<UpsertWriter>()?;
+    m.add_class::<Lookuper>()?;
     m.add_class::<Schema>()?;
     m.add_class::<LogScanner>()?;
     m.add_class::<LakeSnapshot>()?;

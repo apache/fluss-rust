@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::bucketing::BucketingFunction;
-use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
 use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
@@ -26,6 +25,7 @@ use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
 use crate::rpc::ApiError;
+use crate::rpc::RpcClient;
 use crate::rpc::message::LookupRequest;
 use std::sync::Arc;
 
@@ -34,19 +34,19 @@ use std::sync::Arc;
 /// Contains the rows returned from a lookup. For primary key lookups,
 /// this will contain at most one row. For prefix key lookups (future),
 /// this may contain multiple rows.
-pub struct LookupResult<'a> {
+pub struct LookupResult {
     rows: Vec<Vec<u8>>,
-    row_type: &'a RowType,
+    row_type: Arc<RowType>,
 }
 
-impl<'a> LookupResult<'a> {
+impl LookupResult {
     /// Creates a new LookupResult from a list of row bytes.
-    fn new(rows: Vec<Vec<u8>>, row_type: &'a RowType) -> Self {
+    fn new(rows: Vec<Vec<u8>>, row_type: Arc<RowType>) -> Self {
         Self { rows, row_type }
     }
 
     /// Creates an empty LookupResult.
-    fn empty(row_type: &'a RowType) -> Self {
+    fn empty(row_type: Arc<RowType>) -> Self {
         Self {
             rows: Vec::new(),
             row_type,
@@ -67,7 +67,7 @@ impl<'a> LookupResult<'a> {
         match self.rows.len() {
             0 => Ok(None),
             1 => Ok(Some(CompactedRow::from_bytes(
-                self.row_type,
+                &self.row_type,
                 &self.rows[0][SCHEMA_ID_LENGTH..],
             ))),
             _ => Err(Error::UnexpectedError {
@@ -82,7 +82,7 @@ impl<'a> LookupResult<'a> {
         self.rows
             .iter()
             // TODO Add schema id check and fetch when implementing prefix lookup
-            .map(|bytes| CompactedRow::from_bytes(self.row_type, &bytes[SCHEMA_ID_LENGTH..]))
+            .map(|bytes| CompactedRow::from_bytes(&self.row_type, &bytes[SCHEMA_ID_LENGTH..]))
             .collect()
     }
 }
@@ -104,20 +104,20 @@ impl<'a> LookupResult<'a> {
 /// ```
 // TODO: Add lookup_by(column_names) for prefix key lookups (PrefixKeyLookuper)
 // TODO: Add create_typed_lookuper<T>() for typed lookups with POJO mapping
-pub struct TableLookup<'a> {
-    conn: &'a FlussConnection,
+pub struct TableLookup {
+    rpc_client: Arc<RpcClient>,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
 }
 
-impl<'a> TableLookup<'a> {
+impl TableLookup {
     pub(super) fn new(
-        conn: &'a FlussConnection,
+        rpc_client: Arc<RpcClient>,
         table_info: TableInfo,
         metadata: Arc<Metadata>,
     ) -> Self {
         Self {
-            conn,
+            rpc_client,
             table_info,
             metadata,
         }
@@ -127,7 +127,7 @@ impl<'a> TableLookup<'a> {
     ///
     /// The lookuper will automatically encode the key and compute the bucket
     /// for each lookup using the appropriate bucketing function.
-    pub fn create_lookuper(self) -> Result<Lookuper<'a>> {
+    pub fn create_lookuper(self) -> Result<Lookuper> {
         let num_buckets = self.table_info.get_num_buckets();
 
         // Get data lake format from table config for bucketing function
@@ -162,9 +162,11 @@ impl<'a> TableLookup<'a> {
             None
         };
 
+        let row_type = Arc::new(self.table_info.row_type().clone());
         Ok(Lookuper {
-            conn: self.conn,
+            rpc_client: self.rpc_client,
             table_path: Arc::new(self.table_info.table_path.clone()),
+            row_type,
             table_info: self.table_info,
             metadata: self.metadata,
             bucketing_function,
@@ -187,9 +189,10 @@ impl<'a> TableLookup<'a> {
 /// let row = GenericRow::new(vec![Datum::Int32(42)]); // lookup key
 /// let result = lookuper.lookup(&row).await?;
 /// ```
-pub struct Lookuper<'a> {
-    conn: &'a FlussConnection,
+pub struct Lookuper {
+    rpc_client: Arc<RpcClient>,
     table_info: TableInfo,
+    row_type: Arc<RowType>,
     table_path: Arc<TablePath>,
     metadata: Arc<Metadata>,
     bucketing_function: Box<dyn BucketingFunction>,
@@ -199,7 +202,7 @@ pub struct Lookuper<'a> {
     num_buckets: i32,
 }
 
-impl<'a> Lookuper<'a> {
+impl Lookuper {
     /// Looks up a value by its primary key.
     ///
     /// The key is encoded and the bucket is automatically computed using
@@ -211,7 +214,7 @@ impl<'a> Lookuper<'a> {
     /// # Returns
     /// * `Ok(LookupResult)` - The lookup result (may be empty if key not found)
     /// * `Err(Error)` - If the lookup fails
-    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult<'_>> {
+    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
         // todo: support batch lookup
         let pk_bytes = self.primary_key_encoder.encode_key(row)?;
         let pk_bytes_vec = pk_bytes.to_vec();
@@ -231,7 +234,7 @@ impl<'a> Lookuper<'a> {
                 Some(id) => Some(id),
                 None => {
                     // Partition doesn't exist, return empty result (like Java)
-                    return Ok(LookupResult::empty(self.table_info.row_type()));
+                    return Ok(LookupResult::empty(Arc::clone(&self.row_type)));
                 }
             }
         } else {
@@ -266,8 +269,7 @@ impl<'a> Lookuper<'a> {
                     ),
                 })?;
 
-        let connections = self.conn.get_connections();
-        let connection = connections.get_connection(tablet_server).await?;
+        let connection = self.rpc_client.get_connection(tablet_server).await?;
 
         // Send lookup request
         let request = LookupRequest::new(table_id, partition_id, bucket_id, vec![pk_bytes_vec]);
@@ -294,10 +296,10 @@ impl<'a> Lookuper<'a> {
                 .filter_map(|pb_value| pb_value.values)
                 .collect();
 
-            return Ok(LookupResult::new(rows, self.table_info.row_type()));
+            return Ok(LookupResult::new(rows, Arc::clone(&self.row_type)));
         }
 
-        Ok(LookupResult::empty(self.table_info.row_type()))
+        Ok(LookupResult::empty(Arc::clone(&self.row_type)))
     }
 
     /// Returns a reference to the table info.
