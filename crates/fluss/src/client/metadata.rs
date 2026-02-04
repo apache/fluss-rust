@@ -259,8 +259,8 @@ mod tests {
         let leader = metadata
             .leader_for(&table_path, &TableBucket::new(1, 0))
             .await
-            .expect("leader request should be Ok")
-            .expect("leader should exist");
+            .unwrap()
+            .expect("leader");
         assert_eq!(leader.id(), 1);
     }
 

@@ -26,7 +26,6 @@ use std::{
 };
 use tempfile::TempDir;
 
-use crate::TableId;
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
@@ -43,6 +42,7 @@ use crate::record::{
 };
 use crate::rpc::{RpcClient, RpcError, message};
 use crate::util::FairBucketStatusMap;
+use crate::{PartitionId, TableId};
 
 const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 #[allow(dead_code)]
@@ -88,7 +88,7 @@ impl<'a> TableScan<'a> {
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
     ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
-    ///     let conn = FlussConnection::new(config).await;
+    ///     let conn = FlussConnection::new(config).await?;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
     ///         .schema(
@@ -164,7 +164,7 @@ impl<'a> TableScan<'a> {
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
     ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
-    ///     let conn = FlussConnection::new(config).await;
+    ///     let conn = FlussConnection::new(config).await?;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
     ///         .schema(
@@ -270,6 +270,7 @@ struct LogScannerInner {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
+    is_partitioned_table: bool,
 }
 
 impl LogScannerInner {
@@ -284,6 +285,7 @@ impl LogScannerInner {
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
+            is_partitioned_table: table_info.is_partitioned(),
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
             log_fetcher: LogFetcher::new(
@@ -337,6 +339,13 @@ impl LogScannerInner {
     }
 
     async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+        if self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message: "The table is a partitioned table, please use \"subscribe_partition\" to \
+                subscribe a partitioned bucket instead."
+                    .to_string(),
+            });
+        }
         let table_bucket = TableBucket::new(self.table_id, bucket);
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
@@ -347,6 +356,13 @@ impl LogScannerInner {
     }
 
     async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        if self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message:
+                    "The table is a partitioned table, subscribe_batch is not supported currently."
+                        .to_string(),
+            });
+        }
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
@@ -365,6 +381,29 @@ impl LogScannerInner {
 
         self.log_scanner_status
             .assign_scan_buckets(scan_bucket_offsets);
+        Ok(())
+    }
+
+    async fn subscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+        offset: i64,
+    ) -> Result<()> {
+        if !self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message: "The table is not a partitioned table, please use \"subscribe\" to \
+                subscribe a non-partitioned bucket instead."
+                    .to_string(),
+            });
+        }
+        let table_bucket =
+            TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket);
+        self.metadata
+            .check_and_update_table_metadata(from_ref(&self.table_path))
+            .await?;
+        self.log_scanner_status
+            .assign_scan_bucket(table_bucket, offset);
         Ok(())
     }
 
@@ -435,6 +474,17 @@ impl LogScanner {
     pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.inner.subscribe_batch(bucket_offsets).await
     }
+
+    pub async fn subscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+        offset: i64,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_partition(partition_id, bucket, offset)
+            .await
+    }
 }
 
 // Implementation for RecordBatchLogScanner (batches mode)
@@ -450,6 +500,17 @@ impl RecordBatchLogScanner {
 
     pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         self.inner.subscribe_batch(bucket_offsets).await
+    }
+
+    pub async fn subscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+        offset: i64,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_partition(partition_id, bucket, offset)
+            .await
     }
 }
 
@@ -617,55 +678,55 @@ impl LogFetcher {
         )
     }
 
-    async fn check_and_update_metadata(&self) -> Result<()> {
-        let need_update = self
-            .fetchable_buckets()
-            .iter()
-            .any(|bucket| self.get_table_bucket_leader(bucket).is_none());
+    async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
+        let mut partition_ids = Vec::new();
+        let mut need_update = false;
 
-        if !need_update {
-            return Ok(());
+        for tb in table_buckets {
+            if self.get_table_bucket_leader(tb).is_some() {
+                continue;
+            }
+
+            if self.is_partitioned {
+                partition_ids.push(tb.partition_id().unwrap());
+            } else {
+                need_update = true;
+                break;
+            }
         }
 
-        if self.is_partitioned {
-            // Fallback to full table metadata refresh until partition-aware updates are available.
+        let update_result = if self.is_partitioned && !partition_ids.is_empty() {
             self.metadata
-                .update_tables_metadata(&HashSet::from([&self.table_path]), &HashSet::new(), vec![])
+                .update_tables_metadata(
+                    &HashSet::from([&self.table_path]),
+                    &HashSet::new(),
+                    partition_ids,
+                )
                 .await
-                .or_else(|e| {
-                    if let Error::RpcError { source, .. } = &e
-                        && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
-                    {
-                        warn!(
-                            "Retrying after encountering error while updating table metadata: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        Err(e)
-                    }
-                })?;
-            return Ok(());
-        }
+        } else if need_update {
+            self.metadata.update_table_metadata(&self.table_path).await
+        } else {
+            Ok(())
+        };
 
-        // TODO: Handle PartitionNotExist error
-        self.metadata
-            .update_tables_metadata(&HashSet::from([&self.table_path]), &HashSet::new(), vec![])
-            .await
-            .or_else(|e| {
-                if let Error::RpcError { source, .. } = &e
-                    && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
-                {
-                    warn!("Retrying after encountering error while updating table metadata: {e}");
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })
+        // TODO: Handle PartitionNotExist error like java side
+        update_result.or_else(|e| {
+            if let Error::RpcError { source, .. } = &e
+                && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
+            {
+                warn!("Retrying after encountering error while updating table metadata: {e}");
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?;
+        Ok(())
     }
 
     /// Send fetch requests asynchronously without waiting for responses
     async fn send_fetches(&self) -> Result<()> {
-        self.check_and_update_metadata().await?;
+        self.check_and_update_metadata(self.fetchable_buckets().as_slice())
+            .await?;
         let fetch_request = self.prepare_fetch_log_requests().await;
 
         for (leader, fetch_request) in fetch_request {
@@ -774,7 +835,11 @@ impl LogFetcher {
 
             for fetch_log_for_bucket in fetch_log_for_buckets {
                 let bucket: i32 = fetch_log_for_bucket.bucket_id;
-                let table_bucket = TableBucket::new(table_id, bucket);
+                let table_bucket = TableBucket::new_with_partition(
+                    table_id,
+                    fetch_log_for_bucket.partition_id,
+                    bucket,
+                );
 
                 // todo: check fetch result code for per-bucket
                 let Some(fetch_offset) = log_scanner_status.get_bucket_offset(&table_bucket) else {
@@ -1302,7 +1367,7 @@ impl LogFetcher {
                         )
                     } else {
                         let fetch_log_req_for_bucket = PbFetchLogReqForBucket {
-                            partition_id: None,
+                            partition_id: bucket.partition_id(),
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
                             // 1M

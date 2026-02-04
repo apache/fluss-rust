@@ -1206,7 +1206,7 @@ pub struct TableBucket {
 
 impl TableBucket {
     pub fn new(table_id: TableId, bucket: BucketId) -> Self {
-        TableBucket {
+        Self {
             table_id,
             partition_id: None,
             bucket,

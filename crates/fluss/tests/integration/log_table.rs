@@ -974,7 +974,7 @@ mod table_test {
     }
 
     #[tokio::test]
-    async fn partitioned_table_append() {
+    async fn partitioned_table_append_scan() {
         let cluster = get_fluss_cluster();
         let connection = cluster.get_fluss_connection().await;
 
@@ -1098,11 +1098,71 @@ mod table_test {
             "Table partition 'fluss.test_partitioned_log_append(p=NOT Exists)' does not exist."
         ));
 
+        let log_scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        let partition_info = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partition infos");
+        for partition_info in partition_info {
+            log_scanner
+                .subscribe_partition(partition_info.get_partition_id(), 0, 0)
+                .await
+                .expect("Failed to subscribe to partition");
+        }
+
+        let expected_records = vec![
+            (1, "US", 100i64),
+            (2, "US", 200i64),
+            (3, "EU", 300i64),
+            (4, "EU", 400),
+            (5, "US", 500i64),
+            (6, "US", 600i64),
+            (7, "EU", 700i64),
+            (8, "EU", 800i64),
+        ];
+        let expected_records: Vec<(i32, String, i64)> = expected_records
+            .into_iter()
+            .map(|(id, region, val)| (id, region.to_string(), val))
+            .collect();
+
+        let mut collected_records: Vec<(i32, String, i64)> = Vec::new();
+        let start_time = std::time::Instant::now();
+        while collected_records.len() < expected_records.len()
+            && start_time.elapsed() < Duration::from_secs(10)
+        {
+            let records = log_scanner
+                .poll(Duration::from_millis(500))
+                .await
+                .expect("Failed to poll log scanner");
+            for rec in records {
+                let row = rec.row();
+                collected_records.push((
+                    row.get_int(0),
+                    row.get_string(1).to_string(),
+                    row.get_long(2),
+                ));
+            }
+        }
+
+        assert_eq!(
+            collected_records.len(),
+            expected_records.len(),
+            "Did not receive all records in time, expect receive {} records, but got {} records",
+            expected_records.len(),
+            collected_records.len()
+        );
+        collected_records.sort_by_key(|r| r.0);
+        assert_eq!(
+            collected_records, expected_records,
+            "Data mismatch between sent and received"
+        );
+
         admin
             .drop_table(&table_path, false)
             .await
             .expect("Failed to drop table");
-
-        // todo: add scan test in 203
     }
 }
