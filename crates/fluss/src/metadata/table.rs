@@ -969,6 +969,17 @@ impl TableConfig {
         kv_format.parse().map_err(Into::into)
     }
 
+    pub fn get_log_format(&self) -> Result<LogFormat> {
+        // TODO: Consolidate configurations logic, constants, defaults in a single place
+        const DEFAULT_LOG_FORMAT: &str = "ARROW";
+        let log_format = self
+            .properties
+            .get("table.log.format")
+            .map(String::as_str)
+            .unwrap_or(DEFAULT_LOG_FORMAT);
+        LogFormat::parse(log_format)
+    }
+
     pub fn get_auto_partition_strategy(&self) -> AutoPartitionStrategy {
         AutoPartitionStrategy::from(&self.properties)
     }
