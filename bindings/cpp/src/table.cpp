@@ -265,6 +265,15 @@ Result LogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offse
     return utils::from_ffi_result(ffi_result);
 }
 
+Result LogScanner::SubscribePartition(int64_t partition_id, int32_t bucket_id, int64_t start_offset) {
+    if (!Available()) {
+        return utils::make_error(1, "LogScanner not available");
+    }
+
+    auto ffi_result = scanner_->subscribe_partition(partition_id, bucket_id, start_offset);
+    return utils::from_ffi_result(ffi_result);
+}
+
 Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
         return utils::make_error(1, "LogScanner not available");
