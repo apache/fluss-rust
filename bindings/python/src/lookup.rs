@@ -26,7 +26,7 @@ use tokio::sync::Mutex;
 /// The Lookuper caches key encoders and bucketing functions, making
 /// repeated lookups efficient. Create once and reuse for multiple lookups.
 ///
-/// Example:
+/// # Example:
 ///     lookuper = table.new_lookup()
 ///     result = await lookuper.lookup({"user_id": 1})
 ///     result2 = await lookuper.lookup({"user_id": 2})  # Reuses cached encoders

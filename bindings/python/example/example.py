@@ -321,7 +321,7 @@ async def main():
     # Create table descriptor
     pk_table_descriptor = fluss.TableDescriptor(
         fluss_pk_schema,
-        num_buckets=3,
+        bucket_count=3,
     )
 
     pk_table_path = fluss.TablePath("fluss", "users_pk_table_v3")

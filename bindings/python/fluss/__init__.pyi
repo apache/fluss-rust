@@ -45,7 +45,12 @@ class FlussConnection:
     async def get_table(self, table_path: TablePath) -> FlussTable: ...
     def close(self) -> None: ...
     def __enter__(self) -> FlussConnection: ...
-    def __exit__(self, exc_type: Optional[type], exc_value: Optional[BaseException], traceback: Optional[TracebackType]) -> bool: ...
+    def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool: ...
     def __repr__(self) -> str: ...
 
 class FlussAdmin:
@@ -61,7 +66,17 @@ class FlussAdmin:
 
 class FlussTable:
     async def new_append_writer(self) -> AppendWriter: ...
-    async def new_log_scanner(self) -> LogScanner: ...
+    async def new_log_scanner(
+        self,
+        project: Optional[List[int]] = None,
+        columns: Optional[List[str]] = None,
+    ) -> LogScanner: ...
+    def new_upsert(
+        self,
+        columns: Optional[List[str]] = None,
+        column_indices: Optional[List[int]] = None,
+    ) -> UpsertWriter: ...
+    def new_lookup(self) -> Lookuper: ...
     def get_table_info(self) -> TableInfo: ...
     def get_table_path(self) -> TablePath: ...
     def has_primary_key(self) -> bool: ...
@@ -100,6 +115,49 @@ class AppendWriter:
     def flush(self) -> None: ...
     def __repr__(self) -> str: ...
 
+class UpsertWriter:
+    """Writer for upserting and deleting data in a Fluss primary key table."""
+
+    async def upsert(self, row: dict | list | tuple) -> None:
+        """Upsert a row into the table.
+
+        If a row with the same primary key exists, it will be updated.
+        Otherwise, a new row will be inserted.
+
+        Args:
+            row: Dictionary mapping field names to values, or
+                 list/tuple of values in schema order
+        """
+        ...
+    async def delete(self, pk: dict | list | tuple) -> None:
+        """Delete a row from the table by primary key.
+
+        Args:
+            pk: Dictionary with PK column names as keys, or
+                list/tuple of PK values in PK column order
+        """
+        ...
+    async def flush(self) -> None:
+        """Flush all pending upsert/delete operations to the server."""
+        ...
+    def __repr__(self) -> str: ...
+
+class Lookuper:
+    """Lookuper for performing primary key lookups on a Fluss table."""
+
+    async def lookup(self, pk: dict | list | tuple) -> Optional[Dict[str, object]]:
+        """Lookup a row by its primary key.
+
+        Args:
+            pk: Dictionary with PK column names as keys, or
+                list/tuple of PK values in PK column order
+
+        Returns:
+            A dict containing the row data if found, None otherwise.
+        """
+        ...
+    def __repr__(self) -> str: ...
+
 class LogScanner:
     def subscribe(
         self, start_timestamp: Optional[int], end_timestamp: Optional[int]
@@ -109,14 +167,27 @@ class LogScanner:
     def __repr__(self) -> str: ...
 
 class Schema:
-    def __init__(self, schema: pa.Schema, primary_keys: Optional[List[str]] = None) -> None: ...
+    def __init__(
+        self, schema: pa.Schema, primary_keys: Optional[List[str]] = None
+    ) -> None: ...
     def get_column_names(self) -> List[str]: ...
     def get_column_types(self) -> List[str]: ...
-    def get_columns(self) -> List[Tuple[str,str]]: ...
+    def get_columns(self) -> List[Tuple[str, str]]: ...
     def __str__(self) -> str: ...
 
 class TableDescriptor:
-    def __init__(self, schema: Schema, **kwargs: str) -> None: ...
+    def __init__(
+        self,
+        schema: Schema,
+        *,
+        partition_keys: Optional[List[str]] = None,
+        bucket_count: Optional[int] = None,
+        bucket_keys: Optional[List[str]] = None,
+        comment: Optional[str] = None,
+        log_format: Optional[str] = None,
+        kv_format: Optional[str] = None,
+        **properties: str,
+    ) -> None: ...
     def get_schema(self) -> Schema: ...
 
 class TablePath:

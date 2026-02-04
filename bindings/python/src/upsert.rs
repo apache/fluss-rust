@@ -27,7 +27,7 @@ use tokio::sync::Mutex;
 /// Multiple concurrent writers share a common WriterClient which batches requests
 /// for efficiency.
 ///
-/// Example:
+/// # Example:
 ///     writer = table.new_upsert()
 ///     await writer.upsert(row1)
 ///     await writer.upsert(row2)
