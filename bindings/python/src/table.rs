@@ -36,6 +36,7 @@ const MICROS_PER_MILLI: i64 = 1_000;
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const MICROS_PER_DAY: i64 = 86_400_000_000;
 const NANOS_PER_MILLI: i64 = 1_000_000;
+const NANOS_PER_MICRO: i64 = 1_000;
 
 /// Represents a Fluss table for data operations
 #[pyclass]
@@ -126,6 +127,70 @@ impl FlussTable {
     /// Check if table has primary key
     pub fn has_primary_key(&self) -> bool {
         self.has_primary_key
+    }
+
+    /// Create a new lookuper for primary key lookups.
+    ///
+    /// This is only available for tables with a primary key.
+    pub fn new_lookup(&self, _py: Python) -> PyResult<crate::Lookuper> {
+        if !self.has_primary_key {
+            return Err(FlussError::new_err(
+                "Lookup is only supported for primary key tables",
+            ));
+        }
+
+        crate::Lookuper::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        )
+    }
+
+    /// Create a new upsert writer for the table.
+    ///
+    /// This is only available for tables with a primary key.
+    ///
+    /// Args:
+    ///     columns: Optional list of column names for partial update.
+    ///              Only the specified columns will be updated.
+    ///     column_indices: Optional list of column indices (0-based) for partial update.
+    ///                     Alternative to `columns` parameter.
+    #[pyo3(signature = (columns=None, column_indices=None))]
+    pub fn new_upsert(
+        &self,
+        _py: Python,
+        columns: Option<Vec<String>>,
+        column_indices: Option<Vec<usize>>,
+    ) -> PyResult<crate::UpsertWriter> {
+        if !self.has_primary_key {
+            return Err(FlussError::new_err(
+                "Upsert is only supported for primary key tables",
+            ));
+        }
+
+        // Validate that at most one parameter is specified
+        if columns.is_some() && column_indices.is_some() {
+            return Err(FlussError::new_err(
+                "Specify only one of 'columns' or 'column_indices', not both",
+            ));
+        }
+
+        let fluss_table = fcore::client::FlussTable::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        );
+
+        let table_upsert = fluss_table
+            .new_upsert()
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+
+        crate::UpsertWriter::new(
+            table_upsert,
+            self.table_info.clone(),
+            columns,
+            column_indices,
+        )
     }
 
     fn __repr__(&self) -> String {
@@ -358,7 +423,7 @@ where
 }
 
 /// Convert Python row (dict/list/tuple) to GenericRow based on schema
-fn python_to_generic_row(
+pub fn python_to_generic_row(
     row: &Bound<PyAny>,
     table_info: &fcore::metadata::TableInfo,
 ) -> PyResult<fcore::row::GenericRow<'static>> {
@@ -419,6 +484,115 @@ fn python_to_generic_row(
 
         RowInput::Tuple(tuple) => process_sequence_to_datums(tuple.iter(), tuple.len(), fields)?,
     };
+
+    Ok(fcore::row::GenericRow { values: datums })
+}
+
+/// Convert Python primary key values (dict/list/tuple) to GenericRow.
+/// Only requires PK columns; non-PK columns are filled with Null.
+/// For dict: keys should be PK column names.
+/// For list/tuple: values should be PK values in PK column order.
+pub fn python_pk_to_generic_row(
+    row: &Bound<PyAny>,
+    table_info: &fcore::metadata::TableInfo,
+) -> PyResult<fcore::row::GenericRow<'static>> {
+    let schema = table_info.get_schema();
+    let row_type = table_info.row_type();
+    let fields = row_type.fields();
+    let pk_indexes = schema.primary_key_indexes();
+    let pk_names: Vec<&str> = schema.primary_key_column_names();
+
+    if pk_indexes.is_empty() {
+        return Err(FlussError::new_err(
+            "Table has no primary key; cannot use PK-only row",
+        ));
+    }
+
+    // Initialize all datums as Null
+    let mut datums: Vec<fcore::row::Datum<'static>> = vec![fcore::row::Datum::Null; fields.len()];
+
+    // Extract with user-friendly error message
+    let row_input: RowInput = row.extract().map_err(|_| {
+        let type_name = row
+            .get_type()
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        FlussError::new_err(format!(
+            "PK row must be a dict, list, or tuple; got {type_name}"
+        ))
+    })?;
+
+    match row_input {
+        RowInput::Dict(dict) => {
+            // Validate keys are PK columns
+            for (k, _) in dict.iter() {
+                let key_str = k.extract::<&str>().map_err(|_| {
+                    let key_type = k
+                        .get_type()
+                        .name()
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    FlussError::new_err(format!("PK dict keys must be strings; got {key_type}"))
+                })?;
+
+                if !pk_names.contains(&key_str) {
+                    return Err(FlussError::new_err(format!(
+                        "Unknown PK field '{}'. Expected PK fields: {}",
+                        key_str,
+                        pk_names.join(", ")
+                    )));
+                }
+            }
+
+            // Extract PK values
+            for (i, pk_idx) in pk_indexes.iter().enumerate() {
+                let pk_name = pk_names[i];
+                let field: &fcore::metadata::DataField = &fields[*pk_idx];
+                let value = dict
+                    .get_item(pk_name)?
+                    .ok_or_else(|| FlussError::new_err(format!("Missing PK field: {}", pk_name)))?;
+                datums[*pk_idx] = python_value_to_datum(&value, field.data_type())
+                    .map_err(|e| FlussError::new_err(format!("PK field '{}': {}", pk_name, e)))?;
+            }
+        }
+
+        RowInput::List(list) => {
+            if list.len() != pk_indexes.len() {
+                return Err(FlussError::new_err(format!(
+                    "PK list must have {} elements (PK columns), got {}",
+                    pk_indexes.len(),
+                    list.len()
+                )));
+            }
+            for (i, pk_idx) in pk_indexes.iter().enumerate() {
+                let field: &fcore::metadata::DataField = &fields[*pk_idx];
+                let value = list.get_item(i)?;
+                datums[*pk_idx] =
+                    python_value_to_datum(&value, field.data_type()).map_err(|e| {
+                        FlussError::new_err(format!("PK field '{}': {}", field.name(), e))
+                    })?;
+            }
+        }
+
+        RowInput::Tuple(tuple) => {
+            if tuple.len() != pk_indexes.len() {
+                return Err(FlussError::new_err(format!(
+                    "PK tuple must have {} elements (PK columns), got {}",
+                    pk_indexes.len(),
+                    tuple.len()
+                )));
+            }
+            for (i, pk_idx) in pk_indexes.iter().enumerate() {
+                let field: &fcore::metadata::DataField = &fields[*pk_idx];
+                let value = tuple.get_item(i)?;
+                datums[*pk_idx] =
+                    python_value_to_datum(&value, field.data_type()).map_err(|e| {
+                        FlussError::new_err(format!("PK field '{}': {}", field.name(), e))
+                    })?;
+            }
+        }
+    }
 
     Ok(fcore::row::GenericRow { values: datums })
 }
@@ -516,10 +690,236 @@ fn python_value_to_datum(
     }
 }
 
+/// Convert Rust Datum to Python value based on data type.
+/// This is the reverse of python_value_to_datum.
+pub fn datum_to_python_value(
+    py: Python,
+    row: &dyn fcore::row::InternalRow,
+    pos: usize,
+    data_type: &fcore::metadata::DataType,
+) -> PyResult<Py<PyAny>> {
+    use fcore::metadata::DataType;
+
+    // Check for null first
+    if row.is_null_at(pos) {
+        return Ok(py.None());
+    }
+
+    match data_type {
+        DataType::Boolean(_) => Ok(row
+            .get_boolean(pos)
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
+        DataType::TinyInt(_) => Ok(row
+            .get_byte(pos)
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
+        DataType::SmallInt(_) => Ok(row
+            .get_short(pos)
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
+        DataType::Int(_) => Ok(row
+            .get_int(pos)
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
+        DataType::BigInt(_) => Ok(row
+            .get_long(pos)
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
+        DataType::Float(_) => Ok(row
+            .get_float(pos)
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
+        DataType::Double(_) => Ok(row
+            .get_double(pos)
+            .into_pyobject(py)?
+            .to_owned()
+            .into_any()
+            .unbind()),
+        DataType::String(_) => {
+            let s = row.get_string(pos);
+            Ok(s.into_pyobject(py)?.into_any().unbind())
+        }
+        DataType::Char(char_type) => {
+            let s = row.get_char(pos, char_type.length() as usize);
+            Ok(s.into_pyobject(py)?.into_any().unbind())
+        }
+        DataType::Bytes(_) => {
+            let b = row.get_bytes(pos);
+            Ok(pyo3::types::PyBytes::new(py, b).into_any().unbind())
+        }
+        DataType::Binary(binary_type) => {
+            let b = row.get_binary(pos, binary_type.length());
+            Ok(pyo3::types::PyBytes::new(py, b).into_any().unbind())
+        }
+        DataType::Decimal(decimal_type) => {
+            let decimal = row.get_decimal(
+                pos,
+                decimal_type.precision() as usize,
+                decimal_type.scale() as usize,
+            );
+            rust_decimal_to_python(py, &decimal)
+        }
+        DataType::Date(_) => {
+            let date = row.get_date(pos);
+            rust_date_to_python(py, date)
+        }
+        DataType::Time(_) => {
+            let time = row.get_time(pos);
+            rust_time_to_python(py, time)
+        }
+        DataType::Timestamp(ts_type) => {
+            let ts = row.get_timestamp_ntz(pos, ts_type.precision());
+            rust_timestamp_ntz_to_python(py, ts)
+        }
+        DataType::TimestampLTz(ts_type) => {
+            let ts = row.get_timestamp_ltz(pos, ts_type.precision());
+            rust_timestamp_ltz_to_python(py, ts)
+        }
+        _ => Err(FlussError::new_err(format!(
+            "Unsupported data type for conversion to Python: {data_type}"
+        ))),
+    }
+}
+
+/// Convert Rust Decimal to Python decimal.Decimal
+fn rust_decimal_to_python(py: Python, decimal: &fcore::row::Decimal) -> PyResult<Py<PyAny>> {
+    let decimal_ty = get_decimal_type(py)?;
+    let decimal_str = decimal.to_string();
+    let py_decimal = decimal_ty.call1((decimal_str,))?;
+    Ok(py_decimal.into_any().unbind())
+}
+
+/// Convert Rust Date (days since epoch) to Python datetime.date
+fn rust_date_to_python(py: Python, date: fcore::row::Date) -> PyResult<Py<PyAny>> {
+    use pyo3::types::PyDate;
+
+    let days_since_epoch = date.get_inner();
+    let epoch = jiff::civil::date(1970, 1, 1);
+    let civil_date = epoch + jiff::Span::new().days(days_since_epoch as i64);
+
+    let py_date = PyDate::new(
+        py,
+        civil_date.year() as i32,
+        civil_date.month() as u8,
+        civil_date.day() as u8,
+    )?;
+    Ok(py_date.into_any().unbind())
+}
+
+/// Convert Rust Time (millis since midnight) to Python datetime.time
+fn rust_time_to_python(py: Python, time: fcore::row::Time) -> PyResult<Py<PyAny>> {
+    use pyo3::types::PyTime;
+
+    let millis = time.get_inner() as i64;
+    let hours = millis / MILLIS_PER_HOUR;
+    let minutes = (millis % MILLIS_PER_HOUR) / MILLIS_PER_MINUTE;
+    let seconds = (millis % MILLIS_PER_MINUTE) / MILLIS_PER_SECOND;
+    let microseconds = (millis % MILLIS_PER_SECOND) * MICROS_PER_MILLI;
+
+    let py_time = PyTime::new(
+        py,
+        hours as u8,
+        minutes as u8,
+        seconds as u8,
+        microseconds as u32,
+        None,
+    )?;
+    Ok(py_time.into_any().unbind())
+}
+
+/// Convert Rust TimestampNtz to Python naive datetime
+fn rust_timestamp_ntz_to_python(py: Python, ts: fcore::row::TimestampNtz) -> PyResult<Py<PyAny>> {
+    use pyo3::types::PyDateTime;
+
+    let millis = ts.get_millisecond();
+    let nanos = ts.get_nano_of_millisecond();
+    let total_micros = millis * MICROS_PER_MILLI + (nanos as i64 / NANOS_PER_MICRO);
+
+    // Convert to civil datetime via jiff
+    let timestamp = jiff::Timestamp::from_microsecond(total_micros)
+        .map_err(|e| FlussError::new_err(format!("Invalid timestamp: {e}")))?;
+    let civil_dt = timestamp.to_zoned(jiff::tz::TimeZone::UTC).datetime();
+
+    let py_dt = PyDateTime::new(
+        py,
+        civil_dt.year() as i32,
+        civil_dt.month() as u8,
+        civil_dt.day() as u8,
+        civil_dt.hour() as u8,
+        civil_dt.minute() as u8,
+        civil_dt.second() as u8,
+        (civil_dt.subsec_nanosecond() / 1000) as u32, // microseconds
+        None,
+    )?;
+    Ok(py_dt.into_any().unbind())
+}
+
+/// Convert Rust TimestampLtz to Python timezone-aware datetime (UTC)
+fn rust_timestamp_ltz_to_python(py: Python, ts: fcore::row::TimestampLtz) -> PyResult<Py<PyAny>> {
+    use pyo3::types::PyDateTime;
+
+    let millis = ts.get_epoch_millisecond();
+    let nanos = ts.get_nano_of_millisecond();
+    let total_micros = millis * MICROS_PER_MILLI + (nanos as i64 / NANOS_PER_MICRO);
+
+    // Convert to civil datetime via jiff
+    let timestamp = jiff::Timestamp::from_microsecond(total_micros)
+        .map_err(|e| FlussError::new_err(format!("Invalid timestamp: {e}")))?;
+    let civil_dt = timestamp.to_zoned(jiff::tz::TimeZone::UTC).datetime();
+
+    let utc = get_utc_timezone(py)?;
+    let py_dt = PyDateTime::new(
+        py,
+        civil_dt.year() as i32,
+        civil_dt.month() as u8,
+        civil_dt.day() as u8,
+        civil_dt.hour() as u8,
+        civil_dt.minute() as u8,
+        civil_dt.second() as u8,
+        (civil_dt.subsec_nanosecond() / 1000) as u32, // microseconds
+        Some(&utc),
+    )?;
+    Ok(py_dt.into_any().unbind())
+}
+
+/// Convert an InternalRow to a Python dictionary
+pub fn internal_row_to_dict(
+    py: Python,
+    row: &dyn fcore::row::InternalRow,
+    table_info: &fcore::metadata::TableInfo,
+) -> PyResult<Py<PyAny>> {
+    let row_type = table_info.row_type();
+    let fields = row_type.fields();
+    let dict = pyo3::types::PyDict::new(py);
+
+    for (pos, field) in fields.iter().enumerate() {
+        let value = datum_to_python_value(py, row, pos, field.data_type())?;
+        dict.set_item(field.name(), value)?;
+    }
+
+    Ok(dict.into_any().unbind())
+}
+
 /// Cached decimal.Decimal type
 /// Uses PyOnceLock for thread-safety and subinterpreter compatibility.
 static DECIMAL_TYPE: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
     pyo3::sync::PyOnceLock::new();
+
+/// Cached UTC timezone
+static UTC_TIMEZONE: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
 
 /// Cached UTC epoch type
 static UTC_EPOCH: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
@@ -534,6 +934,21 @@ fn get_decimal_type(py: Python) -> PyResult<Bound<pyo3::types::PyType>> {
         Ok(decimal_ty.unbind())
     })?;
     Ok(ty.bind(py).clone())
+}
+
+/// Get the cached UTC timezone (datetime.timezone.utc), creating it once per interpreter.
+fn get_utc_timezone(py: Python) -> PyResult<Bound<pyo3::types::PyTzInfo>> {
+    let tz = UTC_TIMEZONE.get_or_try_init(py, || -> PyResult<_> {
+        let datetime_mod = py.import("datetime")?;
+        let timezone = datetime_mod.getattr("timezone")?;
+        let utc = timezone.getattr("utc")?;
+        Ok(utc.unbind())
+    })?;
+    // Downcast to PyTzInfo for use with PyDateTime::new()
+    Ok(tz
+        .bind(py)
+        .clone()
+        .downcast_into::<pyo3::types::PyTzInfo>()?)
 }
 
 /// Get the cached UTC epoch datetime, creating it once per interpreter.

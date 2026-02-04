@@ -112,14 +112,14 @@ impl<'a> FlussTable<'a> {
     ///     println!("Found value: {:?}", value);
     /// }
     /// ```
-    pub fn new_lookup(&self) -> Result<TableLookup<'_>> {
+    pub fn new_lookup(&self) -> Result<TableLookup> {
         if !self.has_primary_key {
             return Err(Error::UnsupportedOperation {
                 message: "Lookup is only supported for primary key tables".to_string(),
             });
         }
         Ok(TableLookup::new(
-            self.conn,
+            self.conn.get_connections(),
             self.table_info.clone(),
             self.metadata.clone(),
         ))

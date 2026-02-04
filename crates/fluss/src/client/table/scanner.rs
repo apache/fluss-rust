@@ -97,7 +97,7 @@ impl<'a> TableScan<'a> {
     ///                 .column("col1", DataTypes::int())
     ///                 .column("col2", DataTypes::string())
     ///                 .column("col3", DataTypes::string())
-    ///                 .column("col3", DataTypes::string())
+    ///                 .column("col4", DataTypes::string())
     ///             .build()?,
     ///         ).build()?;
     ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
@@ -179,7 +179,6 @@ impl<'a> TableScan<'a> {
     ///     let admin = conn.get_admin().await?;
     ///     admin.create_table(&table_path, &table_descriptor, true)
     ///         .await?;
-    ///     let table_info = admin.get_table(&table_path).await?;
     ///     let table = conn.get_table(&table_path).await?;
     ///
     ///     // Project columns by column names

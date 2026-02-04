@@ -27,7 +27,7 @@ use bytes::Bytes;
 
 /// An interface for encoding key of row into bytes.
 #[allow(dead_code)]
-pub trait KeyEncoder {
+pub trait KeyEncoder: Send + Sync {
     fn encode_key(&mut self, row: &dyn InternalRow) -> Result<Bytes>;
 }
 
@@ -71,7 +71,7 @@ impl KeyEncoderFactory {
 /// 2. call method [`RowEncoder::encode_field()`] to write the row's field.
 /// 3. call method [`RowEncoder::finishRow()`] to finish the writing and get the written row.
 #[allow(dead_code)]
-pub trait RowEncoder {
+pub trait RowEncoder: Send + Sync {
     /// Start to write a new row.
     ///
     /// # Returns
