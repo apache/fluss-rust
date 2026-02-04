@@ -273,9 +273,11 @@ impl FlussAdmin {
         // Convert proto response to LakeSnapshot
         let mut table_buckets_offset = HashMap::new();
         for bucket_snapshot in response.bucket_snapshots {
-            let table_bucket = TableBucket::new(response.table_id,
-                                                bucket_snapshot.partition_id,
-                                                bucket_snapshot.bucket_id);
+            let table_bucket = TableBucket::new(
+                response.table_id,
+                bucket_snapshot.partition_id,
+                bucket_snapshot.bucket_id,
+            );
             if let Some(log_offset) = bucket_snapshot.log_offset {
                 table_buckets_offset.insert(table_bucket, log_offset);
             }

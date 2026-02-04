@@ -825,7 +825,8 @@ impl LogFetcher {
 
             for fetch_log_for_bucket in fetch_log_for_buckets {
                 let bucket: i32 = fetch_log_for_bucket.bucket_id;
-                let table_bucket = TableBucket::new(table_id, fetch_log_for_bucket.partition_id, bucket);
+                let table_bucket =
+                    TableBucket::new(table_id, fetch_log_for_bucket.partition_id, bucket);
 
                 // todo: check fetch result code for per-bucket
                 let Some(fetch_offset) = log_scanner_status.get_bucket_offset(&table_bucket) else {
@@ -1734,7 +1735,7 @@ mod tests {
             None,
         )?;
 
-        let bucket = TableBucket::new(1,None, 0);
+        let bucket = TableBucket::new(1, None, 0);
         assert!(metadata.leader_for(&table_path, &bucket).await?.is_some());
 
         let response = crate::proto::FetchLogResponse {
