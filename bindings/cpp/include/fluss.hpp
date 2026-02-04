@@ -544,6 +544,7 @@ public:
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
+    Result SubscribePartition(int64_t partition_id, int32_t bucket_id, int64_t start_offset);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
     Result PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out);
 

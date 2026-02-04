@@ -21,6 +21,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use fluss as fcore;
+use fluss::PartitionId;
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -247,6 +248,12 @@ mod ffi {
         fn subscribe_batch(
             self: &LogScanner,
             subscriptions: Vec<FfiBucketSubscription>,
+        ) -> FfiResult;
+        fn subscribe_partition(
+            self: &LogScanner,
+            partition_id: i64,
+            bucket_id: i32,
+            start_offset: i64,
         ) -> FfiResult;
         fn poll(self: &LogScanner, timeout_ms: i64) -> FfiScanRecordsResult;
         fn poll_record_batch(self: &LogScanner, timeout_ms: i64) -> FfiArrowRecordBatchesResult;
@@ -743,17 +750,39 @@ pub extern "C" fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize)
 
 impl LogScanner {
     fn subscribe(&self, bucket_id: i32, start_offset: i64) -> ffi::FfiResult {
-        if let Some(ref inner) = self.inner {
-            let result = RUNTIME.block_on(async { inner.subscribe(bucket_id, start_offset).await });
+        self.do_subscribe(None, bucket_id, start_offset)
+    }
 
+    fn do_subscribe(
+        &self,
+        partition_id: Option<PartitionId>,
+        bucket_id: i32,
+        start_offset: i64,
+    ) -> ffi::FfiResult {
+        if let Some(ref inner) = self.inner {
+            let result = RUNTIME.block_on(async {
+                if let Some(partition_id) = partition_id {
+                    inner
+                        .subscribe_partition(partition_id, bucket_id, start_offset)
+                        .await
+                } else {
+                    inner.subscribe(bucket_id, start_offset).await
+                }
+            });
             match result {
                 Ok(_) => ok_result(),
                 Err(e) => err_result(1, e.to_string()),
             }
         } else if let Some(ref inner_batch) = self.inner_batch {
-            let result =
-                RUNTIME.block_on(async { inner_batch.subscribe(bucket_id, start_offset).await });
-
+            let result = RUNTIME.block_on(async {
+                if let Some(partition_id) = partition_id {
+                    inner_batch
+                        .subscribe_partition(partition_id, bucket_id, start_offset)
+                        .await
+                } else {
+                    inner_batch.subscribe(bucket_id, start_offset).await
+                }
+            });
             match result {
                 Ok(_) => ok_result(),
                 Err(e) => err_result(1, e.to_string()),
@@ -788,6 +817,15 @@ impl LogScanner {
         } else {
             err_result(1, "LogScanner not initialized".to_string())
         }
+    }
+
+    fn subscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket_id: i32,
+        start_offset: i64,
+    ) -> ffi::FfiResult {
+        self.do_subscribe(Some(partition_id), bucket_id, start_offset)
     }
 
     fn poll(&self, timeout_ms: i64) -> ffi::FfiScanRecordsResult {
