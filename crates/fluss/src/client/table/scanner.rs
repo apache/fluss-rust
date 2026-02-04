@@ -107,7 +107,7 @@ impl<'a> TableScan<'a> {
     ///     let table = conn.get_table(&table_path).await?;
     ///
     ///     // Project columns by indices
-    ///     let scanner = table.new_scan().project(&[0, 2, 3])?.create_log_scanner()?;
+    ///     let scanner = table.new_scan()?.project(&[0, 2, 3])?.create_log_scanner()?;
     ///     let scan_records = scanner.poll(Duration::from_secs(10)).await?;
     ///     for record in scan_records {
     ///         let row = record.row();
@@ -182,7 +182,7 @@ impl<'a> TableScan<'a> {
     ///     let table = conn.get_table(&table_path).await?;
     ///
     ///     // Project columns by column names
-    ///     let scanner = table.new_scan().project_by_name(&["col1", "col3"])?.create_log_scanner()?;
+    ///     let scanner = table.new_scan()?.project_by_name(&["col1", "col3"])?.create_log_scanner()?;
     ///     let scan_records = scanner.poll(Duration::from_secs(10)).await?;
     ///     for record in scan_records {
     ///         let row = record.row();

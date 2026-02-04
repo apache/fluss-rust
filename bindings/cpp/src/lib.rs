@@ -591,10 +591,11 @@ impl Table {
                 self.table_info.clone(),
             );
 
-            let scanner = match fluss_table.new_scan().create_log_scanner() {
-                Ok(a) => a,
-                Err(e) => return Err(format!("Failed to create log scanner: {e}")),
-            };
+            let scanner = fluss_table
+                .new_scan()
+                .map_err(|e| format!("Failed to create table scan: {e}"))?
+                .create_log_scanner()
+                .map_err(|e| format!("Failed to create log scanner: {e}"))?;
 
             let scanner_ptr = Box::into_raw(Box::new(LogScanner {
                 inner: Some(scanner),
@@ -616,17 +617,16 @@ impl Table {
                 self.table_info.clone(),
             );
 
-            let scan = fluss_table.new_scan();
-            let scan = match scan.project(&column_indices) {
-                Ok(s) => s,
-                Err(e) => return Err(format!("Failed to project columns: {e}")),
-            };
-            let scanner = match scan.create_log_scanner() {
-                Ok(a) => a,
-                Err(e) => return Err(format!("Failed to create log scanner: {e}")),
-            };
+            let log_scanner = fluss_table
+                .new_scan()
+                .map_err(|e| format!("Failed to create table scan: {e}"))?
+                .project(&column_indices)
+                .map_err(|e| format!("Failed to project columns: {e}"))?
+                .create_log_scanner()
+                .map_err(|e| format!("Failed to create log scanner: {e}"))?;
+
             let scanner = Box::into_raw(Box::new(LogScanner {
-                inner: Some(scanner),
+                inner: Some(log_scanner),
                 inner_batch: None,
             }));
             Ok(scanner)
@@ -641,13 +641,15 @@ impl Table {
                 self.table_info.clone(),
             );
 
-            let scanner = match fluss_table.new_scan().create_record_batch_log_scanner() {
-                Ok(a) => a,
-                Err(e) => return Err(format!("Failed to create record batch log scanner: {e}")),
-            };
+            let batch_scanner = fluss_table
+                .new_scan()
+                .map_err(|e| format!("Failed to create table scan: {e}"))?
+                .create_record_batch_log_scanner()
+                .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
+
             let scanner = Box::into_raw(Box::new(LogScanner {
                 inner: None,
-                inner_batch: Some(scanner),
+                inner_batch: Some(batch_scanner),
             }));
             Ok(scanner)
         })
@@ -664,18 +666,17 @@ impl Table {
                 self.table_info.clone(),
             );
 
-            let scan = fluss_table.new_scan();
-            let scan = match scan.project(&column_indices) {
-                Ok(s) => s,
-                Err(e) => return Err(format!("Failed to project columns: {e}")),
-            };
-            let scanner = match scan.create_record_batch_log_scanner() {
-                Ok(a) => a,
-                Err(e) => return Err(format!("Failed to create record batch log scanner: {e}")),
-            };
+            let batch_scanner = fluss_table
+                .new_scan()
+                .map_err(|e| format!("Failed to create table scan: {e}"))?
+                .project(&column_indices)
+                .map_err(|e| format!("Failed to project columns: {e}"))?
+                .create_record_batch_log_scanner()
+                .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
+
             let scanner = Box::into_raw(Box::new(LogScanner {
                 inner: None,
-                inner_batch: Some(scanner),
+                inner_batch: Some(batch_scanner),
             }));
             Ok(scanner)
         })

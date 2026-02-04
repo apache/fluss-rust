@@ -158,6 +158,7 @@ mod table_remote_scan_test {
         let num_buckets = table.table_info().get_num_buckets();
         let log_scanner = table
             .new_scan()
+            .expect("Failed to create table scan")
             .project(&[1, 0])
             .unwrap()
             .create_log_scanner()
