@@ -587,10 +587,23 @@ admin.create_table(&table_path, &table_descriptor, true).await?;
 
 ### Writing to Partitioned Primary Key Tables
 
-Upsert and delete operations work the same as non-partitioned KV tables:
+Upsert and delete operations work the same as non-partitioned KV tables. **Partitions must be created before upserting data.**
 
 ```rust
+use fluss::metadata::PartitionSpec;
+use std::collections::HashMap;
+
 let table = conn.get_table(&table_path).await?;
+
+// Ensure partitions exist before upserting
+for (region, zone) in [("APAC", "1"), ("EMEA", "2"), ("US", "3")] {
+    let mut partition_values = HashMap::new();
+    partition_values.insert("region", region);
+    partition_values.insert("zone", zone);
+    let spec = PartitionSpec::new(partition_values);
+    admin.create_partition(&table_path, &spec, true).await?;
+}
+
 let table_upsert = table.new_upsert()?;
 let mut upsert_writer = table_upsert.create_writer()?;
 
