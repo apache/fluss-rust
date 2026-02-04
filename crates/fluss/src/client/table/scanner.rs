@@ -54,7 +54,6 @@ pub struct TableScan<'a> {
     conn: &'a FlussConnection,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
-    partition_id: Option<PartitionId>,
     /// Column indices to project. None means all columns, Some(vec) means only the specified columns (non-empty).
     projected_fields: Option<Vec<usize>>,
 }
@@ -65,7 +64,6 @@ impl<'a> TableScan<'a> {
             conn,
             table_info,
             metadata,
-            partition_id: None,
             projected_fields: None,
         }
     }
@@ -229,7 +227,6 @@ impl<'a> TableScan<'a> {
             self.conn.get_connections(),
             self.conn.config(),
             self.projected_fields,
-            self.partition_id,
         )?;
         Ok(LogScanner {
             inner: Arc::new(inner),
@@ -243,16 +240,10 @@ impl<'a> TableScan<'a> {
             self.conn.get_connections(),
             self.conn.config(),
             self.projected_fields,
-            self.partition_id,
         )?;
         Ok(RecordBatchLogScanner {
             inner: Arc::new(inner),
         })
-    }
-
-    pub fn filter_partition(mut self, partition_id: PartitionId) -> Self {
-        self.partition_id = Some(partition_id);
-        self
     }
 }
 
@@ -279,7 +270,7 @@ struct LogScannerInner {
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
-    partition_id: Option<PartitionId>,
+    is_partitioned_table: bool,
 }
 
 impl LogScannerInner {
@@ -289,15 +280,14 @@ impl LogScannerInner {
         connections: Arc<RpcClient>,
         config: &crate::config::Config,
         projected_fields: Option<Vec<usize>>,
-        partition_id: Option<PartitionId>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
+            is_partitioned_table: table_info.is_partitioned(),
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
-            partition_id,
             log_fetcher: LogFetcher::new(
                 table_info.clone(),
                 connections.clone(),
@@ -349,7 +339,14 @@ impl LogScannerInner {
     }
 
     async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
-        let table_bucket = TableBucket::new(self.table_id, self.partition_id, bucket);
+        if self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message: "The table is a partitioned table, please use \"subscribe_partition\" to \
+                subscribe a partitioned bucket instead."
+                    .to_string(),
+            });
+        }
+        let table_bucket = TableBucket::new(self.table_id, bucket);
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
@@ -359,6 +356,13 @@ impl LogScannerInner {
     }
 
     async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        if self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message:
+                    "The table is a partitioned table, subscribe_batch is not supported currently."
+                        .to_string(),
+            });
+        }
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
@@ -371,7 +375,7 @@ impl LogScannerInner {
 
         let mut scan_bucket_offsets = HashMap::new();
         for (bucket_id, offset) in bucket_offsets {
-            let table_bucket = TableBucket::new(self.table_id, self.partition_id, *bucket_id);
+            let table_bucket = TableBucket::new(self.table_id, *bucket_id);
             scan_bucket_offsets.insert(table_bucket, *offset);
         }
 
@@ -386,7 +390,15 @@ impl LogScannerInner {
         bucket: i32,
         offset: i64,
     ) -> Result<()> {
-        let table_bucket = TableBucket::new(self.table_id, Some(partition_id), bucket);
+        if !self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message: "The table is not a partitioned table, please use \"subscribe\" to \
+                subscribe a non-partitioned bucket instead."
+                    .to_string(),
+            });
+        }
+        let table_bucket =
+            TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket);
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
@@ -666,57 +678,55 @@ impl LogFetcher {
         )
     }
 
-    async fn check_and_update_metadata(&self) -> Result<()> {
-        // Collect buckets that are missing leader information
-        let buckets_needing_leader: Vec<TableBucket> = self
-            .fetchable_buckets()
-            .into_iter()
-            .filter(|bucket| self.get_table_bucket_leader(bucket).is_none())
-            .collect();
+    async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
+        let mut partition_ids = Vec::new();
+        let mut need_update = false;
 
-        if buckets_needing_leader.is_empty() {
-            return Ok(());
+        for tb in table_buckets {
+            if self.get_table_bucket_leader(tb).is_some() {
+                continue;
+            }
+
+            if self.is_partitioned {
+                partition_ids.push(tb.partition_id().unwrap());
+            } else {
+                need_update = true;
+                break;
+            }
         }
 
-        if self.is_partitioned {
-            // Fallback to full table metadata refresh until partition-aware updates are available.
+        let update_result = if self.is_partitioned && !partition_ids.is_empty() {
             self.metadata
-                .update_tables_metadata(&HashSet::from([&self.table_path]), &HashSet::new(), vec![])
+                .update_tables_metadata(
+                    &HashSet::from([&self.table_path]),
+                    &HashSet::new(),
+                    partition_ids,
+                )
                 .await
-                .or_else(|e| {
-                    if let Error::RpcError { source, .. } = &e
-                        && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
-                    {
-                        warn!(
-                            "Retrying after encountering error while updating table metadata: {e}"
-                        );
-                        Ok(())
-                    } else {
-                        Err(e)
-                    }
-                })?;
-            return Ok(());
-        }
+        } else if need_update {
+            self.metadata.update_table_metadata(&self.table_path).await
+        } else {
+            Ok(())
+        };
 
-        // Non-partitioned table: standard metadata refresh
-        self.metadata
-            .update_tables_metadata(&HashSet::from([&self.table_path]), &HashSet::new(), vec![])
-            .await
-            .or_else(|e| {
-                if let Error::RpcError { source, .. } = &e
-                    && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
-                {
-                    warn!("Retrying after encountering error while updating table metadata: {e}");
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })
+        // TODO: Handle PartitionNotExist error like java side
+        update_result.or_else(|e| {
+            if let Error::RpcError { source, .. } = &e
+                && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
+            {
+                warn!("Retrying after encountering error while updating table metadata: {e}");
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })?;
+        Ok(())
     }
 
     /// Send fetch requests asynchronously without waiting for responses
     async fn send_fetches(&self) -> Result<()> {
-        self.check_and_update_metadata().await?;
+        self.check_and_update_metadata(self.fetchable_buckets().as_slice())
+            .await?;
         let fetch_request = self.prepare_fetch_log_requests().await;
 
         for (leader, fetch_request) in fetch_request {
@@ -825,8 +835,11 @@ impl LogFetcher {
 
             for fetch_log_for_bucket in fetch_log_for_buckets {
                 let bucket: i32 = fetch_log_for_bucket.bucket_id;
-                let table_bucket =
-                    TableBucket::new(table_id, fetch_log_for_bucket.partition_id, bucket);
+                let table_bucket = TableBucket::new_with_partition(
+                    table_id,
+                    fetch_log_for_bucket.partition_id,
+                    bucket,
+                );
 
                 // todo: check fetch result code for per-bucket
                 let Some(fetch_offset) = log_scanner_status.get_bucket_offset(&table_bucket) else {
@@ -1593,7 +1606,7 @@ mod tests {
             None,
         )?;
 
-        let bucket = TableBucket::new(1, None, 0);
+        let bucket = TableBucket::new(1, 0);
         status.assign_scan_bucket(bucket.clone(), 0);
 
         let data = build_records(&table_info, Arc::new(table_path))?;
@@ -1625,7 +1638,7 @@ mod tests {
             None,
         )?;
 
-        let bucket = TableBucket::new(1, None, 0);
+        let bucket = TableBucket::new(1, 0);
         let data = build_records(&table_info, Arc::new(table_path))?;
         let log_records = LogRecordsBatches::new(data.clone());
         let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type())?, false);
@@ -1651,7 +1664,7 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
-        status.assign_scan_bucket(TableBucket::new(1, None, 0), 0);
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
         let fetcher = LogFetcher::new(
             table_info,
             Arc::new(RpcClient::new()),
@@ -1675,7 +1688,7 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let status = Arc::new(LogScannerStatus::new());
-        status.assign_scan_bucket(TableBucket::new(1, None, 0), 5);
+        status.assign_scan_bucket(TableBucket::new(1, 0), 5);
         let fetcher = LogFetcher::new(
             table_info.clone(),
             Arc::new(RpcClient::new()),
@@ -1725,7 +1738,7 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
         let status = Arc::new(LogScannerStatus::new());
-        status.assign_scan_bucket(TableBucket::new(1, None, 0), 5);
+        status.assign_scan_bucket(TableBucket::new(1, 0), 5);
         let fetcher = LogFetcher::new(
             table_info.clone(),
             Arc::new(RpcClient::new()),
@@ -1735,7 +1748,7 @@ mod tests {
             None,
         )?;
 
-        let bucket = TableBucket::new(1, None, 0);
+        let bucket = TableBucket::new(1, 0);
         assert!(metadata.leader_for(&table_path, &bucket).await?.is_some());
 
         let response = crate::proto::FetchLogResponse {
@@ -1766,87 +1779,6 @@ mod tests {
         LogFetcher::handle_fetch_response(response, response_context).await;
 
         assert!(metadata.get_cluster().leader_for(&bucket).is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn subscribe_with_partition_creates_correct_table_bucket() -> Result<()> {
-        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = build_table_info(table_path.clone(), 1, 1);
-        let cluster = build_cluster_arc(&table_path, 1, 1);
-        let metadata = Arc::new(Metadata::new_for_test(cluster));
-
-        let scanner = LogScannerInner::new(
-            &table_info,
-            metadata.clone(),
-            Arc::new(RpcClient::new()),
-            &crate::config::Config::default(),
-            None,
-            Some(27),
-        )?;
-
-        scanner.subscribe(0, 0).await?;
-
-        let bucket = TableBucket::new(1, Some(27), 0);
-        assert_eq!(
-            scanner.log_scanner_status.get_bucket_offset(&bucket),
-            Some(0)
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn subscribe_partition_overrides_stored_partition() -> Result<()> {
-        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = build_table_info(table_path.clone(), 1, 1);
-        let cluster = build_cluster_arc(&table_path, 1, 1);
-        let metadata = Arc::new(Metadata::new_for_test(cluster));
-
-        let scanner = LogScannerInner::new(
-            &table_info,
-            metadata.clone(),
-            Arc::new(RpcClient::new()),
-            &crate::config::Config::default(),
-            None,
-            Some(27),
-        )?;
-
-        scanner.subscribe_partition(99, 0, 0).await?;
-
-        let bucket = TableBucket::new(1, Some(99), 0);
-        assert_eq!(
-            scanner.log_scanner_status.get_bucket_offset(&bucket),
-            Some(0)
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn subscribe_without_partition_uses_none() -> Result<()> {
-        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let table_info = build_table_info(table_path.clone(), 1, 1);
-        let cluster = build_cluster_arc(&table_path, 1, 1);
-        let metadata = Arc::new(Metadata::new_for_test(cluster));
-
-        let scanner = LogScannerInner::new(
-            &table_info,
-            metadata.clone(),
-            Arc::new(RpcClient::new()),
-            &crate::config::Config::default(),
-            None,
-            None,
-        )?;
-
-        scanner.subscribe(0, 0).await?;
-
-        let bucket = TableBucket::new(1, None, 0);
-        assert_eq!(
-            scanner.log_scanner_status.get_bucket_offset(&bucket),
-            Some(0)
-        );
-
         Ok(())
     }
 }

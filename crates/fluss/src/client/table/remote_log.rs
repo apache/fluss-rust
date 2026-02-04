@@ -946,7 +946,7 @@ mod tests {
 
     /// Helper function to create a TableBucket for testing
     fn create_table_bucket(table_id: i64, bucket_id: i32) -> TableBucket {
-        TableBucket::new(table_id, None, bucket_id)
+        TableBucket::new(table_id, bucket_id)
     }
 
     /// Simplified fake fetcher for testing

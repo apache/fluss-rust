@@ -530,7 +530,11 @@ impl TableBucket {
 
     /// Convert to core TableBucket (internal use)
     pub fn to_core(&self) -> fcore::metadata::TableBucket {
-        fcore::metadata::TableBucket::new(self.table_id, None, self.bucket)
+        fcore::metadata::TableBucket::new_with_partition(
+            self.table_id,
+            self.partition_id,
+            self.bucket,
+        )
     }
 }
 

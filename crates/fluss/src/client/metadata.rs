@@ -257,7 +257,7 @@ mod tests {
         let cluster = build_cluster_arc(&table_path, 1, 1);
         let metadata = Metadata::new_for_test(cluster);
         let leader = metadata
-            .leader_for(&table_path, &TableBucket::new(1, None, 0))
+            .leader_for(&table_path, &TableBucket::new(1, 0))
             .await
             .unwrap()
             .expect("leader");

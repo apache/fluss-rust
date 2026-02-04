@@ -191,8 +191,8 @@ mod tests {
 
     #[test]
     fn fair_bucket_status_map_tracks_order_and_size() {
-        let bucket0 = TableBucket::new(1, None, 0);
-        let bucket1 = TableBucket::new(1, None, 1);
+        let bucket0 = TableBucket::new(1, 0);
+        let bucket1 = TableBucket::new(1, 1);
 
         let mut map = FairBucketStatusMap::new();
         map.update_and_move_to_end(bucket0.clone(), 10);
@@ -217,8 +217,8 @@ mod tests {
 
     #[test]
     fn fair_bucket_status_map_mutations() {
-        let bucket0 = TableBucket::new(1, None, 0);
-        let bucket1 = TableBucket::new(2, None, 1);
+        let bucket0 = TableBucket::new(1, 0);
+        let bucket1 = TableBucket::new(2, 1);
 
         let mut map = FairBucketStatusMap::new();
         let mut input = HashMap::new();
