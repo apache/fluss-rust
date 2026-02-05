@@ -203,20 +203,15 @@ impl Utils {
         py: Python,
         batches: Vec<Arc<arrow::record_batch::RecordBatch>>,
     ) -> PyResult<Py<PyAny>> {
-        use arrow_array::RecordBatch as ArrowArrayRecordBatch;
-
         let py_batches: Result<Vec<Py<PyAny>>, _> = batches
             .iter()
             .map(|batch| {
-                ArrowArrayRecordBatch::try_new(batch.schema().clone(), batch.columns().to_vec())
-                    .map_err(|e| FlussError::new_err(format!("Failed to convert RecordBatch: {e}")))
-                    .and_then(|b| {
-                        ToPyArrow::to_pyarrow(&b, py)
-                            .map(|x| x.into())
-                            .map_err(|e| {
-                                FlussError::new_err(format!("Failed to convert to PyObject: {e}"))
-                            })
-                    })
+                // Just dereference the Arc - no need to recreate the batch
+                batch
+                    .as_ref()
+                    .to_pyarrow(py)
+                    .map(|x| x.into())
+                    .map_err(|e| FlussError::new_err(format!("Failed to convert to PyObject: {e}")))
             })
             .collect();
 
