@@ -109,6 +109,7 @@ mod table_test {
             .await
             .expect("Failed to append batch");
 
+        // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
 
         // Create scanner to verify appended records
@@ -231,6 +232,9 @@ mod table_test {
             .append_arrow_batch(batch)
             .await
             .expect("Failed to append batch");
+
+        // Flush to ensure all writes are acknowledged
+        append_writer.flush().await.expect("Failed to flush");
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 

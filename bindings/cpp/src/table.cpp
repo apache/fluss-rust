@@ -152,6 +152,45 @@ bool Table::HasPrimaryKey() const {
     return table_->has_primary_key();
 }
 
+// WriteResult implementation
+WriteResult::WriteResult() noexcept = default;
+
+WriteResult::WriteResult(ffi::WriteResult* inner) noexcept : inner_(inner) {}
+
+WriteResult::~WriteResult() noexcept { Destroy(); }
+
+void WriteResult::Destroy() noexcept {
+    if (inner_) {
+        // Reconstruct the rust::Box to let Rust drop the value
+        rust::Box<ffi::WriteResult>::from_raw(inner_);
+        inner_ = nullptr;
+    }
+}
+
+WriteResult::WriteResult(WriteResult&& other) noexcept : inner_(other.inner_) {
+    other.inner_ = nullptr;
+}
+
+WriteResult& WriteResult::operator=(WriteResult&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        inner_ = other.inner_;
+        other.inner_ = nullptr;
+    }
+    return *this;
+}
+
+bool WriteResult::Available() const { return inner_ != nullptr; }
+
+Result WriteResult::Wait() {
+    if (!Available()) {
+        return utils::make_ok();
+    }
+
+    auto ffi_result = inner_->wait();
+    return utils::from_ffi_result(ffi_result);
+}
+
 // AppendWriter implementation
 AppendWriter::AppendWriter() noexcept = default;
 
@@ -182,13 +221,25 @@ AppendWriter& AppendWriter::operator=(AppendWriter&& other) noexcept {
 bool AppendWriter::Available() const { return writer_ != nullptr; }
 
 Result AppendWriter::Append(const GenericRow& row) {
+    WriteResult wr;
+    return Append(row, wr);
+}
+
+Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
     if (!Available()) {
         return utils::make_error(1, "AppendWriter not available");
     }
 
-    auto ffi_row = utils::to_ffi_generic_row(row);
-    auto ffi_result = writer_->append(ffi_row);
-    return utils::from_ffi_result(ffi_result);
+    try {
+        auto ffi_row = utils::to_ffi_generic_row(row);
+        auto rust_box = writer_->append(ffi_row);
+        out.inner_ = rust_box.into_raw();
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
 }
 
 Result AppendWriter::Flush() {

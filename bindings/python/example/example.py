@@ -417,11 +417,13 @@ async def main():
     print(f"Has primary key: {pk_table.has_primary_key()}")
 
     # --- Test Upsert ---
-    print("\n--- Testing Upsert ---")
+    print("\n--- Testing Upsert (fire-and-forget) ---")
     try:
         upsert_writer = pk_table.new_upsert()
         print(f"Created upsert writer: {upsert_writer}")
 
+        # Fire-and-forget: queue writes without waiting for individual acks.
+        # Records are batched internally for efficiency.
         await upsert_writer.upsert(
             {
                 "user_id": 1,
@@ -437,7 +439,7 @@ async def main():
                 "balance": Decimal("1234.56"),
             }
         )
-        print("Upserted user_id=1 (Alice)")
+        print("Queued user_id=1 (Alice)")
 
         await upsert_writer.upsert(
             {
@@ -452,7 +454,7 @@ async def main():
                 "balance": Decimal("5678.91"),
             }
         )
-        print("Upserted user_id=2 (Bob)")
+        print("Queued user_id=2 (Bob)")
 
         await upsert_writer.upsert(
             {
@@ -467,10 +469,17 @@ async def main():
                 "balance": Decimal("9876.54"),
             }
         )
-        print("Upserted user_id=3 (Charlie)")
+        print("Queued user_id=3 (Charlie)")
 
-        # Update an existing row (same PK, different values)
-        await upsert_writer.upsert(
+        # flush() waits for all queued writes to be acknowledged by the server
+        await upsert_writer.flush()
+        print("Flushed — all 3 rows acknowledged by server")
+
+        # Per-record acknowledgment: await the returned handle to block until
+        # the server confirms this specific write, useful when you need to
+        # read-after-write or verify critical updates.
+        print("\n--- Testing Upsert (per-record acknowledgment) ---")
+        ack = await upsert_writer.upsert(
             {
                 "user_id": 1,
                 "name": "Alice Updated",
@@ -485,11 +494,8 @@ async def main():
                 "balance": Decimal("2345.67"),
             }
         )
-        print("Updated user_id=1 (Alice -> Alice Updated)")
-
-        # Explicit flush to ensure all upserts are acknowledged
-        await upsert_writer.flush()
-        print("Flushed all upserts")
+        await ack  # wait for server acknowledgment before proceeding
+        print("Updated user_id=1 (Alice -> Alice Updated) — server acknowledged")
 
     except Exception as e:
         print(f"Error during upsert: {e}")
@@ -548,13 +554,10 @@ async def main():
     try:
         upsert_writer = pk_table.new_upsert()
 
-        # Delete only needs PK columns - much simpler API!
-        await upsert_writer.delete({"user_id": 3})
-        print("Deleted user_id=3")
-
-        # Explicit flush to ensure delete is acknowledged
-        await upsert_writer.flush()
-        print("Flushed delete")
+        # Per-record ack for delete — await the handle to confirm deletion
+        ack = await upsert_writer.delete({"user_id": 3})
+        await ack
+        print("Deleted user_id=3 — server acknowledged")
 
         lookuper = pk_table.new_lookup()
         result = await lookuper.lookup({"user_id": 3})

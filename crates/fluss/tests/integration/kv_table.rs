@@ -95,7 +95,7 @@ mod kv_table_test {
 
         let test_data = [(1, "Verso", 32i64), (2, "Noco", 25), (3, "Esquie", 35)];
 
-        // Upsert rows
+        // Upsert rows (fire-and-forget, then flush)
         for (id, name, age) in &test_data {
             let mut row = GenericRow::new(3);
             row.set_field(0, *id);
@@ -106,6 +106,7 @@ mod kv_table_test {
                 .await
                 .expect("Failed to upsert row");
         }
+        upsert_writer.flush().await.expect("Failed to flush");
 
         // Lookup records
         let mut lookuper = table
@@ -130,7 +131,7 @@ mod kv_table_test {
             assert_eq!(row.get_long(2), *expected_age, "age mismatch");
         }
 
-        // Update the record with new age
+        // Update the record with new age (await acknowledgment)
         let mut updated_row = GenericRow::new(3);
         updated_row.set_field(0, 1);
         updated_row.set_field(1, "Verso");
@@ -138,7 +139,9 @@ mod kv_table_test {
         upsert_writer
             .upsert(&updated_row)
             .await
-            .expect("Failed to upsert updated row");
+            .expect("Failed to upsert updated row")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
 
         // Verify the update
         let result = lookuper
@@ -160,13 +163,15 @@ mod kv_table_test {
             "Name should remain unchanged"
         );
 
-        // Delete record with id=1
+        // Delete record with id=1 (await acknowledgment)
         let mut delete_row = GenericRow::new(3);
         delete_row.set_field(0, 1);
         upsert_writer
             .delete(&delete_row)
             .await
-            .expect("Failed to delete");
+            .expect("Failed to delete")
+            .await
+            .expect("Failed to wait for delete acknowledgment");
 
         // Verify deletion
         let result = lookuper
@@ -265,6 +270,7 @@ mod kv_table_test {
             row.set_field(2, *score);
             upsert_writer.upsert(&row).await.expect("Failed to upsert");
         }
+        upsert_writer.flush().await.expect("Failed to flush");
 
         // Lookup with composite key
         let mut lookuper = table
@@ -295,7 +301,7 @@ mod kv_table_test {
             .expect("Row should exist");
         assert_eq!(row.get_long(2), 250, "Score for (EU, 2) should be 250");
 
-        // Update (US, 1) score
+        // Update (US, 1) score (await acknowledgment)
         let mut update_row = GenericRow::new(3);
         update_row.set_field(0, "US");
         update_row.set_field(1, 1);
@@ -303,7 +309,9 @@ mod kv_table_test {
         upsert_writer
             .upsert(&update_row)
             .await
-            .expect("Failed to update");
+            .expect("Failed to update")
+            .await
+            .expect("Failed to wait for update acknowledgment");
 
         // Verify update
         let mut key = GenericRow::new(3);
@@ -372,7 +380,9 @@ mod kv_table_test {
         upsert_writer
             .upsert(&row)
             .await
-            .expect("Failed to upsert initial row");
+            .expect("Failed to upsert initial row")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
 
         // Verify initial record
         let mut lookuper = table
@@ -403,7 +413,7 @@ mod kv_table_test {
             .create_writer()
             .expect("Failed to create UpsertWriter with partial write");
 
-        // Update only the score column
+        // Update only the score column (await acknowledgment)
         let mut partial_row = GenericRow::new(4);
         partial_row.set_field(0, 1);
         partial_row.set_field(1, Datum::Null); // not in partial update column
@@ -412,7 +422,9 @@ mod kv_table_test {
         partial_writer
             .upsert(&partial_row)
             .await
-            .expect("Failed to upsert");
+            .expect("Failed to upsert")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
 
         // Verify partial update - name and age should remain unchanged
         let result = lookuper
@@ -499,6 +511,7 @@ mod kv_table_test {
             row.set_field(3, *score);
             upsert_writer.upsert(&row).await.expect("Failed to upsert");
         }
+        upsert_writer.flush().await.expect("Failed to flush");
 
         // Create lookuper
         let mut lookuper = table
@@ -525,7 +538,7 @@ mod kv_table_test {
             assert_eq!(row.get_long(3), *expected_score, "score mismatch");
         }
 
-        // Test update within a partition
+        // Test update within a partition (await acknowledgment)
         let mut updated_row = GenericRow::new(4);
         updated_row.set_field(0, "US");
         updated_row.set_field(1, 1);
@@ -534,7 +547,9 @@ mod kv_table_test {
         upsert_writer
             .upsert(&updated_row)
             .await
-            .expect("Failed to upsert updated row");
+            .expect("Failed to upsert updated row")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
 
         // Verify the update
         let mut key = GenericRow::new(4);
@@ -564,14 +579,16 @@ mod kv_table_test {
             "Lookup in non-existent partition should return None"
         );
 
-        // Delete a record within a partition
+        // Delete a record within a partition (await acknowledgment)
         let mut delete_key = GenericRow::new(4);
         delete_key.set_field(0, "EU");
         delete_key.set_field(1, 1);
         upsert_writer
             .delete(&delete_key)
             .await
-            .expect("Failed to delete");
+            .expect("Failed to delete")
+            .await
+            .expect("Failed to wait for delete acknowledgment");
 
         // Verify deletion
         let mut key = GenericRow::new(4);
@@ -705,7 +722,9 @@ mod kv_table_test {
         upsert_writer
             .upsert(&row)
             .await
-            .expect("Failed to upsert row with all datatypes");
+            .expect("Failed to upsert row with all datatypes")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
 
         // Lookup the record
         let mut lookuper = table
@@ -808,7 +827,9 @@ mod kv_table_test {
         upsert_writer
             .upsert(&row_with_nulls)
             .await
-            .expect("Failed to upsert row with nulls");
+            .expect("Failed to upsert row with nulls")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
 
         // Lookup row with nulls
         let mut key2 = GenericRow::new(17);

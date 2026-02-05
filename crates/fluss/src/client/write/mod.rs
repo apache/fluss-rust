@@ -26,7 +26,10 @@ use crate::row::InternalRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
 use bytes::Bytes;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 pub(crate) mod broadcast;
 mod bucket_assigner;
@@ -196,5 +199,43 @@ impl ResultHandle {
                 source: None,
             },
         })
+    }
+}
+
+/// A future that represents a pending write operation.
+///
+/// This type implements [`Future`], allowing users to either:
+/// 1. Await immediately to block on acknowledgment: `writer.upsert(&row).await?.await?`
+/// 2. Fire-and-forget with later flush: `writer.upsert(&row).await?; writer.flush().await?`
+///
+/// This pattern is similar to rdkafka's `DeliveryFuture` and allows for efficient batching
+/// when users don't need immediate per-record acknowledgment.
+pub struct WriteResultFuture {
+    inner: Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>,
+}
+
+impl std::fmt::Debug for WriteResultFuture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriteResultFuture").finish_non_exhaustive()
+    }
+}
+
+impl WriteResultFuture {
+    /// Create a new WriteResultFuture from a ResultHandle.
+    pub fn new(result_handle: ResultHandle) -> Self {
+        Self {
+            inner: Box::pin(async move {
+                let result = result_handle.wait().await?;
+                result_handle.result(result)
+            }),
+        }
+    }
+}
+
+impl Future for WriteResultFuture {
+    type Output = Result<(), Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.inner.as_mut().poll(cx)
     }
 }

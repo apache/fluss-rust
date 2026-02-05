@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
-use crate::client::{WriteRecord, WriterClient};
+use crate::client::{WriteRecord, WriteResultFuture, WriterClient};
 use crate::error::Result;
 use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
 use crate::row::{ColumnarRow, InternalRow};
@@ -69,7 +69,18 @@ pub struct AppendWriter {
 }
 
 impl AppendWriter {
-    pub async fn append<R: InternalRow>(&self, row: &R) -> Result<()> {
+    /// Appends a row to the table.
+    ///
+    /// This method returns a [`WriteResultFuture`] immediately after queueing the write,
+    /// enabling fire-and-forget semantics for efficient batching.
+    ///
+    /// # Arguments
+    /// * row - the row to append.
+    ///
+    /// # Returns
+    /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
+    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    pub async fn append<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         let physical_table_path = Arc::new(get_physical_path(
             &self.table_path,
             self.partition_getter.as_ref(),
@@ -82,15 +93,21 @@ impl AppendWriter {
             row,
         );
         let result_handle = self.writer_client.send(&record).await?;
-        let result = result_handle.wait().await?;
-        result_handle.result(result)
+        Ok(WriteResultFuture::new(result_handle))
     }
 
     /// Appends an Arrow RecordBatch to the table.
     ///
+    /// This method returns a [`WriteResultFuture`] immediately after queueing the write,
+    /// enabling fire-and-forget semantics for efficient batching.
+    ///
     /// For partitioned tables, the partition is derived from the **first row** of the batch.
     /// Callers must ensure all rows in the batch belong to the same partition.
-    pub async fn append_arrow_batch(&self, batch: RecordBatch) -> Result<()> {
+    ///
+    /// # Returns
+    /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
+    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    pub async fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture> {
         let physical_table_path = if self.partition_getter.is_some() && batch.num_rows() > 0 {
             let first_row = ColumnarRow::new(Arc::new(batch.clone()));
             Arc::new(get_physical_path(
@@ -109,8 +126,7 @@ impl AppendWriter {
             batch,
         );
         let result_handle = self.writer_client.send(&record).await?;
-        let result = result_handle.wait().await?;
-        result_handle.result(result)
+        Ok(WriteResultFuture::new(result_handle))
     }
 
     pub async fn flush(&self) -> Result<()> {
