@@ -1607,17 +1607,17 @@ impl LogScanner {
     ///
     /// Args:
     ///     bucket_offsets: A dict mapping bucket_id -> start_offset
-    fn subscribe_batch(&self, py: Python, bucket_offsets: HashMap<i32, i64>) -> PyResult<()> {
+    fn subscribe_buckets(&self, py: Python, bucket_offsets: HashMap<i32, i64>) -> PyResult<()> {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
                 if let Some(ref inner) = self.inner {
                     inner
-                        .subscribe_batch(&bucket_offsets)
+                        .subscribe_buckets(&bucket_offsets)
                         .await
                         .map_err(|e| FlussError::new_err(format!("Failed to subscribe batch: {e}")))
                 } else if let Some(ref inner_batch) = self.inner_batch {
                     inner_batch
-                        .subscribe_batch(&bucket_offsets)
+                        .subscribe_buckets(&bucket_offsets)
                         .await
                         .map_err(|e| FlussError::new_err(format!("Failed to subscribe batch: {e}")))
                 } else {
@@ -1646,12 +1646,16 @@ impl LogScanner {
                     inner
                         .subscribe_partition(partition_id, bucket_id, start_offset)
                         .await
-                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe partition: {e}")))
+                        .map_err(|e| {
+                            FlussError::new_err(format!("Failed to subscribe partition: {e}"))
+                        })
                 } else if let Some(ref inner_batch) = self.inner_batch {
                     inner_batch
                         .subscribe_partition(partition_id, bucket_id, start_offset)
                         .await
-                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe partition: {e}")))
+                        .map_err(|e| {
+                            FlussError::new_err(format!("Failed to subscribe partition: {e}"))
+                        })
                 } else {
                     Err(FlussError::new_err("No scanner available"))
                 }
@@ -1813,7 +1817,7 @@ impl LogScanner {
     /// Reads from currently subscribed buckets until reaching their latest offsets.
     /// Works for both partitioned and non-partitioned tables.
     ///
-    /// You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
+    /// You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
     ///
     /// Returns:
     ///     PyArrow Table containing all data from subscribed buckets
@@ -1828,7 +1832,7 @@ impl LogScanner {
         let subscribed = inner_batch.get_subscribed_buckets();
         if subscribed.is_empty() {
             return Err(FlussError::new_err(
-                "No buckets subscribed. Call subscribe(), subscribe_batch(), or subscribe_partition() first.",
+                "No buckets subscribed. Call subscribe(), subscribe_buckets(), or subscribe_partition() first.",
             ));
         }
 
@@ -1844,7 +1848,7 @@ impl LogScanner {
     /// Reads from currently subscribed buckets until reaching their latest offsets.
     /// Works for both partitioned and non-partitioned tables.
     ///
-    /// You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
+    /// You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
     ///
     /// Returns:
     ///     Pandas DataFrame containing all data from subscribed buckets

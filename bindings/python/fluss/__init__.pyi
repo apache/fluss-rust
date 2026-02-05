@@ -402,7 +402,7 @@ class LogScanner:
             start_offset: The offset to start reading from (use EARLIEST_OFFSET for beginning)
         """
         ...
-    def subscribe_batch(self, bucket_offsets: Dict[int, int]) -> None:
+    def subscribe_buckets(self, bucket_offsets: Dict[int, int]) -> None:
         """Subscribe to multiple buckets at specified offsets (non-partitioned tables).
 
         Args:
@@ -474,7 +474,7 @@ class LogScanner:
         Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
         Reads from currently subscribed buckets until reaching their latest offsets.
 
-        You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
+        You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
         ...
     def to_arrow(self) -> pa.Table:
@@ -483,7 +483,7 @@ class LogScanner:
         Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
         Reads from currently subscribed buckets until reaching their latest offsets.
 
-        You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
+        You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
         ...
     def __repr__(self) -> str: ...
