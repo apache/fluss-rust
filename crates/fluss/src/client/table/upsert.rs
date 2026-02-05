@@ -16,14 +16,13 @@
 // under the License.
 
 use crate::client::{RowBytes, WriteFormat, WriteRecord, WriterClient};
-use crate::error::Error::IllegalArgument;
+use crate::error::Error::{IllegalArgument, UnexpectedError};
 use crate::error::Result;
 use crate::metadata::{RowType, TableInfo, TablePath};
 use crate::row::InternalRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory, RowEncoder, RowEncoderFactory};
 use crate::row::field_getter::FieldGetter;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
 use bitvec::prelude::bitvec;
@@ -298,17 +297,35 @@ impl UpsertWriter {
         Ok(())
     }
 
-    async fn get_keys(&self, row: &dyn InternalRow) -> Result<(Bytes, Option<Bytes>)> {
-        let key = self.primary_key_encoder.lock().await.encode_key(row)?;
+    fn get_keys(&self, row: &dyn InternalRow) -> Result<(Bytes, Option<Bytes>)> {
+        let key = self
+            .primary_key_encoder
+            .lock()
+            .map_err(|e| UnexpectedError {
+                message: format!("primary_key_encoder lock poisoned: {e}"),
+                source: None,
+            })?
+            .encode_key(row)?;
         let bucket_key = match &self.bucket_key_encoder {
-            Some(encoder) => Some(encoder.lock().await.encode_key(row)?),
+            Some(encoder) => Some(
+                encoder
+                    .lock()
+                    .map_err(|e| UnexpectedError {
+                        message: format!("bucket_key_encoder lock poisoned: {e}"),
+                        source: None,
+                    })?
+                    .encode_key(row)?,
+            ),
             None => Some(key.clone()),
         };
         Ok((key, bucket_key))
     }
 
-    async fn encode_row<R: InternalRow>(&self, row: &R) -> Result<Bytes> {
-        let mut encoder = self.row_encoder.lock().await;
+    fn encode_row<R: InternalRow>(&self, row: &R) -> Result<Bytes> {
+        let mut encoder = self.row_encoder.lock().map_err(|e| UnexpectedError {
+            message: format!("row_encoder lock poisoned: {e}"),
+            source: None,
+        })?;
         encoder.start_new_row()?;
         for (pos, field_getter) in self.field_getters.iter().enumerate() {
             let datum = field_getter.get_field(row);
@@ -336,11 +353,11 @@ impl UpsertWriter {
     pub async fn upsert<R: InternalRow>(&self, row: &R) -> Result<UpsertResult> {
         self.check_field_count(row)?;
 
-        let (key, bucket_key) = self.get_keys(row).await?;
+        let (key, bucket_key) = self.get_keys(row)?;
 
         let row_bytes: RowBytes<'_> = match row.as_encoded_bytes(self.write_format) {
             Some(bytes) => RowBytes::Borrowed(bytes),
-            None => RowBytes::Owned(self.encode_row(row).await?),
+            None => RowBytes::Owned(self.encode_row(row)?),
         };
 
         let write_record = WriteRecord::for_upsert(
@@ -375,7 +392,7 @@ impl UpsertWriter {
     pub async fn delete<R: InternalRow>(&self, row: &R) -> Result<DeleteResult> {
         self.check_field_count(row)?;
 
-        let (key, bucket_key) = self.get_keys(row).await?;
+        let (key, bucket_key) = self.get_keys(row)?;
 
         let write_record = WriteRecord::for_upsert(
             Arc::clone(&self.table_info),
