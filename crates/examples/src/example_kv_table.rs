@@ -54,7 +54,7 @@ pub async fn main() -> Result<()> {
 
     let table = conn.get_table(&table_path).await?;
     let table_upsert = table.new_upsert()?;
-    let mut upsert_writer = table_upsert.create_writer()?;
+    let upsert_writer = table_upsert.create_writer()?;
 
     println!("\n=== Upserting ===");
     for (id, name, age) in [(1, "Verso", 32i64), (2, "Noco", 25), (3, "Esquie", 35)] {
