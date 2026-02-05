@@ -274,6 +274,15 @@ Result LogScanner::SubscribePartition(int64_t partition_id, int32_t bucket_id, i
     return utils::from_ffi_result(ffi_result);
 }
 
+Result LogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id) {
+    if (!Available()) {
+        return utils::make_error(1, "LogScanner not available");
+    }
+
+    auto ffi_result = scanner_->unsubscribe_partition(partition_id, bucket_id);
+    return utils::from_ffi_result(ffi_result);
+}
+
 Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
         return utils::make_error(1, "LogScanner not available");

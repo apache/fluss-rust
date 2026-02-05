@@ -409,6 +409,19 @@ impl LogScannerInner {
         Ok(())
     }
 
+    async fn unsubscribe_partition(&self, partition_id: PartitionId, bucket: i32) -> Result<()> {
+        if !self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message: "Can't unsubscribe a partition for a non-partitioned table.".to_string(),
+            });
+        }
+        let table_bucket =
+            TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket);
+        self.log_scanner_status
+            .unassign_scan_buckets(from_ref(&table_bucket));
+        Ok(())
+    }
+
     async fn poll_for_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
         let result = self.log_fetcher.collect_fetches()?;
         if !result.is_empty() {
@@ -487,6 +500,14 @@ impl LogScanner {
             .subscribe_partition(partition_id, bucket, offset)
             .await
     }
+
+    pub async fn unsubscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+    ) -> Result<()> {
+        self.inner.unsubscribe_partition(partition_id, bucket).await
+    }
 }
 
 // Implementation for RecordBatchLogScanner (batches mode)
@@ -513,6 +534,14 @@ impl RecordBatchLogScanner {
         self.inner
             .subscribe_partition(partition_id, bucket, offset)
             .await
+    }
+
+    pub async fn unsubscribe_partition(
+        &self,
+        partition_id: PartitionId,
+        bucket: i32,
+    ) -> Result<()> {
+        self.inner.unsubscribe_partition(partition_id, bucket).await
     }
 }
 
