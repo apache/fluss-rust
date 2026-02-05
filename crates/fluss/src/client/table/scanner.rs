@@ -357,11 +357,11 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+    async fn subscribe_buckets(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message:
-                    "The table is a partitioned table, subscribe_batch is not supported currently."
+                    "The table is a partitioned table, subscribe_buckets is not supported currently."
                         .to_string(),
             });
         }
@@ -473,8 +473,8 @@ impl LogScanner {
         self.inner.subscribe(bucket, offset).await
     }
 
-    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
-        self.inner.subscribe_batch(bucket_offsets).await
+    pub async fn subscribe_buckets(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.inner.subscribe_buckets(bucket_offsets).await
     }
 
     pub async fn subscribe_partition(
@@ -500,8 +500,8 @@ impl RecordBatchLogScanner {
         self.inner.subscribe(bucket, offset).await
     }
 
-    pub async fn subscribe_batch(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
-        self.inner.subscribe_batch(bucket_offsets).await
+    pub async fn subscribe_buckets(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.inner.subscribe_buckets(bucket_offsets).await
     }
 
     pub async fn subscribe_partition(

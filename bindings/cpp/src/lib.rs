@@ -245,7 +245,7 @@ mod ffi {
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
         fn subscribe(self: &LogScanner, bucket_id: i32, start_offset: i64) -> FfiResult;
-        fn subscribe_batch(
+        fn subscribe_buckets(
             self: &LogScanner,
             subscriptions: Vec<FfiBucketSubscription>,
         ) -> FfiResult;
@@ -789,7 +789,7 @@ impl LogScanner {
         }
     }
 
-    fn subscribe_batch(&self, subscriptions: Vec<ffi::FfiBucketSubscription>) -> ffi::FfiResult {
+    fn subscribe_buckets(&self, subscriptions: Vec<ffi::FfiBucketSubscription>) -> ffi::FfiResult {
         use std::collections::HashMap;
         let mut bucket_offsets = HashMap::new();
         for sub in subscriptions {
@@ -797,7 +797,7 @@ impl LogScanner {
         }
 
         if let Some(ref inner) = self.inner {
-            let result = RUNTIME.block_on(async { inner.subscribe_batch(&bucket_offsets).await });
+            let result = RUNTIME.block_on(async { inner.subscribe_buckets(&bucket_offsets).await });
 
             match result {
                 Ok(_) => ok_result(),
@@ -805,7 +805,7 @@ impl LogScanner {
             }
         } else if let Some(ref inner_batch) = self.inner_batch {
             let result =
-                RUNTIME.block_on(async { inner_batch.subscribe_batch(&bucket_offsets).await });
+                RUNTIME.block_on(async { inner_batch.subscribe_buckets(&bucket_offsets).await });
 
             match result {
                 Ok(_) => ok_result(),
