@@ -20,7 +20,6 @@ use crate::*;
 use arrow::array::RecordBatch as ArrowRecordBatch;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_schema::SchemaRef;
-use fluss::client::EARLIEST_OFFSET;
 use fluss::record::to_arrow_schema;
 use fluss::rpc::message::OffsetSpec;
 use pyo3::types::IntoPyDict;
@@ -1573,155 +1572,91 @@ pub struct LogScanner {
     projected_schema: SchemaRef,
     /// The projected row type to use for record-based scanning
     projected_row_type: fcore::metadata::RowType,
-    #[allow(dead_code)]
-    start_timestamp: Option<i64>,
-    #[allow(dead_code)]
-    end_timestamp: Option<i64>,
+    /// Cache for partition_id -> partition_name mapping (avoids repeated list_partition_infos calls)
+    partition_name_cache: std::sync::RwLock<Option<HashMap<i64, String>>>,
 }
 
 #[pymethods]
 impl LogScanner {
-    /// Subscribe to log data with timestamp range
-    fn subscribe(
-        &mut self,
-        _start_timestamp: Option<i64>,
-        _end_timestamp: Option<i64>,
-    ) -> PyResult<()> {
-        if _start_timestamp.is_some() {
-            return Err(FlussError::new_err(
-                "Specifying start_timestamp is not yet supported. Please use None.".to_string(),
-            ));
-        }
-        if _end_timestamp.is_some() {
-            return Err(FlussError::new_err(
-                "Specifying end_timestamp is not yet supported. Please use None.".to_string(),
-            ));
-        }
-
-        let num_buckets = self.table_info.get_num_buckets();
-        for bucket_id in 0..num_buckets {
-            let start_offset = EARLIEST_OFFSET;
-
-            // Subscribe to the appropriate scanner
-            if let Some(ref inner) = self.inner {
-                TOKIO_RUNTIME.block_on(async {
+    /// Subscribe to a single bucket at a specific offset (non-partitioned tables).
+    ///
+    /// Args:
+    ///     bucket_id: The bucket ID to subscribe to
+    ///     start_offset: The offset to start reading from (use EARLIEST_OFFSET for beginning)
+    fn subscribe(&self, py: Python, bucket_id: i32, start_offset: i64) -> PyResult<()> {
+        py.detach(|| {
+            TOKIO_RUNTIME.block_on(async {
+                if let Some(ref inner) = self.inner {
                     inner
                         .subscribe(bucket_id, start_offset)
                         .await
-                        .map_err(|e| FlussError::new_err(e.to_string()))
-                })?;
-            } else if let Some(ref inner_batch) = self.inner_batch {
-                TOKIO_RUNTIME.block_on(async {
+                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe: {e}")))
+                } else if let Some(ref inner_batch) = self.inner_batch {
                     inner_batch
                         .subscribe(bucket_id, start_offset)
                         .await
-                        .map_err(|e| FlussError::new_err(e.to_string()))
-                })?;
-            } else {
-                return Err(FlussError::new_err("No scanner available"));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Convert all data to Arrow Table
-    ///
-    /// Note: Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
-    fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
-            FlussError::new_err(
-                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
-                 that supports to_arrow().",
-            )
-        })?;
-
-        let mut all_batches = Vec::new();
-
-        let num_buckets = self.table_info.get_num_buckets();
-        let bucket_ids: Vec<i32> = (0..num_buckets).collect();
-
-        // todo: after supporting list_offsets with timestamp, we can use start_timestamp and end_timestamp here
-        let mut stopping_offsets: HashMap<i32, i64> = py
-            .detach(|| {
-                TOKIO_RUNTIME.block_on(async {
-                    self.admin
-                        .list_offsets(
-                            &self.table_info.table_path,
-                            bucket_ids.as_slice(),
-                            OffsetSpec::Latest,
-                        )
-                        .await
-                })
-            })
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-        // Filter out buckets with no records to read (stop_at <= 0)
-        stopping_offsets.retain(|_, &mut v| v > 0);
-
-        while !stopping_offsets.is_empty() {
-            let scan_batches = py
-                .detach(|| {
-                    TOKIO_RUNTIME
-                        .block_on(async { inner_batch.poll(Duration::from_millis(500)).await })
-                })
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            if scan_batches.is_empty() {
-                continue;
-            }
-
-            for scan_batch in scan_batches {
-                let bucket_id = scan_batch.bucket().bucket_id();
-
-                // Check if this bucket is still being tracked; if not, ignore the batch
-                let Some(&stop_at) = stopping_offsets.get(&bucket_id) else {
-                    continue;
-                };
-
-                let base_offset = scan_batch.base_offset();
-                let last_offset = scan_batch.last_offset();
-
-                // If the batch starts at or after the stop_at offset, the bucket is exhausted
-                if base_offset >= stop_at {
-                    stopping_offsets.remove(&bucket_id);
-                    continue;
-                }
-
-                let batch = if last_offset >= stop_at {
-                    // This batch contains the target offset; slice it to keep only records
-                    // where offset < stop_at.
-                    let num_to_keep = (stop_at - base_offset) as usize;
-                    let b = scan_batch.into_batch();
-
-                    // Safety check: ensure we don't attempt to slice more rows than the batch contains
-                    let limit = num_to_keep.min(b.num_rows());
-                    b.slice(0, limit)
+                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe: {e}")))
                 } else {
-                    // The entire batch is within the desired range (all offsets < stop_at)
-                    scan_batch.into_batch()
-                };
-
-                all_batches.push(Arc::new(batch));
-
-                // If the batch's last offset reached or passed the inclusive limit (stop_at - 1),
-                // we are done with this bucket.
-                if last_offset >= stop_at - 1 {
-                    stopping_offsets.remove(&bucket_id);
+                    Err(FlussError::new_err("No scanner available"))
                 }
-            }
-        }
-
-        Utils::combine_batches_to_table(py, all_batches)
+            })
+        })
     }
 
-    /// Convert all data to Pandas DataFrame
-    fn to_pandas(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let arrow_table = self.to_arrow(py)?;
+    /// Subscribe to multiple buckets at specified offsets (non-partitioned tables).
+    ///
+    /// Args:
+    ///     bucket_offsets: A dict mapping bucket_id -> start_offset
+    fn subscribe_batch(&self, py: Python, bucket_offsets: HashMap<i32, i64>) -> PyResult<()> {
+        py.detach(|| {
+            TOKIO_RUNTIME.block_on(async {
+                if let Some(ref inner) = self.inner {
+                    inner
+                        .subscribe_batch(&bucket_offsets)
+                        .await
+                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe batch: {e}")))
+                } else if let Some(ref inner_batch) = self.inner_batch {
+                    inner_batch
+                        .subscribe_batch(&bucket_offsets)
+                        .await
+                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe batch: {e}")))
+                } else {
+                    Err(FlussError::new_err("No scanner available"))
+                }
+            })
+        })
+    }
 
-        // Convert Arrow Table to Pandas DataFrame using pyarrow
-        let df = arrow_table.call_method0(py, "to_pandas")?;
-        Ok(df)
+    /// Subscribe to a bucket within a specific partition (partitioned tables only).
+    ///
+    /// Args:
+    ///     partition_id: The partition ID (from PartitionInfo.partition_id)
+    ///     bucket_id: The bucket ID within the partition
+    ///     start_offset: The offset to start reading from (use EARLIEST_OFFSET for beginning)
+    fn subscribe_partition(
+        &self,
+        py: Python,
+        partition_id: i64,
+        bucket_id: i32,
+        start_offset: i64,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            TOKIO_RUNTIME.block_on(async {
+                if let Some(ref inner) = self.inner {
+                    inner
+                        .subscribe_partition(partition_id, bucket_id, start_offset)
+                        .await
+                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe partition: {e}")))
+                } else if let Some(ref inner_batch) = self.inner_batch {
+                    inner_batch
+                        .subscribe_partition(partition_id, bucket_id, start_offset)
+                        .await
+                        .map_err(|e| FlussError::new_err(format!("Failed to subscribe partition: {e}")))
+                } else {
+                    Err(FlussError::new_err("No scanner available"))
+                }
+            })
+        })
     }
 
     /// Poll for individual records with metadata.
@@ -1873,6 +1808,54 @@ impl LogScanner {
         Ok(empty_table.into())
     }
 
+    /// Convert all data to Arrow Table.
+    ///
+    /// Reads from currently subscribed buckets until reaching their latest offsets.
+    /// Works for both partitioned and non-partitioned tables.
+    ///
+    /// You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
+    ///
+    /// Returns:
+    ///     PyArrow Table containing all data from subscribed buckets
+    fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
+        // 1. Get subscribed buckets from scanner (requires batch scanner for get_subscribed_buckets)
+        let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
+            FlussError::new_err(
+                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
+                 that supports to_arrow().",
+            )
+        })?;
+        let subscribed = inner_batch.get_subscribed_buckets();
+        if subscribed.is_empty() {
+            return Err(FlussError::new_err(
+                "No buckets subscribed. Call subscribe(), subscribe_batch(), or subscribe_partition() first.",
+            ));
+        }
+
+        // 2. Query latest offsets for all subscribed buckets
+        let stopping_offsets = self.query_latest_offsets(py, &subscribed)?;
+
+        // 3. Poll until all buckets reach their stopping offsets
+        self.poll_until_offsets(py, stopping_offsets)
+    }
+
+    /// Convert all data to Pandas DataFrame.
+    ///
+    /// Reads from currently subscribed buckets until reaching their latest offsets.
+    /// Works for both partitioned and non-partitioned tables.
+    ///
+    /// You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
+    ///
+    /// Returns:
+    ///     Pandas DataFrame containing all data from subscribed buckets
+    fn to_pandas(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let arrow_table = self.to_arrow(py)?;
+
+        // Convert Arrow Table to Pandas DataFrame using pyarrow
+        let df = arrow_table.call_method0(py, "to_pandas")?;
+        Ok(df)
+    }
+
     fn __repr__(&self) -> String {
         format!("LogScanner(table={})", self.table_info.table_path)
     }
@@ -1894,8 +1877,7 @@ impl LogScanner {
             table_info,
             projected_schema,
             projected_row_type,
-            start_timestamp: None,
-            end_timestamp: None,
+            partition_name_cache: std::sync::RwLock::new(None),
         }
     }
 
@@ -1914,9 +1896,215 @@ impl LogScanner {
             table_info,
             projected_schema,
             projected_row_type,
-            start_timestamp: None,
-            end_timestamp: None,
+            partition_name_cache: std::sync::RwLock::new(None),
         }
+    }
+
+    /// Get partition_id -> partition_name mapping, using cache if available
+    fn get_partition_name_map(
+        &self,
+        py: Python,
+        table_path: &fcore::metadata::TablePath,
+    ) -> PyResult<HashMap<i64, String>> {
+        // Check cache first (read lock)
+        {
+            let cache = self.partition_name_cache.read().unwrap();
+            if let Some(map) = cache.as_ref() {
+                return Ok(map.clone());
+            }
+        }
+
+        // Fetch partition infos (releases GIL during async call)
+        let partition_infos: Vec<fcore::metadata::PartitionInfo> = py
+            .detach(|| {
+                TOKIO_RUNTIME.block_on(async { self.admin.list_partition_infos(table_path).await })
+            })
+            .map_err(|e| FlussError::new_err(format!("Failed to list partition infos: {e}")))?;
+
+        // Build and cache the mapping
+        let map: HashMap<i64, String> = partition_infos
+            .into_iter()
+            .map(|info| (info.get_partition_id(), info.get_partition_name()))
+            .collect();
+
+        // Store in cache (write lock)
+        {
+            let mut cache = self.partition_name_cache.write().unwrap();
+            *cache = Some(map.clone());
+        }
+
+        Ok(map)
+    }
+
+    /// Query latest offsets for subscribed buckets (handles both partitioned and non-partitioned)
+    fn query_latest_offsets(
+        &self,
+        py: Python,
+        subscribed: &[(fcore::metadata::TableBucket, i64)],
+    ) -> PyResult<HashMap<fcore::metadata::TableBucket, i64>> {
+        let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
+            FlussError::new_err("Batch-based scanner required for this operation")
+        })?;
+        let is_partitioned = inner_batch.is_partitioned();
+        let table_path = &self.table_info.table_path;
+
+        if !is_partitioned {
+            // Non-partitioned: simple case - just query all bucket IDs
+            let bucket_ids: Vec<i32> = subscribed.iter().map(|(tb, _)| tb.bucket_id()).collect();
+
+            let offsets: HashMap<i32, i64> = py
+                .detach(|| {
+                    TOKIO_RUNTIME.block_on(async {
+                        self.admin
+                            .list_offsets(table_path, &bucket_ids, OffsetSpec::Latest)
+                            .await
+                    })
+                })
+                .map_err(|e| FlussError::new_err(format!("Failed to list offsets: {e}")))?;
+
+            // Convert to TableBucket-keyed map
+            let table_id = self.table_info.table_id;
+            Ok(offsets
+                .into_iter()
+                .filter(|(_, offset)| *offset > 0)
+                .map(|(bucket_id, offset)| {
+                    (
+                        fcore::metadata::TableBucket::new(table_id, bucket_id),
+                        offset,
+                    )
+                })
+                .collect())
+        } else {
+            // Partitioned: need to query per partition
+            self.query_partitioned_offsets(py, subscribed)
+        }
+    }
+
+    /// Query offsets for partitioned table subscriptions
+    fn query_partitioned_offsets(
+        &self,
+        py: Python,
+        subscribed: &[(fcore::metadata::TableBucket, i64)],
+    ) -> PyResult<HashMap<fcore::metadata::TableBucket, i64>> {
+        let table_path = &self.table_info.table_path;
+
+        // Get partition_id -> partition_name mapping (cached)
+        let partition_id_to_name = self.get_partition_name_map(py, table_path)?;
+
+        // Group subscribed buckets by partition_id
+        let mut by_partition: HashMap<i64, Vec<i32>> = HashMap::new();
+        for (tb, _) in subscribed {
+            if let Some(partition_id) = tb.partition_id() {
+                by_partition
+                    .entry(partition_id)
+                    .or_default()
+                    .push(tb.bucket_id());
+            }
+        }
+
+        // Query offsets for each partition
+        let mut result: HashMap<fcore::metadata::TableBucket, i64> = HashMap::new();
+        let table_id = self.table_info.table_id;
+
+        for (partition_id, bucket_ids) in by_partition {
+            let partition_name = partition_id_to_name.get(&partition_id).ok_or_else(|| {
+                FlussError::new_err(format!("Unknown partition_id: {partition_id}"))
+            })?;
+
+            let offsets: HashMap<i32, i64> = py
+                .detach(|| {
+                    TOKIO_RUNTIME.block_on(async {
+                        self.admin
+                            .list_partition_offsets(
+                                table_path,
+                                partition_name,
+                                &bucket_ids,
+                                OffsetSpec::Latest,
+                            )
+                            .await
+                    })
+                })
+                .map_err(|e| {
+                    FlussError::new_err(format!(
+                        "Failed to list offsets for partition {partition_name}: {e}"
+                    ))
+                })?;
+
+            for (bucket_id, offset) in offsets {
+                if offset > 0 {
+                    let tb = fcore::metadata::TableBucket::new_with_partition(
+                        table_id,
+                        Some(partition_id),
+                        bucket_id,
+                    );
+                    result.insert(tb, offset);
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Poll until all buckets reach their stopping offsets
+    fn poll_until_offsets(
+        &self,
+        py: Python,
+        mut stopping_offsets: HashMap<fcore::metadata::TableBucket, i64>,
+    ) -> PyResult<Py<PyAny>> {
+        let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
+            FlussError::new_err("Batch-based scanner required for this operation")
+        })?;
+        let mut all_batches = Vec::new();
+
+        while !stopping_offsets.is_empty() {
+            let scan_batches = py
+                .detach(|| {
+                    TOKIO_RUNTIME
+                        .block_on(async { inner_batch.poll(Duration::from_millis(500)).await })
+                })
+                .map_err(|e| FlussError::new_err(format!("Failed to poll: {e}")))?;
+
+            if scan_batches.is_empty() {
+                continue;
+            }
+
+            for scan_batch in scan_batches {
+                let table_bucket = scan_batch.bucket().clone();
+
+                // Check if this bucket is still being tracked
+                let Some(&stop_at) = stopping_offsets.get(&table_bucket) else {
+                    continue;
+                };
+
+                let base_offset = scan_batch.base_offset();
+                let last_offset = scan_batch.last_offset();
+
+                // If the batch starts at or after the stop_at offset, the bucket is exhausted
+                if base_offset >= stop_at {
+                    stopping_offsets.remove(&table_bucket);
+                    continue;
+                }
+
+                let batch = if last_offset >= stop_at {
+                    // Slice batch to keep only records where offset < stop_at
+                    let num_to_keep = (stop_at - base_offset) as usize;
+                    let b = scan_batch.into_batch();
+                    let limit = num_to_keep.min(b.num_rows());
+                    b.slice(0, limit)
+                } else {
+                    scan_batch.into_batch()
+                };
+
+                all_batches.push(Arc::new(batch));
+
+                // Check if we're done with this bucket
+                if last_offset >= stop_at - 1 {
+                    stopping_offsets.remove(&table_bucket);
+                }
+            }
+        }
+
+        Utils::combine_batches_to_table(py, all_batches)
     }
 }
 

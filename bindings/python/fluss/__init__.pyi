@@ -129,6 +129,78 @@ class FlussAdmin:
     ) -> None: ...
     async def get_table(self, table_path: TablePath) -> TableInfo: ...
     async def get_latest_lake_snapshot(self, table_path: TablePath) -> LakeSnapshot: ...
+    async def drop_table(
+        self,
+        table_path: TablePath,
+        ignore_if_not_exists: bool = False,
+    ) -> None: ...
+    async def list_offsets(
+        self,
+        table_path: TablePath,
+        bucket_ids: List[int],
+        offset_type: str,
+        timestamp: Optional[int] = None,
+    ) -> Dict[int, int]:
+        """List offsets for the specified buckets.
+
+        Args:
+            table_path: Path to the table
+            bucket_ids: List of bucket IDs to query
+            offset_type: "earliest", "latest", or "timestamp"
+            timestamp: Required when offset_type is "timestamp"
+
+        Returns:
+            Dict mapping bucket_id -> offset
+        """
+        ...
+    async def list_partition_offsets(
+        self,
+        table_path: TablePath,
+        partition_name: str,
+        bucket_ids: List[int],
+        offset_type: str,
+        timestamp: Optional[int] = None,
+    ) -> Dict[int, int]:
+        """List offsets for buckets in a specific partition.
+
+        Args:
+            table_path: Path to the table
+            partition_name: Partition value (e.g., "US" not "region=US")
+            bucket_ids: List of bucket IDs to query
+            offset_type: "earliest", "latest", or "timestamp"
+            timestamp: Required when offset_type is "timestamp"
+
+        Returns:
+            Dict mapping bucket_id -> offset
+        """
+        ...
+    async def create_partition(
+        self,
+        table_path: TablePath,
+        partition_spec: Dict[str, str],
+        ignore_if_exists: bool = False,
+    ) -> None:
+        """Create a partition for a partitioned table.
+
+        Args:
+            table_path: Path to the table
+            partition_spec: Dict mapping partition column name to value (e.g., {"region": "US"})
+            ignore_if_exists: If True, don't raise error if partition already exists
+        """
+        ...
+    async def list_partition_infos(
+        self,
+        table_path: TablePath,
+    ) -> List["PartitionInfo"]:
+        """List all partitions for a partitioned table.
+
+        Args:
+            table_path: Path to the table
+
+        Returns:
+            List of PartitionInfo objects
+        """
+        ...
     def __repr__(self) -> str: ...
 
 class TableScan:
@@ -322,14 +394,30 @@ class LogScanner:
         scanner = await table.new_scan().project([0, 1]).create_log_scanner()
     """
 
-    def subscribe(
-        self, start_timestamp: Optional[int], end_timestamp: Optional[int]
-    ) -> None:
-        """Subscribe to log data with timestamp range.
+    def subscribe(self, bucket_id: int, start_offset: int) -> None:
+        """Subscribe to a single bucket at a specific offset (non-partitioned tables).
 
         Args:
-            start_timestamp: Not yet supported, must be None.
-            end_timestamp: Not yet supported, must be None.
+            bucket_id: The bucket ID to subscribe to
+            start_offset: The offset to start reading from (use EARLIEST_OFFSET for beginning)
+        """
+        ...
+    def subscribe_batch(self, bucket_offsets: Dict[int, int]) -> None:
+        """Subscribe to multiple buckets at specified offsets (non-partitioned tables).
+
+        Args:
+            bucket_offsets: Dict mapping bucket_id -> start_offset
+        """
+        ...
+    def subscribe_partition(
+        self, partition_id: int, bucket_id: int, start_offset: int
+    ) -> None:
+        """Subscribe to a bucket within a specific partition (partitioned tables only).
+
+        Args:
+            partition_id: The partition ID (from PartitionInfo.partition_id)
+            bucket_id: The bucket ID within the partition
+            start_offset: The offset to start reading from (use EARLIEST_OFFSET for beginning)
         """
         ...
     def poll(self, timeout_ms: int) -> List[ScanRecord]:
@@ -384,12 +472,18 @@ class LogScanner:
         """Convert all data to Pandas DataFrame.
 
         Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
+        Reads from currently subscribed buckets until reaching their latest offsets.
+
+        You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
         """
         ...
     def to_arrow(self) -> pa.Table:
         """Convert all data to Arrow Table.
 
         Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
+        Reads from currently subscribed buckets until reaching their latest offsets.
+
+        You must call subscribe(), subscribe_batch(), or subscribe_partition() first.
         """
         ...
     def __repr__(self) -> str: ...
@@ -492,5 +586,28 @@ class TableBucket:
 class TableDistribution:
     def bucket_keys(self) -> List[str]: ...
     def bucket_count(self) -> Optional[int]: ...
+
+class PartitionInfo:
+    """Information about a partition."""
+
+    @property
+    def partition_id(self) -> int:
+        """Get the partition ID (globally unique in the cluster)."""
+        ...
+    @property
+    def partition_name(self) -> str:
+        """Get the partition name."""
+        ...
+    def __repr__(self) -> str: ...
+
+class OffsetType:
+    """Offset type constants for list_offsets()."""
+
+    EARLIEST: str
+    LATEST: str
+    TIMESTAMP: str
+
+# Constant for earliest offset (-2)
+EARLIEST_OFFSET: int
 
 __version__: str

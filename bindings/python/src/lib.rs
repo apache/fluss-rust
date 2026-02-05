@@ -86,7 +86,11 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChangeType>()?;
     m.add_class::<ScanRecord>()?;
     m.add_class::<RecordBatch>()?;
+    m.add_class::<PartitionInfo>()?;
     m.add_class::<OffsetType>()?;
+
+    // Register constants
+    m.add("EARLIEST_OFFSET", fcore::client::EARLIEST_OFFSET)?;
 
     // Register exception types
     m.add_class::<FlussError>()?;
