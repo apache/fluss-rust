@@ -508,6 +508,11 @@ private:
 
 class TableScan {
 public:
+    TableScan(const TableScan&) = delete;
+    TableScan& operator=(const TableScan&) = delete;
+    TableScan(TableScan&&) noexcept = default;
+    TableScan& operator=(TableScan&&) noexcept = default;
+
     TableScan& Project(std::vector<size_t> column_indices);
 
     Result CreateLogScanner(LogScanner& out);
