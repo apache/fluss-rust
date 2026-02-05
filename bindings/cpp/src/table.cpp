@@ -71,32 +71,33 @@ Result Table::NewAppendWriter(AppendWriter& out) {
     }
 }
 
-Result Table::NewLogScanner(LogScanner& out) {
-    if (!Available()) {
-        return utils::make_error(1, "Table not available");
-    }
-
-    try {
-        out.scanner_ = table_->new_log_scanner();
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
-    } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
-    }
+TableScan Table::NewScan() {
+    return TableScan(table_);
 }
 
-Result Table::NewLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out) {
-    if (!Available()) {
+// TableScan implementation
+TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
+
+TableScan& TableScan::Project(std::vector<size_t> column_indices) {
+    projection_ = std::move(column_indices);
+    return *this;
+}
+
+Result TableScan::CreateLogScanner(LogScanner& out) {
+    if (table_ == nullptr) {
         return utils::make_error(1, "Table not available");
     }
 
     try {
-        rust::Vec<size_t> rust_indices;
-        for (size_t idx : column_indices) {
-            rust_indices.push_back(idx);
+        if (projection_.empty()) {
+            out.scanner_ = table_->new_log_scanner();
+        } else {
+            rust::Vec<size_t> rust_indices;
+            for (size_t idx : projection_) {
+                rust_indices.push_back(idx);
+            }
+            out.scanner_ = table_->new_log_scanner_with_projection(std::move(rust_indices));
         }
-        out.scanner_ = table_->new_log_scanner_with_projection(std::move(rust_indices));
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -105,32 +106,21 @@ Result Table::NewLogScannerWithProjection(const std::vector<size_t>& column_indi
     }
 }
 
-Result Table::NewRecordBatchLogScanner(LogScanner& out) {
-    if (!Available()) {
+Result TableScan::CreateRecordBatchScanner(LogScanner& out) {
+    if (table_ == nullptr) {
         return utils::make_error(1, "Table not available");
     }
 
     try {
-        out.scanner_ = table_->new_record_batch_log_scanner();
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
-    } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
-    }
-}
-
-Result Table::NewRecordBatchLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out) {
-    if (!Available()) {
-        return utils::make_error(1, "Table not available");
-    }
-
-    try {
-        rust::Vec<size_t> rust_indices;
-        for (size_t idx : column_indices) {
-            rust_indices.push_back(idx);
+        if (projection_.empty()) {
+            out.scanner_ = table_->new_record_batch_log_scanner();
+        } else {
+            rust::Vec<size_t> rust_indices;
+            for (size_t idx : projection_) {
+                rust_indices.push_back(idx);
+            }
+            out.scanner_ = table_->new_record_batch_log_scanner_with_projection(std::move(rust_indices));
         }
-        out.scanner_ = table_->new_record_batch_log_scanner_with_projection(std::move(rust_indices));
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());

@@ -407,6 +407,7 @@ class AppendWriter;
 class LogScanner;
 class Admin;
 class Table;
+class TableScan;
 
 class Connection {
 public:
@@ -490,10 +491,7 @@ public:
     bool Available() const;
 
     Result NewAppendWriter(AppendWriter& out);
-    Result NewLogScanner(LogScanner& out);
-    Result NewLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out);
-    Result NewRecordBatchLogScanner(LogScanner& out);
-    Result NewRecordBatchLogScannerWithProjection(const std::vector<size_t>& column_indices, LogScanner& out);
+    TableScan NewScan();
 
     TableInfo GetTableInfo() const;
     TablePath GetTablePath() const;
@@ -501,10 +499,26 @@ public:
 
 private:
     friend class Connection;
+    friend class TableScan;
     Table(ffi::Table* table) noexcept;
 
     void Destroy() noexcept;
     ffi::Table* table_{nullptr};
+};
+
+class TableScan {
+public:
+    TableScan& Project(std::vector<size_t> column_indices);
+
+    Result CreateLogScanner(LogScanner& out);
+    Result CreateRecordBatchScanner(LogScanner& out);
+
+private:
+    friend class Table;
+    explicit TableScan(ffi::Table* table) noexcept;
+
+    ffi::Table* table_{nullptr};
+    std::vector<size_t> projection_;
 };
 
 class AppendWriter {
@@ -550,6 +564,7 @@ public:
 
 private:
     friend class Table;
+    friend class TableScan;
     LogScanner(ffi::LogScanner* scanner) noexcept;
 
     void Destroy() noexcept;

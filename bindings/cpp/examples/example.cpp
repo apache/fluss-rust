@@ -104,7 +104,7 @@ int main() {
 
     // 6) Scan
     fluss::LogScanner scanner;
-    check("new_log_scanner", table.NewLogScanner(scanner));
+    check("new_log_scanner", table.NewScan().CreateLogScanner(scanner));
 
     auto info = table.GetTableInfo();
     int buckets = info.num_buckets;
@@ -126,8 +126,8 @@ int main() {
     // 7) Project only id (0) and name (1) columns
     std::vector<size_t> projected_columns = {0, 1};
     fluss::LogScanner projected_scanner;
-    check("new_log_scanner_with_projection", 
-          table.NewLogScannerWithProjection(projected_columns, projected_scanner));
+    check("new_log_scanner_with_projection",
+          table.NewScan().Project(projected_columns).CreateLogScanner(projected_scanner));
     
     for (int b = 0; b < buckets; ++b) {
         check("subscribe_projected", projected_scanner.Subscribe(b, 0));
@@ -226,7 +226,7 @@ int main() {
     // 8.4) Use batch subscribe with offsets from list_offsets
     std::cout << "\n=== Batch Subscribe Example ===" << std::endl;
     fluss::LogScanner batch_scanner;
-    check("new_log_scanner_for_batch", table.NewLogScanner(batch_scanner));
+    check("new_log_scanner_for_batch", table.NewScan().CreateLogScanner(batch_scanner));
     
     std::vector<fluss::BucketSubscription> subscriptions;
     for (const auto& [bucket_id, offset] : earliest_offsets) {
@@ -255,9 +255,9 @@ int main() {
 
     // 9) Test the new Arrow record batch polling functionality
     std::cout << "\n=== Testing Arrow Record Batch Polling ===" << std::endl;
-    
+
     fluss::LogScanner arrow_scanner;
-    check("new_record_batch_log_scanner", table.NewRecordBatchLogScanner(arrow_scanner));
+    check("new_record_batch_log_scanner", table.NewScan().CreateRecordBatchScanner(arrow_scanner));
     
     // Subscribe to all buckets starting from offset 0
     for (int b = 0; b < buckets; ++b) {
@@ -279,10 +279,10 @@ int main() {
     
     // 10) Test the new Arrow record batch polling with projection
     std::cout << "\n=== Testing Arrow Record Batch Polling with Projection ===" << std::endl;
-    
+
     fluss::LogScanner projected_arrow_scanner;
-    check("new_record_batch_log_scanner_with_projection", 
-          table.NewRecordBatchLogScannerWithProjection(projected_columns, projected_arrow_scanner));
+    check("new_record_batch_log_scanner_with_projection",
+          table.NewScan().Project(projected_columns).CreateRecordBatchScanner(projected_arrow_scanner));
     
     // Subscribe to all buckets starting from offset 0
     for (int b = 0; b < buckets; ++b) {
