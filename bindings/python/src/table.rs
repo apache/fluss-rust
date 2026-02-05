@@ -166,7 +166,141 @@ pub struct FlussTable {
     has_primary_key: bool,
 }
 
+/// Builder for creating log scanners with flexible configuration.
+///
+/// Use this builder to configure projection, and in the future, filters
+/// before creating a log scanner.
+#[pyclass]
+pub struct TableScan {
+    connection: Arc<fcore::client::FlussConnection>,
+    metadata: Arc<fcore::client::Metadata>,
+    table_info: fcore::metadata::TableInfo,
+    projection: Option<ProjectionType>,
+}
+
+/// Scanner type for internal use
+enum ScannerType {
+    Record,
+    Batch,
+}
+
+#[pymethods]
+impl TableScan {
+    /// Project to specific columns by their indices.
+    ///
+    /// Args:
+    ///     indices: List of column indices (0-based) to include in the scan.
+    ///
+    /// Returns:
+    ///     Self for method chaining.
+    pub fn project(mut slf: PyRefMut<'_, Self>, indices: Vec<usize>) -> PyRefMut<'_, Self> {
+        slf.projection = Some(ProjectionType::Indices(indices));
+        slf
+    }
+
+    /// Project to specific columns by their names.
+    ///
+    /// Args:
+    ///     names: List of column names to include in the scan.
+    ///
+    /// Returns:
+    ///     Self for method chaining.
+    pub fn project_by_name(mut slf: PyRefMut<'_, Self>, names: Vec<String>) -> PyRefMut<'_, Self> {
+        slf.projection = Some(ProjectionType::Names(names));
+        slf
+    }
+
+    /// Create a record-based log scanner.
+    ///
+    /// Use this scanner with `poll()` to get individual records with metadata
+    /// (offset, timestamp, change_type).
+    ///
+    /// Returns:
+    ///     LogScanner for record-by-record scanning with `poll()`
+    pub fn create_log_scanner<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.create_scanner_internal(py, ScannerType::Record)
+    }
+
+    /// Create a batch-based log scanner.
+    ///
+    /// Use this scanner with `poll_arrow()` to get Arrow Tables, or with
+    /// `poll_batches()` to get individual batches with metadata.
+    ///
+    /// Returns:
+    ///     LogScanner for batch-based scanning with `poll_arrow()` or `poll_batches()`
+    pub fn create_batch_scanner<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.create_scanner_internal(py, ScannerType::Batch)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TableScan(table={}.{})",
+            self.table_info.table_path.database(),
+            self.table_info.table_path.table()
+        )
+    }
+}
+
+impl TableScan {
+    fn create_scanner_internal<'py>(
+        &self,
+        py: Python<'py>,
+        scanner_type: ScannerType,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let conn = self.connection.clone();
+        let metadata = self.metadata.clone();
+        let table_info = self.table_info.clone();
+        let projection = self.projection.clone();
+
+        future_into_py(py, async move {
+            let fluss_table = fcore::client::FlussTable::new(&conn, metadata, table_info.clone());
+
+            let projection_indices = resolve_projection_indices(&projection, &table_info)?;
+            let table_scan = apply_projection(fluss_table.new_scan(), projection)?;
+
+            let admin = conn
+                .get_admin()
+                .await
+                .map_err(|e| FlussError::new_err(e.to_string()))?;
+
+            let (projected_schema, projected_row_type) =
+                calculate_projected_types(&table_info, projection_indices)?;
+
+            let py_scanner = match scanner_type {
+                ScannerType::Record => {
+                    let rust_scanner = table_scan.create_log_scanner().map_err(|e| {
+                        FlussError::new_err(format!("Failed to create log scanner: {e}"))
+                    })?;
+                    LogScanner::from_log_scanner(
+                        rust_scanner,
+                        admin,
+                        table_info,
+                        projected_schema,
+                        projected_row_type,
+                    )
+                }
+                ScannerType::Batch => {
+                    let rust_scanner =
+                        table_scan.create_record_batch_log_scanner().map_err(|e| {
+                            FlussError::new_err(format!("Failed to create batch scanner: {e}"))
+                        })?;
+                    LogScanner::from_batch_scanner(
+                        rust_scanner,
+                        admin,
+                        table_info,
+                        projected_schema,
+                        projected_row_type,
+                    )
+                }
+            };
+
+            Python::attach(|py| Py::new(py, py_scanner))
+        })
+    }
+}
+
 /// Internal enum to represent different projection types
+#[derive(Clone)]
 enum ProjectionType {
     Indices(Vec<usize>),
     Names(Vec<String>),
@@ -245,6 +379,20 @@ fn calculate_projected_types(
 
 #[pymethods]
 impl FlussTable {
+    /// Create a new table scan builder for configuring and creating log scanners.
+    ///
+    /// Use this method to create scanners with the builder pattern:
+    /// Returns:
+    ///     TableScan builder for configuring the scanner.
+    pub fn new_scan(&self) -> TableScan {
+        TableScan {
+            connection: self.connection.clone(),
+            metadata: self.metadata.clone(),
+            table_info: self.table_info.clone(),
+            projection: None,
+        }
+    }
+
     /// Create a new append writer for the table
     fn new_append_writer<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let conn = self.connection.clone();
@@ -266,80 +414,6 @@ impl FlussTable {
 
             Python::attach(|py| Py::new(py, py_writer))
         })
-    }
-
-    /// Create a new record-based log scanner for the table.
-    ///
-    /// Use this scanner with `poll()` to get individual records with metadata
-    /// (offset, timestamp, change_type).
-    ///
-    /// Args:
-    ///     project: Optional list of column indices (0-based) to include in the scan.
-    ///     columns: Optional list of column names to include in the scan.
-    ///
-    /// Returns:
-    ///     LogScanner for record-by-record scanning with `poll()`
-    ///
-    /// Note:
-    ///     Specify only one of 'project' or 'columns'.
-    ///     If neither is specified, all columns are included.
-    ///
-    #[pyo3(signature = (project=None, columns=None))]
-    pub fn new_log_scanner<'py>(
-        &self,
-        py: Python<'py>,
-        project: Option<Vec<usize>>,
-        columns: Option<Vec<String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let projection = match (project, columns) {
-            (Some(_), Some(_)) => {
-                return Err(FlussError::new_err(
-                    "Specify only one of 'project' or 'columns'".to_string(),
-                ));
-            }
-            (Some(indices), None) => Some(ProjectionType::Indices(indices)),
-            (None, Some(names)) => Some(ProjectionType::Names(names)),
-            (None, None) => None,
-        };
-
-        self.create_record_scanner_internal(py, projection)
-    }
-
-    /// Create a new batch-based log scanner for the table.
-    ///
-    /// Use this scanner with `poll_arrow()` to get Arrow Tables, or with
-    /// `poll_batches()` to get individual batches with metadata.
-    ///
-    /// Args:
-    ///     project: Optional list of column indices (0-based) to include in the scan.
-    ///     columns: Optional list of column names to include in the scan.
-    ///
-    /// Returns:
-    ///     LogScanner for batch-based scanning with `poll_arrow()` or `poll_batches()`
-    ///
-    /// Note:
-    ///     Specify only one of 'project' or 'columns'.
-    ///     If neither is specified, all columns are included.
-    ///
-    #[pyo3(signature = (project=None, columns=None))]
-    pub fn new_batch_scanner<'py>(
-        &self,
-        py: Python<'py>,
-        project: Option<Vec<usize>>,
-        columns: Option<Vec<String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let projection = match (project, columns) {
-            (Some(_), Some(_)) => {
-                return Err(FlussError::new_err(
-                    "Specify only one of 'project' or 'columns'".to_string(),
-                ));
-            }
-            (Some(indices), None) => Some(ProjectionType::Indices(indices)),
-            (None, Some(names)) => Some(ProjectionType::Names(names)),
-            (None, None) => None,
-        };
-
-        self.create_batch_scanner_internal(py, projection)
     }
 
     /// Get table information
@@ -446,86 +520,6 @@ impl FlussTable {
             table_path,
             has_primary_key,
         }
-    }
-
-    /// Internal helper to create a record-based log scanner with optional projection
-    fn create_record_scanner_internal<'py>(
-        &self,
-        py: Python<'py>,
-        projection: Option<ProjectionType>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
-
-        future_into_py(py, async move {
-            let fluss_table =
-                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
-
-            let projection_indices = resolve_projection_indices(&projection, &table_info)?;
-            let table_scan = apply_projection(fluss_table.new_scan(), projection)?;
-
-            let rust_scanner = table_scan
-                .create_log_scanner()
-                .map_err(|e| FlussError::new_err(format!("Failed to create log scanner: {e}")))?;
-
-            let admin = conn
-                .get_admin()
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            let (projected_schema, projected_row_type) =
-                calculate_projected_types(&table_info, projection_indices)?;
-
-            let py_scanner = LogScanner::from_log_scanner(
-                rust_scanner,
-                admin,
-                table_info.clone(),
-                projected_schema,
-                projected_row_type,
-            );
-            Python::attach(|py| Py::new(py, py_scanner))
-        })
-    }
-
-    /// Internal helper to create a batch-based log scanner with optional projection
-    fn create_batch_scanner_internal<'py>(
-        &self,
-        py: Python<'py>,
-        projection: Option<ProjectionType>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
-
-        future_into_py(py, async move {
-            let fluss_table =
-                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
-
-            let projection_indices = resolve_projection_indices(&projection, &table_info)?;
-            let table_scan = apply_projection(fluss_table.new_scan(), projection)?;
-
-            let rust_scanner = table_scan
-                .create_record_batch_log_scanner()
-                .map_err(|e| FlussError::new_err(format!("Failed to create log scanner: {e}")))?;
-
-            let admin = conn
-                .get_admin()
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            let (projected_schema, projected_row_type) =
-                calculate_projected_types(&table_info, projection_indices)?;
-
-            let py_scanner = LogScanner::from_batch_scanner(
-                rust_scanner,
-                admin,
-                table_info.clone(),
-                projected_schema,
-                projected_row_type,
-            );
-            Python::attach(|py| Py::new(py, py_scanner))
-        })
     }
 }
 
@@ -1562,14 +1556,11 @@ fn get_type_name(value: &Bound<PyAny>) -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-/// Scanner for reading log data from a Fluss table
+/// Scanner for reading log data from a Fluss table.
 ///
 /// This scanner supports two modes:
 /// - Record-based scanning via `poll()` - returns individual records with metadata
 /// - Batch-based scanning via `poll_arrow()` / `poll_batches()` - returns Arrow batches
-///
-/// Use `new_log_scanner()` for record-based scanning (poll method).
-/// Use `new_batch_scanner()` for batch-based scanning (poll_arrow/poll_batches methods).
 #[pyclass]
 pub struct LogScanner {
     /// Record-based scanner for poll()
@@ -1636,11 +1627,11 @@ impl LogScanner {
 
     /// Convert all data to Arrow Table
     ///
-    /// Note: Requires a batch-based scanner (created with new_batch_scanner).
+    /// Note: Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
     fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
         let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
             FlussError::new_err(
-                "Batch-based scanner not available. Use new_batch_scanner() to create a scanner \
+                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
                  that supports to_arrow().",
             )
         })?;
@@ -1743,13 +1734,13 @@ impl LogScanner {
     ///     change_type, and row data as a dictionary.
     ///
     /// Note:
-    ///     - Requires a record-based scanner (created with new_log_scanner)
+    ///     - Requires a record-based scanner (created with new_scan().create_log_scanner())
     ///     - Returns an empty list if no records are available
     ///     - When timeout expires, returns an empty list (NOT an error)
     fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<ScanRecord>> {
         let inner = self.inner.as_ref().ok_or_else(|| {
             FlussError::new_err(
-                "Record-based scanner not available. Use new_log_scanner() to create a scanner \
+                "Record-based scanner not available. Use new_scan().create_log_scanner() to create a scanner \
                  that supports poll().",
             )
         })?;
@@ -1790,13 +1781,13 @@ impl LogScanner {
     ///     bucket, base_offset, and last_offset metadata.
     ///
     /// Note:
-    ///     - Requires a batch-based scanner (created with new_batch_scanner)
+    ///     - Requires a batch-based scanner (created with new_scan().create_batch_scanner())
     ///     - Returns an empty list if no batches are available
     ///     - When timeout expires, returns an empty list (NOT an error)
     fn poll_batches(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<RecordBatch>> {
         let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
             FlussError::new_err(
-                "Batch-based scanner not available. Use new_batch_scanner() to create a scanner \
+                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
                  that supports poll_batches().",
             )
         })?;
@@ -1830,13 +1821,13 @@ impl LogScanner {
     ///     PyArrow Table containing the polled records (batches merged)
     ///
     /// Note:
-    ///     - Requires a batch-based scanner (created with new_batch_scanner)
+    ///     - Requires a batch-based scanner (created with new_scan().create_batch_scanner())
     ///     - Returns an empty table (with correct schema) if no records are available
     ///     - When timeout expires, returns an empty table (NOT an error)
     fn poll_arrow(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
         let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
             FlussError::new_err(
-                "Batch-based scanner not available. Use new_batch_scanner() to create a scanner \
+                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
                  that supports poll_arrow().",
             )
         })?;

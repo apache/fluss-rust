@@ -238,8 +238,8 @@ async def main():
     # Now scan the table to verify data was written
     print("\n--- Scanning table (batch scanner) ---")
     try:
-        # Use new_batch_scanner() for batch-based operations (to_arrow, to_pandas, poll_arrow)
-        batch_scanner = await table.new_batch_scanner()
+        # Use new_scan().create_batch_scanner() for batch-based operations
+        batch_scanner = await table.new_scan().create_batch_scanner()
         print(f"Created batch scanner: {batch_scanner}")
 
         # Subscribe to scan from earliest to latest
@@ -315,8 +315,8 @@ async def main():
     # Test record-based scanning with poll()
     print("\n--- Scanning table (record scanner) ---")
     try:
-        # Use new_log_scanner() for record-based operations (poll returns List[ScanRecord])
-        record_scanner = await table.new_log_scanner()
+        # Use new_scan().create_log_scanner() for record-based operations
+        record_scanner = await table.new_scan().create_log_scanner()
         print(f"Created record scanner: {record_scanner}")
 
         record_scanner.subscribe(None, None)
@@ -536,12 +536,12 @@ async def main():
         print(f"Error during delete: {e}")
         traceback.print_exc()
 
-    # Demo: Column projection
+    # Demo: Column projection using builder pattern
     print("\n--- Testing Column Projection ---")
     try:
         # Project specific columns by index (using batch scanner for to_pandas)
         print("\n1. Projection by index [0, 1] (id, name):")
-        scanner_index = await table.new_batch_scanner(project=[0, 1])
+        scanner_index = await table.new_scan().project([0, 1]).create_batch_scanner()
         scanner_index.subscribe(None, None)
         df_projected = scanner_index.to_pandas()
         print(df_projected.head())
@@ -551,7 +551,9 @@ async def main():
 
         # Project specific columns by name (Pythonic!)
         print("\n2. Projection by name ['name', 'score'] (Pythonic):")
-        scanner_names = await table.new_batch_scanner(columns=["name", "score"])
+        scanner_names = await table.new_scan() \
+            .project_by_name(["name", "score"]) \
+            .create_batch_scanner()
         scanner_names.subscribe(None, None)
         df_named = scanner_names.to_pandas()
         print(df_named.head())
@@ -559,7 +561,7 @@ async def main():
 
         # Test empty result schema with projection
         print("\n3. Testing empty result schema with projection:")
-        scanner_proj = await table.new_batch_scanner(project=[0, 2])
+        scanner_proj = await table.new_scan().project([0, 2]).create_batch_scanner()
         scanner_proj.subscribe(None, None)
         # Quick poll that may return empty
         result = scanner_proj.poll_arrow(100)

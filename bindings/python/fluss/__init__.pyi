@@ -131,44 +131,92 @@ class FlussAdmin:
     async def get_latest_lake_snapshot(self, table_path: TablePath) -> LakeSnapshot: ...
     def __repr__(self) -> str: ...
 
-class FlussTable:
-    async def new_append_writer(self) -> AppendWriter: ...
-    async def new_log_scanner(
-        self,
-        project: Optional[List[int]] = None,
-        columns: Optional[List[str]] = None,
-    ) -> LogScanner:
+class TableScan:
+    """Builder for creating log scanners with flexible configuration.
+
+    Use this builder to configure projection before creating a log scanner.
+    Obtain a TableScan instance via `FlussTable.new_scan()`.
+
+    Example:
+        ```python
+        # Record-based scanning with projection
+        scanner = await table.new_scan() \\
+            .project([0, 1, 2]) \\
+            .create_log_scanner()
+
+        # Batch-based scanning with column names
+        scanner = await table.new_scan() \\
+            .project_by_name(["id", "name"]) \\
+            .create_batch_scanner()
+        ```
+    """
+
+    def project(self, indices: List[int]) -> "TableScan":
+        """Project to specific columns by their indices.
+
+        Args:
+            indices: List of column indices (0-based) to include in the scan.
+
+        Returns:
+            Self for method chaining.
+        """
+        ...
+    def project_by_name(self, names: List[str]) -> "TableScan":
+        """Project to specific columns by their names.
+
+        Args:
+            names: List of column names to include in the scan.
+
+        Returns:
+            Self for method chaining.
+        """
+        ...
+    async def create_log_scanner(self) -> LogScanner:
         """Create a record-based log scanner.
 
         Use this scanner with `poll()` to get individual records with metadata
         (offset, timestamp, change_type).
 
-        Args:
-            project: Optional list of column indices (0-based) to include.
-            columns: Optional list of column names to include.
-
         Returns:
             LogScanner for record-by-record scanning with `poll()`
         """
         ...
-    async def new_batch_scanner(
-        self,
-        project: Optional[List[int]] = None,
-        columns: Optional[List[str]] = None,
-    ) -> LogScanner:
+    async def create_batch_scanner(self) -> LogScanner:
         """Create a batch-based log scanner.
 
         Use this scanner with `poll_arrow()` to get Arrow Tables, or with
         `poll_batches()` to get individual batches with metadata.
 
-        Args:
-            project: Optional list of column indices (0-based) to include.
-            columns: Optional list of column names to include.
-
         Returns:
             LogScanner for batch-based scanning with `poll_arrow()` or `poll_batches()`
         """
         ...
+    def __repr__(self) -> str: ...
+
+class FlussTable:
+    def new_scan(self) -> TableScan:
+        """Create a new table scan builder for configuring and creating log scanners.
+
+        Use this method to create scanners with the builder pattern:
+
+        Example:
+            ```python
+            # Record-based scanning
+            scanner = await table.new_scan() \\
+                .project([0, 1]) \\
+                .create_log_scanner()
+
+            # Batch-based scanning
+            scanner = await table.new_scan() \\
+                .project_by_name(["id", "name"]) \\
+                .create_batch_scanner()
+            ```
+
+        Returns:
+            TableScan builder for configuring the scanner.
+        """
+        ...
+    async def new_append_writer(self) -> AppendWriter: ...
     def new_upsert(
         self,
         columns: Optional[List[str]] = None,
@@ -263,8 +311,15 @@ class LogScanner:
     - Record-based scanning via `poll()` - returns individual records with metadata
     - Batch-based scanning via `poll_arrow()` / `poll_batches()` - returns Arrow batches
 
-    Use `new_log_scanner()` for record-based scanning (poll method).
-    Use `new_batch_scanner()` for batch-based scanning (poll_arrow/poll_batches methods).
+    Create scanners using the builder pattern:
+        # Record-based scanning
+        scanner = await table.new_scan().create_log_scanner()
+
+        # Batch-based scanning
+        scanner = await table.new_scan().create_batch_scanner()
+
+        # With projection
+        scanner = await table.new_scan().project([0, 1]).create_log_scanner()
     """
 
     def subscribe(
@@ -280,7 +335,7 @@ class LogScanner:
     def poll(self, timeout_ms: int) -> List[ScanRecord]:
         """Poll for individual records with metadata.
 
-        Requires a record-based scanner (created with new_log_scanner).
+        Requires a record-based scanner (created with new_scan().create_log_scanner()).
 
         Args:
             timeout_ms: Timeout in milliseconds to wait for records.
@@ -296,7 +351,7 @@ class LogScanner:
     def poll_batches(self, timeout_ms: int) -> List[RecordBatch]:
         """Poll for batches with metadata.
 
-        Requires a batch-based scanner (created with new_batch_scanner).
+        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
 
         Args:
             timeout_ms: Timeout in milliseconds to wait for batches.
@@ -312,7 +367,7 @@ class LogScanner:
     def poll_arrow(self, timeout_ms: int) -> pa.Table:
         """Poll for records as an Arrow Table.
 
-        Requires a batch-based scanner (created with new_batch_scanner).
+        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
 
         Args:
             timeout_ms: Timeout in milliseconds to wait for records.
@@ -328,13 +383,13 @@ class LogScanner:
     def to_pandas(self) -> pd.DataFrame:
         """Convert all data to Pandas DataFrame.
 
-        Requires a batch-based scanner (created with new_batch_scanner).
+        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
         """
         ...
     def to_arrow(self) -> pa.Table:
         """Convert all data to Arrow Table.
 
-        Requires a batch-based scanner (created with new_batch_scanner).
+        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
         """
         ...
     def __repr__(self) -> str: ...

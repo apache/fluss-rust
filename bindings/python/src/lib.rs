@@ -58,6 +58,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TableDescriptor>()?;
     m.add_class::<FlussAdmin>()?;
     m.add_class::<FlussTable>()?;
+    m.add_class::<TableScan>()?;
     m.add_class::<AppendWriter>()?;
     m.add_class::<UpsertWriter>()?;
     m.add_class::<Lookuper>()?;
