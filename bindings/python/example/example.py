@@ -236,31 +236,32 @@ async def main():
         print(f"Error during writing: {e}")
 
     # Now scan the table to verify data was written
-    print("\n--- Scanning table ---")
+    print("\n--- Scanning table (batch scanner) ---")
     try:
-        log_scanner = await table.new_log_scanner()
-        print(f"Created log scanner: {log_scanner}")
+        # Use new_batch_scanner() for batch-based operations (to_arrow, to_pandas, poll_arrow)
+        batch_scanner = await table.new_batch_scanner()
+        print(f"Created batch scanner: {batch_scanner}")
 
         # Subscribe to scan from earliest to latest
         # start_timestamp=None (earliest), end_timestamp=None (latest)
-        log_scanner.subscribe(None, None)
+        batch_scanner.subscribe(None, None)
 
         print("Scanning results using to_arrow():")
 
         # Try to get as PyArrow Table
         try:
-            pa_table_result = log_scanner.to_arrow()
+            pa_table_result = batch_scanner.to_arrow()
             print(f"\nAs PyArrow Table: {pa_table_result}")
         except Exception as e:
             print(f"Could not convert to PyArrow: {e}")
 
         # Let's subscribe from the beginning again.
         # Reset subscription
-        log_scanner.subscribe(None, None)
+        batch_scanner.subscribe(None, None)
 
         # Try to get as Pandas DataFrame
         try:
-            df_result = log_scanner.to_pandas()
+            df_result = batch_scanner.to_pandas()
             print(f"\nAs Pandas DataFrame:\n{df_result}")
         except Exception as e:
             print(f"Could not convert to Pandas: {e}")
@@ -270,15 +271,15 @@ async def main():
 
         # TODO: support to_duckdb()
 
-        # Test the new poll() method for incremental reading
-        print("\n--- Testing poll() method ---")
+        # Test poll_arrow() method for incremental reading as Arrow Table
+        print("\n--- Testing poll_arrow() method ---")
         # Reset subscription to start from the beginning
-        log_scanner.subscribe(None, None)
+        batch_scanner.subscribe(None, None)
 
         # Poll with a timeout of 5000ms (5 seconds)
-        # Note: poll() returns an empty table (not an error) on timeout
+        # Note: poll_arrow() returns an empty table (not an error) on timeout
         try:
-            poll_result = log_scanner.poll(5000)
+            poll_result = batch_scanner.poll_arrow(5000)
             print(f"Number of rows: {poll_result.num_rows}")
 
             if poll_result.num_rows > 0:
@@ -290,10 +291,57 @@ async def main():
                 print(f"Schema: {poll_result.schema}")
 
         except Exception as e:
+            print(f"Error during poll_arrow: {e}")
+
+        # Test poll_batches() method for batches with metadata
+        print("\n--- Testing poll_batches() method ---")
+        batch_scanner.subscribe(None, None)
+
+        try:
+            batches = batch_scanner.poll_batches(5000)
+            print(f"Number of batches: {len(batches)}")
+
+            for i, batch in enumerate(batches):
+                print(f"  Batch {i}: bucket={batch.bucket}, "
+                      f"offsets={batch.base_offset}-{batch.last_offset}, "
+                      f"rows={batch.batch.num_rows}")
+
+        except Exception as e:
+            print(f"Error during poll_batches: {e}")
+
+    except Exception as e:
+        print(f"Error during batch scanning: {e}")
+
+    # Test record-based scanning with poll()
+    print("\n--- Scanning table (record scanner) ---")
+    try:
+        # Use new_log_scanner() for record-based operations (poll returns List[ScanRecord])
+        record_scanner = await table.new_log_scanner()
+        print(f"Created record scanner: {record_scanner}")
+
+        record_scanner.subscribe(None, None)
+
+        # Poll returns List[ScanRecord] with per-record metadata
+        print("\n--- Testing poll() method (record-by-record) ---")
+        try:
+            records = record_scanner.poll(5000)
+            print(f"Number of records: {len(records)}")
+
+            # Show first few records with metadata
+            for i, record in enumerate(records[:5]):
+                print(f"  Record {i}: offset={record.offset}, "
+                      f"timestamp={record.timestamp}, "
+                      f"change_type={record.change_type}, "
+                      f"row={record.row}")
+
+            if len(records) > 5:
+                print(f"  ... and {len(records) - 5} more records")
+
+        except Exception as e:
             print(f"Error during poll: {e}")
 
     except Exception as e:
-        print(f"Error during scanning: {e}")
+        print(f"Error during record scanning: {e}")
 
     # =====================================================
     # Demo: Primary Key Table with Lookup and Upsert
@@ -491,9 +539,9 @@ async def main():
     # Demo: Column projection
     print("\n--- Testing Column Projection ---")
     try:
-        # Project specific columns by index
+        # Project specific columns by index (using batch scanner for to_pandas)
         print("\n1. Projection by index [0, 1] (id, name):")
-        scanner_index = await table.new_log_scanner(project=[0, 1])
+        scanner_index = await table.new_batch_scanner(project=[0, 1])
         scanner_index.subscribe(None, None)
         df_projected = scanner_index.to_pandas()
         print(df_projected.head())
@@ -503,11 +551,19 @@ async def main():
 
         # Project specific columns by name (Pythonic!)
         print("\n2. Projection by name ['name', 'score'] (Pythonic):")
-        scanner_names = await table.new_log_scanner(columns=["name", "score"])
+        scanner_names = await table.new_batch_scanner(columns=["name", "score"])
         scanner_names.subscribe(None, None)
         df_named = scanner_names.to_pandas()
         print(df_named.head())
         print(f"   Projected {df_named.shape[1]} columns: {list(df_named.columns)}")
+
+        # Test empty result schema with projection
+        print("\n3. Testing empty result schema with projection:")
+        scanner_proj = await table.new_batch_scanner(project=[0, 2])
+        scanner_proj.subscribe(None, None)
+        # Quick poll that may return empty
+        result = scanner_proj.poll_arrow(100)
+        print(f"   Schema columns: {result.schema.names}")
 
     except Exception as e:
         print(f"Error during projection: {e}")

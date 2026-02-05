@@ -17,11 +17,78 @@
 
 """Type stubs for Fluss Python bindings."""
 
+from enum import IntEnum
 from types import TracebackType
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import pyarrow as pa
+
+class ChangeType(IntEnum):
+    """Represents the type of change for a record in a log."""
+
+    AppendOnly = 0
+    """Append-only operation"""
+    Insert = 1
+    """Insert operation"""
+    UpdateBefore = 2
+    """Update operation containing the previous content of the updated row"""
+    UpdateAfter = 3
+    """Update operation containing the new content of the updated row"""
+    Delete = 4
+    """Delete operation"""
+
+    def short_string(self) -> str:
+        """Returns a short string representation (+A, +I, -U, +U, -D)."""
+        ...
+
+class ScanRecord:
+    """Represents a single scan record with metadata."""
+
+    @property
+    def bucket(self) -> TableBucket:
+        """The bucket this record belongs to."""
+        ...
+    @property
+    def offset(self) -> int:
+        """The position of this record in the log."""
+        ...
+    @property
+    def timestamp(self) -> int:
+        """The timestamp of this record."""
+        ...
+    @property
+    def change_type(self) -> ChangeType:
+        """The type of change (insert, update, delete, etc.)."""
+        ...
+    @property
+    def row(self) -> Dict[str, object]:
+        """The row data as a dictionary mapping column names to values."""
+        ...
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+
+class RecordBatch:
+    """Represents a batch of records with metadata."""
+
+    @property
+    def batch(self) -> pa.RecordBatch:
+        """The Arrow RecordBatch containing the data."""
+        ...
+    @property
+    def bucket(self) -> TableBucket:
+        """The bucket this batch belongs to."""
+        ...
+    @property
+    def base_offset(self) -> int:
+        """The offset of the first record in this batch."""
+        ...
+    @property
+    def last_offset(self) -> int:
+        """The offset of the last record in this batch."""
+        ...
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
 
 class Config:
     def __init__(self, properties: Optional[Dict[str, str]] = None) -> None: ...
@@ -70,7 +137,38 @@ class FlussTable:
         self,
         project: Optional[List[int]] = None,
         columns: Optional[List[str]] = None,
-    ) -> LogScanner: ...
+    ) -> LogScanner:
+        """Create a record-based log scanner.
+
+        Use this scanner with `poll()` to get individual records with metadata
+        (offset, timestamp, change_type).
+
+        Args:
+            project: Optional list of column indices (0-based) to include.
+            columns: Optional list of column names to include.
+
+        Returns:
+            LogScanner for record-by-record scanning with `poll()`
+        """
+        ...
+    async def new_batch_scanner(
+        self,
+        project: Optional[List[int]] = None,
+        columns: Optional[List[str]] = None,
+    ) -> LogScanner:
+        """Create a batch-based log scanner.
+
+        Use this scanner with `poll_arrow()` to get Arrow Tables, or with
+        `poll_batches()` to get individual batches with metadata.
+
+        Args:
+            project: Optional list of column indices (0-based) to include.
+            columns: Optional list of column names to include.
+
+        Returns:
+            LogScanner for batch-based scanning with `poll_arrow()` or `poll_batches()`
+        """
+        ...
     def new_upsert(
         self,
         columns: Optional[List[str]] = None,
@@ -159,11 +257,86 @@ class Lookuper:
     def __repr__(self) -> str: ...
 
 class LogScanner:
+    """Scanner for reading log data from a Fluss table.
+
+    This scanner supports two modes:
+    - Record-based scanning via `poll()` - returns individual records with metadata
+    - Batch-based scanning via `poll_arrow()` / `poll_batches()` - returns Arrow batches
+
+    Use `new_log_scanner()` for record-based scanning (poll method).
+    Use `new_batch_scanner()` for batch-based scanning (poll_arrow/poll_batches methods).
+    """
+
     def subscribe(
         self, start_timestamp: Optional[int], end_timestamp: Optional[int]
-    ) -> None: ...
-    def to_pandas(self) -> pd.DataFrame: ...
-    def to_arrow(self) -> pa.Table: ...
+    ) -> None:
+        """Subscribe to log data with timestamp range.
+
+        Args:
+            start_timestamp: Not yet supported, must be None.
+            end_timestamp: Not yet supported, must be None.
+        """
+        ...
+    def poll(self, timeout_ms: int) -> List[ScanRecord]:
+        """Poll for individual records with metadata.
+
+        Requires a record-based scanner (created with new_log_scanner).
+
+        Args:
+            timeout_ms: Timeout in milliseconds to wait for records.
+
+        Returns:
+            List of ScanRecord objects, each containing bucket, offset, timestamp,
+            change_type, and row data as a dictionary.
+
+        Note:
+            Returns an empty list if no records are available or timeout expires.
+        """
+        ...
+    def poll_batches(self, timeout_ms: int) -> List[RecordBatch]:
+        """Poll for batches with metadata.
+
+        Requires a batch-based scanner (created with new_batch_scanner).
+
+        Args:
+            timeout_ms: Timeout in milliseconds to wait for batches.
+
+        Returns:
+            List of RecordBatch objects, each containing the Arrow batch along with
+            bucket, base_offset, and last_offset metadata.
+
+        Note:
+            Returns an empty list if no batches are available or timeout expires.
+        """
+        ...
+    def poll_arrow(self, timeout_ms: int) -> pa.Table:
+        """Poll for records as an Arrow Table.
+
+        Requires a batch-based scanner (created with new_batch_scanner).
+
+        Args:
+            timeout_ms: Timeout in milliseconds to wait for records.
+
+        Returns:
+            PyArrow Table containing the polled records (batches merged).
+
+        Note:
+            Returns an empty table (with correct schema) if no records are available
+            or timeout expires.
+        """
+        ...
+    def to_pandas(self) -> pd.DataFrame:
+        """Convert all data to Pandas DataFrame.
+
+        Requires a batch-based scanner (created with new_batch_scanner).
+        """
+        ...
+    def to_arrow(self) -> pa.Table:
+        """Convert all data to Arrow Table.
+
+        Requires a batch-based scanner (created with new_batch_scanner).
+        """
+        ...
     def __repr__(self) -> str: ...
 
 class Schema:
