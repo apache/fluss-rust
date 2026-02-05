@@ -514,6 +514,16 @@ impl RecordBatchLogScanner {
             .subscribe_partition(partition_id, bucket, offset)
             .await
     }
+
+    /// Returns whether the table is partitioned
+    pub fn is_partitioned(&self) -> bool {
+        self.inner.is_partitioned_table
+    }
+
+    /// Returns all subscribed buckets with their current offsets
+    pub fn get_subscribed_buckets(&self) -> Vec<(TableBucket, i64)> {
+        self.inner.log_scanner_status.get_all_subscriptions()
+    }
 }
 
 struct LogFetcher {
@@ -1508,6 +1518,16 @@ impl LogScannerStatus {
             if is_available(bucket) {
                 result.push(bucket.clone());
             }
+        });
+        result
+    }
+
+    /// Returns all subscribed buckets with their current offsets
+    pub fn get_all_subscriptions(&self) -> Vec<(TableBucket, i64)> {
+        let map = self.bucket_status_map.read();
+        let mut result = Vec::new();
+        map.for_each(|bucket, status| {
+            result.push((bucket.clone(), status.offset()));
         });
         result
     }
