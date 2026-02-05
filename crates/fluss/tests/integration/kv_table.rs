@@ -89,7 +89,7 @@ mod kv_table_test {
             .expect("Failed to get table");
 
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
+        let upsert_writer = table_upsert
             .create_writer()
             .expect("Failed to create writer");
 
@@ -246,7 +246,7 @@ mod kv_table_test {
             .expect("Failed to get table");
 
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
+        let upsert_writer = table_upsert
             .create_writer()
             .expect("Failed to create writer");
 
@@ -360,7 +360,7 @@ mod kv_table_test {
 
         // Insert initial record with all columns
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
+        let upsert_writer = table_upsert
             .create_writer()
             .expect("Failed to create writer");
 
@@ -399,7 +399,7 @@ mod kv_table_test {
         let partial_upsert = table_upsert
             .partial_update_with_column_names(&["id", "score"])
             .expect("Failed to create TableUpsert with partial update");
-        let mut partial_writer = partial_upsert
+        let partial_writer = partial_upsert
             .create_writer()
             .expect("Failed to create UpsertWriter with partial write");
 
@@ -478,7 +478,7 @@ mod kv_table_test {
 
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
 
-        let mut upsert_writer = table_upsert
+        let upsert_writer = table_upsert
             .create_writer()
             .expect("Failed to create writer");
 
@@ -659,7 +659,7 @@ mod kv_table_test {
             .expect("Failed to get table");
 
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let mut upsert_writer = table_upsert
+        let upsert_writer = table_upsert
             .create_writer()
             .expect("Failed to create writer");
 
