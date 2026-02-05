@@ -261,7 +261,7 @@ Result LogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offse
         rust_subs.push_back(ffi_sub);
     }
 
-    auto ffi_result = scanner_->subscribe_batch(std::move(rust_subs));
+    auto ffi_result = scanner_->subscribe_buckets(std::move(rust_subs));
     return utils::from_ffi_result(ffi_result);
 }
 

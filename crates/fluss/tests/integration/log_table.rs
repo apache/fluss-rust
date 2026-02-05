@@ -426,7 +426,7 @@ mod table_test {
         let mut bucket_offsets = HashMap::new();
         bucket_offsets.insert(0, 0);
         log_scanner
-            .subscribe_batch(&bucket_offsets)
+            .subscribe_buckets(&bucket_offsets)
             .await
             .expect("Failed to subscribe");
 
