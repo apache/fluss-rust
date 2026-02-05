@@ -58,6 +58,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TableDescriptor>()?;
     m.add_class::<FlussAdmin>()?;
     m.add_class::<FlussTable>()?;
+    m.add_class::<TableScan>()?;
     m.add_class::<AppendWriter>()?;
     m.add_class::<UpsertWriter>()?;
     m.add_class::<Lookuper>()?;
@@ -65,6 +66,9 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LogScanner>()?;
     m.add_class::<LakeSnapshot>()?;
     m.add_class::<TableBucket>()?;
+    m.add_class::<ChangeType>()?;
+    m.add_class::<ScanRecord>()?;
+    m.add_class::<RecordBatch>()?;
 
     // Register exception types
     m.add_class::<FlussError>()?;

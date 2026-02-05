@@ -17,8 +17,9 @@
 
 use crate::TOKIO_RUNTIME;
 use crate::*;
-use arrow::array::RecordBatch;
+use arrow::array::RecordBatch as ArrowRecordBatch;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
+use arrow_schema::SchemaRef;
 use fluss::client::EARLIEST_OFFSET;
 use fluss::record::to_arrow_schema;
 use fluss::rpc::message::OffsetSpec;
@@ -38,6 +39,123 @@ const MICROS_PER_DAY: i64 = 86_400_000_000;
 const NANOS_PER_MILLI: i64 = 1_000_000;
 const NANOS_PER_MICRO: i64 = 1_000;
 
+/// Represents a single scan record with metadata
+#[pyclass]
+pub struct ScanRecord {
+    #[pyo3(get)]
+    bucket: TableBucket,
+    #[pyo3(get)]
+    offset: i64,
+    #[pyo3(get)]
+    timestamp: i64,
+    #[pyo3(get)]
+    change_type: ChangeType,
+    /// Store row as a Python dict directly
+    row_dict: Py<pyo3::types::PyDict>,
+}
+
+#[pymethods]
+impl ScanRecord {
+    /// Get the row data as a dictionary
+    #[getter]
+    pub fn row(&self, py: Python) -> Py<pyo3::types::PyDict> {
+        self.row_dict.clone_ref(py)
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "ScanRecord(bucket={}, offset={}, timestamp={}, change_type={})",
+            self.bucket.__str__(),
+            self.offset,
+            self.timestamp,
+            self.change_type.short_string()
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
+}
+
+impl ScanRecord {
+    /// Create a ScanRecord from core types
+    pub fn from_core(
+        py: Python,
+        bucket: &fcore::metadata::TableBucket,
+        record: &fcore::record::ScanRecord,
+        row_type: &fcore::metadata::RowType,
+    ) -> PyResult<Self> {
+        let fields = row_type.fields();
+        let row = record.row();
+        let dict = pyo3::types::PyDict::new(py);
+
+        for (pos, field) in fields.iter().enumerate() {
+            let value = datum_to_python_value(py, row, pos, field.data_type())?;
+            dict.set_item(field.name(), value)?;
+        }
+
+        Ok(ScanRecord {
+            bucket: TableBucket::from_core(bucket.clone()),
+            offset: record.offset(),
+            timestamp: record.timestamp(),
+            change_type: ChangeType::from_core(*record.change_type()),
+            row_dict: dict.unbind(),
+        })
+    }
+}
+
+/// Represents a batch of records with metadata
+#[pyclass]
+pub struct RecordBatch {
+    batch: Arc<ArrowRecordBatch>,
+    #[pyo3(get)]
+    bucket: TableBucket,
+    #[pyo3(get)]
+    base_offset: i64,
+    #[pyo3(get)]
+    last_offset: i64,
+}
+
+#[pymethods]
+impl RecordBatch {
+    /// Get the Arrow RecordBatch as PyArrow RecordBatch
+    #[getter]
+    pub fn batch(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let pyarrow_batch = self
+            .batch
+            .as_ref()
+            .to_pyarrow(py)
+            .map_err(|e| FlussError::new_err(format!("Failed to convert batch: {e}")))?;
+        Ok(pyarrow_batch.unbind())
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "RecordBatch(bucket={}, base_offset={}, last_offset={}, rows={})",
+            self.bucket.__str__(),
+            self.base_offset,
+            self.last_offset,
+            self.batch.num_rows()
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
+}
+
+impl RecordBatch {
+    /// Create a RecordBatch from core ScanBatch
+    pub fn from_scan_batch(scan_batch: fcore::record::ScanBatch) -> Self {
+        RecordBatch {
+            bucket: TableBucket::from_core(scan_batch.bucket().clone()),
+            base_offset: scan_batch.base_offset(),
+            last_offset: scan_batch.last_offset(),
+            batch: Arc::new(scan_batch.into_batch()),
+        }
+    }
+}
+
 /// Represents a Fluss table for data operations
 #[pyclass]
 pub struct FlussTable {
@@ -48,14 +166,233 @@ pub struct FlussTable {
     has_primary_key: bool,
 }
 
+/// Builder for creating log scanners with flexible configuration.
+///
+/// Use this builder to configure projection, and in the future, filters
+/// before creating a log scanner.
+#[pyclass]
+pub struct TableScan {
+    connection: Arc<fcore::client::FlussConnection>,
+    metadata: Arc<fcore::client::Metadata>,
+    table_info: fcore::metadata::TableInfo,
+    projection: Option<ProjectionType>,
+}
+
+/// Scanner type for internal use
+enum ScannerType {
+    Record,
+    Batch,
+}
+
+#[pymethods]
+impl TableScan {
+    /// Project to specific columns by their indices.
+    ///
+    /// Args:
+    ///     indices: List of column indices (0-based) to include in the scan.
+    ///
+    /// Returns:
+    ///     Self for method chaining.
+    pub fn project(mut slf: PyRefMut<'_, Self>, indices: Vec<usize>) -> PyRefMut<'_, Self> {
+        slf.projection = Some(ProjectionType::Indices(indices));
+        slf
+    }
+
+    /// Project to specific columns by their names.
+    ///
+    /// Args:
+    ///     names: List of column names to include in the scan.
+    ///
+    /// Returns:
+    ///     Self for method chaining.
+    pub fn project_by_name(mut slf: PyRefMut<'_, Self>, names: Vec<String>) -> PyRefMut<'_, Self> {
+        slf.projection = Some(ProjectionType::Names(names));
+        slf
+    }
+
+    /// Create a record-based log scanner.
+    ///
+    /// Use this scanner with `poll()` to get individual records with metadata
+    /// (offset, timestamp, change_type).
+    ///
+    /// Returns:
+    ///     LogScanner for record-by-record scanning with `poll()`
+    pub fn create_log_scanner<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.create_scanner_internal(py, ScannerType::Record)
+    }
+
+    /// Create a batch-based log scanner.
+    ///
+    /// Use this scanner with `poll_arrow()` to get Arrow Tables, or with
+    /// `poll_batches()` to get individual batches with metadata.
+    ///
+    /// Returns:
+    ///     LogScanner for batch-based scanning with `poll_arrow()` or `poll_batches()`
+    pub fn create_batch_scanner<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.create_scanner_internal(py, ScannerType::Batch)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TableScan(table={}.{})",
+            self.table_info.table_path.database(),
+            self.table_info.table_path.table()
+        )
+    }
+}
+
+impl TableScan {
+    fn create_scanner_internal<'py>(
+        &self,
+        py: Python<'py>,
+        scanner_type: ScannerType,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let conn = self.connection.clone();
+        let metadata = self.metadata.clone();
+        let table_info = self.table_info.clone();
+        let projection = self.projection.clone();
+
+        future_into_py(py, async move {
+            let fluss_table = fcore::client::FlussTable::new(&conn, metadata, table_info.clone());
+
+            let projection_indices = resolve_projection_indices(&projection, &table_info)?;
+            let table_scan = apply_projection(fluss_table.new_scan(), projection)?;
+
+            let admin = conn
+                .get_admin()
+                .await
+                .map_err(|e| FlussError::new_err(e.to_string()))?;
+
+            let (projected_schema, projected_row_type) =
+                calculate_projected_types(&table_info, projection_indices)?;
+
+            let py_scanner = match scanner_type {
+                ScannerType::Record => {
+                    let rust_scanner = table_scan.create_log_scanner().map_err(|e| {
+                        FlussError::new_err(format!("Failed to create log scanner: {e}"))
+                    })?;
+                    LogScanner::from_log_scanner(
+                        rust_scanner,
+                        admin,
+                        table_info,
+                        projected_schema,
+                        projected_row_type,
+                    )
+                }
+                ScannerType::Batch => {
+                    let rust_scanner =
+                        table_scan.create_record_batch_log_scanner().map_err(|e| {
+                            FlussError::new_err(format!("Failed to create batch scanner: {e}"))
+                        })?;
+                    LogScanner::from_batch_scanner(
+                        rust_scanner,
+                        admin,
+                        table_info,
+                        projected_schema,
+                        projected_row_type,
+                    )
+                }
+            };
+
+            Python::attach(|py| Py::new(py, py_scanner))
+        })
+    }
+}
+
 /// Internal enum to represent different projection types
+#[derive(Clone)]
 enum ProjectionType {
     Indices(Vec<usize>),
     Names(Vec<String>),
 }
 
+/// Resolve projection to column indices
+fn resolve_projection_indices(
+    projection: &Option<ProjectionType>,
+    table_info: &fcore::metadata::TableInfo,
+) -> PyResult<Option<Vec<usize>>> {
+    match projection {
+        Some(ProjectionType::Indices(indices)) => Ok(Some(indices.clone())),
+        Some(ProjectionType::Names(names)) => {
+            let schema = table_info.get_schema();
+            let columns = schema.columns();
+            let mut indices = Vec::with_capacity(names.len());
+            for name in names {
+                let idx = columns
+                    .iter()
+                    .position(|c| c.name() == name)
+                    .ok_or_else(|| FlussError::new_err(format!("Column '{}' not found", name)))?;
+                indices.push(idx);
+            }
+            Ok(Some(indices))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Apply projection to table scan
+fn apply_projection(
+    table_scan: fcore::client::TableScan,
+    projection: Option<ProjectionType>,
+) -> PyResult<fcore::client::TableScan> {
+    match projection {
+        Some(ProjectionType::Indices(indices)) => table_scan
+            .project(&indices)
+            .map_err(|e| FlussError::new_err(format!("Failed to project columns: {e}"))),
+        Some(ProjectionType::Names(names)) => {
+            let column_name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+            table_scan
+                .project_by_name(&column_name_refs)
+                .map_err(|e| FlussError::new_err(format!("Failed to project columns: {e}")))
+        }
+        None => Ok(table_scan),
+    }
+}
+
+/// Calculate projected schema and row type from projection indices
+fn calculate_projected_types(
+    table_info: &fcore::metadata::TableInfo,
+    projection_indices: Option<Vec<usize>>,
+) -> PyResult<(SchemaRef, fcore::metadata::RowType)> {
+    let full_schema = to_arrow_schema(table_info.get_row_type())
+        .map_err(|e| FlussError::new_err(format!("Failed to get arrow schema: {e}")))?;
+    let full_row_type = table_info.get_row_type();
+
+    match projection_indices {
+        Some(indices) => {
+            let arrow_fields: Vec<_> = indices
+                .iter()
+                .map(|&i| full_schema.field(i).clone())
+                .collect();
+            let row_fields: Vec<_> = indices
+                .iter()
+                .map(|&i| full_row_type.fields()[i].clone())
+                .collect();
+            Ok((
+                Arc::new(arrow_schema::Schema::new(arrow_fields)),
+                fcore::metadata::RowType::new(row_fields),
+            ))
+        }
+        None => Ok((full_schema, full_row_type.clone())),
+    }
+}
+
 #[pymethods]
 impl FlussTable {
+    /// Create a new table scan builder for configuring and creating log scanners.
+    ///
+    /// Use this method to create scanners with the builder pattern:
+    /// Returns:
+    ///     TableScan builder for configuring the scanner.
+    pub fn new_scan(&self) -> TableScan {
+        TableScan {
+            connection: self.connection.clone(),
+            metadata: self.metadata.clone(),
+            table_info: self.table_info.clone(),
+            projection: None,
+        }
+    }
+
     /// Create a new append writer for the table
     fn new_append_writer<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let conn = self.connection.clone();
@@ -77,41 +414,6 @@ impl FlussTable {
 
             Python::attach(|py| Py::new(py, py_writer))
         })
-    }
-
-    /// Create a new log scanner for the table.
-    ///
-    /// Args:
-    ///     project: Optional list of column indices (0-based) to include in the scan.
-    ///     columns: Optional list of column names to include in the scan.
-    ///
-    /// Returns:
-    ///     LogScanner, optionally with projection applied
-    ///
-    /// Note:
-    ///     Specify only one of 'project' or 'columns'.
-    ///     If neither is specified, all columns are included.
-    ///     Rust side will validate the projection parameters.
-    ///
-    #[pyo3(signature = (project=None, columns=None))]
-    pub fn new_log_scanner<'py>(
-        &self,
-        py: Python<'py>,
-        project: Option<Vec<usize>>,
-        columns: Option<Vec<String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let projection = match (project, columns) {
-            (Some(_), Some(_)) => {
-                return Err(FlussError::new_err(
-                    "Specify only one of 'project' or 'columns'".to_string(),
-                ));
-            }
-            (Some(indices), None) => Some(ProjectionType::Indices(indices)),
-            (None, Some(names)) => Some(ProjectionType::Names(names)),
-            (None, None) => None,
-        };
-
-        self.create_log_scanner_internal(py, projection)
     }
 
     /// Get table information
@@ -219,55 +521,6 @@ impl FlussTable {
             has_primary_key,
         }
     }
-
-    /// Internal helper to create log scanner with optional projection
-    fn create_log_scanner_internal<'py>(
-        &self,
-        py: Python<'py>,
-        projection: Option<ProjectionType>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
-
-        future_into_py(py, async move {
-            let fluss_table =
-                fcore::client::FlussTable::new(&conn, metadata.clone(), table_info.clone());
-
-            let mut table_scan = fluss_table.new_scan();
-
-            // Apply projection if specified
-            if let Some(proj) = projection {
-                table_scan = match proj {
-                    ProjectionType::Indices(indices) => {
-                        table_scan.project(&indices).map_err(|e| {
-                            FlussError::new_err(format!("Failed to project columns: {e}"))
-                        })?
-                    }
-                    ProjectionType::Names(names) => {
-                        // Convert Vec<String> to Vec<&str> for the API
-                        let column_name_refs: Vec<&str> =
-                            names.iter().map(|s| s.as_str()).collect();
-                        table_scan.project_by_name(&column_name_refs).map_err(|e| {
-                            FlussError::new_err(format!("Failed to project columns: {e}"))
-                        })?
-                    }
-                };
-            }
-
-            let rust_scanner = table_scan
-                .create_record_batch_log_scanner()
-                .map_err(|e| FlussError::new_err(format!("Failed to create log scanner: {e}")))?;
-
-            let admin = conn
-                .get_admin()
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            let py_scanner = LogScanner::from_core(rust_scanner, admin, table_info.clone());
-            Python::attach(|py| Py::new(py, py_scanner))
-        })
-    }
 }
 
 /// Writer for appending data to a Fluss table
@@ -295,7 +548,7 @@ impl AppendWriter {
     pub fn write_arrow_batch(&self, py: Python, batch: Py<PyAny>) -> PyResult<()> {
         // This shares the underlying Arrow buffers without copying data
         let batch_bound = batch.bind(py);
-        let rust_batch: RecordBatch = FromPyArrow::from_pyarrow_bound(batch_bound)
+        let rust_batch: ArrowRecordBatch = FromPyArrow::from_pyarrow_bound(batch_bound)
             .map_err(|e| FlussError::new_err(format!("Failed to convert RecordBatch: {e}")))?;
 
         let inner = self.inner.clone();
@@ -1303,12 +1556,23 @@ fn get_type_name(value: &Bound<PyAny>) -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-/// Scanner for reading log data from a Fluss table
+/// Scanner for reading log data from a Fluss table.
+///
+/// This scanner supports two modes:
+/// - Record-based scanning via `poll()` - returns individual records with metadata
+/// - Batch-based scanning via `poll_arrow()` / `poll_batches()` - returns Arrow batches
 #[pyclass]
 pub struct LogScanner {
-    inner: fcore::client::RecordBatchLogScanner,
+    /// Record-based scanner for poll()
+    inner: Option<fcore::client::LogScanner>,
+    /// Batch-based scanner for poll_arrow/poll_batches
+    inner_batch: Option<fcore::client::RecordBatchLogScanner>,
     admin: fcore::client::FlussAdmin,
     table_info: fcore::metadata::TableInfo,
+    /// The projected Arrow schema to use for empty table creation
+    projected_schema: SchemaRef,
+    /// The projected row type to use for record-based scanning
+    projected_row_type: fcore::metadata::RowType,
     #[allow(dead_code)]
     start_timestamp: Option<i64>,
     #[allow(dead_code)]
@@ -1338,19 +1602,40 @@ impl LogScanner {
         for bucket_id in 0..num_buckets {
             let start_offset = EARLIEST_OFFSET;
 
-            TOKIO_RUNTIME.block_on(async {
-                self.inner
-                    .subscribe(bucket_id, start_offset)
-                    .await
-                    .map_err(|e| FlussError::new_err(e.to_string()))
-            })?;
+            // Subscribe to the appropriate scanner
+            if let Some(ref inner) = self.inner {
+                TOKIO_RUNTIME.block_on(async {
+                    inner
+                        .subscribe(bucket_id, start_offset)
+                        .await
+                        .map_err(|e| FlussError::new_err(e.to_string()))
+                })?;
+            } else if let Some(ref inner_batch) = self.inner_batch {
+                TOKIO_RUNTIME.block_on(async {
+                    inner_batch
+                        .subscribe(bucket_id, start_offset)
+                        .await
+                        .map_err(|e| FlussError::new_err(e.to_string()))
+                })?;
+            } else {
+                return Err(FlussError::new_err("No scanner available"));
+            }
         }
 
         Ok(())
     }
 
     /// Convert all data to Arrow Table
+    ///
+    /// Note: Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
     fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
+            FlussError::new_err(
+                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
+                 that supports to_arrow().",
+            )
+        })?;
+
         let mut all_batches = Vec::new();
 
         let num_buckets = self.table_info.get_num_buckets();
@@ -1378,7 +1663,7 @@ impl LogScanner {
             let scan_batches = py
                 .detach(|| {
                     TOKIO_RUNTIME
-                        .block_on(async { self.inner.poll(Duration::from_millis(500)).await })
+                        .block_on(async { inner_batch.poll(Duration::from_millis(500)).await })
                 })
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
 
@@ -1439,18 +1724,74 @@ impl LogScanner {
         Ok(df)
     }
 
-    /// Poll for new records with the specified timeout
+    /// Poll for individual records with metadata.
     ///
     /// Args:
     ///     timeout_ms: Timeout in milliseconds to wait for records
     ///
     /// Returns:
-    ///     PyArrow Table containing the polled records
+    ///     List of ScanRecord objects, each containing bucket, offset, timestamp,
+    ///     change_type, and row data as a dictionary.
     ///
     /// Note:
-    ///     - Returns an empty table (with correct schema) if no records are available
-    ///     - When timeout expires, returns an empty table (NOT an error)
-    fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
+    ///     - Requires a record-based scanner (created with new_scan().create_log_scanner())
+    ///     - Returns an empty list if no records are available
+    ///     - When timeout expires, returns an empty list (NOT an error)
+    fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<ScanRecord>> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            FlussError::new_err(
+                "Record-based scanner not available. Use new_scan().create_log_scanner() to create a scanner \
+                 that supports poll().",
+            )
+        })?;
+
+        if timeout_ms < 0 {
+            return Err(FlussError::new_err(format!(
+                "timeout_ms must be non-negative, got: {timeout_ms}"
+            )));
+        }
+
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        let scan_records = py
+            .detach(|| TOKIO_RUNTIME.block_on(async { inner.poll(timeout).await }))
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+
+        // Convert ScanRecords to Python ScanRecord list
+        // Use projected_row_type to handle column projection correctly
+        let row_type = &self.projected_row_type;
+        let mut result = Vec::new();
+
+        for (bucket, records) in scan_records.into_records_by_buckets() {
+            for record in records {
+                let scan_record = ScanRecord::from_core(py, &bucket, &record, row_type)?;
+                result.push(scan_record);
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Poll for batches with metadata.
+    ///
+    /// Args:
+    ///     timeout_ms: Timeout in milliseconds to wait for batches
+    ///
+    /// Returns:
+    ///     List of RecordBatch objects, each containing the Arrow batch along with
+    ///     bucket, base_offset, and last_offset metadata.
+    ///
+    /// Note:
+    ///     - Requires a batch-based scanner (created with new_scan().create_batch_scanner())
+    ///     - Returns an empty list if no batches are available
+    ///     - When timeout expires, returns an empty list (NOT an error)
+    fn poll_batches(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<RecordBatch>> {
+        let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
+            FlussError::new_err(
+                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
+                 that supports poll_batches().",
+            )
+        })?;
+
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
                 "timeout_ms must be non-negative, got: {timeout_ms}"
@@ -1459,7 +1800,47 @@ impl LogScanner {
 
         let timeout = Duration::from_millis(timeout_ms as u64);
         let scan_batches = py
-            .detach(|| TOKIO_RUNTIME.block_on(async { self.inner.poll(timeout).await }))
+            .detach(|| TOKIO_RUNTIME.block_on(async { inner_batch.poll(timeout).await }))
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+
+        // Convert ScanBatch to RecordBatch with metadata
+        let result = scan_batches
+            .into_iter()
+            .map(RecordBatch::from_scan_batch)
+            .collect();
+
+        Ok(result)
+    }
+
+    /// Poll for new records as an Arrow Table.
+    ///
+    /// Args:
+    ///     timeout_ms: Timeout in milliseconds to wait for records
+    ///
+    /// Returns:
+    ///     PyArrow Table containing the polled records (batches merged)
+    ///
+    /// Note:
+    ///     - Requires a batch-based scanner (created with new_scan().create_batch_scanner())
+    ///     - Returns an empty table (with correct schema) if no records are available
+    ///     - When timeout expires, returns an empty table (NOT an error)
+    fn poll_arrow(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
+        let inner_batch = self.inner_batch.as_ref().ok_or_else(|| {
+            FlussError::new_err(
+                "Batch-based scanner not available. Use new_scan().create_batch_scanner() to create a scanner \
+                 that supports poll_arrow().",
+            )
+        })?;
+
+        if timeout_ms < 0 {
+            return Err(FlussError::new_err(format!(
+                "timeout_ms must be non-negative, got: {timeout_ms}"
+            )));
+        }
+
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        let scan_batches = py
+            .detach(|| TOKIO_RUNTIME.block_on(async { inner_batch.poll(timeout).await }))
             .map_err(|e| FlussError::new_err(e.to_string()))?;
 
         // Convert ScanBatch to Arrow batches
@@ -1475,11 +1856,11 @@ impl LogScanner {
         Utils::combine_batches_to_table(py, arrow_batches)
     }
 
-    /// Create an empty PyArrow table with the correct schema
+    /// Create an empty PyArrow table with the correct (projected) schema
     fn create_empty_table(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let arrow_schema = to_arrow_schema(self.table_info.get_row_type())
-            .map_err(|e| FlussError::new_err(format!("Failed to get arrow schema: {e}")))?;
-        let py_schema = arrow_schema
+        // Use the projected schema stored in the scanner
+        let py_schema = self
+            .projected_schema
             .as_ref()
             .to_pyarrow(py)
             .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
@@ -1498,16 +1879,41 @@ impl LogScanner {
 }
 
 impl LogScanner {
-    /// Create LogScanner from core RecordBatchLogScanner
-    pub fn from_core(
-        inner_scanner: fcore::client::RecordBatchLogScanner,
+    /// Create LogScanner for record-based scanning
+    pub fn from_log_scanner(
+        inner_scanner: fcore::client::LogScanner,
         admin: fcore::client::FlussAdmin,
         table_info: fcore::metadata::TableInfo,
+        projected_schema: SchemaRef,
+        projected_row_type: fcore::metadata::RowType,
     ) -> Self {
         Self {
-            inner: inner_scanner,
+            inner: Some(inner_scanner),
+            inner_batch: None,
             admin,
             table_info,
+            projected_schema,
+            projected_row_type,
+            start_timestamp: None,
+            end_timestamp: None,
+        }
+    }
+
+    /// Create LogScanner for batch-based scanning
+    pub fn from_batch_scanner(
+        inner_batch_scanner: fcore::client::RecordBatchLogScanner,
+        admin: fcore::client::FlussAdmin,
+        table_info: fcore::metadata::TableInfo,
+        projected_schema: SchemaRef,
+        projected_row_type: fcore::metadata::RowType,
+    ) -> Self {
+        Self {
+            inner: None,
+            inner_batch: Some(inner_batch_scanner),
+            admin,
+            table_info,
+            projected_schema,
+            projected_row_type,
             start_timestamp: None,
             end_timestamp: None,
         }

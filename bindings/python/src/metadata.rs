@@ -19,6 +19,57 @@ use crate::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 
+/// Represents the type of change for a record in a log
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeType {
+    /// Append-only operation
+    AppendOnly = 0,
+    /// Insert operation
+    Insert = 1,
+    /// Update operation containing the previous content of the updated row
+    UpdateBefore = 2,
+    /// Update operation containing the new content of the updated row
+    UpdateAfter = 3,
+    /// Delete operation
+    Delete = 4,
+}
+
+#[pymethods]
+impl ChangeType {
+    /// Returns a short string representation of this ChangeType
+    pub fn short_string(&self) -> &'static str {
+        match self {
+            ChangeType::AppendOnly => "+A",
+            ChangeType::Insert => "+I",
+            ChangeType::UpdateBefore => "-U",
+            ChangeType::UpdateAfter => "+U",
+            ChangeType::Delete => "-D",
+        }
+    }
+
+    fn __str__(&self) -> &'static str {
+        self.short_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ChangeType.{:?}", self)
+    }
+}
+
+impl ChangeType {
+    /// Convert from core ChangeType
+    pub fn from_core(change_type: fcore::record::ChangeType) -> Self {
+        match change_type {
+            fcore::record::ChangeType::AppendOnly => ChangeType::AppendOnly,
+            fcore::record::ChangeType::Insert => ChangeType::Insert,
+            fcore::record::ChangeType::UpdateBefore => ChangeType::UpdateBefore,
+            fcore::record::ChangeType::UpdateAfter => ChangeType::UpdateAfter,
+            fcore::record::ChangeType::Delete => ChangeType::Delete,
+        }
+    }
+}
+
 /// Represents a table path with database and table name
 #[pyclass]
 #[derive(Clone)]
