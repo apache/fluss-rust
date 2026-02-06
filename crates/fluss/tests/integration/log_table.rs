@@ -1160,6 +1160,64 @@ mod table_test {
             "Data mismatch between sent and received"
         );
 
+        // Test unsubscribe_partition: after unsubscribing from one partition,
+        // data from that partition should no longer be read.
+        let log_scanner_unsub = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner for unsubscribe test");
+        let partition_infos = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partition infos");
+        let eu_partition_id = partition_infos
+            .iter()
+            .find(|p| p.get_partition_name() == "EU")
+            .map(|p| p.get_partition_id())
+            .expect("EU partition should exist");
+        for info in &partition_infos {
+            log_scanner_unsub
+                .subscribe_partition(info.get_partition_id(), 0, 0)
+                .await
+                .expect("Failed to subscribe to partition");
+        }
+        log_scanner_unsub
+            .unsubscribe_partition(eu_partition_id, 0)
+            .await
+            .expect("Failed to unsubscribe from EU partition");
+
+        let mut records_after_unsubscribe: Vec<(i32, String, i64)> = Vec::new();
+        let unsub_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while records_after_unsubscribe.len() < 4 && std::time::Instant::now() < unsub_deadline {
+            let records = log_scanner_unsub
+                .poll(Duration::from_millis(300))
+                .await
+                .expect("Failed to poll after unsubscribe");
+            for rec in records {
+                let row = rec.row();
+                records_after_unsubscribe.push((
+                    row.get_int(0),
+                    row.get_string(1).to_string(),
+                    row.get_long(2),
+                ));
+            }
+        }
+
+        assert!(
+            records_after_unsubscribe.iter().all(|r| r.1 == "US"),
+            "After unsubscribe_partition(EU), only US partition data should be read; got regions: {:?}",
+            records_after_unsubscribe
+                .iter()
+                .map(|r| r.1.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            records_after_unsubscribe.len(),
+            4,
+            "Should receive exactly 4 US records (ids 1,2,5,6); got {}",
+            records_after_unsubscribe.len()
+        );
+
         admin
             .drop_table(&table_path, false)
             .await

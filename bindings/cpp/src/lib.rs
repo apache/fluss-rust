@@ -255,6 +255,8 @@ mod ffi {
             bucket_id: i32,
             start_offset: i64,
         ) -> FfiResult;
+        fn unsubscribe_partition(self: &LogScanner, partition_id: i64, bucket_id: i32)
+        -> FfiResult;
         fn poll(self: &LogScanner, timeout_ms: i64) -> FfiScanRecordsResult;
         fn poll_record_batch(self: &LogScanner, timeout_ms: i64) -> FfiArrowRecordBatchesResult;
         fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize);
@@ -823,6 +825,28 @@ impl LogScanner {
         start_offset: i64,
     ) -> ffi::FfiResult {
         self.do_subscribe(Some(partition_id), bucket_id, start_offset)
+    }
+
+    fn unsubscribe_partition(&self, partition_id: PartitionId, bucket_id: i32) -> ffi::FfiResult {
+        if let Some(ref inner) = self.inner {
+            match RUNTIME
+                .block_on(async { inner.unsubscribe_partition(partition_id, bucket_id).await })
+            {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else if let Some(ref inner_batch) = self.inner_batch {
+            match RUNTIME.block_on(async {
+                inner_batch
+                    .unsubscribe_partition(partition_id, bucket_id)
+                    .await
+            }) {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else {
+            err_result(1, "LogScanner not initialized".to_string())
+        }
     }
 
     fn poll(&self, timeout_ms: i64) -> ffi::FfiScanRecordsResult {
