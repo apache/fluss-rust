@@ -175,6 +175,16 @@ mod ffi {
         lake_snapshot: FfiLakeSnapshot,
     }
 
+    struct FfiPartitionInfo {
+        partition_id: i64,
+        partition_name: String,
+    }
+
+    struct FfiListPartitionInfosResult {
+        result: FfiResult,
+        partition_infos: Vec<FfiPartitionInfo>,
+    }
+
     extern "Rust" {
         type Connection;
         type Admin;
@@ -219,6 +229,10 @@ mod ffi {
             bucket_ids: Vec<i32>,
             offset_query: &FfiOffsetQuery,
         ) -> FfiListOffsetsResult;
+        fn list_partition_infos(
+            self: &Admin,
+            table_path: &FfiTablePath,
+        ) -> FfiListPartitionInfosResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
@@ -550,6 +564,36 @@ impl Admin {
         offset_query: &ffi::FfiOffsetQuery,
     ) -> ffi::FfiListOffsetsResult {
         self.do_list_offsets(table_path, Some(&partition_name), bucket_ids, offset_query)
+    }
+
+    fn list_partition_infos(
+        &self,
+        table_path: &ffi::FfiTablePath,
+    ) -> ffi::FfiListPartitionInfosResult {
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+        let result = RUNTIME.block_on(async { self.inner.list_partition_infos(&path).await });
+        match result {
+            Ok(infos) => {
+                let partition_infos: Vec<ffi::FfiPartitionInfo> = infos
+                    .into_iter()
+                    .map(|info| ffi::FfiPartitionInfo {
+                        partition_id: info.get_partition_id(),
+                        partition_name: info.get_partition_name(),
+                    })
+                    .collect();
+                ffi::FfiListPartitionInfosResult {
+                    result: ok_result(),
+                    partition_infos,
+                }
+            }
+            Err(e) => ffi::FfiListPartitionInfosResult {
+                result: err_result(1, e.to_string()),
+                partition_infos: vec![],
+            },
+        }
     }
 }
 

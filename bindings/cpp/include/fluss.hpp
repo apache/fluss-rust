@@ -403,6 +403,11 @@ struct LakeSnapshot {
     std::vector<BucketOffset> bucket_offsets;
 };
 
+struct PartitionInfo {
+    int64_t partition_id;
+    std::string partition_name;
+};
+
 class AppendWriter;
 class LogScanner;
 class Admin;
@@ -463,6 +468,9 @@ public:
                               const std::vector<int32_t>& bucket_ids,
                               const OffsetQuery& offset_query,
                               std::unordered_map<int32_t, int64_t>& out);
+
+    Result ListPartitionInfos(const TablePath& table_path,
+                             std::vector<PartitionInfo>& out);
 
 private:
     Result DoListOffsets(const TablePath& table_path,

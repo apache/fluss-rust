@@ -162,4 +162,25 @@ Result Admin::ListPartitionOffsets(const TablePath& table_path,
     return DoListOffsets(table_path, bucket_ids, offset_query, out, &partition_name);
 }
 
+Result Admin::ListPartitionInfos(const TablePath& table_path,
+                                 std::vector<PartitionInfo>& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_path = utils::to_ffi_table_path(table_path);
+    auto ffi_result = admin_->list_partition_infos(ffi_path);
+
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.clear();
+        out.reserve(ffi_result.partition_infos.size());
+        for (const auto& pi : ffi_result.partition_infos) {
+            out.push_back({pi.partition_id, std::string(pi.partition_name)});
+        }
+    }
+
+    return result;
+}
+
 }  // namespace fluss
