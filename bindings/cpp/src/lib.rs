@@ -51,6 +51,8 @@ mod ffi {
         name: String,
         data_type: i32,
         comment: String,
+        precision: i32,
+        scale: i32,
     }
 
     struct FfiSchema {
@@ -98,6 +100,10 @@ mod ffi {
         f64_val: f64,
         string_val: String,
         bytes_val: Vec<u8>,
+        decimal_precision: i32,
+        decimal_scale: i32,
+        i128_hi: i64,
+        i128_lo: i64,
     }
 
     struct FfiGenericRow {
@@ -301,6 +307,7 @@ pub struct Table {
 
 pub struct AppendWriter {
     inner: fcore::client::AppendWriter,
+    table_info: fcore::metadata::TableInfo,
 }
 
 pub struct WriteResult {
@@ -636,7 +643,10 @@ impl Table {
             Ok(w) => w,
             Err(e) => return Err(format!("Failed to create writer: {e}")),
         };
-        let writer = Box::into_raw(Box::new(AppendWriter { inner: writer }));
+        let writer = Box::into_raw(Box::new(AppendWriter {
+            inner: writer,
+            table_info: self.table_info.clone(),
+        }));
         Ok(writer)
     }
 
@@ -792,7 +802,9 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
 
 impl AppendWriter {
     fn append(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
-        let generic_row = types::ffi_row_to_core(row);
+        let schema = self.table_info.get_schema();
+        let generic_row = types::ffi_row_to_core(row, Some(schema))
+            .map_err(|e| e.to_string())?;
 
         let result_future = self
             .inner
