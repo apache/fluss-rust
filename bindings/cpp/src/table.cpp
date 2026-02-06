@@ -22,11 +22,44 @@
 #include "ffi_converter.hpp"
 #include "rust/cxx.h"
 #include <arrow/c/bridge.h>
+#include <ctime>
 // todo:  bindings/cpp/BUILD.bazel still doesn’t declare Arrow include/link dependencies.
 // In environments where Bazel does not already have Arrow available, this will fail at compile/link time.
 #include <arrow/record_batch.h>
 
 namespace fluss {
+
+static constexpr int kSecondsPerDay = 24 * 60 * 60;
+
+Date Date::FromYMD(int year, int month, int day) {
+    std::tm tm{};
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    std::time_t epoch_seconds = timegm(&tm);
+    return {static_cast<int32_t>(epoch_seconds / kSecondsPerDay)};
+}
+
+int Date::Year() const {
+    std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
+    std::tm tm{};
+    gmtime_r(&epoch_seconds, &tm);
+    return tm.tm_year + 1900;
+}
+
+int Date::Month() const {
+    std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
+    std::tm tm{};
+    gmtime_r(&epoch_seconds, &tm);
+    return tm.tm_mon + 1;
+}
+
+int Date::Day() const {
+    std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
+    std::tm tm{};
+    gmtime_r(&epoch_seconds, &tm);
+    return tm.tm_mday;
+}
 
 Table::Table() noexcept = default;
 

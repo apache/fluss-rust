@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -39,6 +40,64 @@ namespace ffi {
     struct AppendWriter;
     struct LogScanner;
 }  // namespace ffi
+
+struct Date {
+    int32_t days_since_epoch{0};
+
+    static Date FromDays(int32_t days) { return {days}; }
+    static Date FromYMD(int year, int month, int day);
+
+    int Year() const;
+    int Month() const;
+    int Day() const;
+};
+
+struct Time {
+    static constexpr int32_t kMillisPerSecond = 1000;
+    static constexpr int32_t kMillisPerMinute = 60 * kMillisPerSecond;
+    static constexpr int32_t kMillisPerHour = 60 * kMillisPerMinute;
+
+    int32_t millis_since_midnight{0};
+
+    static Time FromMillis(int32_t ms) { return {ms}; }
+    static Time FromHMS(int hour, int minute, int second, int millis = 0) {
+        return {hour * kMillisPerHour + minute * kMillisPerMinute +
+                second * kMillisPerSecond + millis};
+    }
+
+    int Hour() const { return millis_since_midnight / kMillisPerHour; }
+    int Minute() const { return (millis_since_midnight % kMillisPerHour) / kMillisPerMinute; }
+    int Second() const { return (millis_since_midnight % kMillisPerMinute) / kMillisPerSecond; }
+    int Millis() const { return millis_since_midnight % kMillisPerSecond; }
+};
+
+struct Timestamp {
+    static constexpr int32_t kMaxNanoOfMillisecond = 999999;
+    static constexpr int64_t kNanosPerMilli = 1000000;
+
+    int64_t epoch_millis{0};
+    int32_t nano_of_millisecond{0};
+
+    static Timestamp FromMillis(int64_t ms) { return {ms, 0}; }
+    static Timestamp FromMillisNanos(int64_t ms, int32_t nanos) {
+        if (nanos < 0) nanos = 0;
+        if (nanos > kMaxNanoOfMillisecond) nanos = kMaxNanoOfMillisecond;
+        return {ms, nanos};
+    }
+    static Timestamp FromTimePoint(std::chrono::system_clock::time_point tp) {
+        auto duration = tp.time_since_epoch();
+        auto ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(duration)
+                .count();
+        auto ms = ns / kNanosPerMilli;
+        auto nano_of_ms = static_cast<int32_t>(ns % kNanosPerMilli);
+        if (nano_of_ms < 0) {
+            nano_of_ms += kNanosPerMilli;
+            ms -= 1;
+        }
+        return {ms, nano_of_ms};
+    }
+};
 
 enum class DataType {
     Boolean = 1,
@@ -65,6 +124,11 @@ enum class DatumType {
     Float64 = 5,
     String = 6,
     Bytes = 7,
+    // 8-10 reserved for decimal types
+    Date = 11,
+    Time = 12,
+    TimestampNtz = 13,
+    TimestampLtz = 14,
 };
 
 constexpr int64_t EARLIEST_OFFSET = -2;
@@ -269,6 +333,36 @@ struct Datum {
         d.bytes_val = std::move(v);
         return d;
     }
+    static Datum Date(fluss::Date d) {
+        Datum dat;
+        dat.type = DatumType::Date;
+        dat.i32_val = d.days_since_epoch;
+        return dat;
+    }
+    static Datum Time(fluss::Time t) {
+        Datum dat;
+        dat.type = DatumType::Time;
+        dat.i32_val = t.millis_since_midnight;
+        return dat;
+    }
+    static Datum TimestampNtz(fluss::Timestamp ts) {
+        Datum dat;
+        dat.type = DatumType::TimestampNtz;
+        dat.i64_val = ts.epoch_millis;
+        dat.i32_val = ts.nano_of_millisecond;
+        return dat;
+    }
+    static Datum TimestampLtz(fluss::Timestamp ts) {
+        Datum dat;
+        dat.type = DatumType::TimestampLtz;
+        dat.i64_val = ts.epoch_millis;
+        dat.i32_val = ts.nano_of_millisecond;
+        return dat;
+    }
+
+    fluss::Date GetDate() const { return {i32_val}; }
+    fluss::Time GetTime() const { return {i32_val}; }
+    fluss::Timestamp GetTimestamp() const { return {i64_val, i32_val}; }
 };
 
 struct GenericRow {
@@ -312,6 +406,26 @@ struct GenericRow {
     void SetBytes(size_t idx, std::vector<uint8_t> v) {
         EnsureSize(idx);
         fields[idx] = Datum::Bytes(std::move(v));
+    }
+
+    void SetDate(size_t idx, fluss::Date d) {
+        EnsureSize(idx);
+        fields[idx] = Datum::Date(d);
+    }
+
+    void SetTime(size_t idx, fluss::Time t) {
+        EnsureSize(idx);
+        fields[idx] = Datum::Time(t);
+    }
+
+    void SetTimestampNtz(size_t idx, fluss::Timestamp ts) {
+        EnsureSize(idx);
+        fields[idx] = Datum::TimestampNtz(ts);
+    }
+
+    void SetTimestampLtz(size_t idx, fluss::Timestamp ts) {
+        EnsureSize(idx);
+        fields[idx] = Datum::TimestampLtz(ts);
     }
 
 private:
