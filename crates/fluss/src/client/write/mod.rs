@@ -205,8 +205,8 @@ impl ResultHandle {
 /// A future that represents a pending write operation.
 ///
 /// This type implements [`Future`], allowing users to either:
-/// 1. Await immediately to block on acknowledgment: `writer.upsert(&row).await?.await?`
-/// 2. Fire-and-forget with later flush: `writer.upsert(&row).await?; writer.flush().await?`
+/// 1. Await immediately to block on acknowledgment: `writer.upsert(&row)?.await?`
+/// 2. Fire-and-forget with later flush: `writer.upsert(&row)?; writer.flush().await?`
 ///
 /// This pattern is similar to rdkafka's `DeliveryFuture` and allows for efficient batching
 /// when users don't need immediate per-record acknowledgment.

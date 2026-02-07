@@ -62,7 +62,7 @@ pub async fn main() -> Result<()> {
         row.set_field(0, id);
         row.set_field(1, name);
         row.set_field(2, age);
-        upsert_writer.upsert(&row).await?;
+        upsert_writer.upsert(&row)?;
         println!("Upserted: {row:?}");
     }
     upsert_writer.flush().await?;
@@ -85,7 +85,7 @@ pub async fn main() -> Result<()> {
     row.set_field(0, 1);
     row.set_field(1, "Verso");
     row.set_field(2, 33i64);
-    upsert_writer.upsert(&row).await?.await?;
+    upsert_writer.upsert(&row)?.await?;
     println!("Updated: {row:?}");
 
     let result = lookuper.lookup(&make_key(1)).await?;
@@ -100,7 +100,7 @@ pub async fn main() -> Result<()> {
     // For delete, only primary key field needs to be set; other fields can remain null
     let mut row = GenericRow::new(3);
     row.set_field(0, 2);
-    upsert_writer.delete(&row).await?.await?;
+    upsert_writer.delete(&row)?.await?;
     println!("Deleted row with id=2");
 
     let result = lookuper.lookup(&make_key(2)).await?;

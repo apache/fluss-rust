@@ -148,11 +148,10 @@ mod table_remote_scan_test {
             row.set_field(0, i as i32);
             let v = format!("v{}", i);
             row.set_field(1, v.as_str());
-            append_writer
-                .append(&row)
-                .await
-                .expect("Failed to append row");
+            append_writer.append(&row).expect("Failed to append row");
         }
+
+        append_writer.flush().await.expect("Failed to flush");
 
         // Create a log scanner and subscribe to all buckets to read appended records
         let num_buckets = table.table_info().get_num_buckets();

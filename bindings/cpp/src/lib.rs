@@ -761,8 +761,9 @@ impl AppendWriter {
     fn append(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
         let generic_row = types::ffi_row_to_core(row);
 
-        let result_future = RUNTIME
-            .block_on(async { self.inner.append(&generic_row).await })
+        let result_future = self
+            .inner
+            .append(&generic_row)
             .map_err(|e| format!("Failed to append: {e}"))?;
 
         Ok(Box::new(WriteResult {
@@ -789,7 +790,7 @@ impl WriteResult {
                 Err(e) => err_result(1, e.to_string()),
             }
         } else {
-            ok_result()
+            err_result(1, "WriteResult already consumed".to_string())
         }
     }
 }

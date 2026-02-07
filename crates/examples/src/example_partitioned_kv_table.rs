@@ -74,7 +74,7 @@ pub async fn main() -> Result<()> {
         row.set_field(1, region);
         row.set_field(2, zone);
         row.set_field(3, score);
-        upsert_writer.upsert(&row).await?;
+        upsert_writer.upsert(&row)?;
         println!("Upserted: {row:?}");
     }
     upsert_writer.flush().await?;
@@ -102,7 +102,7 @@ pub async fn main() -> Result<()> {
     row.set_field(1, "APAC");
     row.set_field(2, 1i64);
     row.set_field(3, 4321i64);
-    upsert_writer.upsert(&row).await?.await?;
+    upsert_writer.upsert(&row)?.await?;
     println!("Updated: {row:?}");
 
     let result = lookuper.lookup(&make_key(1001, "APAC", 1)).await?;
@@ -118,7 +118,7 @@ pub async fn main() -> Result<()> {
     row.set_field(0, 1002);
     row.set_field(1, "EMEA");
     row.set_field(2, 2i64);
-    upsert_writer.delete(&row).await?.await?;
+    upsert_writer.delete(&row)?.await?;
     println!("Deleted: {row:?}");
 
     let result = lookuper.lookup(&make_key(1002, "EMEA", 2)).await?;

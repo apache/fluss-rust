@@ -25,11 +25,11 @@ use crate::metadata::{PhysicalTablePath, TableBucket};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicI64, Ordering};
-use tokio::sync::Mutex;
 
 // Type alias to simplify complex nested types
 type BucketBatches = Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>;
@@ -144,7 +144,7 @@ impl RecordAccumulator {
         ))
     }
 
-    pub async fn append(
+    pub fn append(
         &self,
         record: &WriteRecord<'_>,
         bucket_id: BucketId,
@@ -180,7 +180,7 @@ impl RecordAccumulator {
                 .clone()
         };
 
-        let mut dq_guard = dq.lock().await;
+        let mut dq_guard = dq.lock();
         if let Some(append_result) = self.try_append(record, &mut dq_guard)? {
             return Ok(append_result);
         }
@@ -193,7 +193,7 @@ impl RecordAccumulator {
         self.append_new_batch(cluster, record, &mut dq_guard)
     }
 
-    pub async fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
+    pub fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
         // Snapshot just the Arcs we need, avoiding cloning the entire BucketAndWriteBatches struct
         let entries: Vec<(Arc<PhysicalTablePath>, Option<PartitionId>, BucketBatches)> = self
             .write_batches
@@ -216,18 +216,16 @@ impl RecordAccumulator {
         let mut unknown_leader_tables = HashSet::new();
 
         for (physical_table_path, mut partition_id, bucket_batches) in entries {
-            next_ready_check_delay_ms = self
-                .bucket_ready(
-                    &physical_table_path,
-                    physical_table_path.get_partition_name().is_some(),
-                    &mut partition_id,
-                    bucket_batches,
-                    &mut ready_nodes,
-                    &mut unknown_leader_tables,
-                    cluster,
-                    next_ready_check_delay_ms,
-                )
-                .await?
+            next_ready_check_delay_ms = self.bucket_ready(
+                &physical_table_path,
+                physical_table_path.get_partition_name().is_some(),
+                &mut partition_id,
+                bucket_batches,
+                &mut ready_nodes,
+                &mut unknown_leader_tables,
+                cluster,
+                next_ready_check_delay_ms,
+            )?
         }
 
         Ok(ReadyCheckResult {
@@ -238,7 +236,7 @@ impl RecordAccumulator {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn bucket_ready(
+    fn bucket_ready(
         &self,
         physical_table_path: &Arc<PhysicalTablePath>,
         is_partitioned_table: bool,
@@ -274,7 +272,7 @@ impl RecordAccumulator {
         }
 
         for (bucket_id, batch) in bucket_batches {
-            let batch_guard = batch.lock().await;
+            let batch_guard = batch.lock();
             if batch_guard.is_empty() {
                 continue;
             }
@@ -316,7 +314,7 @@ impl RecordAccumulator {
         next_ready_check_delay_ms
     }
 
-    pub async fn drain(
+    pub fn drain(
         &self,
         cluster: Arc<Cluster>,
         nodes: &HashSet<ServerNode>,
@@ -327,9 +325,7 @@ impl RecordAccumulator {
         }
         let mut batches = HashMap::new();
         for node in nodes {
-            let ready = self
-                .drain_batches_for_one_node(&cluster, node, max_size)
-                .await?;
+            let ready = self.drain_batches_for_one_node(&cluster, node, max_size)?;
             if !ready.is_empty() {
                 batches.insert(node.id(), ready);
             }
@@ -338,7 +334,7 @@ impl RecordAccumulator {
         Ok(batches)
     }
 
-    async fn drain_batches_for_one_node(
+    fn drain_batches_for_one_node(
         &self,
         cluster: &Cluster,
         node: &ServerNode,
@@ -352,15 +348,13 @@ impl RecordAccumulator {
             return Ok(ready);
         }
 
-        // Get the start index without holding the lock across awaits
         let start = {
-            let mut nodes_drain_index_guard = self.nodes_drain_index.lock().await;
+            let mut nodes_drain_index_guard = self.nodes_drain_index.lock();
             let drain_index = nodes_drain_index_guard.entry(node.id()).or_insert(0);
             *drain_index % buckets.len()
         };
 
         let mut current_index = start;
-        // Assigned at the start of each loop iteration (line 323), used after loop (line 376)
         let mut last_processed_index;
 
         loop {
@@ -383,7 +377,7 @@ impl RecordAccumulator {
             if let Some(deque) = deque {
                 let mut maybe_batch = None;
                 {
-                    let mut batch_lock = deque.lock().await;
+                    let mut batch_lock = deque.lock();
                     if !batch_lock.is_empty() {
                         let first_batch = batch_lock.front().unwrap();
 
@@ -419,7 +413,7 @@ impl RecordAccumulator {
 
         // Store the last processed index to maintain round-robin fairness
         {
-            let mut nodes_drain_index_guard = self.nodes_drain_index.lock().await;
+            let mut nodes_drain_index_guard = self.nodes_drain_index.lock();
             nodes_drain_index_guard.insert(node.id(), last_processed_index);
         }
 
@@ -430,7 +424,7 @@ impl RecordAccumulator {
         self.incomplete_batches.write().remove(&batch_id);
     }
 
-    pub async fn re_enqueue(&self, ready_write_batch: ReadyWriteBatch) {
+    pub fn re_enqueue(&self, ready_write_batch: ReadyWriteBatch) {
         ready_write_batch.write_batch.re_enqueued();
         let physical_table_path = ready_write_batch.write_batch.physical_table_path();
         let bucket_id = ready_write_batch.table_bucket.bucket_id();
@@ -456,7 +450,7 @@ impl RecordAccumulator {
                 .clone()
         };
 
-        let mut dq_guard = dq.lock().await;
+        let mut dq_guard = dq.lock();
         dq_guard.push_front(ready_write_batch.write_batch);
     }
 
@@ -604,20 +598,18 @@ mod tests {
         };
         let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
 
-        accumulator.append(&record, 0, &cluster, false).await?;
+        accumulator.append(&record, 0, &cluster, false)?;
 
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
-        let mut batches = accumulator
-            .drain(cluster.clone(), &nodes, 1024 * 1024)
-            .await?;
+        let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
         let mut drained = batches.remove(&1).expect("drained batches");
         let batch = drained.pop().expect("batch");
         assert_eq!(batch.write_batch.attempts(), 0);
 
-        accumulator.re_enqueue(batch).await;
+        accumulator.re_enqueue(batch);
 
-        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024).await?;
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
         let mut drained = batches.remove(&1).expect("drained batches");
         let batch = drained.pop().expect("batch");
         assert_eq!(batch.write_batch.attempts(), 1);
