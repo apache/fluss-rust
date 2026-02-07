@@ -60,7 +60,7 @@ Before your first release, perform one-time configuration. See **[Release Manage
 
 ### 1. Install Rust (and optional: just)
 
-The release script (`just release` or `./scripts/release.sh`) uses `git archive` and `gpg`; building or verifying the project locally requires **Rust**. Install the [Rust toolchain](https://rustup.rs/) (the version should match [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml) in the repo).
+The release script (`just release` or `./scripts/release.sh`) uses `git archive` and `gpg`; building or verifying the project locally requires **Rust**. Install the [Rust toolchain](https://rustup.rs/) (the version should match [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml) in the repo). The dependency list script (`scripts/dependencies.py`) requires **Python 3.11+**.
 
 ```bash
 rustc --version
@@ -108,7 +108,7 @@ For the **first release** there is no previous version; leave `LAST_VERSION` uns
 Do this on `main` **before** creating the release branch. Then both the release branch (when created from `main`) and `main` will have the same dependency list.
 
 1. Download and set up [cargo-deny](https://embarkstudios.github.io/cargo-deny/cli/index.html) (see cargo-deny docs).
-2. Run the script to update the dependency list, then commit on `main`:
+2. Run the script to update the dependency list (requires **Python 3.11+** for the release tooling), then commit on `main`:
 
 ```bash
 git checkout main
@@ -168,6 +168,7 @@ You can open a pull request in the **Apache Fluss** repository for the release b
 **Checklist to proceed to the next step**
 
 - [ ] Rust (and optionally just) installed and on PATH
+- [ ] Python 3.11+ for dependency list script
 - [ ] No release-blocking issues (or triaged)
 - [ ] Environment variables set
 - [ ] Release branch created and pushed
@@ -395,7 +396,7 @@ Add an entry for `$RELEASE_VERSION` with the list of changes (use [Generate Rele
 
 ### Merge website PRs
 
-Merge the pull requests for the release blog and download page that were created in [Prepare for the release](#9-optional-create-prs-for-release-blog-and-download-page).
+Merge the pull requests for the release blog and download page that were created in [Prepare for the release](#10-optional-create-prs-for-release-blog-and-download-page).
 
 ### Announce the release
 

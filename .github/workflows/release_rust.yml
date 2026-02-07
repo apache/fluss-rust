@@ -27,7 +27,7 @@ name: Release Rust
 on:
   push:
     tags:
-      - "*"
+      - "v*"  # Only version-like tags (e.g. v0.1.0, v0.1.0-rc1); avoids running on arbitrary tags
 
 jobs:
   publish:
@@ -37,6 +37,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/verify-tag-version
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler

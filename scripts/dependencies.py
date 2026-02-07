@@ -15,6 +15,16 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
+# Release tooling: requires Python 3.11+ (constants.py uses tomllib).
+
+import sys
+
+if sys.version_info < (3, 11):
+    sys.exit(
+        "This script requires Python 3.11 or newer (uses tomllib). "
+        f"Current: {sys.version}. Use python3.11+ or see docs for release requirements."
+    )
 
 import subprocess
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter

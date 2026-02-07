@@ -25,6 +25,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 def list_packages():
     """Package directories from [workspace].members in root Cargo.toml, plus workspace root.
     Each gets a DEPENDENCIES.rust.tsv. Avoids scanning target/, .git/, etc.
+    Requires Python 3.11+ (tomllib).
     """
     root_cargo = ROOT_DIR / "Cargo.toml"
     if not root_cargo.exists():
