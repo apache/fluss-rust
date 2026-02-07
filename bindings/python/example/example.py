@@ -184,7 +184,7 @@ async def main():
         # Test 3: Append single rows with Date, Time, Timestamp, Decimal
         print("\n--- Testing single row append with temporal/decimal types ---")
         # Dict input with all types including Date, Time, Timestamp, Decimal
-        await append_writer.append(
+        append_writer.append(
             {
                 "id": 8,
                 "name": "Helen",
@@ -200,7 +200,7 @@ async def main():
         print("Successfully appended row (dict with Date, Time, Timestamp, Decimal)")
 
         # List input with all types
-        await append_writer.append(
+        append_writer.append(
             [
                 9,
                 "Ivan",
@@ -242,7 +242,7 @@ async def main():
 
         # Flush all pending data
         print("\n--- Flushing data ---")
-        append_writer.flush()
+        await append_writer.flush()
         print("Successfully flushed data")
 
         # Demo: Check offsets after writes
@@ -422,9 +422,9 @@ async def main():
         upsert_writer = pk_table.new_upsert()
         print(f"Created upsert writer: {upsert_writer}")
 
-        # Fire-and-forget: queue writes without waiting for individual acks.
+        # Fire-and-forget: queue writes synchronously, flush at end.
         # Records are batched internally for efficiency.
-        await upsert_writer.upsert(
+        upsert_writer.upsert(
             {
                 "user_id": 1,
                 "name": "Alice",
@@ -441,7 +441,7 @@ async def main():
         )
         print("Queued user_id=1 (Alice)")
 
-        await upsert_writer.upsert(
+        upsert_writer.upsert(
             {
                 "user_id": 2,
                 "name": "Bob",
@@ -456,7 +456,7 @@ async def main():
         )
         print("Queued user_id=2 (Bob)")
 
-        await upsert_writer.upsert(
+        upsert_writer.upsert(
             {
                 "user_id": 3,
                 "name": "Charlie",
@@ -479,7 +479,7 @@ async def main():
         # the server confirms this specific write, useful when you need to
         # read-after-write or verify critical updates.
         print("\n--- Testing Upsert (per-record acknowledgment) ---")
-        ack = await upsert_writer.upsert(
+        handle = upsert_writer.upsert(
             {
                 "user_id": 1,
                 "name": "Alice Updated",
@@ -494,7 +494,7 @@ async def main():
                 "balance": Decimal("2345.67"),
             }
         )
-        await ack  # wait for server acknowledgment before proceeding
+        await handle.wait()  # wait for server acknowledgment
         print("Updated user_id=1 (Alice -> Alice Updated) — server acknowledged")
 
     except Exception as e:
@@ -554,9 +554,8 @@ async def main():
     try:
         upsert_writer = pk_table.new_upsert()
 
-        # Per-record ack for delete — await the handle to confirm deletion
-        ack = await upsert_writer.delete({"user_id": 3})
-        await ack
+        handle = upsert_writer.delete({"user_id": 3})
+        await handle.wait()
         print("Deleted user_id=3 — server acknowledged")
 
         lookuper = pk_table.new_lookup()
@@ -670,12 +669,12 @@ async def main():
         partitioned_writer = await partitioned_table.new_append_writer()
 
         # Append data to US partition
-        await partitioned_writer.append({"id": 1, "region": "US", "value": 100})
-        await partitioned_writer.append({"id": 2, "region": "US", "value": 200})
+        partitioned_writer.append({"id": 1, "region": "US", "value": 100})
+        partitioned_writer.append({"id": 2, "region": "US", "value": 200})
         # Append data to EU partition
-        await partitioned_writer.append({"id": 3, "region": "EU", "value": 300})
-        await partitioned_writer.append({"id": 4, "region": "EU", "value": 400})
-        partitioned_writer.flush()
+        partitioned_writer.append({"id": 3, "region": "EU", "value": 300})
+        partitioned_writer.append({"id": 4, "region": "EU", "value": 400})
+        await partitioned_writer.flush()
         print("\nWrote 4 records (2 to US, 2 to EU)")
 
         # Demo: list_partition_offsets

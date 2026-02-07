@@ -18,26 +18,24 @@
 use crate::table::{python_pk_to_generic_row, python_to_generic_row};
 use crate::*;
 use pyo3_async_runtimes::tokio::future_into_py;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Writer for upserting and deleting data in a Fluss primary key table.
 ///
-/// Each upsert/delete operation queues the write and returns a coroutine
-/// that can be awaited for per-record acknowledgment, or ignored for
-/// fire-and-forget semantics (call `flush()` to ensure delivery).
+/// Each upsert/delete operation synchronously queues the write. Call `flush()`
+/// to ensure all queued writes are delivered to the server.
 ///
 /// # Example:
 ///     writer = table.new_upsert()
 ///
-///     # Fire-and-forget with flush
-///     await writer.upsert(row1)
-///     await writer.upsert(row2)
+///     # Fire-and-forget — ignore the returned handle
+///     writer.upsert(row1)
+///     writer.upsert(row2)
 ///     await writer.flush()
 ///
-///     # Or await individual acknowledgment
-///     ack = await writer.upsert(row3)
-///     await ack
+///     # Per-record ack — call wait() on the handle
+///     handle = writer.upsert(critical_row)
+///     await handle.wait()
 #[pyclass]
 pub struct UpsertWriter {
     inner: Arc<UpsertWriterInner>,
@@ -46,7 +44,7 @@ pub struct UpsertWriter {
 struct UpsertWriterInner {
     table_upsert: fcore::client::TableUpsert,
     /// Lazily initialized writer - created on first write operation
-    writer: Mutex<Option<fcore::client::UpsertWriter>>,
+    writer: Mutex<Option<Arc<fcore::client::UpsertWriter>>>,
     table_info: fcore::metadata::TableInfo,
 }
 
@@ -57,100 +55,65 @@ impl UpsertWriter {
     /// If a row with the same primary key exists, it will be updated.
     /// Otherwise, a new row will be inserted.
     ///
+    /// The write is queued synchronously. Call `flush()` to ensure delivery.
+    ///
     /// Args:
     ///     row: A dict, list, or tuple containing the row data.
     ///          For dict: keys are column names, values are column values.
     ///          For list/tuple: values must be in schema order.
-    ///
-    /// Returns:
-    ///     A coroutine that can be awaited for server acknowledgment,
-    ///     or ignored for fire-and-forget behavior.
-    pub fn upsert<'py>(
-        &self,
-        py: Python<'py>,
-        row: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    pub fn upsert(&self, row: &Bound<'_, PyAny>) -> PyResult<WriteResultHandle> {
         let generic_row = python_to_generic_row(row, &self.inner.table_info)?;
-        let inner = self.inner.clone();
 
-        future_into_py(py, async move {
-            let mut guard = inner.get_or_create_writer().await?;
-            let writer = guard.as_mut().unwrap();
-            let result_future = writer
-                .upsert(&generic_row)
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            Python::attach(|py| {
-                future_into_py(py, async move {
-                    result_future
-                        .await
-                        .map_err(|e| FlussError::new_err(e.to_string()))?;
-                    Ok(())
-                })
-                .map(|bound| bound.unbind())
-            })
-        })
+        let writer = self.inner.get_or_create_writer()?;
+        let result_future = writer
+            .upsert(&generic_row)
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+        Ok(WriteResultHandle::new(result_future))
     }
 
     /// Delete a row from the table by primary key.
+    ///
+    /// The delete is queued synchronously. Call `flush()` to ensure delivery.
     ///
     /// Args:
     ///     pk: A dict, list, or tuple containing only the primary key values.
     ///         For dict: keys are PK column names.
     ///         For list/tuple: values in PK column order.
-    ///
-    /// Returns:
-    ///     A coroutine that can be awaited for server acknowledgment,
-    ///     or ignored for fire-and-forget behavior.
-    pub fn delete<'py>(
-        &self,
-        py: Python<'py>,
-        pk: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    pub fn delete(&self, pk: &Bound<'_, PyAny>) -> PyResult<WriteResultHandle> {
         let generic_row = python_pk_to_generic_row(pk, &self.inner.table_info)?;
-        let inner = self.inner.clone();
 
-        future_into_py(py, async move {
-            let mut guard = inner.get_or_create_writer().await?;
-            let writer = guard.as_mut().unwrap();
-            let result_future = writer
-                .delete(&generic_row)
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            Python::attach(|py| {
-                future_into_py(py, async move {
-                    result_future
-                        .await
-                        .map_err(|e| FlussError::new_err(e.to_string()))?;
-                    Ok(())
-                })
-                .map(|bound| bound.unbind())
-            })
-        })
+        let writer = self.inner.get_or_create_writer()?;
+        let result_future = writer
+            .delete(&generic_row)
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+        Ok(WriteResultHandle::new(result_future))
     }
 
     /// Flush all pending upsert/delete operations to the server.
     ///
-    /// This method sends all buffered operations and blocks until they are
+    /// This method sends all buffered operations and waits until they are
     /// acknowledged according to the writer's ack configuration.
     ///
     /// Returns:
     ///     None on success
     pub fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        // Clone the Arc<UpsertWriter> out of the lock so we don't hold the guard across await
+        let writer = {
+            let guard = self
+                .inner
+                .writer
+                .lock()
+                .map_err(|e| FlussError::new_err(format!("Lock poisoned: {e}")))?;
+            guard.as_ref().cloned()
+        };
 
         future_into_py(py, async move {
-            let writer_guard = inner.writer.lock().await;
-
-            if let Some(writer) = writer_guard.as_ref() {
+            if let Some(writer) = writer {
                 writer
                     .flush()
                     .await
                     .map_err(|e| FlussError::new_err(e.to_string()))
             } else {
-                // Nothing to flush - no writer was created yet
                 Ok(())
             }
         })
@@ -197,17 +160,18 @@ impl UpsertWriter {
 
 impl UpsertWriterInner {
     /// Get the cached writer or create one on first use.
-    async fn get_or_create_writer(
-        &self,
-    ) -> PyResult<tokio::sync::MutexGuard<'_, Option<fcore::client::UpsertWriter>>> {
-        let mut guard = self.writer.lock().await;
+    fn get_or_create_writer(&self) -> PyResult<Arc<fcore::client::UpsertWriter>> {
+        let mut guard = self
+            .writer
+            .lock()
+            .map_err(|e| FlussError::new_err(format!("Lock poisoned: {e}")))?;
         if guard.is_none() {
             let writer = self
                 .table_upsert
                 .create_writer()
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
-            *guard = Some(writer);
+            *guard = Some(Arc::new(writer));
         }
-        Ok(guard)
+        Ok(guard.as_ref().unwrap().clone())
     }
 }

@@ -99,14 +99,12 @@ mod table_test {
             record_batch!(("c1", Int32, [1, 2, 3]), ("c2", Utf8, ["a1", "a2", "a3"])).unwrap();
         append_writer
             .append_arrow_batch(batch1)
-            .await
             .expect("Failed to append batch");
 
         let batch2 =
             record_batch!(("c1", Int32, [4, 5, 6]), ("c2", Utf8, ["a4", "a5", "a6"])).unwrap();
         append_writer
             .append_arrow_batch(batch2)
-            .await
             .expect("Failed to append batch");
 
         // Flush to ensure all writes are acknowledged
@@ -230,7 +228,6 @@ mod table_test {
         .unwrap();
         append_writer
             .append_arrow_batch(batch)
-            .await
             .expect("Failed to append batch");
 
         // Flush to ensure all writes are acknowledged
@@ -332,7 +329,6 @@ mod table_test {
         .unwrap();
         append_writer
             .append_arrow_batch(batch)
-            .await
             .expect("Failed to append batch");
         append_writer.flush().await.expect("Failed to flush");
 
@@ -485,19 +481,16 @@ mod table_test {
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
             )
-            .await
             .unwrap();
         writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [3, 4]), ("name", Utf8, ["c", "d"])).unwrap(),
             )
-            .await
             .unwrap();
         writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [5, 6]), ("name", Utf8, ["e", "f"])).unwrap(),
             )
-            .await
             .unwrap();
         writer.flush().await.unwrap();
 
@@ -525,7 +518,6 @@ mod table_test {
             .append_arrow_batch(
                 record_batch!(("id", Int32, [7, 8]), ("name", Utf8, ["g", "h"])).unwrap(),
             )
-            .await
             .unwrap();
         writer.flush().await.unwrap();
 
@@ -759,7 +751,6 @@ mod table_test {
 
         append_writer
             .append(&row)
-            .await
             .expect("Failed to append row with all datatypes");
 
         // Append a row with null values for all columns
@@ -770,7 +761,6 @@ mod table_test {
 
         append_writer
             .append(&row_with_nulls)
-            .await
             .expect("Failed to append row with nulls");
 
         append_writer.flush().await.expect("Failed to flush");
@@ -1033,10 +1023,7 @@ mod table_test {
             row.set_field(0, *id);
             row.set_field(1, *region);
             row.set_field(2, *value);
-            append_writer
-                .append(&row)
-                .await
-                .expect("Failed to append row");
+            append_writer.append(&row).expect("Failed to append row");
         }
 
         append_writer.flush().await.expect("Failed to flush");
@@ -1051,7 +1038,6 @@ mod table_test {
         .unwrap();
         append_writer
             .append_arrow_batch(us_batch)
-            .await
             .expect("Failed to append US batch");
 
         let eu_batch = record_batch!(
@@ -1062,7 +1048,6 @@ mod table_test {
         .unwrap();
         append_writer
             .append_arrow_batch(eu_batch)
-            .await
             .expect("Failed to append EU batch");
 
         append_writer

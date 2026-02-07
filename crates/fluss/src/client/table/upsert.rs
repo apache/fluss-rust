@@ -354,7 +354,7 @@ impl UpsertWriter {
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
-    pub async fn upsert<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
+    pub fn upsert<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
@@ -379,7 +379,7 @@ impl UpsertWriter {
             Some(row_bytes),
         );
 
-        let result_handle = self.writer_client.send(&write_record).await?;
+        let result_handle = self.writer_client.send(&write_record)?;
         Ok(WriteResultFuture::new(result_handle))
     }
 
@@ -395,7 +395,7 @@ impl UpsertWriter {
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
-    pub async fn delete<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
+    pub fn delete<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
@@ -415,7 +415,7 @@ impl UpsertWriter {
             None,
         );
 
-        let result_handle = self.writer_client.send(&write_record).await?;
+        let result_handle = self.writer_client.send(&write_record)?;
         Ok(WriteResultFuture::new(result_handle))
     }
 }

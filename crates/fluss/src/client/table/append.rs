@@ -80,7 +80,7 @@ impl AppendWriter {
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
-    pub async fn append<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
+    pub fn append<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         let physical_table_path = Arc::new(get_physical_path(
             &self.table_path,
             self.partition_getter.as_ref(),
@@ -92,7 +92,7 @@ impl AppendWriter {
             self.table_info.schema_id,
             row,
         );
-        let result_handle = self.writer_client.send(&record).await?;
+        let result_handle = self.writer_client.send(&record)?;
         Ok(WriteResultFuture::new(result_handle))
     }
 
@@ -107,7 +107,7 @@ impl AppendWriter {
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
-    pub async fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture> {
+    pub fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture> {
         let physical_table_path = if self.partition_getter.is_some() && batch.num_rows() > 0 {
             let first_row = ColumnarRow::new(Arc::new(batch.clone()));
             Arc::new(get_physical_path(
@@ -125,7 +125,7 @@ impl AppendWriter {
             self.table_info.schema_id,
             batch,
         );
-        let result_handle = self.writer_client.send(&record).await?;
+        let result_handle = self.writer_client.send(&record)?;
         Ok(WriteResultFuture::new(result_handle))
     }
 

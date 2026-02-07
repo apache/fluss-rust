@@ -91,7 +91,7 @@ impl WriterClient {
         }
     }
 
-    pub async fn send(&self, record: &WriteRecord<'_>) -> Result<ResultHandle> {
+    pub fn send(&self, record: &WriteRecord<'_>) -> Result<ResultHandle> {
         let physical_table_path = &record.physical_table_path;
         let cluster = self.metadata.get_cluster();
         let bucket_key = record.bucket_key.as_ref();
@@ -99,19 +99,13 @@ impl WriterClient {
         let (bucket_assigner, bucket_id) =
             self.assign_bucket(&record.table_info, bucket_key, physical_table_path)?;
 
-        let mut result = self
-            .accumulate
-            .append(record, bucket_id, &cluster, true)
-            .await?;
+        let mut result = self.accumulate.append(record, bucket_id, &cluster, true)?;
 
         if result.abort_record_for_new_batch {
             let prev_bucket_id = bucket_id;
             bucket_assigner.on_new_batch(&cluster, prev_bucket_id);
             let bucket_id = bucket_assigner.assign_bucket(bucket_key, &cluster)?;
-            result = self
-                .accumulate
-                .append(record, bucket_id, &cluster, false)
-                .await?;
+            result = self.accumulate.append(record, bucket_id, &cluster, false)?;
         }
 
         if result.batch_is_full || result.new_batch_created {

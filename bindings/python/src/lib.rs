@@ -30,6 +30,7 @@ mod metadata;
 mod table;
 mod upsert;
 mod utils;
+mod write_handle;
 
 pub use admin::*;
 pub use config::*;
@@ -40,6 +41,7 @@ pub use metadata::*;
 pub use table::*;
 pub use upsert::*;
 pub use utils::*;
+pub use write_handle::*;
 
 static TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -88,6 +90,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RecordBatch>()?;
     m.add_class::<PartitionInfo>()?;
     m.add_class::<OffsetType>()?;
+    m.add_class::<WriteResultHandle>()?;
 
     // Register constants
     m.add("EARLIEST_OFFSET", fcore::client::EARLIEST_OFFSET)?;

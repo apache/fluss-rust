@@ -101,10 +101,7 @@ mod kv_table_test {
             row.set_field(0, *id);
             row.set_field(1, *name);
             row.set_field(2, *age);
-            upsert_writer
-                .upsert(&row)
-                .await
-                .expect("Failed to upsert row");
+            upsert_writer.upsert(&row).expect("Failed to upsert row");
         }
         upsert_writer.flush().await.expect("Failed to flush");
 
@@ -138,7 +135,6 @@ mod kv_table_test {
         updated_row.set_field(2, 33i64);
         upsert_writer
             .upsert(&updated_row)
-            .await
             .expect("Failed to upsert updated row")
             .await
             .expect("Failed to wait for upsert acknowledgment");
@@ -168,7 +164,6 @@ mod kv_table_test {
         delete_row.set_field(0, 1);
         upsert_writer
             .delete(&delete_row)
-            .await
             .expect("Failed to delete")
             .await
             .expect("Failed to wait for delete acknowledgment");
@@ -268,7 +263,7 @@ mod kv_table_test {
             row.set_field(0, *region);
             row.set_field(1, *user_id);
             row.set_field(2, *score);
-            upsert_writer.upsert(&row).await.expect("Failed to upsert");
+            upsert_writer.upsert(&row).expect("Failed to upsert");
         }
         upsert_writer.flush().await.expect("Failed to flush");
 
@@ -308,7 +303,6 @@ mod kv_table_test {
         update_row.set_field(2, 500i64);
         upsert_writer
             .upsert(&update_row)
-            .await
             .expect("Failed to update")
             .await
             .expect("Failed to wait for update acknowledgment");
@@ -379,7 +373,6 @@ mod kv_table_test {
         row.set_field(3, 6942i64);
         upsert_writer
             .upsert(&row)
-            .await
             .expect("Failed to upsert initial row")
             .await
             .expect("Failed to wait for upsert acknowledgment");
@@ -421,7 +414,6 @@ mod kv_table_test {
         partial_row.set_field(3, 420i64);
         partial_writer
             .upsert(&partial_row)
-            .await
             .expect("Failed to upsert")
             .await
             .expect("Failed to wait for upsert acknowledgment");
@@ -509,7 +501,7 @@ mod kv_table_test {
             row.set_field(1, *user_id);
             row.set_field(2, *name);
             row.set_field(3, *score);
-            upsert_writer.upsert(&row).await.expect("Failed to upsert");
+            upsert_writer.upsert(&row).expect("Failed to upsert");
         }
         upsert_writer.flush().await.expect("Failed to flush");
 
@@ -546,7 +538,6 @@ mod kv_table_test {
         updated_row.set_field(3, 999i64);
         upsert_writer
             .upsert(&updated_row)
-            .await
             .expect("Failed to upsert updated row")
             .await
             .expect("Failed to wait for upsert acknowledgment");
@@ -585,7 +576,6 @@ mod kv_table_test {
         delete_key.set_field(1, 1);
         upsert_writer
             .delete(&delete_key)
-            .await
             .expect("Failed to delete")
             .await
             .expect("Failed to wait for delete acknowledgment");
@@ -721,7 +711,6 @@ mod kv_table_test {
 
         upsert_writer
             .upsert(&row)
-            .await
             .expect("Failed to upsert row with all datatypes")
             .await
             .expect("Failed to wait for upsert acknowledgment");
@@ -826,7 +815,6 @@ mod kv_table_test {
 
         upsert_writer
             .upsert(&row_with_nulls)
-            .await
             .expect("Failed to upsert row with nulls")
             .await
             .expect("Failed to wait for upsert acknowledgment");

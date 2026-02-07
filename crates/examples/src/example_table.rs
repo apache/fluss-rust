@@ -64,12 +64,12 @@ pub async fn main() -> Result<()> {
     let table = conn.get_table(&table_path).await?;
     let append_writer = table.new_append()?.create_writer()?;
     // Fire-and-forget: queue writes then flush
-    append_writer.append(&row).await?;
+    append_writer.append(&row)?;
     let mut row = GenericRow::new(3);
     row.set_field(0, 233333);
     row.set_field(1, "tt44");
     row.set_field(2, 987_654_321_987i64);
-    append_writer.append(&row).await?;
+    append_writer.append(&row)?;
     append_writer.flush().await?;
 
     // scan rows

@@ -78,7 +78,7 @@ impl Sender {
 
     async fn run_once(&self) -> Result<()> {
         let cluster = self.metadata.get_cluster();
-        let ready_check_result = self.accumulator.ready(&cluster).await?;
+        let ready_check_result = self.accumulator.ready(&cluster)?;
 
         // Update metadata if needed
         if !ready_check_result.unknown_leader_tables.is_empty() {
@@ -124,14 +124,11 @@ impl Sender {
             return Ok(());
         }
 
-        let batches = self
-            .accumulator
-            .drain(
-                cluster.clone(),
-                &ready_check_result.ready_nodes,
-                self.max_request_size,
-            )
-            .await?;
+        let batches = self.accumulator.drain(
+            cluster.clone(),
+            &ready_check_result.ready_nodes,
+            self.max_request_size,
+        )?;
 
         if !batches.is_empty() {
             self.add_to_inflight_batches(&batches);
@@ -233,8 +230,7 @@ impl Sender {
                     self.handle_batches_with_local_error(
                         request_batches,
                         format!("Failed to build write request: {e}"),
-                    )
-                    .await?;
+                    )?;
                     continue;
                 }
             };
@@ -377,9 +373,8 @@ impl Sender {
                         .error_message()
                         .cloned()
                         .unwrap_or_else(|| error.message().to_string());
-                    if let Some(physical_table_path) = self
-                        .handle_write_batch_error(ready_batch, error, message)
-                        .await?
+                    if let Some(physical_table_path) =
+                        self.handle_write_batch_error(ready_batch, error, message)?
                     {
                         invalid_metadata_tables
                             .insert(physical_table_path.get_table_path().clone());
@@ -392,14 +387,11 @@ impl Sender {
 
         for bucket in pending_buckets {
             if let Some(ready_batch) = records_by_bucket.remove(&bucket) {
-                if let Some(physical_table_path) = self
-                    .handle_write_batch_error(
-                        ready_batch,
-                        FlussError::UnknownServerError,
-                        format!("Missing response for table bucket {bucket}"),
-                    )
-                    .await?
-                {
+                if let Some(physical_table_path) = self.handle_write_batch_error(
+                    ready_batch,
+                    FlussError::UnknownServerError,
+                    format!("Missing response for table bucket {bucket}"),
+                )? {
                     invalid_metadata_tables.insert(physical_table_path.get_table_path().clone());
                     invalid_physical_table_paths.insert(physical_table_path);
                 }
@@ -438,9 +430,8 @@ impl Sender {
         let mut invalid_physical_table_paths: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
 
         for batch in batches {
-            if let Some(physical_table_path) = self
-                .handle_write_batch_error(batch, error, message.clone())
-                .await?
+            if let Some(physical_table_path) =
+                self.handle_write_batch_error(batch, error, message.clone())?
             {
                 invalid_metadata_tables.insert(physical_table_path.get_table_path().clone());
                 invalid_physical_table_paths.insert(physical_table_path);
@@ -451,7 +442,7 @@ impl Sender {
         Ok(())
     }
 
-    async fn handle_batches_with_local_error(
+    fn handle_batches_with_local_error(
         &self,
         batches: Vec<ReadyWriteBatch>,
         message: String,
@@ -467,7 +458,7 @@ impl Sender {
         Ok(())
     }
 
-    async fn handle_write_batch_error(
+    fn handle_write_batch_error(
         &self,
         ready_write_batch: ReadyWriteBatch,
         error: FlussError,
@@ -480,7 +471,7 @@ impl Sender {
                 physical_table_path.as_ref(),
                 ready_write_batch.table_bucket.bucket_id()
             );
-            self.re_enqueue_batch(ready_write_batch).await;
+            self.re_enqueue_batch(ready_write_batch);
             return Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path));
         }
 
@@ -504,9 +495,9 @@ impl Sender {
         Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path))
     }
 
-    async fn re_enqueue_batch(&self, ready_write_batch: ReadyWriteBatch) {
+    fn re_enqueue_batch(&self, ready_write_batch: ReadyWriteBatch) {
         self.remove_from_inflight_batches(&ready_write_batch);
-        self.accumulator.re_enqueue(ready_write_batch).await;
+        self.accumulator.re_enqueue(ready_write_batch);
     }
 
     fn remove_from_inflight_batches(&self, ready_write_batch: &ReadyWriteBatch) {
@@ -656,7 +647,7 @@ mod tests {
     use crate::test_utils::{build_cluster_arc, build_table_info};
     use std::collections::{HashMap, HashSet};
 
-    async fn build_ready_batch(
+    fn build_ready_batch(
         accumulator: &RecordAccumulator,
         cluster: Arc<Cluster>,
         table_path: Arc<TablePath>,
@@ -667,11 +658,11 @@ mod tests {
             values: vec![Datum::Int32(1)],
         };
         let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
-        let result = accumulator.append(&record, 0, &cluster, false).await?;
+        let result = accumulator.append(&record, 0, &cluster, false)?;
         let result_handle = result.result_handle.expect("result handle");
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
-        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024).await?;
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
         let mut drained = batches.remove(&1).expect("drained batches");
         let batch = drained.pop().expect("batch");
         Ok((batch, result_handle))
@@ -686,19 +677,21 @@ mod tests {
         let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 1);
 
         let (batch, _handle) =
-            build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone()).await?;
+            build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone())?;
         let mut inflight = HashMap::new();
         inflight.insert(1, vec![batch]);
         sender.add_to_inflight_batches(&inflight);
         let batch = inflight.remove(&1).unwrap().pop().unwrap();
 
-        sender
-            .handle_write_batch_error(batch, FlussError::RequestTimeOut, "timeout".to_string())
-            .await?;
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::RequestTimeOut,
+            "timeout".to_string(),
+        )?;
 
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
-        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024).await?;
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
         let mut drained = batches.remove(&1).expect("drained batches");
         let batch = drained.pop().expect("batch");
         assert_eq!(batch.write_batch.attempts(), 1);
@@ -713,15 +706,12 @@ mod tests {
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
         let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
 
-        let (batch, handle) =
-            build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path).await?;
-        sender
-            .handle_write_batch_error(
-                batch,
-                FlussError::InvalidTableException,
-                "invalid".to_string(),
-            )
-            .await?;
+        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::InvalidTableException,
+            "invalid".to_string(),
+        )?;
 
         let batch_result = handle.wait().await?;
         assert!(matches!(
@@ -740,7 +730,7 @@ mod tests {
         let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
         let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
 
-        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster, table_path).await?;
+        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster, table_path)?;
         let request_buckets = vec![batch.table_bucket.clone()];
         let mut records_by_bucket = HashMap::new();
         records_by_bucket.insert(batch.table_bucket.clone(), batch);

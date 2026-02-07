@@ -533,76 +533,43 @@ impl AppendWriter {
         let batch_list: Vec<Py<PyAny>> = batches.extract(py)?;
 
         for batch in batch_list {
-            // Drop the ack coroutine — fire-and-forget
-            let _ = self.write_arrow_batch(py, batch)?;
+            // Drop the handle — fire-and-forget for bulk writes
+            drop(self.write_arrow_batch(py, batch)?);
         }
         Ok(())
     }
 
-    /// Write Arrow batch data
+    /// Write Arrow batch data.
     ///
     /// Returns:
-    ///     A coroutine that can be awaited for server acknowledgment,
-    ///     or ignored for fire-and-forget behavior.
-    pub fn write_arrow_batch<'py>(
-        &self,
-        py: Python<'py>,
-        batch: Py<PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ///     WriteResultHandle that can be ignored (fire-and-forget) or
+    ///     awaited via `handle.wait()` for server acknowledgment.
+    pub fn write_arrow_batch(&self, py: Python, batch: Py<PyAny>) -> PyResult<WriteResultHandle> {
         // This shares the underlying Arrow buffers without copying data
         let batch_bound = batch.bind(py);
         let rust_batch: ArrowRecordBatch = FromPyArrow::from_pyarrow_bound(batch_bound)
             .map_err(|e| FlussError::new_err(format!("Failed to convert RecordBatch: {e}")))?;
 
-        let inner = self.inner.clone();
-
-        future_into_py(py, async move {
-            let result_future = inner
-                .append_arrow_batch(rust_batch)
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            Python::attach(|py| {
-                future_into_py(py, async move {
-                    result_future
-                        .await
-                        .map_err(|e| FlussError::new_err(e.to_string()))?;
-                    Ok(())
-                })
-                .map(|bound| bound.unbind())
-            })
-        })
+        let result_future = self
+            .inner
+            .append_arrow_batch(rust_batch)
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+        Ok(WriteResultHandle::new(result_future))
     }
 
-    /// Append a single row to the table
+    /// Append a single row to the table.
     ///
     /// Returns:
-    ///     A coroutine that can be awaited for server acknowledgment,
-    ///     or ignored for fire-and-forget behavior.
-    pub fn append<'py>(
-        &self,
-        py: Python<'py>,
-        row: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ///     WriteResultHandle that can be ignored (fire-and-forget) or
+    ///     awaited via `handle.wait()` for server acknowledgment.
+    pub fn append(&self, row: &Bound<'_, PyAny>) -> PyResult<WriteResultHandle> {
         let generic_row = python_to_generic_row(row, &self.table_info)?;
-        let inner = self.inner.clone();
 
-        future_into_py(py, async move {
-            let result_future = inner
-                .append(&generic_row)
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
-
-            Python::attach(|py| {
-                future_into_py(py, async move {
-                    result_future
-                        .await
-                        .map_err(|e| FlussError::new_err(e.to_string()))?;
-                    Ok(())
-                })
-                .map(|bound| bound.unbind())
-            })
-        })
+        let result_future = self
+            .inner
+            .append(&generic_row)
+            .map_err(|e| FlussError::new_err(e.to_string()))?;
+        Ok(WriteResultHandle::new(result_future))
     }
 
     /// Write Pandas DataFrame data
@@ -636,16 +603,13 @@ impl AppendWriter {
     }
 
     /// Flush any pending data
-    pub fn flush(&self, py: Python) -> PyResult<()> {
+    pub fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        // Release the GIL before blocking on I/O
-        py.detach(|| {
-            TOKIO_RUNTIME.block_on(async {
-                inner
-                    .flush()
-                    .await
-                    .map_err(|e| FlussError::new_err(e.to_string()))
-            })
+        future_into_py(py, async move {
+            inner
+                .flush()
+                .await
+                .map_err(|e| FlussError::new_err(e.to_string()))
         })
     }
 
