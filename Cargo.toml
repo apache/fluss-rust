@@ -32,7 +32,7 @@ resolver = "2"
 members = ["crates/fluss", "crates/examples", "bindings/python", "bindings/cpp"]
 
 [workspace.dependencies]
-fluss-rs = { version = "0.1.0", path = "./crates/fluss" }
+fluss = { package = "fluss-rs", version = "0.1.0", path = "crates/fluss", features = ["storage-all"] }
 tokio = { version = "1.44.2", features = ["full"] }
 clap = { version = "4.5.37", features = ["derive"] }
 arrow = { version = "57.0.0", features = ["ipc_compression"] }

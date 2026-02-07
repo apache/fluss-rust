@@ -28,7 +28,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.26.0", features = ["extension-module"] }
-fluss-rs = { workspace = true, features = ["storage-all"] }
+fluss = { workspace = true, features = ["storage-all"] }
 tokio = { workspace = true }
 arrow = { workspace = true }
 arrow-pyarrow = "57.0.0"

@@ -19,8 +19,8 @@
 # Trigger: push tag only (e.g. v0.1.0).
 # Pre-release tags (containing '-') publish to TestPyPI; release tags publish to PyPI.
 #
-# First publish: add repo secrets PYPI_API_TOKEN and/or TEST_PYPI_API_TOKEN (from pypi.org / test.pypi.org);
-# CI will use them. After Trusted Publishing is set up on PyPI/TestPyPI, you can remove the secrets.
+# Token auth: set repo variable PYPI_USE_TOKEN_AUTH = 'true' and add secrets PYPI_API_TOKEN / TEST_PYPI_API_TOKEN.
+# Trusted Publishing (OIDC): leave PYPI_USE_TOKEN_AUTH unset; do not pass password so the action uses OIDC.
 
 name: Release Python
 
@@ -119,8 +119,8 @@ jobs:
           merge-multiple: true
           path: bindings/python/dist
 
-      - name: Publish to TestPyPI (pre-release tags)
-        if: contains(github.ref, '-')
+      - name: Publish to TestPyPI (token)
+        if: contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -128,10 +128,25 @@ jobs:
           packages-dir: bindings/python/dist
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
-      - name: Publish to PyPI (release tags)
-        if: ${{ !contains(github.ref, '-') }}
+      - name: Publish to TestPyPI (Trusted Publishing)
+        if: contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          packages-dir: bindings/python/dist
+
+      - name: Publish to PyPI (token)
+        if: ${{ !contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH == 'true' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
           packages-dir: bindings/python/dist
           password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: ${{ !contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH != 'true' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          packages-dir: bindings/python/dist

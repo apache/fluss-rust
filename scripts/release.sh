@@ -18,7 +18,7 @@
 #   fluss-rust-{version}.tar.gz
 #   fluss-rust-{version}.tar.gz.asc
 #   fluss-rust-{version}.tar.gz.sha512
-# Run from repo root. Check out the release tag first (e.g. git checkout v0.1.0-rc.1).
+# Run from repo root. Check out the release tag first (e.g. git checkout v0.1.0-rc1).
 # Usage: ./scripts/release.sh [version]
 #   If version is omitted, it is read from Cargo.toml (workspace.package.version).
 

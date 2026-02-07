@@ -55,7 +55,7 @@ Before your first release, perform one-time configuration. See **[Release Manage
 
 **Checklist (one-time)**
 
-- [ ] GPG key set up and published to [KEYS](https://downloads.apache.org/fluss/KEYS) or Apache account
+- [ ] GPG key set up and published to [KEYS](https://downloads.apache.org/incubator/fluss/KEYS) or Apache account
 - [ ] Git configured to use your GPG key for signing tags
 
 ### 1. Install Rust (and optional: just)
@@ -272,7 +272,7 @@ The release candidate (source distribution) is available at:
 * https://dist.apache.org/repos/dist/dev/incubator/fluss/$SVN_RC_DIR/
 
 KEYS for signature verification:
-* https://downloads.apache.org/fluss/KEYS
+* https://downloads.apache.org/incubator/fluss/KEYS
 
 Git tag:
 * https://github.com/apache/fluss-rust/releases/tag/$RC_TAG
