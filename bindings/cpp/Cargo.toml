@@ -30,7 +30,7 @@ crate-type = ["staticlib"]
 anyhow = "1.0"
 arrow = { workspace = true, features = ["ffi"] }
 cxx = "1.0"
-fluss = { workspace = true }
+fluss-rs = { workspace = true, features = ["storage-all"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [build-dependencies]

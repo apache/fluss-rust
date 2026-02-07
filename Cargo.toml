@@ -16,24 +16,26 @@
 # under the License.
 
 [workspace.package]
-categories = ["command-line-utilities"]
+authors = ["Apache Fluss <dev@fluss.apache.org>"]
+categories = ["api-bindings", "database"]
 description = "The rust implementation of fluss"
-repository = "https://github.com/apache/fluss-rust"
 edition = "2024"
-version = "0.1.0"
+homepage = "https://fluss.apache.org/"
 license = "Apache-2.0"
+repository = "https://github.com/apache/fluss-rust"
 rust-version = "1.85"
+version = "0.1.0"
+keywords = ["fluss", "streaming-storage", "datalake"]
 
 [workspace]
 resolver = "2"
 members = ["crates/fluss", "crates/examples", "bindings/python", "bindings/cpp"]
 
 [workspace.dependencies]
-fluss = { version = "0.1.0", path = "./crates/fluss" }
+fluss-rs = { version = "0.1.0", path = "./crates/fluss" }
 tokio = { version = "1.44.2", features = ["full"] }
 clap = { version = "4.5.37", features = ["derive"] }
 arrow = { version = "57.0.0", features = ["ipc_compression"] }
-chrono = { version = "0.4", features = ["clock", "std", "wasmbind"] }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
