@@ -625,8 +625,15 @@ impl Table {
             let all_columns = self.table_info.get_schema().columns();
             let projected_columns: Vec<_> = column_indices
                 .iter()
-                .map(|&i| all_columns[i].clone())
-                .collect();
+                .map(|&i| {
+                    all_columns.get(i).cloned().ok_or_else(|| {
+                        format!(
+                            "Invalid column index {i}: schema has {} columns",
+                            all_columns.len()
+                        )
+                    })
+                })
+                .collect::<Result<_, String>>()?;
 
             let log_scanner = fluss_table
                 .new_scan()
@@ -680,8 +687,15 @@ impl Table {
             let all_columns = self.table_info.get_schema().columns();
             let projected_columns: Vec<_> = column_indices
                 .iter()
-                .map(|&i| all_columns[i].clone())
-                .collect();
+                .map(|&i| {
+                    all_columns.get(i).cloned().ok_or_else(|| {
+                        format!(
+                            "Invalid column index {i}: schema has {} columns",
+                            all_columns.len()
+                        )
+                    })
+                })
+                .collect::<Result<_, String>>()?;
 
             let batch_scanner = fluss_table
                 .new_scan()

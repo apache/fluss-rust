@@ -235,18 +235,14 @@ pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'_> {
             DATUM_TYPE_BYTES => Datum::Blob(Cow::Borrowed(field.bytes_val.as_slice())),
             DATUM_TYPE_DATE => Datum::Date(fcore::row::Date::new(field.i32_val)),
             DATUM_TYPE_TIME => Datum::Time(fcore::row::Time::new(field.i32_val)),
-            DATUM_TYPE_TIMESTAMP_NTZ => {
-                Datum::TimestampNtz(
-                    fcore::row::TimestampNtz::from_millis_nanos(field.i64_val, field.i32_val)
-                        .unwrap_or_else(|_| fcore::row::TimestampNtz::new(field.i64_val)),
-                )
-            }
-            DATUM_TYPE_TIMESTAMP_LTZ => {
-                Datum::TimestampLtz(
-                    fcore::row::TimestampLtz::from_millis_nanos(field.i64_val, field.i32_val)
-                        .unwrap_or_else(|_| fcore::row::TimestampLtz::new(field.i64_val)),
-                )
-            }
+            DATUM_TYPE_TIMESTAMP_NTZ => Datum::TimestampNtz(
+                fcore::row::TimestampNtz::from_millis_nanos(field.i64_val, field.i32_val)
+                    .unwrap_or_else(|_| fcore::row::TimestampNtz::new(field.i64_val)),
+            ),
+            DATUM_TYPE_TIMESTAMP_LTZ => Datum::TimestampLtz(
+                fcore::row::TimestampLtz::from_millis_nanos(field.i64_val, field.i32_val)
+                    .unwrap_or_else(|_| fcore::row::TimestampLtz::new(field.i64_val)),
+            ),
             _ => Datum::Null,
         };
         generic_row.set_field(idx, datum);

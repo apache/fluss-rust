@@ -31,33 +31,48 @@ namespace fluss {
 
 static constexpr int kSecondsPerDay = 24 * 60 * 60;
 
+static std::time_t timegm_utc(std::tm* tm) {
+#if defined(_WIN32)
+    return _mkgmtime(tm);
+#else
+    return ::timegm(tm);
+#endif
+}
+
+static std::tm gmtime_utc(std::time_t epoch_seconds) {
+    std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &epoch_seconds);
+#else
+    ::gmtime_r(&epoch_seconds, &tm);
+#endif
+    return tm;
+}
+
 Date Date::FromYMD(int year, int month, int day) {
     std::tm tm{};
     tm.tm_year = year - 1900;
     tm.tm_mon = month - 1;
     tm.tm_mday = day;
-    std::time_t epoch_seconds = timegm(&tm);
+    std::time_t epoch_seconds = timegm_utc(&tm);
     return {static_cast<int32_t>(epoch_seconds / kSecondsPerDay)};
 }
 
 int Date::Year() const {
     std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
-    std::tm tm{};
-    gmtime_r(&epoch_seconds, &tm);
+    std::tm tm = gmtime_utc(epoch_seconds);
     return tm.tm_year + 1900;
 }
 
 int Date::Month() const {
     std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
-    std::tm tm{};
-    gmtime_r(&epoch_seconds, &tm);
+    std::tm tm = gmtime_utc(epoch_seconds);
     return tm.tm_mon + 1;
 }
 
 int Date::Day() const {
     std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
-    std::tm tm{};
-    gmtime_r(&epoch_seconds, &tm);
+    std::tm tm = gmtime_utc(epoch_seconds);
     return tm.tm_mday;
 }
 
