@@ -363,6 +363,25 @@ Result LogScanner::SubscribePartition(int64_t partition_id, int32_t bucket_id, i
     return utils::from_ffi_result(ffi_result);
 }
 
+Result LogScanner::SubscribePartitionBuckets(
+    const std::vector<PartitionBucketSubscription>& subscriptions) {
+    if (!Available()) {
+        return utils::make_error(1, "LogScanner not available");
+    }
+
+    rust::Vec<ffi::FfiPartitionBucketSubscription> rust_subs;
+    for (const auto& sub : subscriptions) {
+        ffi::FfiPartitionBucketSubscription ffi_sub;
+        ffi_sub.partition_id = sub.partition_id;
+        ffi_sub.bucket_id = sub.bucket_id;
+        ffi_sub.offset = sub.offset;
+        rust_subs.push_back(ffi_sub);
+    }
+
+    auto ffi_result = scanner_->subscribe_partition_buckets(std::move(rust_subs));
+    return utils::from_ffi_result(ffi_result);
+}
+
 Result LogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id) {
     if (!Available()) {
         return utils::make_error(1, "LogScanner not available");

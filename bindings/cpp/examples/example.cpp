@@ -444,5 +444,125 @@ int main() {
                   << std::endl;
     }
 
+    // 13) Partitioned table example
+    std::cout << "\n=== Partitioned Table Example ===" << std::endl;
+
+    fluss::TablePath partitioned_table_path("fluss", "partitioned_table_cpp_v1");
+
+    // Drop if exists
+    admin.DropTable(partitioned_table_path, true);
+
+    // Create a partitioned table with a "region" partition key
+    auto partitioned_schema = fluss::Schema::NewBuilder()
+                                  .AddColumn("id", fluss::DataType::Int)
+                                  .AddColumn("region", fluss::DataType::String)
+                                  .AddColumn("value", fluss::DataType::BigInt)
+                                  .Build();
+
+    auto partitioned_descriptor = fluss::TableDescriptor::NewBuilder()
+                                      .SetSchema(partitioned_schema)
+                                      .SetPartitionKeys({"region"})
+                                      .SetBucketCount(1)
+                                      .SetComment("cpp partitioned table example")
+                                      .Build();
+
+    check("create_partitioned_table",
+          admin.CreateTable(partitioned_table_path, partitioned_descriptor, false));
+    std::cout << "Created partitioned table" << std::endl;
+
+    // Create partitions
+    check("create_partition_US",
+          admin.CreatePartition(partitioned_table_path, {{"region", "US"}}, true));
+    check("create_partition_EU",
+          admin.CreatePartition(partitioned_table_path, {{"region", "EU"}}, true));
+    std::cout << "Created partitions: US, EU" << std::endl;
+
+    // List partitions
+    std::vector<fluss::PartitionInfo> partition_infos;
+    check("list_partition_infos",
+          admin.ListPartitionInfos(partitioned_table_path, partition_infos));
+    for (const auto& pi : partition_infos) {
+        std::cout << "  Partition: " << pi.partition_name
+                  << " (id=" << pi.partition_id << ")" << std::endl;
+    }
+
+    // Write data to partitioned table
+    fluss::Table partitioned_table;
+    check("get_partitioned_table", conn.GetTable(partitioned_table_path, partitioned_table));
+
+    fluss::AppendWriter partitioned_writer;
+    check("new_partitioned_writer", partitioned_table.NewAppendWriter(partitioned_writer));
+
+    struct PartitionedRow {
+        int id;
+        const char* region;
+        int64_t value;
+    };
+
+    std::vector<PartitionedRow> partitioned_rows = {
+        {1, "US", 100}, {2, "US", 200}, {3, "EU", 300}, {4, "EU", 400},
+    };
+
+    for (const auto& r : partitioned_rows) {
+        fluss::GenericRow row;
+        row.SetInt32(0, r.id);
+        row.SetString(1, r.region);
+        row.SetInt64(2, r.value);
+        check("append_partitioned", partitioned_writer.Append(row));
+    }
+    check("flush_partitioned", partitioned_writer.Flush());
+    std::cout << "Wrote " << partitioned_rows.size() << " rows to partitioned table" << std::endl;
+
+    // 13.1) subscribe_partition_buckets: subscribe to each partition individually
+    std::cout << "\n--- Testing SubscribePartitionBuckets ---" << std::endl;
+    fluss::LogScanner partition_scanner;
+    check("new_partition_scanner",
+          partitioned_table.NewScan().CreateLogScanner(partition_scanner));
+
+    for (const auto& pi : partition_infos) {
+        check("subscribe_partition_buckets", partition_scanner.SubscribePartitionBuckets(pi.partition_id, 0, 0));
+        std::cout << "Subscribed to partition " << pi.partition_name << std::endl;
+    }
+
+    fluss::ScanRecords partition_records;
+    check("poll_partitioned", partition_scanner.Poll(5000, partition_records));
+    std::cout << "Scanned " << partition_records.Size() << " records from partitioned table"
+              << std::endl;
+    for (size_t i = 0; i < partition_records.Size(); ++i) {
+        const auto& rec = partition_records[i];
+        std::cout << "  Record " << i << ": id=" << rec.row.fields[0].i32_val
+                  << ", region=" << rec.row.fields[1].string_val
+                  << ", value=" << rec.row.fields[2].i64_val << std::endl;
+    }
+
+    // 13.2) subscribe_partition_buckets: batch subscribe to all partitions at once
+    std::cout << "\n--- Testing SubscribePartitionBuckets (batch) ---" << std::endl;
+    fluss::LogScanner partition_batch_scanner;
+    check("new_partition_batch_scanner",
+          partitioned_table.NewScan().CreateLogScanner(partition_batch_scanner));
+
+    std::vector<fluss::PartitionBucketSubscription> partition_subs;
+    for (const auto& pi : partition_infos) {
+        partition_subs.push_back({pi.partition_id, 0, 0});
+    }
+    check("subscribe_partition_buckets",
+          partition_batch_scanner.SubscribePartitionBuckets(partition_subs));
+    std::cout << "Batch subscribed to " << partition_subs.size()
+              << " partition+bucket combinations" << std::endl;
+
+    fluss::ScanRecords partition_batch_records;
+    check("poll_partition_batch", partition_batch_scanner.Poll(5000, partition_batch_records));
+    std::cout << "Scanned " << partition_batch_records.Size()
+              << " records from batch partition subscription" << std::endl;
+    for (size_t i = 0; i < partition_batch_records.Size(); ++i) {
+        const auto& rec = partition_batch_records[i];
+        std::cout << "  Record " << i << ": id=" << rec.row.fields[0].i32_val
+                  << ", region=" << rec.row.fields[1].string_val
+                  << ", value=" << rec.row.fields[2].i64_val << std::endl;
+    }
+
+    // Cleanup
+    check("drop_partitioned_table", admin.DropTable(partitioned_table_path, true));
+    std::cout << "Dropped partitioned table" << std::endl;
     return 0;
 }

@@ -1200,6 +1200,48 @@ mod table_test {
             records_after_unsubscribe.len()
         );
 
+        // Test subscribe_partition_buckets: batch subscribe to all partitions at once
+        let log_scanner_batch = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner for batch partition subscribe test");
+        let partition_infos = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partition infos");
+        let partition_bucket_offsets: HashMap<(i64, i32), i64> = partition_infos
+            .iter()
+            .map(|p| ((p.get_partition_id(), 0), 0i64))
+            .collect();
+        log_scanner_batch
+            .subscribe_partition_buckets(&partition_bucket_offsets)
+            .await
+            .expect("Failed to batch subscribe to partitions");
+
+        let mut batch_collected: Vec<(i32, String, i64)> = Vec::new();
+        let batch_start = std::time::Instant::now();
+        while batch_collected.len() < expected_records.len()
+            && batch_start.elapsed() < Duration::from_secs(10)
+        {
+            let records = log_scanner_batch
+                .poll(Duration::from_millis(500))
+                .await
+                .expect("Failed to poll after batch partition subscribe");
+            for rec in records {
+                let row = rec.row();
+                batch_collected.push((
+                    row.get_int(0),
+                    row.get_string(1).to_string(),
+                    row.get_long(2),
+                ));
+            }
+        }
+        batch_collected.sort_by_key(|r| r.0);
+        assert_eq!(
+            batch_collected, expected_records,
+            "subscribe_partition_buckets should receive the same records as subscribe_partition loop"
+        );
+
         admin
             .drop_table(&table_path, false)
             .await

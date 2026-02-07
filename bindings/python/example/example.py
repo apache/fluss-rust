@@ -717,6 +717,18 @@ async def main():
         print(f"\nto_arrow() returned {partitioned_arrow.num_rows} records from partitioned table:")
         print(partitioned_arrow.to_pandas())
 
+        # Demo: subscribe_partition_buckets for batch subscribing to multiple partitions at once
+        print("\n--- Testing subscribe_partition_buckets + to_arrow() ---")
+        partitioned_scanner_batch = await partitioned_table.new_scan().create_batch_scanner()
+        partition_bucket_offsets = {
+            (p.partition_id, 0): fluss.EARLIEST_OFFSET for p in partition_infos
+        }
+        partitioned_scanner_batch.subscribe_partition_buckets(partition_bucket_offsets)
+        print(f"Batch subscribed to {len(partition_bucket_offsets)} partition+bucket combinations")
+        partitioned_batch_arrow = partitioned_scanner_batch.to_arrow()
+        print(f"to_arrow() returned {partitioned_batch_arrow.num_rows} records:")
+        print(partitioned_batch_arrow.to_pandas())
+
         # Demo: unsubscribe_partition - unsubscribe from one partition, read remaining
         print("\n--- Testing unsubscribe_partition ---")
         partitioned_scanner3 = await partitioned_table.new_scan().create_batch_scanner()

@@ -626,6 +626,12 @@ struct BucketSubscription {
     int64_t offset;
 };
 
+struct PartitionBucketSubscription {
+    int64_t partition_id;
+    int32_t bucket_id;
+    int64_t offset;
+};
+
 struct LakeSnapshot {
     int64_t snapshot_id;
     std::vector<BucketOffset> bucket_offsets;
@@ -700,6 +706,10 @@ public:
 
     Result ListPartitionInfos(const TablePath& table_path,
                              std::vector<PartitionInfo>& out);
+
+    Result CreatePartition(const TablePath& table_path,
+                          const std::unordered_map<std::string, std::string>& partition_spec,
+                          bool ignore_if_exists = false);
 
 private:
     Result DoListOffsets(const TablePath& table_path,
@@ -826,6 +836,7 @@ public:
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
     Result SubscribePartition(int64_t partition_id, int32_t bucket_id, int64_t start_offset);
+    Result SubscribePartitionBuckets(const std::vector<PartitionBucketSubscription>& subscriptions);
     Result UnsubscribePartition(int64_t partition_id, int32_t bucket_id);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
     Result PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out);
