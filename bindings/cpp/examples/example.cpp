@@ -91,6 +91,7 @@ int main() {
         {3, "Charlie", 92.1f, 35},
     };
 
+    // Fire-and-forget: queue rows, flush at end
     for (const auto& r : rows) {
         fluss::GenericRow row;
         row.SetInt32(0, r.id);
@@ -100,7 +101,20 @@ int main() {
         check("append", writer.Append(row));
     }
     check("flush", writer.Flush());
-    std::cout << "Wrote " << rows.size() << " rows" << std::endl;
+    std::cout << "Wrote " << rows.size() << " rows (fire-and-forget + flush)" << std::endl;
+
+    // Per-record acknowledgment
+    {
+        fluss::GenericRow row;
+        row.SetInt32(0, 100);
+        row.SetString(1, "AckTest");
+        row.SetFloat32(2, 99.9f);
+        row.SetInt32(3, 42);
+        fluss::WriteResult wr;
+        check("append", writer.Append(row, wr));
+        check("wait", wr.Wait());
+        std::cout << "Row acknowledged by server" << std::endl;
+    }
 
     // 6) Scan
     fluss::LogScanner scanner;

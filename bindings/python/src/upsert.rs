@@ -23,16 +23,21 @@ use tokio::sync::Mutex;
 
 /// Writer for upserting and deleting data in a Fluss primary key table.
 ///
-/// Each upsert/delete operation is sent to the server and waits for acknowledgment.
-/// Multiple concurrent writers share a common WriterClient which batches requests
-/// for efficiency.
+/// Each upsert/delete operation queues the write and returns a coroutine
+/// that can be awaited for per-record acknowledgment, or ignored for
+/// fire-and-forget semantics (call `flush()` to ensure delivery).
 ///
 /// # Example:
 ///     writer = table.new_upsert()
+///
+///     # Fire-and-forget with flush
 ///     await writer.upsert(row1)
 ///     await writer.upsert(row2)
-///     await writer.delete(pk)
-///     await writer.flush()  # Ensures all pending operations are acknowledged
+///     await writer.flush()
+///
+///     # Or await individual acknowledgment
+///     ack = await writer.upsert(row3)
+///     await ack
 #[pyclass]
 pub struct UpsertWriter {
     inner: Arc<UpsertWriterInner>,
@@ -58,7 +63,8 @@ impl UpsertWriter {
     ///          For list/tuple: values must be in schema order.
     ///
     /// Returns:
-    ///     None on success
+    ///     A coroutine that can be awaited for server acknowledgment,
+    ///     or ignored for fire-and-forget behavior.
     pub fn upsert<'py>(
         &self,
         py: Python<'py>,
@@ -70,11 +76,20 @@ impl UpsertWriter {
         future_into_py(py, async move {
             let mut guard = inner.get_or_create_writer().await?;
             let writer = guard.as_mut().unwrap();
-            writer
+            let result_future = writer
                 .upsert(&generic_row)
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
-            Ok(())
+
+            Python::attach(|py| {
+                future_into_py(py, async move {
+                    result_future
+                        .await
+                        .map_err(|e| FlussError::new_err(e.to_string()))?;
+                    Ok(())
+                })
+                .map(|bound| bound.unbind())
+            })
         })
     }
 
@@ -86,7 +101,8 @@ impl UpsertWriter {
     ///         For list/tuple: values in PK column order.
     ///
     /// Returns:
-    ///     None on success
+    ///     A coroutine that can be awaited for server acknowledgment,
+    ///     or ignored for fire-and-forget behavior.
     pub fn delete<'py>(
         &self,
         py: Python<'py>,
@@ -98,11 +114,20 @@ impl UpsertWriter {
         future_into_py(py, async move {
             let mut guard = inner.get_or_create_writer().await?;
             let writer = guard.as_mut().unwrap();
-            writer
+            let result_future = writer
                 .delete(&generic_row)
                 .await
                 .map_err(|e| FlussError::new_err(e.to_string()))?;
-            Ok(())
+
+            Python::attach(|py| {
+                future_into_py(py, async move {
+                    result_future
+                        .await
+                        .map_err(|e| FlussError::new_err(e.to_string()))?;
+                    Ok(())
+                })
+                .map(|bound| bound.unbind())
+            })
         })
     }
 

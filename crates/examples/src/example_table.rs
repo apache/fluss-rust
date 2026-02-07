@@ -25,7 +25,6 @@ use fluss::error::Result;
 use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
 use fluss::row::{GenericRow, InternalRow};
 use std::time::Duration;
-use tokio::try_join;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
@@ -64,13 +63,14 @@ pub async fn main() -> Result<()> {
 
     let table = conn.get_table(&table_path).await?;
     let append_writer = table.new_append()?.create_writer()?;
-    let f1 = append_writer.append(&row);
+    // Fire-and-forget: queue writes then flush
+    append_writer.append(&row).await?;
     let mut row = GenericRow::new(3);
     row.set_field(0, 233333);
     row.set_field(1, "tt44");
     row.set_field(2, 987_654_321_987i64);
-    let f2 = append_writer.append(&row);
-    try_join!(f1, f2, append_writer.flush())?;
+    append_writer.append(&row).await?;
+    append_writer.flush().await?;
 
     // scan rows
     let log_scanner = table.new_scan().create_log_scanner()?;

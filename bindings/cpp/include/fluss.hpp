@@ -37,6 +37,7 @@ namespace ffi {
     struct Admin;
     struct Table;
     struct AppendWriter;
+    struct WriteResult;
     struct LogScanner;
 }  // namespace ffi
 
@@ -409,6 +410,7 @@ struct PartitionInfo {
 };
 
 class AppendWriter;
+class WriteResult;
 class LogScanner;
 class Admin;
 class Table;
@@ -534,6 +536,30 @@ private:
     std::vector<size_t> projection_;
 };
 
+class WriteResult {
+public:
+    WriteResult() noexcept;
+    ~WriteResult() noexcept;
+
+    WriteResult(const WriteResult&) = delete;
+    WriteResult& operator=(const WriteResult&) = delete;
+    WriteResult(WriteResult&& other) noexcept;
+    WriteResult& operator=(WriteResult&& other) noexcept;
+
+    bool Available() const;
+
+    /// Wait for server acknowledgment of the write.
+    /// For fire-and-forget, simply let the WriteResult go out of scope.
+    Result Wait();
+
+private:
+    friend class AppendWriter;
+    WriteResult(ffi::WriteResult* inner) noexcept;
+
+    void Destroy() noexcept;
+    ffi::WriteResult* inner_{nullptr};
+};
+
 class AppendWriter {
 public:
     AppendWriter() noexcept;
@@ -547,6 +573,7 @@ public:
     bool Available() const;
 
     Result Append(const GenericRow& row);
+    Result Append(const GenericRow& row, WriteResult& out);
     Result Flush();
 
 private:

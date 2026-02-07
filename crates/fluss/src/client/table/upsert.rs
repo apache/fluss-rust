@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{RowBytes, WriteFormat, WriteRecord, WriterClient};
+use crate::client::{RowBytes, WriteFormat, WriteRecord, WriteResultFuture, WriterClient};
 use crate::error::Error::{IllegalArgument, UnexpectedError};
 use crate::error::Result;
 use crate::metadata::{RowType, TableInfo, TablePath};
@@ -345,12 +345,16 @@ impl UpsertWriter {
 
     /// Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
     ///
+    /// This method returns a [`WriteResultFuture`] immediately after queueing the write,
+    /// enabling fire-and-forget semantics for efficient batching.
+    ///
     /// # Arguments
     /// * row - the row to upsert.
     ///
     /// # Returns
-    /// Ok(UpsertResult) when completed normally
-    pub async fn upsert<R: InternalRow>(&self, row: &R) -> Result<UpsertResult> {
+    /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
+    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    pub async fn upsert<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
@@ -376,20 +380,22 @@ impl UpsertWriter {
         );
 
         let result_handle = self.writer_client.send(&write_record).await?;
-        let result = result_handle.wait().await?;
-
-        result_handle.result(result).map(|_| UpsertResult)
+        Ok(WriteResultFuture::new(result_handle))
     }
 
     /// Delete certain row by the input row in Fluss table, the input row must contain the primary
     /// key.
     ///
+    /// This method returns a [`WriteResultFuture`] immediately after queueing the delete,
+    /// enabling fire-and-forget semantics for efficient batching.
+    ///
     /// # Arguments
-    /// * row - the row to delete.
+    /// * row - the row to delete (must contain the primary key fields).
     ///
     /// # Returns
-    /// Ok(DeleteResult) when completed normally
-    pub async fn delete<R: InternalRow>(&self, row: &R) -> Result<DeleteResult> {
+    /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
+    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    pub async fn delete<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
@@ -410,9 +416,7 @@ impl UpsertWriter {
         );
 
         let result_handle = self.writer_client.send(&write_record).await?;
-        let result = result_handle.wait().await?;
-
-        result_handle.result(result).map(|_| DeleteResult)
+        Ok(WriteResultFuture::new(result_handle))
     }
 }
 
@@ -546,9 +550,11 @@ mod tests {
 /// The result of upserting a record
 /// Currently this is an empty struct to allow for compatible evolution in the future
 #[derive(Default)]
+#[allow(dead_code)]
 pub struct UpsertResult;
 
 /// The result of deleting a record
 /// Currently this is an empty struct to allow for compatible evolution in the future
 #[derive(Default)]
+#[allow(dead_code)]
 pub struct DeleteResult;

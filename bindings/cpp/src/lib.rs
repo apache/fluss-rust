@@ -190,6 +190,7 @@ mod ffi {
         type Admin;
         type Table;
         type AppendWriter;
+        type WriteResult;
         type LogScanner;
 
         // Connection
@@ -253,8 +254,11 @@ mod ffi {
 
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
-        fn append(self: &mut AppendWriter, row: &FfiGenericRow) -> FfiResult;
+        fn append(self: &mut AppendWriter, row: &FfiGenericRow) -> Result<Box<WriteResult>>;
         fn flush(self: &mut AppendWriter) -> FfiResult;
+
+        // WriteResult — dropped automatically via rust::Box, or call wait() for ack
+        fn wait(self: &mut WriteResult) -> FfiResult;
 
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
@@ -297,6 +301,10 @@ pub struct Table {
 
 pub struct AppendWriter {
     inner: fcore::client::AppendWriter,
+}
+
+pub struct WriteResult {
+    inner: Option<fcore::client::WriteResultFuture>,
 }
 
 pub struct LogScanner {
@@ -750,15 +758,16 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
 }
 
 impl AppendWriter {
-    fn append(&mut self, row: &ffi::FfiGenericRow) -> ffi::FfiResult {
+    fn append(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
         let generic_row = types::ffi_row_to_core(row);
 
-        let result = RUNTIME.block_on(async { self.inner.append(&generic_row).await });
+        let result_future = RUNTIME
+            .block_on(async { self.inner.append(&generic_row).await })
+            .map_err(|e| format!("Failed to append: {e}"))?;
 
-        match result {
-            Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
-        }
+        Ok(Box::new(WriteResult {
+            inner: Some(result_future),
+        }))
     }
 
     fn flush(&mut self) -> ffi::FfiResult {
@@ -767,6 +776,20 @@ impl AppendWriter {
         match result {
             Ok(_) => ok_result(),
             Err(e) => err_result(1, e.to_string()),
+        }
+    }
+}
+
+impl WriteResult {
+    fn wait(&mut self) -> ffi::FfiResult {
+        if let Some(future) = self.inner.take() {
+            let result = RUNTIME.block_on(future);
+            match result {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else {
+            ok_result()
         }
     }
 }
