@@ -717,6 +717,19 @@ async def main():
         print(f"\nto_arrow() returned {partitioned_arrow.num_rows} records from partitioned table:")
         print(partitioned_arrow.to_pandas())
 
+        # Demo: unsubscribe_partition - unsubscribe from one partition, read remaining
+        print("\n--- Testing unsubscribe_partition ---")
+        partitioned_scanner3 = await partitioned_table.new_scan().create_batch_scanner()
+        for p in partition_infos:
+            partitioned_scanner3.subscribe_partition(p.partition_id, 0, fluss.EARLIEST_OFFSET)
+        # Unsubscribe from the first partition
+        first_partition = partition_infos[0]
+        partitioned_scanner3.unsubscribe_partition(first_partition.partition_id, 0)
+        print(f"Unsubscribed from partition {first_partition.partition_name} (id={first_partition.partition_id})")
+        remaining_arrow = partitioned_scanner3.to_arrow()
+        print(f"After unsubscribe, to_arrow() returned {remaining_arrow.num_rows} records (from remaining partitions):")
+        print(remaining_arrow.to_pandas())
+
         # Demo: to_pandas() also works for partitioned tables
         print("\n--- Testing to_pandas() on partitioned table ---")
         partitioned_scanner2 = await partitioned_table.new_scan().create_batch_scanner()

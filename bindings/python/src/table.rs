@@ -1657,6 +1657,23 @@ impl LogScanner {
         })
     }
 
+    /// Unsubscribe from a specific partition bucket (partitioned tables only).
+    ///
+    /// Args:
+    ///     partition_id: The partition ID to unsubscribe from
+    ///     bucket_id: The bucket ID within the partition
+    fn unsubscribe_partition(&self, py: Python, partition_id: i64, bucket_id: i32) -> PyResult<()> {
+        py.detach(|| {
+            TOKIO_RUNTIME.block_on(async {
+                with_scanner!(
+                    &self.scanner,
+                    unsubscribe_partition(partition_id, bucket_id)
+                )
+                .map_err(|e| FlussError::new_err(e.to_string()))
+            })
+        })
+    }
+
     /// Poll for individual records with metadata.
     ///
     /// Args:
