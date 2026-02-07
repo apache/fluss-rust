@@ -398,8 +398,9 @@ struct Datum {
         if (type == DatumType::DecimalI64) {
             return FormatUnscaled64(i64_val, decimal_scale);
         } else if (type == DatumType::DecimalI128) {
-            __int128 val = (static_cast<__int128>(i128_hi) << 64) |
-                           static_cast<__int128>(static_cast<uint64_t>(i128_lo));
+            unsigned __int128 uval = (static_cast<unsigned __int128>(static_cast<uint64_t>(i128_hi)) << 64) |
+                                     static_cast<unsigned __int128>(static_cast<uint64_t>(i128_lo));
+            __int128 val = static_cast<__int128>(uval);
             return FormatUnscaled128(val, decimal_scale);
         } else if (type == DatumType::DecimalString) {
             return string_val;

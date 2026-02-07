@@ -87,7 +87,10 @@ fn ffi_data_type_to_core(
         DATA_TYPE_TIME => Ok(fcore::metadata::DataTypes::time()),
         DATA_TYPE_TIMESTAMP => Ok(fcore::metadata::DataTypes::timestamp()),
         DATA_TYPE_TIMESTAMP_LTZ => Ok(fcore::metadata::DataTypes::timestamp_ltz()),
-        DATA_TYPE_DECIMAL => Ok(fcore::metadata::DataTypes::decimal(precision, scale)),
+        DATA_TYPE_DECIMAL => {
+            let dt = fcore::metadata::DecimalType::new(precision, scale)?;
+            Ok(fcore::metadata::DataType::Decimal(dt))
+        }
         _ => Err(anyhow!("Unknown data type: {dt}")),
     }
 }
@@ -118,6 +121,9 @@ pub fn ffi_descriptor_to_core(
     let mut schema_builder = fcore::metadata::Schema::builder();
 
     for col in &descriptor.schema.columns {
+        if col.precision < 0 || col.scale < 0 {
+            return Err(anyhow!("Column '{}': precision and scale must be non-negative", col.name));
+        }
         let dt = ffi_data_type_to_core(col.data_type, col.precision as u32, col.scale as u32)?;
         schema_builder = schema_builder.column(&col.name, dt);
         if !col.comment.is_empty() {
@@ -281,6 +287,22 @@ pub fn ffi_row_to_core<'a>(
                     ))?;
                 let decimal = fcore::row::Decimal::from_big_decimal(bd, precision, scale)
                     .map_err(|e| anyhow!("Column {idx}: {e}"))?;
+                Datum::Decimal(decimal)
+            }
+            DATUM_TYPE_DECIMAL_I64 => {
+                let precision = field.decimal_precision as u32;
+                let scale = field.decimal_scale as u32;
+                let decimal = fcore::row::Decimal::from_unscaled_long(field.i64_val, precision, scale)
+                    .map_err(|e| anyhow!("Column {idx}: {e}"))?;
+                Datum::Decimal(decimal)
+            }
+            DATUM_TYPE_DECIMAL_I128 => {
+                let precision = field.decimal_precision as u32;
+                let scale = field.decimal_scale as u32;
+                let i128_val = ((field.i128_hi as i128) << 64) | (field.i128_lo as u64 as i128);
+                let decimal = fcore::row::Decimal::from_arrow_decimal128(
+                    i128_val, scale as i64, precision, scale,
+                ).map_err(|e| anyhow!("Column {idx}: {e}"))?;
                 Datum::Decimal(decimal)
             }
             DATUM_TYPE_DATE => Datum::Date(fcore::row::Date::new(field.i32_val)),
