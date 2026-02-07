@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 # Create ASF source release artifacts under dist/.
-# Check out the release tag first (e.g. git checkout v0.1.0-rc.1).
+# Check out the release tag first (e.g. git checkout v0.1.0-rc1).
 # Usage: just release [version]
 #   If version is omitted, read from Cargo.toml.
 

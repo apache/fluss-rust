@@ -16,18 +16,28 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import tomllib
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
 def list_packages():
-    """All directories that have Cargo.toml (recursive); each gets a DEPENDENCIES.rust.tsv."""
-    packages = []
-    for cargo in sorted(ROOT_DIR.rglob("Cargo.toml")):
-        parent = cargo.parent
-        rel = "." if parent == ROOT_DIR else parent.relative_to(ROOT_DIR).as_posix()
-        packages.append(rel)
+    """Package directories from [workspace].members in root Cargo.toml, plus workspace root.
+    Each gets a DEPENDENCIES.rust.tsv. Avoids scanning target/, .git/, etc.
+    """
+    root_cargo = ROOT_DIR / "Cargo.toml"
+    if not root_cargo.exists():
+        return ["."]
+    with open(root_cargo, "rb") as f:
+        data = tomllib.load(f)
+    members = data.get("workspace", {}).get("members", [])
+    if not isinstance(members, list):
+        return ["."]
+    packages = ["."]
+    for m in members:
+        if isinstance(m, str) and m:
+            packages.append(m)
     return packages
 
 

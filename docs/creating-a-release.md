@@ -18,7 +18,7 @@
 
 # Creating a Fluss Rust Client Release
 
-This document describes in detail how to create a release of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss-rust) repository. It is based on the [Creating a Fluss Release](https://fluss.apache.org/community/how-to-release/creating-a-fluss-release/) guide of the Apache Fluss project and the [release guide of Apache OpenDAL](https://nightlies.apache.org/opendal/opendal-docs-stable/community/release/); releases are source archives plus CI-published crates.io and PyPI).
+This document describes in detail how to create a release of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss-rust) repository. It is based on the [Creating a Fluss Release](https://fluss.apache.org/community/how-to-release/creating-a-fluss-release/) guide of the Apache Fluss project and the [release guide of Apache OpenDAL](https://nightlies.apache.org/opendal/opendal-docs-stable/community/release/); releases are source archives plus CI-published crates.io and PyPI.
 
 Publishing software has legal consequences. This guide complements the foundation-wide [Product Release Policy](https://www.apache.org/legal/release-policy.html) and [Release Distribution Policy](https://infra.apache.org/release-distribution.html).
 
@@ -373,7 +373,7 @@ svn commit -m "Remove RC after release fluss-rust ${RELEASE_VERSION}"
 
 1. Go to [Releases → New release](https://github.com/apache/fluss-rust/releases/new).
 2. Choose tag `$RELEASE_TAG`.
-3. Set target branch to `main`.
+3. Set the target to the release branch `release-${RELEASE_VERSION}` (i.e., the branch/commit used to create `$RELEASE_TAG`).
 4. Click **Generate release notes**, then add: notable changes, breaking changes (if any) from component upgrade docs, **official download link** (source archive and verification), and install instructions for fluss-rust, fluss-python, fluss-cpp.
    - **Download link:** `https://downloads.apache.org/incubator/fluss/fluss-rust-${RELEASE_VERSION}/` (or the project download page). In the release description, include checksums and GPG verification steps.
 5. Click **Publish release**.
