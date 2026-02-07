@@ -38,6 +38,14 @@ jobs:
       - name: Check License Header
         uses: apache/skywalking-eyes/header@v0.6.0
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.14.22
+
+      - name: Check dependency licenses (Apache-compatible)
+        run: cargo deny check licenses
+
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 

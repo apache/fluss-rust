@@ -15,25 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "fluss_python"
-edition = "2024"
-version = "0.1.0"
-license.workspace = true
-rust-version = "1.85"
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
 
-[lib]
-name = "fluss"
-crate-type = ["cdylib"]
-
-[dependencies]
-pyo3 = { version = "0.26.0", features = ["extension-module"] }
-fluss = { path = "../../crates/fluss" }
-tokio = { workspace = true }
-arrow = { workspace = true }
-arrow-pyarrow = "57.0.0"
-arrow-schema = "57.0.0"
-arrow-array = "57.0.0"
-pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
-jiff = { workspace = true }
-bigdecimal = "0.4"
+exceptions = [
+    # open data licenses that SHOULD be OK
+    { crate = "webpki-roots", allow = [
+        "CDLA-Permissive-2.0",
+    ] },
+]
