@@ -132,6 +132,10 @@ Then, stop your Fluss cluster. Go to your Fluss home, stop it via the following 
 ./bin/local-cluster.sh stop
 ```
 
+## Documentation
+
+- [Development Guide](DEVELOPMENT.md) – Build, test, and contribute to fluss-rust.
+- [Release Guide](RELEASE.md) – How to build, release, and sign official Fluss client packages (Rust, Python, C++), and how to **verify** signed releases.
 
 ## License
 

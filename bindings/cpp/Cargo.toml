@@ -17,7 +17,7 @@
 
 [package]
 name = "fluss-cpp"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -30,8 +30,8 @@ crate-type = ["staticlib"]
 anyhow = "1.0"
 arrow = { workspace = true, features = ["ffi"] }
 cxx = "1.0"
-fluss = { path = "../../crates/fluss" }
-tokio = { version = "1.27", features = ["rt-multi-thread", "macros"] }
+fluss = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [build-dependencies]
 cxx-build = "1.0"
