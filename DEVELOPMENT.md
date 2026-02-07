@@ -104,6 +104,15 @@ cargo test --features integration_tests --workspace
 ```
 
 
+### License check (cargo-deny)
+
+We use [cargo-deny](https://embarkstudios.github.io/cargo-deny/) to ensure all dependency licenses are Apache-compatible. Configuration is in `deny.toml` at the repo root.
+
+```bash
+cargo install cargo-deny --locked
+cargo deny check licenses
+```
+
 ### Formatting and Clippy
 
 Our CI runs cargo formatting and clippy to help keep the code base styling tidy and readable. Run the following commands and address any errors or warnings to ensure that your PR can complete CI successfully.
