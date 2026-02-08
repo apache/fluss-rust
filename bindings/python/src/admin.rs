@@ -17,6 +17,7 @@
 
 use crate::*;
 use fcore::rpc::message::OffsetSpec;
+use pyo3::conversion::IntoPyObject;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
 
@@ -161,15 +162,7 @@ impl FlussAdmin {
                 FlussError::new_err(format!("Failed to check database exists: {e}"))
             })?;
 
-            Python::attach(|py| {
-                let builtins = py.import("builtins")?;
-                let val = if exists {
-                    builtins.getattr("True")?
-                } else {
-                    builtins.getattr("False")?
-                };
-                Ok(val.unbind())
-            })
+            Python::attach(|py| Ok(exists.into_pyobject(py)?.to_owned().into_any().unbind()))
         })
     }
 
@@ -250,15 +243,7 @@ impl FlussAdmin {
                 .await
                 .map_err(|e| FlussError::new_err(format!("Failed to check table exists: {e}")))?;
 
-            Python::attach(|py| {
-                let builtins = py.import("builtins")?;
-                let val = if exists {
-                    builtins.getattr("True")?
-                } else {
-                    builtins.getattr("False")?
-                };
-                Ok(val.unbind())
-            })
+            Python::attach(|py| Ok(exists.into_pyobject(py)?.to_owned().into_any().unbind()))
         })
     }
 
