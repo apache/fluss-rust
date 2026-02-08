@@ -1236,6 +1236,13 @@ mod table_test {
                 ));
             }
         }
+        assert_eq!(
+            batch_collected.len(),
+            expected_records.len(),
+            "Did not receive all records in time, expect receive {} records, but got {} records",
+            expected_records.len(),
+            batch_collected.len()
+        );
         batch_collected.sort_by_key(|r| r.0);
         assert_eq!(
             batch_collected, expected_records,

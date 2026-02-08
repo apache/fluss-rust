@@ -450,7 +450,7 @@ int main() {
     fluss::TablePath partitioned_table_path("fluss", "partitioned_table_cpp_v1");
 
     // Drop if exists
-    admin.DropTable(partitioned_table_path, true);
+    check("drop_partitioned_table_if_exists", admin.DropTable(partitioned_table_path, true));
 
     // Create a partitioned table with a "region" partition key
     auto partitioned_schema = fluss::Schema::NewBuilder()
