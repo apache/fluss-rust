@@ -47,10 +47,10 @@ inline ffi::FfiTablePath to_ffi_table_path(const TablePath& path) {
 inline ffi::FfiColumn to_ffi_column(const Column& col) {
     ffi::FfiColumn ffi_col;
     ffi_col.name = rust::String(col.name);
-    ffi_col.data_type = static_cast<int32_t>(col.data_type);
+    ffi_col.data_type = static_cast<int32_t>(col.data_type.id());
     ffi_col.comment = rust::String(col.comment);
-    ffi_col.precision = col.precision;
-    ffi_col.scale = col.scale;
+    ffi_col.precision = col.data_type.precision();
+    ffi_col.scale = col.data_type.scale();
     return ffi_col;
 }
 
@@ -143,10 +143,8 @@ inline ffi::FfiGenericRow to_ffi_generic_row(const GenericRow& row) {
 inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
     return Column{
         std::string(ffi_col.name),
-        static_cast<DataType>(ffi_col.data_type),
-        std::string(ffi_col.comment),
-        ffi_col.precision,
-        ffi_col.scale};
+        DataType(static_cast<TypeId>(ffi_col.data_type), ffi_col.precision, ffi_col.scale),
+        std::string(ffi_col.comment)};
 }
 
 inline Schema from_ffi_schema(const ffi::FfiSchema& ffi_schema) {

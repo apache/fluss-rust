@@ -80,8 +80,12 @@ fn ffi_data_type_to_core(dt: i32, precision: u32, scale: u32) -> Result<fcore::m
         DATA_TYPE_BYTES => Ok(fcore::metadata::DataTypes::bytes()),
         DATA_TYPE_DATE => Ok(fcore::metadata::DataTypes::date()),
         DATA_TYPE_TIME => Ok(fcore::metadata::DataTypes::time()),
-        DATA_TYPE_TIMESTAMP => Ok(fcore::metadata::DataTypes::timestamp()),
-        DATA_TYPE_TIMESTAMP_LTZ => Ok(fcore::metadata::DataTypes::timestamp_ltz()),
+        DATA_TYPE_TIMESTAMP => Ok(fcore::metadata::DataTypes::timestamp_with_precision(
+            precision,
+        )),
+        DATA_TYPE_TIMESTAMP_LTZ => Ok(fcore::metadata::DataTypes::timestamp_ltz_with_precision(
+            precision,
+        )),
         DATA_TYPE_DECIMAL => {
             let dt = fcore::metadata::DecimalType::new(precision, scale)?;
             Ok(fcore::metadata::DataType::Decimal(dt))
@@ -169,6 +173,8 @@ pub fn core_table_info_to_ffi(info: &fcore::metadata::TableInfo) -> ffi::FfiTabl
                 fcore::metadata::DataType::Decimal(dt) => {
                     (dt.precision() as i32, dt.scale() as i32)
                 }
+                fcore::metadata::DataType::Timestamp(dt) => (dt.precision() as i32, 0),
+                fcore::metadata::DataType::TimestampLTz(dt) => (dt.precision() as i32, 0),
                 _ => (0, 0),
             };
             ffi::FfiColumn {

@@ -54,14 +54,14 @@ int main() {
 
     // 3) Schema with scalar and temporal columns
     auto schema = fluss::Schema::NewBuilder()
-                        .AddColumn("id", fluss::DataType::Int)
-                        .AddColumn("name", fluss::DataType::String)
-                        .AddColumn("score", fluss::DataType::Float)
-                        .AddColumn("age", fluss::DataType::Int)
-                        .AddColumn("event_date", fluss::DataType::Date)
-                        .AddColumn("event_time", fluss::DataType::Time)
-                        .AddColumn("created_at", fluss::DataType::Timestamp)
-                        .AddColumn("updated_at", fluss::DataType::TimestampLtz)
+                        .AddColumn("id", fluss::DataType::Int())
+                        .AddColumn("name", fluss::DataType::String())
+                        .AddColumn("score", fluss::DataType::Float())
+                        .AddColumn("age", fluss::DataType::Int())
+                        .AddColumn("event_date", fluss::DataType::Date())
+                        .AddColumn("event_time", fluss::DataType::Time())
+                        .AddColumn("created_at", fluss::DataType::Timestamp())
+                        .AddColumn("updated_at", fluss::DataType::TimestampLtz())
                         .Build();
 
     auto descriptor = fluss::TableDescriptor::NewBuilder()
@@ -379,9 +379,9 @@ int main() {
 
     // Create schema with decimal columns
     auto decimal_schema = fluss::Schema::NewBuilder()
-                              .AddColumn("id", fluss::DataType::Int)
-                              .AddDecimalColumn("price", 10, 2)    // DECIMAL(10,2) — compact
-                              .AddDecimalColumn("amount", 28, 8)   // DECIMAL(28,8) — i128
+                              .AddColumn("id", fluss::DataType::Int())
+                              .AddColumn("price", fluss::DataType::Decimal(10, 2))    // compact
+                              .AddColumn("amount", fluss::DataType::Decimal(28, 8))   // i128
                               .Build();
 
     auto decimal_descriptor = fluss::TableDescriptor::NewBuilder()

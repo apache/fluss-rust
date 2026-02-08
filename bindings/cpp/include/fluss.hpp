@@ -100,7 +100,7 @@ struct Timestamp {
     }
 };
 
-enum class DataType {
+enum class TypeId {
     Boolean = 1,
     TinyInt = 2,
     SmallInt = 3,
@@ -115,6 +115,42 @@ enum class DataType {
     Timestamp = 12,
     TimestampLtz = 13,
     Decimal = 14,
+};
+
+class DataType {
+public:
+    explicit DataType(TypeId id, int32_t p = 0, int32_t s = 0)
+        : id_(id), precision_(p), scale_(s) {}
+
+    static DataType Boolean() { return DataType(TypeId::Boolean); }
+    static DataType TinyInt() { return DataType(TypeId::TinyInt); }
+    static DataType SmallInt() { return DataType(TypeId::SmallInt); }
+    static DataType Int() { return DataType(TypeId::Int); }
+    static DataType BigInt() { return DataType(TypeId::BigInt); }
+    static DataType Float() { return DataType(TypeId::Float); }
+    static DataType Double() { return DataType(TypeId::Double); }
+    static DataType String() { return DataType(TypeId::String); }
+    static DataType Bytes() { return DataType(TypeId::Bytes); }
+    static DataType Date() { return DataType(TypeId::Date); }
+    static DataType Time() { return DataType(TypeId::Time); }
+    static DataType Timestamp(int32_t precision = 6) {
+        return DataType(TypeId::Timestamp, precision, 0);
+    }
+    static DataType TimestampLtz(int32_t precision = 6) {
+        return DataType(TypeId::TimestampLtz, precision, 0);
+    }
+    static DataType Decimal(int32_t precision, int32_t scale) {
+        return DataType(TypeId::Decimal, precision, scale);
+    }
+
+    TypeId id() const { return id_; }
+    int32_t precision() const { return precision_; }
+    int32_t scale() const { return scale_; }
+
+private:
+    TypeId id_;
+    int32_t precision_{0};
+    int32_t scale_{0};
 };
 
 enum class DatumType {
@@ -175,8 +211,6 @@ struct Column {
     std::string name;
     DataType data_type;
     std::string comment;
-    int32_t precision{0};
-    int32_t scale{0};
 };
 
 struct Schema {
@@ -187,14 +221,7 @@ struct Schema {
     public:
         Builder& AddColumn(std::string name, DataType type,
                            std::string comment = "") {
-            columns_.push_back({std::move(name), type, std::move(comment), 0, 0});
-            return *this;
-        }
-
-        Builder& AddDecimalColumn(std::string name, int32_t precision, int32_t scale,
-                                  std::string comment = "") {
-            columns_.push_back({std::move(name), DataType::Decimal, std::move(comment),
-                                precision, scale});
+            columns_.push_back({std::move(name), std::move(type), std::move(comment)});
             return *this;
         }
 
@@ -302,10 +329,10 @@ struct Datum {
     double f64_val{0.0};
     std::string string_val;
     std::vector<uint8_t> bytes_val;
-    int32_t decimal_precision{0};
-    int32_t decimal_scale{0};
-    int64_t i128_hi{0};
-    int64_t i128_lo{0};
+    int32_t decimal_precision{0};  // Decimal: precision (total digits)
+    int32_t decimal_scale{0};      // Decimal: scale (digits after decimal point)
+    int64_t i128_hi{0};            // Decimal (i128): high 64 bits of unscaled value
+    int64_t i128_lo{0};            // Decimal (i128): low 64 bits of unscaled value
 
     static Datum Null() { return {}; }
     static Datum Bool(bool v) {
