@@ -217,11 +217,13 @@ just release $RELEASE_VERSION
 
 This creates under `dist/`:
 
-- `fluss-rust-${RELEASE_VERSION}.tar.gz`
-- `fluss-rust-${RELEASE_VERSION}.tar.gz.sha512`
-- `fluss-rust-${RELEASE_VERSION}.tar.gz.asc`
+- `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz`
+- `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.sha512`
+- `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.asc`
 
-Verify with: `gpg --verify dist/fluss-rust-${RELEASE_VERSION}.tar.gz.asc dist/fluss-rust-${RELEASE_VERSION}.tar.gz`
+(Incubator policy requires the word "incubating" in release artifact names.)
+
+Verify with: `gpg --verify dist/fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.asc dist/fluss-rust-${RELEASE_VERSION}-incubating.tar.gz`
 
 ### 4. Stage artifacts to SVN (dist.apache.org dev)
 
@@ -231,7 +233,7 @@ From the **fluss-rust** repo root, check out the Fluss dev area and add the rele
 svn checkout https://dist.apache.org/repos/dist/dev/incubator/fluss fluss-dist-dev --depth=immediates
 cd fluss-dist-dev
 mkdir $SVN_RC_DIR
-cp ../dist/fluss-rust-${RELEASE_VERSION}.* $SVN_RC_DIR/
+cp ../dist/fluss-rust-${RELEASE_VERSION}-incubating.* $SVN_RC_DIR/
 svn add $SVN_RC_DIR
 svn status
 svn commit -m "Add fluss-rust ${RELEASE_VERSION} RC${RC_NUM}"
@@ -282,7 +284,7 @@ PyPI (release) / TestPyPI (RC):
 * https://pypi.org/project/pyfluss/
 * https://test.pypi.org/project/pyfluss/
 
-Please download, verify, and test. Verification steps are in the project docs (todo: add how to verify release).
+Please download, verify, and test. Verification steps are in [How to Verify a Release Candidate](verifying-a-release-candidate.md).
 
 The vote will be open for at least 72 hours. It is adopted by majority approval with at least 3 PPMC affirmative votes (or as per project policy).
 
@@ -449,5 +451,5 @@ After finishing the release, consider what could be improved (simplifications, c
 ## See also
 
 - [Release Manager Preparation](https://fluss.apache.org/community/how-to-release/release-manager-preparation/) — GPG and one-time setup
-- [Verifying a Fluss Release](https://fluss.apache.org/community/how-to-release/verifying-a-fluss-release/) — How to verify artifacts (adapt for fluss-rust source tarball)
+- [How to Verify a Release Candidate](verifying-a-release-candidate.md) — Verify signatures, checksums, build, and tests for a release candidate
 - [ASF Release Policy](https://www.apache.org/legal/release-policy.html)

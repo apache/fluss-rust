@@ -15,9 +15,10 @@
 # limitations under the License.
 #
 # Create ASF source release artifacts under dist/:
-#   fluss-rust-{version}.tar.gz
-#   fluss-rust-{version}.tar.gz.asc
-#   fluss-rust-{version}.tar.gz.sha512
+#   fluss-rust-{version}-incubating.tar.gz
+#   fluss-rust-{version}-incubating.tar.gz.asc
+#   fluss-rust-{version}-incubating.tar.gz.sha512
+# (Incubator policy requires "incubating" in the artifact name.)
 # Run from repo root. Check out the release tag first (e.g. git checkout v0.1.0-rc1).
 # Usage: ./scripts/release.sh [version]
 #   If version is omitted, it is read from Cargo.toml (workspace.package.version).
@@ -37,7 +38,7 @@ else
   fi
 fi
 
-PREFIX="fluss-rust-${VERSION}"
+PREFIX="fluss-rust-${VERSION}-incubating"
 DIST_DIR="${REPO_ROOT}/dist"
 TARBALL="${PREFIX}.tar.gz"
 
