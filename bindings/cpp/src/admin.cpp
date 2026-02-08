@@ -204,4 +204,124 @@ Result Admin::CreatePartition(const TablePath& table_path,
     return utils::from_ffi_result(ffi_result);
 }
 
+Result Admin::DropPartition(const TablePath& table_path,
+                            const std::unordered_map<std::string, std::string>& partition_spec,
+                            bool ignore_if_not_exists) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_path = utils::to_ffi_table_path(table_path);
+
+    rust::Vec<ffi::FfiPartitionKeyValue> rust_spec;
+    for (const auto& [key, value] : partition_spec) {
+        ffi::FfiPartitionKeyValue kv;
+        kv.key = rust::String(key);
+        kv.value = rust::String(value);
+        rust_spec.push_back(std::move(kv));
+    }
+
+    auto ffi_result =
+        admin_->drop_partition(ffi_path, std::move(rust_spec), ignore_if_not_exists);
+    return utils::from_ffi_result(ffi_result);
+}
+
+Result Admin::CreateDatabase(const std::string& database_name,
+                             const DatabaseDescriptor& descriptor,
+                             bool ignore_if_exists) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_desc = utils::to_ffi_database_descriptor(descriptor);
+    auto ffi_result =
+        admin_->create_database(rust::Str(database_name), ffi_desc, ignore_if_exists);
+    return utils::from_ffi_result(ffi_result);
+}
+
+Result Admin::DropDatabase(const std::string& database_name, bool ignore_if_not_exists,
+                           bool cascade) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_result =
+        admin_->drop_database(rust::Str(database_name), ignore_if_not_exists, cascade);
+    return utils::from_ffi_result(ffi_result);
+}
+
+Result Admin::ListDatabases(std::vector<std::string>& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_result = admin_->list_databases();
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.clear();
+        out.reserve(ffi_result.database_names.size());
+        for (const auto& name : ffi_result.database_names) {
+            out.push_back(std::string(name));
+        }
+    }
+    return result;
+}
+
+Result Admin::DatabaseExists(const std::string& database_name, bool& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_result = admin_->database_exists(rust::Str(database_name));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = ffi_result.value;
+    }
+    return result;
+}
+
+Result Admin::GetDatabaseInfo(const std::string& database_name, DatabaseInfo& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_result = admin_->get_database_info(rust::Str(database_name));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = utils::from_ffi_database_info(ffi_result.database_info);
+    }
+    return result;
+}
+
+Result Admin::ListTables(const std::string& database_name, std::vector<std::string>& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_result = admin_->list_tables(rust::Str(database_name));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.clear();
+        out.reserve(ffi_result.table_names.size());
+        for (const auto& name : ffi_result.table_names) {
+            out.push_back(std::string(name));
+        }
+    }
+    return result;
+}
+
+Result Admin::TableExists(const TablePath& table_path, bool& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_path = utils::to_ffi_table_path(table_path);
+    auto ffi_result = admin_->table_exists(ffi_path);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = ffi_result.value;
+    }
+    return result;
+}
+
 }  // namespace fluss

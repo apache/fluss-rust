@@ -250,6 +250,49 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
     }
 }
 
+/// Convert FFI database descriptor to core. Returns None if descriptor is effectively empty
+/// (no comment and no properties), so create_database can pass Option::None to core.
+pub fn ffi_database_descriptor_to_core(
+    d: &ffi::FfiDatabaseDescriptor,
+) -> Option<fcore::metadata::DatabaseDescriptor> {
+    if d.comment.is_empty() && d.properties.is_empty() {
+        return None;
+    }
+    let mut builder = fcore::metadata::DatabaseDescriptor::builder();
+    if !d.comment.is_empty() {
+        builder = builder.comment(&d.comment);
+    }
+    if !d.properties.is_empty() {
+        let props: std::collections::HashMap<String, String> = d
+            .properties
+            .iter()
+            .map(|kv| (kv.key.clone(), kv.value.clone()))
+            .collect();
+        builder = builder.custom_properties(props);
+    }
+    Some(builder.build())
+}
+
+/// Convert core DatabaseInfo to FFI.
+pub fn core_database_info_to_ffi(info: &fcore::metadata::DatabaseInfo) -> ffi::FfiDatabaseInfo {
+    let desc = info.database_descriptor();
+    let properties: Vec<ffi::HashMapValue> = desc
+        .custom_properties()
+        .iter()
+        .map(|(k, v)| ffi::HashMapValue {
+            key: k.clone(),
+            value: v.clone(),
+        })
+        .collect();
+    ffi::FfiDatabaseInfo {
+        database_name: info.database_name().to_string(),
+        comment: desc.comment().unwrap_or("").to_string(),
+        properties,
+        created_time: info.created_time(),
+        modified_time: info.modified_time(),
+    }
+}
+
 /// Look up decimal (precision, scale) from schema for column `idx`.
 fn get_decimal_type(idx: usize, schema: Option<&fcore::metadata::Schema>) -> Result<(u32, u32)> {
     let col = schema

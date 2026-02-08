@@ -709,6 +709,21 @@ struct PartitionInfo {
     std::string partition_name;
 };
 
+/// Descriptor for create_database (optional). Leave comment and properties empty for default.
+struct DatabaseDescriptor {
+    std::string comment;
+    std::unordered_map<std::string, std::string> properties;
+};
+
+/// Metadata returned by GetDatabaseInfo.
+struct DatabaseInfo {
+    std::string database_name;
+    std::string comment;
+    std::unordered_map<std::string, std::string> properties;
+    int64_t created_time{0};
+    int64_t modified_time{0};
+};
+
 class AppendWriter;
 class WriteResult;
 class LogScanner;
@@ -772,6 +787,27 @@ class Admin {
     Result CreatePartition(const TablePath& table_path,
                            const std::unordered_map<std::string, std::string>& partition_spec,
                            bool ignore_if_exists = false);
+
+    Result DropPartition(const TablePath& table_path,
+                         const std::unordered_map<std::string, std::string>& partition_spec,
+                         bool ignore_if_not_exists = false);
+
+    Result CreateDatabase(const std::string& database_name,
+                          const DatabaseDescriptor& descriptor,
+                          bool ignore_if_exists = false);
+
+    Result DropDatabase(const std::string& database_name, bool ignore_if_not_exists = false,
+                        bool cascade = true);
+
+    Result ListDatabases(std::vector<std::string>& out);
+
+    Result DatabaseExists(const std::string& database_name, bool& out);
+
+    Result GetDatabaseInfo(const std::string& database_name, DatabaseInfo& out);
+
+    Result ListTables(const std::string& database_name, std::vector<std::string>& out);
+
+    Result TableExists(const TablePath& table_path, bool& out);
 
    private:
     Result DoListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,

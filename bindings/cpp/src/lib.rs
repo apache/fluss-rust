@@ -202,6 +202,39 @@ mod ffi {
         partition_infos: Vec<FfiPartitionInfo>,
     }
 
+    struct FfiDatabaseDescriptor {
+        comment: String,
+        properties: Vec<HashMapValue>,
+    }
+
+    struct FfiDatabaseInfo {
+        database_name: String,
+        comment: String,
+        properties: Vec<HashMapValue>,
+        created_time: i64,
+        modified_time: i64,
+    }
+
+    struct FfiDatabaseInfoResult {
+        result: FfiResult,
+        database_info: FfiDatabaseInfo,
+    }
+
+    struct FfiListDatabasesResult {
+        result: FfiResult,
+        database_names: Vec<String>,
+    }
+
+    struct FfiListTablesResult {
+        result: FfiResult,
+        table_names: Vec<String>,
+    }
+
+    struct FfiBoolResult {
+        result: FfiResult,
+        value: bool,
+    }
+
     extern "Rust" {
         type Connection;
         type Admin;
@@ -257,6 +290,29 @@ mod ffi {
             partition_spec: Vec<FfiPartitionKeyValue>,
             ignore_if_exists: bool,
         ) -> FfiResult;
+        fn drop_partition(
+            self: &Admin,
+            table_path: &FfiTablePath,
+            partition_spec: Vec<FfiPartitionKeyValue>,
+            ignore_if_not_exists: bool,
+        ) -> FfiResult;
+        fn create_database(
+            self: &Admin,
+            database_name: &str,
+            descriptor: &FfiDatabaseDescriptor,
+            ignore_if_exists: bool,
+        ) -> FfiResult;
+        fn drop_database(
+            self: &Admin,
+            database_name: &str,
+            ignore_if_not_exists: bool,
+            cascade: bool,
+        ) -> FfiResult;
+        fn list_databases(self: &Admin) -> FfiListDatabasesResult;
+        fn database_exists(self: &Admin, database_name: &str) -> FfiBoolResult;
+        fn get_database_info(self: &Admin, database_name: &str) -> FfiDatabaseInfoResult;
+        fn list_tables(self: &Admin, database_name: &str) -> FfiListTablesResult;
+        fn table_exists(self: &Admin, table_path: &FfiTablePath) -> FfiBoolResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
@@ -659,6 +715,158 @@ impl Admin {
         match result {
             Ok(_) => ok_result(),
             Err(e) => err_result(1, e.to_string()),
+        }
+    }
+
+    fn drop_partition(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        partition_spec: Vec<ffi::FfiPartitionKeyValue>,
+        ignore_if_not_exists: bool,
+    ) -> ffi::FfiResult {
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+        let spec_map: std::collections::HashMap<String, String> = partition_spec
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect();
+        let partition_spec = fcore::metadata::PartitionSpec::new(spec_map);
+
+        let result = RUNTIME.block_on(async {
+            self.inner
+                .drop_partition(&path, &partition_spec, ignore_if_not_exists)
+                .await
+        });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_result(1, e.to_string()),
+        }
+    }
+
+    fn create_database(
+        &self,
+        database_name: &str,
+        descriptor: &ffi::FfiDatabaseDescriptor,
+        ignore_if_exists: bool,
+    ) -> ffi::FfiResult {
+        let descriptor_opt = types::ffi_database_descriptor_to_core(descriptor);
+
+        let result = RUNTIME.block_on(async {
+            self.inner
+                .create_database(database_name, ignore_if_exists, descriptor_opt.as_ref())
+                .await
+        });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_result(1, e.to_string()),
+        }
+    }
+
+    fn drop_database(
+        &self,
+        database_name: &str,
+        ignore_if_not_exists: bool,
+        cascade: bool,
+    ) -> ffi::FfiResult {
+        let result = RUNTIME.block_on(async {
+            self.inner
+                .drop_database(database_name, ignore_if_not_exists, cascade)
+                .await
+        });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_result(1, e.to_string()),
+        }
+    }
+
+    fn list_databases(&self) -> ffi::FfiListDatabasesResult {
+        let result = RUNTIME.block_on(async { self.inner.list_databases().await });
+
+        match result {
+            Ok(names) => ffi::FfiListDatabasesResult {
+                result: ok_result(),
+                database_names: names,
+            },
+            Err(e) => ffi::FfiListDatabasesResult {
+                result: err_result(1, e.to_string()),
+                database_names: vec![],
+            },
+        }
+    }
+
+    fn database_exists(&self, database_name: &str) -> ffi::FfiBoolResult {
+        let result = RUNTIME.block_on(async { self.inner.database_exists(database_name).await });
+
+        match result {
+            Ok(exists) => ffi::FfiBoolResult {
+                result: ok_result(),
+                value: exists,
+            },
+            Err(e) => ffi::FfiBoolResult {
+                result: err_result(1, e.to_string()),
+                value: false,
+            },
+        }
+    }
+
+    fn get_database_info(&self, database_name: &str) -> ffi::FfiDatabaseInfoResult {
+        let result = RUNTIME.block_on(async { self.inner.get_database_info(database_name).await });
+
+        match result {
+            Ok(info) => ffi::FfiDatabaseInfoResult {
+                result: ok_result(),
+                database_info: types::core_database_info_to_ffi(&info),
+            },
+            Err(e) => ffi::FfiDatabaseInfoResult {
+                result: err_result(1, e.to_string()),
+                database_info: ffi::FfiDatabaseInfo {
+                    database_name: String::new(),
+                    comment: String::new(),
+                    properties: vec![],
+                    created_time: 0,
+                    modified_time: 0,
+                },
+            },
+        }
+    }
+
+    fn list_tables(&self, database_name: &str) -> ffi::FfiListTablesResult {
+        let result = RUNTIME.block_on(async { self.inner.list_tables(database_name).await });
+
+        match result {
+            Ok(names) => ffi::FfiListTablesResult {
+                result: ok_result(),
+                table_names: names,
+            },
+            Err(e) => ffi::FfiListTablesResult {
+                result: err_result(1, e.to_string()),
+                table_names: vec![],
+            },
+        }
+    }
+
+    fn table_exists(&self, table_path: &ffi::FfiTablePath) -> ffi::FfiBoolResult {
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+
+        let result = RUNTIME.block_on(async { self.inner.table_exists(&path).await });
+
+        match result {
+            Ok(exists) => ffi::FfiBoolResult {
+                result: ok_result(),
+                value: exists,
+            },
+            Err(e) => ffi::FfiBoolResult {
+                result: err_result(1, e.to_string()),
+                value: false,
+            },
         }
     }
 }
