@@ -153,36 +153,34 @@ int main() {
     std::cout << "Scanned records: " << records.Size() << std::endl;
     bool scan_ok = true;
     for (const auto& rec : records.records) {
-        const auto& f = rec.row.fields;
-
-        if (f[4].GetType() != fluss::DatumType::Date) {
-            std::cerr << "ERROR: field 4 expected Date, got " << static_cast<int>(f[4].GetType())
-                      << std::endl;
+        if (rec.row.GetType(4) != fluss::DatumType::Date) {
+            std::cerr << "ERROR: field 4 expected Date, got "
+                      << static_cast<int>(rec.row.GetType(4)) << std::endl;
             scan_ok = false;
         }
-        if (f[5].GetType() != fluss::DatumType::Time) {
-            std::cerr << "ERROR: field 5 expected Time, got " << static_cast<int>(f[5].GetType())
-                      << std::endl;
+        if (rec.row.GetType(5) != fluss::DatumType::Time) {
+            std::cerr << "ERROR: field 5 expected Time, got "
+                      << static_cast<int>(rec.row.GetType(5)) << std::endl;
             scan_ok = false;
         }
-        if (f[6].GetType() != fluss::DatumType::TimestampNtz) {
+        if (rec.row.GetType(6) != fluss::DatumType::TimestampNtz) {
             std::cerr << "ERROR: field 6 expected TimestampNtz, got "
-                      << static_cast<int>(f[6].GetType()) << std::endl;
+                      << static_cast<int>(rec.row.GetType(6)) << std::endl;
             scan_ok = false;
         }
-        if (f[7].GetType() != fluss::DatumType::TimestampLtz) {
+        if (rec.row.GetType(7) != fluss::DatumType::TimestampLtz) {
             std::cerr << "ERROR: field 7 expected TimestampLtz, got "
-                      << static_cast<int>(f[7].GetType()) << std::endl;
+                      << static_cast<int>(rec.row.GetType(7)) << std::endl;
             scan_ok = false;
         }
 
-        auto date = f[4].GetDate();
-        auto time = f[5].GetTime();
-        auto ts_ntz = f[6].GetTimestamp();
-        auto ts_ltz = f[7].GetTimestamp();
+        auto date = rec.row.GetDate(4);
+        auto time = rec.row.GetTime(5);
+        auto ts_ntz = rec.row.GetTimestamp(6);
+        auto ts_ltz = rec.row.GetTimestamp(7);
 
-        std::cout << "  id=" << f[0].GetInt32() << " name=" << f[1].GetString()
-                  << " score=" << f[2].GetFloat32() << " age=" << f[3].GetInt32()
+        std::cout << "  id=" << rec.row.GetInt32(0) << " name=" << rec.row.GetString(1)
+                  << " score=" << rec.row.GetFloat32(2) << " age=" << rec.row.GetInt32(3)
                   << " date=" << date.Year() << "-" << date.Month() << "-" << date.Day()
                   << " time=" << time.Hour() << ":" << time.Minute() << ":" << time.Second()
                   << " ts_ntz=" << ts_ntz.epoch_millis << " ts_ltz=" << ts_ltz.epoch_millis << "+"
@@ -210,26 +208,24 @@ int main() {
 
     std::cout << "Projected records: " << projected_records.Size() << std::endl;
     for (const auto& rec : projected_records.records) {
-        const auto& f = rec.row.fields;
-
-        if (f.size() != 2) {
-            std::cerr << "ERROR: expected 2 fields, got " << f.size() << std::endl;
+        if (rec.row.FieldCount() != 2) {
+            std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
             scan_ok = false;
             continue;
         }
-        if (f[0].GetType() != fluss::DatumType::Int32) {
+        if (rec.row.GetType(0) != fluss::DatumType::Int32) {
             std::cerr << "ERROR: projected field 0 expected Int32, got "
-                      << static_cast<int>(f[0].GetType()) << std::endl;
+                      << static_cast<int>(rec.row.GetType(0)) << std::endl;
             scan_ok = false;
         }
-        if (f[1].GetType() != fluss::DatumType::TimestampLtz) {
+        if (rec.row.GetType(1) != fluss::DatumType::TimestampLtz) {
             std::cerr << "ERROR: projected field 1 expected TimestampLtz, got "
-                      << static_cast<int>(f[1].GetType()) << std::endl;
+                      << static_cast<int>(rec.row.GetType(1)) << std::endl;
             scan_ok = false;
         }
 
-        auto ts = f[1].GetTimestamp();
-        std::cout << "  id=" << f[0].GetInt32() << " updated_at=" << ts.epoch_millis << "+"
+        auto ts = rec.row.GetTimestamp(1);
+        std::cout << "  id=" << rec.row.GetInt32(0) << " updated_at=" << ts.epoch_millis << "+"
                   << ts.nano_of_millisecond << "ns" << std::endl;
     }
 
@@ -428,12 +424,9 @@ int main() {
 
     std::cout << "Scanned decimal records: " << decimal_records.Size() << std::endl;
     for (const auto& rec : decimal_records) {
-        auto& price = rec.row.fields[1];
-        auto& amount = rec.row.fields[2];
-        std::cout << "  id=" << rec.row.fields[0].GetInt32() << " price=" << price.DecimalToString()
-                  << " (raw=" << price.GetInt64() << ")"
-                  << " amount=" << amount.DecimalToString() << " is_decimal=" << price.IsDecimal()
-                  << std::endl;
+        std::cout << "  id=" << rec.row.GetInt32(0) << " price=" << rec.row.DecimalToString(1)
+                  << " amount=" << rec.row.DecimalToString(2)
+                  << " is_decimal=" << rec.row.IsDecimal(1) << std::endl;
     }
 
     // 13) Partitioned table example
@@ -525,9 +518,9 @@ int main() {
               << std::endl;
     for (size_t i = 0; i < partition_records.Size(); ++i) {
         const auto& rec = partition_records[i];
-        std::cout << "  Record " << i << ": id=" << rec.row.fields[0].i32_val
-                  << ", region=" << rec.row.fields[1].string_val
-                  << ", value=" << rec.row.fields[2].i64_val << std::endl;
+        std::cout << "  Record " << i << ": id=" << rec.row.GetInt32(0)
+                  << ", region=" << rec.row.GetString(1) << ", value=" << rec.row.GetInt64(2)
+                  << std::endl;
     }
 
     // 13.2) subscribe_partition_buckets: batch subscribe to all partitions at once
@@ -551,9 +544,9 @@ int main() {
               << " records from batch partition subscription" << std::endl;
     for (size_t i = 0; i < partition_batch_records.Size(); ++i) {
         const auto& rec = partition_batch_records[i];
-        std::cout << "  Record " << i << ": id=" << rec.row.fields[0].i32_val
-                  << ", region=" << rec.row.fields[1].string_val
-                  << ", value=" << rec.row.fields[2].i64_val << std::endl;
+        std::cout << "  Record " << i << ": id=" << rec.row.GetInt32(0)
+                  << ", region=" << rec.row.GetString(1) << ", value=" << rec.row.GetInt64(2)
+                  << std::endl;
     }
 
     // Cleanup
