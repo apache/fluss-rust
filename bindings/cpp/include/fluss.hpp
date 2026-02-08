@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -312,19 +313,13 @@ struct TableInfo {
     Schema schema;
 };
 
+namespace detail {
+struct FfiAccess;
+}
+
 struct Datum {
-    DatumType type{DatumType::Null};
-    bool bool_val{false};
-    int32_t i32_val{0};
-    int64_t i64_val{0};
-    float f32_val{0.0F};
-    double f64_val{0.0};
-    std::string string_val;
-    std::vector<uint8_t> bytes_val;
-    int32_t decimal_precision{0};  // Decimal: precision (total digits)
-    int32_t decimal_scale{0};      // Decimal: scale (digits after decimal point)
-    int64_t i128_hi{0};            // Decimal (i128): high 64 bits of unscaled value
-    int64_t i128_lo{0};            // Decimal (i128): low 64 bits of unscaled value
+    friend struct GenericRow;
+    friend struct detail::FfiAccess;
 
     static Datum Null() { return {}; }
     static Datum Bool(bool v) {
@@ -404,6 +399,29 @@ struct Datum {
         return d;
     }
 
+   private:
+    DatumType type{DatumType::Null};
+    bool bool_val{false};
+    int32_t i32_val{0};
+    int64_t i64_val{0};
+    float f32_val{0.0F};
+    double f64_val{0.0};
+    std::string string_val;
+    std::vector<uint8_t> bytes_val;
+    int32_t decimal_precision{0};  // Decimal: precision (total digits)
+    int32_t decimal_scale{0};      // Decimal: scale (digits after decimal point)
+    int64_t i128_hi{0};            // Decimal (i128): high 64 bits of unscaled value
+    int64_t i128_lo{0};            // Decimal (i128): low 64 bits of unscaled value
+
+    DatumType GetType() const { return type; }
+    bool IsNull() const { return type == DatumType::Null; }
+    bool GetBool() const { return bool_val; }
+    int32_t GetInt32() const { return i32_val; }
+    int64_t GetInt64() const { return i64_val; }
+    float GetFloat32() const { return f32_val; }
+    double GetFloat64() const { return f64_val; }
+    const std::string& GetString() const { return string_val; }
+    const std::vector<uint8_t>& GetBytes() const { return bytes_val; }
     fluss::Date GetDate() const { return {i32_val}; }
     fluss::Time GetTime() const { return {i32_val}; }
     fluss::Timestamp GetTimestamp() const { return {i64_val, i32_val}; }
@@ -428,7 +446,6 @@ struct Datum {
         return "";
     }
 
-   private:
     static std::string FormatUnscaled64(int64_t unscaled, int32_t scale) {
         bool negative = unscaled < 0;
         uint64_t abs_val =
@@ -469,7 +486,47 @@ struct Datum {
 };
 
 struct GenericRow {
-    std::vector<Datum> fields;
+    friend struct detail::FfiAccess;
+
+    size_t FieldCount() const { return fields.size(); }
+
+    DatumType GetType(size_t idx) const { return GetField(idx).GetType(); }
+    bool IsNull(size_t idx) const { return GetField(idx).IsNull(); }
+    bool GetBool(size_t idx) const { return GetTypedField(idx, DatumType::Bool).GetBool(); }
+    int32_t GetInt32(size_t idx) const { return GetTypedField(idx, DatumType::Int32).GetInt32(); }
+    int64_t GetInt64(size_t idx) const { return GetTypedField(idx, DatumType::Int64).GetInt64(); }
+    float GetFloat32(size_t idx) const {
+        return GetTypedField(idx, DatumType::Float32).GetFloat32();
+    }
+    double GetFloat64(size_t idx) const {
+        return GetTypedField(idx, DatumType::Float64).GetFloat64();
+    }
+    const std::string& GetString(size_t idx) const {
+        return GetTypedField(idx, DatumType::String).GetString();
+    }
+    const std::vector<uint8_t>& GetBytes(size_t idx) const {
+        return GetTypedField(idx, DatumType::Bytes).GetBytes();
+    }
+    fluss::Date GetDate(size_t idx) const { return GetTypedField(idx, DatumType::Date).GetDate(); }
+    fluss::Time GetTime(size_t idx) const { return GetTypedField(idx, DatumType::Time).GetTime(); }
+    fluss::Timestamp GetTimestamp(size_t idx) const {
+        const auto& d = GetField(idx);
+        auto t = d.GetType();
+        if (t != DatumType::TimestampNtz && t != DatumType::TimestampLtz) {
+            throw std::runtime_error("GenericRow: field " + std::to_string(idx) +
+                                     " is not a Timestamp type");
+        }
+        return d.GetTimestamp();
+    }
+    bool IsDecimal(size_t idx) const { return GetField(idx).IsDecimal(); }
+    std::string DecimalToString(size_t idx) const {
+        const auto& d = GetField(idx);
+        if (!d.IsDecimal()) {
+            throw std::runtime_error("GenericRow: field " + std::to_string(idx) +
+                                     " is not a Decimal type");
+        }
+        return d.DecimalToString();
+    }
 
     void SetNull(size_t idx) {
         EnsureSize(idx);
@@ -537,6 +594,27 @@ struct GenericRow {
     }
 
    private:
+    std::vector<Datum> fields;
+
+    const Datum& GetField(size_t idx) const {
+        if (idx >= fields.size()) {
+            throw std::runtime_error("GenericRow: index " + std::to_string(idx) +
+                                     " out of bounds (size=" + std::to_string(fields.size()) + ")");
+        }
+        return fields[idx];
+    }
+
+    const Datum& GetTypedField(size_t idx, DatumType expected) const {
+        const auto& d = GetField(idx);
+        if (d.GetType() != expected) {
+            throw std::runtime_error("GenericRow: field " + std::to_string(idx) +
+                                     " type mismatch: expected " +
+                                     std::to_string(static_cast<int>(expected)) + ", got " +
+                                     std::to_string(static_cast<int>(d.GetType())));
+        }
+        return d;
+    }
+
     void EnsureSize(size_t idx) {
         if (fields.size() <= idx) {
             fields.resize(idx + 1);
