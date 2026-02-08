@@ -52,6 +52,15 @@ pub const DATUM_TYPE_FLOAT32: i32 = 4;
 pub const DATUM_TYPE_FLOAT64: i32 = 5;
 pub const DATUM_TYPE_STRING: i32 = 6;
 pub const DATUM_TYPE_BYTES: i32 = 7;
+pub const DATUM_TYPE_DATE: i32 = 11;
+pub const DATUM_TYPE_TIME: i32 = 12;
+pub const DATUM_TYPE_TIMESTAMP_NTZ: i32 = 13;
+pub const DATUM_TYPE_TIMESTAMP_LTZ: i32 = 14;
+
+const MILLIS_PER_SECOND: i64 = 1_000;
+const MICROS_PER_MILLI: i64 = 1_000;
+const NANOS_PER_MICRO: i64 = 1_000;
+const NANOS_PER_MILLI: i64 = 1_000_000;
 
 fn ffi_data_type_to_core(dt: i32) -> Result<fcore::metadata::DataType> {
     match dt {
@@ -224,6 +233,16 @@ pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'_> {
             DATUM_TYPE_FLOAT64 => Datum::Float64(field.f64_val.into()),
             DATUM_TYPE_STRING => Datum::String(Cow::Borrowed(field.string_val.as_str())),
             DATUM_TYPE_BYTES => Datum::Blob(Cow::Borrowed(field.bytes_val.as_slice())),
+            DATUM_TYPE_DATE => Datum::Date(fcore::row::Date::new(field.i32_val)),
+            DATUM_TYPE_TIME => Datum::Time(fcore::row::Time::new(field.i32_val)),
+            DATUM_TYPE_TIMESTAMP_NTZ => Datum::TimestampNtz(
+                fcore::row::TimestampNtz::from_millis_nanos(field.i64_val, field.i32_val)
+                    .unwrap_or_else(|_| fcore::row::TimestampNtz::new(field.i64_val)),
+            ),
+            DATUM_TYPE_TIMESTAMP_LTZ => Datum::TimestampLtz(
+                fcore::row::TimestampLtz::from_millis_nanos(field.i64_val, field.i32_val)
+                    .unwrap_or_else(|_| fcore::row::TimestampLtz::new(field.i64_val)),
+            ),
             _ => Datum::Null,
         };
         generic_row.set_field(idx, datum);
@@ -232,7 +251,10 @@ pub fn ffi_row_to_core(row: &ffi::FfiGenericRow) -> fcore::row::GenericRow<'_> {
     generic_row
 }
 
-pub fn core_scan_records_to_ffi(records: &fcore::record::ScanRecords) -> ffi::FfiScanRecords {
+pub fn core_scan_records_to_ffi(
+    records: &fcore::record::ScanRecords,
+    columns: &[fcore::metadata::Column],
+) -> ffi::FfiScanRecords {
     let mut ffi_records = Vec::new();
 
     // Iterate over all buckets and their records
@@ -240,7 +262,7 @@ pub fn core_scan_records_to_ffi(records: &fcore::record::ScanRecords) -> ffi::Ff
         let bucket_id = table_bucket.bucket_id();
         for record in bucket_records {
             let row = record.row();
-            let fields = core_row_to_ffi_fields(row);
+            let fields = core_row_to_ffi_fields(row, columns);
 
             ffi_records.push(ffi::FfiScanRecord {
                 bucket_id,
@@ -256,7 +278,10 @@ pub fn core_scan_records_to_ffi(records: &fcore::record::ScanRecords) -> ffi::Ff
     }
 }
 
-fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
+fn core_row_to_ffi_fields(
+    row: &fcore::row::ColumnarRow,
+    columns: &[fcore::metadata::Column],
+) -> Vec<ffi::FfiDatum> {
     fn new_datum(datum_type: i32) -> ffi::FfiDatum {
         ffi::FfiDatum {
             datum_type,
@@ -361,52 +386,59 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                     .as_any()
                     .downcast_ref::<Date32Array>()
                     .expect("Date32 column expected");
-                let mut datum = new_datum(DATUM_TYPE_INT32);
+                let mut datum = new_datum(DATUM_TYPE_DATE);
                 datum.i32_val = array.value(row_id);
                 datum
             }
-            ArrowDataType::Timestamp(unit, _) => match unit {
-                TimeUnit::Second => {
-                    let array = record_batch
-                        .column(i)
-                        .as_any()
-                        .downcast_ref::<TimestampSecondArray>()
-                        .expect("Timestamp(second) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT64);
-                    datum.i64_val = array.value(row_id);
-                    datum
+            ArrowDataType::Timestamp(unit, _tz) => {
+                let datum_type = match columns.get(i).map(|c| c.data_type()) {
+                    Some(fcore::metadata::DataType::TimestampLTz(_)) => DATUM_TYPE_TIMESTAMP_LTZ,
+                    _ => DATUM_TYPE_TIMESTAMP_NTZ,
+                };
+                let mut datum = new_datum(datum_type);
+                match unit {
+                    TimeUnit::Second => {
+                        let array = record_batch
+                            .column(i)
+                            .as_any()
+                            .downcast_ref::<TimestampSecondArray>()
+                            .expect("Timestamp(second) column expected");
+                        datum.i64_val = array.value(row_id) * MILLIS_PER_SECOND;
+                        datum.i32_val = 0;
+                    }
+                    TimeUnit::Millisecond => {
+                        let array = record_batch
+                            .column(i)
+                            .as_any()
+                            .downcast_ref::<TimestampMillisecondArray>()
+                            .expect("Timestamp(millisecond) column expected");
+                        datum.i64_val = array.value(row_id);
+                        datum.i32_val = 0;
+                    }
+                    TimeUnit::Microsecond => {
+                        let array = record_batch
+                            .column(i)
+                            .as_any()
+                            .downcast_ref::<TimestampMicrosecondArray>()
+                            .expect("Timestamp(microsecond) column expected");
+                        let micros = array.value(row_id);
+                        datum.i64_val = micros.div_euclid(MICROS_PER_MILLI);
+                        datum.i32_val =
+                            (micros.rem_euclid(MICROS_PER_MILLI) * NANOS_PER_MICRO) as i32;
+                    }
+                    TimeUnit::Nanosecond => {
+                        let array = record_batch
+                            .column(i)
+                            .as_any()
+                            .downcast_ref::<TimestampNanosecondArray>()
+                            .expect("Timestamp(nanosecond) column expected");
+                        let nanos = array.value(row_id);
+                        datum.i64_val = nanos.div_euclid(NANOS_PER_MILLI);
+                        datum.i32_val = nanos.rem_euclid(NANOS_PER_MILLI) as i32;
+                    }
                 }
-                TimeUnit::Millisecond => {
-                    let array = record_batch
-                        .column(i)
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .expect("Timestamp(millisecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT64);
-                    datum.i64_val = array.value(row_id);
-                    datum
-                }
-                TimeUnit::Microsecond => {
-                    let array = record_batch
-                        .column(i)
-                        .as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>()
-                        .expect("Timestamp(microsecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT64);
-                    datum.i64_val = array.value(row_id);
-                    datum
-                }
-                TimeUnit::Nanosecond => {
-                    let array = record_batch
-                        .column(i)
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .expect("Timestamp(nanosecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT64);
-                    datum.i64_val = array.value(row_id);
-                    datum
-                }
-            },
+                datum
+            }
             ArrowDataType::Time32(unit) => match unit {
                 TimeUnit::Second => {
                     let array = record_batch
@@ -414,8 +446,8 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                         .as_any()
                         .downcast_ref::<Time32SecondArray>()
                         .expect("Time32(second) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT32);
-                    datum.i32_val = array.value(row_id);
+                    let mut datum = new_datum(DATUM_TYPE_TIME);
+                    datum.i32_val = array.value(row_id) * MILLIS_PER_SECOND as i32;
                     datum
                 }
                 TimeUnit::Millisecond => {
@@ -424,7 +456,7 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                         .as_any()
                         .downcast_ref::<Time32MillisecondArray>()
                         .expect("Time32(millisecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT32);
+                    let mut datum = new_datum(DATUM_TYPE_TIME);
                     datum.i32_val = array.value(row_id);
                     datum
                 }
@@ -437,8 +469,8 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                         .as_any()
                         .downcast_ref::<Time64MicrosecondArray>()
                         .expect("Time64(microsecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT64);
-                    datum.i64_val = array.value(row_id);
+                    let mut datum = new_datum(DATUM_TYPE_TIME);
+                    datum.i32_val = (array.value(row_id) / MICROS_PER_MILLI) as i32;
                     datum
                 }
                 TimeUnit::Nanosecond => {
@@ -447,8 +479,8 @@ fn core_row_to_ffi_fields(row: &fcore::row::ColumnarRow) -> Vec<ffi::FfiDatum> {
                         .as_any()
                         .downcast_ref::<Time64NanosecondArray>()
                         .expect("Time64(nanosecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_INT64);
-                    datum.i64_val = array.value(row_id);
+                    let mut datum = new_datum(DATUM_TYPE_TIME);
+                    datum.i32_val = (array.value(row_id) / NANOS_PER_MILLI) as i32;
                     datum
                 }
                 _ => panic!("Will never come here. Unsupported Time64 unit for column {i}"),

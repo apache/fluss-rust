@@ -310,6 +310,9 @@ pub struct WriteResult {
 pub struct LogScanner {
     inner: Option<fcore::client::LogScanner>,
     inner_batch: Option<fcore::client::RecordBatchLogScanner>,
+    /// Fluss columns matching the projected Arrow fields (1:1 by index).
+    /// For non-projected scanners this is the full table schema columns.
+    projected_columns: Vec<fcore::metadata::Column>,
 }
 
 fn ok_result() -> ffi::FfiResult {
@@ -653,6 +656,7 @@ impl Table {
             let scanner_ptr = Box::into_raw(Box::new(LogScanner {
                 inner: Some(scanner),
                 inner_batch: None,
+                projected_columns: self.table_info.get_schema().columns().to_vec(),
             }));
 
             Ok(scanner_ptr)
@@ -670,6 +674,19 @@ impl Table {
                 self.table_info.clone(),
             );
 
+            let all_columns = self.table_info.get_schema().columns();
+            let projected_columns: Vec<_> = column_indices
+                .iter()
+                .map(|&i| {
+                    all_columns.get(i).cloned().ok_or_else(|| {
+                        format!(
+                            "Invalid column index {i}: schema has {} columns",
+                            all_columns.len()
+                        )
+                    })
+                })
+                .collect::<Result<_, String>>()?;
+
             let log_scanner = fluss_table
                 .new_scan()
                 .project(&column_indices)
@@ -680,6 +697,7 @@ impl Table {
             let scanner = Box::into_raw(Box::new(LogScanner {
                 inner: Some(log_scanner),
                 inner_batch: None,
+                projected_columns,
             }));
             Ok(scanner)
         })
@@ -701,6 +719,7 @@ impl Table {
             let scanner = Box::into_raw(Box::new(LogScanner {
                 inner: None,
                 inner_batch: Some(batch_scanner),
+                projected_columns: self.table_info.get_schema().columns().to_vec(),
             }));
             Ok(scanner)
         })
@@ -717,6 +736,19 @@ impl Table {
                 self.table_info.clone(),
             );
 
+            let all_columns = self.table_info.get_schema().columns();
+            let projected_columns: Vec<_> = column_indices
+                .iter()
+                .map(|&i| {
+                    all_columns.get(i).cloned().ok_or_else(|| {
+                        format!(
+                            "Invalid column index {i}: schema has {} columns",
+                            all_columns.len()
+                        )
+                    })
+                })
+                .collect::<Result<_, String>>()?;
+
             let batch_scanner = fluss_table
                 .new_scan()
                 .project(&column_indices)
@@ -727,6 +759,7 @@ impl Table {
             let scanner = Box::into_raw(Box::new(LogScanner {
                 inner: None,
                 inner_batch: Some(batch_scanner),
+                projected_columns,
             }));
             Ok(scanner)
         })
@@ -925,7 +958,10 @@ impl LogScanner {
             match result {
                 Ok(records) => ffi::FfiScanRecordsResult {
                     result: ok_result(),
-                    scan_records: types::core_scan_records_to_ffi(&records),
+                    scan_records: types::core_scan_records_to_ffi(
+                        &records,
+                        &self.projected_columns,
+                    ),
                 },
                 Err(e) => ffi::FfiScanRecordsResult {
                     result: err_result(1, e.to_string()),
