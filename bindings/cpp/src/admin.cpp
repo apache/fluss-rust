@@ -235,7 +235,7 @@ Result Admin::CreateDatabase(const std::string& database_name,
 
     auto ffi_desc = utils::to_ffi_database_descriptor(descriptor);
     auto ffi_result =
-        admin_->create_database(rust::String(database_name), ffi_desc, ignore_if_exists);
+        admin_->create_database(rust::Str(database_name), ffi_desc, ignore_if_exists);
     return utils::from_ffi_result(ffi_result);
 }
 
@@ -246,7 +246,7 @@ Result Admin::DropDatabase(const std::string& database_name, bool ignore_if_not_
     }
 
     auto ffi_result =
-        admin_->drop_database(rust::String(database_name), ignore_if_not_exists, cascade);
+        admin_->drop_database(rust::Str(database_name), ignore_if_not_exists, cascade);
     return utils::from_ffi_result(ffi_result);
 }
 
@@ -272,7 +272,7 @@ Result Admin::DatabaseExists(const std::string& database_name, bool& out) {
         return utils::make_error(1, "Admin not available");
     }
 
-    auto ffi_result = admin_->database_exists(rust::String(database_name));
+    auto ffi_result = admin_->database_exists(rust::Str(database_name));
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = ffi_result.value;
@@ -285,7 +285,7 @@ Result Admin::GetDatabaseInfo(const std::string& database_name, DatabaseInfo& ou
         return utils::make_error(1, "Admin not available");
     }
 
-    auto ffi_result = admin_->get_database_info(rust::String(database_name));
+    auto ffi_result = admin_->get_database_info(rust::Str(database_name));
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = utils::from_ffi_database_info(ffi_result.database_info);
@@ -298,7 +298,7 @@ Result Admin::ListTables(const std::string& database_name, std::vector<std::stri
         return utils::make_error(1, "Admin not available");
     }
 
-    auto ffi_result = admin_->list_tables(rust::String(database_name));
+    auto ffi_result = admin_->list_tables(rust::Str(database_name));
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out.clear();
