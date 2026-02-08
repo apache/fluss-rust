@@ -155,24 +155,24 @@ int main() {
     for (const auto& rec : records.records) {
         const auto& f = rec.row.fields;
 
-        if (f[4].type != fluss::DatumType::Date) {
-            std::cerr << "ERROR: field 4 expected Date, got " << static_cast<int>(f[4].type)
+        if (f[4].GetType() != fluss::DatumType::Date) {
+            std::cerr << "ERROR: field 4 expected Date, got " << static_cast<int>(f[4].GetType())
                       << std::endl;
             scan_ok = false;
         }
-        if (f[5].type != fluss::DatumType::Time) {
-            std::cerr << "ERROR: field 5 expected Time, got " << static_cast<int>(f[5].type)
+        if (f[5].GetType() != fluss::DatumType::Time) {
+            std::cerr << "ERROR: field 5 expected Time, got " << static_cast<int>(f[5].GetType())
                       << std::endl;
             scan_ok = false;
         }
-        if (f[6].type != fluss::DatumType::TimestampNtz) {
-            std::cerr << "ERROR: field 6 expected TimestampNtz, got " << static_cast<int>(f[6].type)
-                      << std::endl;
+        if (f[6].GetType() != fluss::DatumType::TimestampNtz) {
+            std::cerr << "ERROR: field 6 expected TimestampNtz, got "
+                      << static_cast<int>(f[6].GetType()) << std::endl;
             scan_ok = false;
         }
-        if (f[7].type != fluss::DatumType::TimestampLtz) {
-            std::cerr << "ERROR: field 7 expected TimestampLtz, got " << static_cast<int>(f[7].type)
-                      << std::endl;
+        if (f[7].GetType() != fluss::DatumType::TimestampLtz) {
+            std::cerr << "ERROR: field 7 expected TimestampLtz, got "
+                      << static_cast<int>(f[7].GetType()) << std::endl;
             scan_ok = false;
         }
 
@@ -181,12 +181,12 @@ int main() {
         auto ts_ntz = f[6].GetTimestamp();
         auto ts_ltz = f[7].GetTimestamp();
 
-        std::cout << "  id=" << f[0].i32_val << " name=" << f[1].string_val
-                  << " score=" << f[2].f32_val << " age=" << f[3].i32_val << " date=" << date.Year()
-                  << "-" << date.Month() << "-" << date.Day() << " time=" << time.Hour() << ":"
-                  << time.Minute() << ":" << time.Second() << " ts_ntz=" << ts_ntz.epoch_millis
-                  << " ts_ltz=" << ts_ltz.epoch_millis << "+" << ts_ltz.nano_of_millisecond << "ns"
-                  << std::endl;
+        std::cout << "  id=" << f[0].GetInt32() << " name=" << f[1].GetString()
+                  << " score=" << f[2].GetFloat32() << " age=" << f[3].GetInt32()
+                  << " date=" << date.Year() << "-" << date.Month() << "-" << date.Day()
+                  << " time=" << time.Hour() << ":" << time.Minute() << ":" << time.Second()
+                  << " ts_ntz=" << ts_ntz.epoch_millis << " ts_ltz=" << ts_ltz.epoch_millis << "+"
+                  << ts_ltz.nano_of_millisecond << "ns" << std::endl;
     }
 
     if (!scan_ok) {
@@ -217,19 +217,19 @@ int main() {
             scan_ok = false;
             continue;
         }
-        if (f[0].type != fluss::DatumType::Int32) {
+        if (f[0].GetType() != fluss::DatumType::Int32) {
             std::cerr << "ERROR: projected field 0 expected Int32, got "
-                      << static_cast<int>(f[0].type) << std::endl;
+                      << static_cast<int>(f[0].GetType()) << std::endl;
             scan_ok = false;
         }
-        if (f[1].type != fluss::DatumType::TimestampLtz) {
+        if (f[1].GetType() != fluss::DatumType::TimestampLtz) {
             std::cerr << "ERROR: projected field 1 expected TimestampLtz, got "
-                      << static_cast<int>(f[1].type) << std::endl;
+                      << static_cast<int>(f[1].GetType()) << std::endl;
             scan_ok = false;
         }
 
         auto ts = f[1].GetTimestamp();
-        std::cout << "  id=" << f[0].i32_val << " updated_at=" << ts.epoch_millis << "+"
+        std::cout << "  id=" << f[0].GetInt32() << " updated_at=" << ts.epoch_millis << "+"
                   << ts.nano_of_millisecond << "ns" << std::endl;
     }
 
@@ -430,8 +430,8 @@ int main() {
     for (const auto& rec : decimal_records) {
         auto& price = rec.row.fields[1];
         auto& amount = rec.row.fields[2];
-        std::cout << "  id=" << rec.row.fields[0].i32_val << " price=" << price.DecimalToString()
-                  << " (raw=" << price.i64_val << ")"
+        std::cout << "  id=" << rec.row.fields[0].GetInt32() << " price=" << price.DecimalToString()
+                  << " (raw=" << price.GetInt64() << ")"
                   << " amount=" << amount.DecimalToString() << " is_decimal=" << price.IsDecimal()
                   << std::endl;
     }

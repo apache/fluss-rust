@@ -404,6 +404,15 @@ struct Datum {
         return d;
     }
 
+    DatumType GetType() const { return type; }
+    bool IsNull() const { return type == DatumType::Null; }
+    bool GetBool() const { return bool_val; }
+    int32_t GetInt32() const { return i32_val; }
+    int64_t GetInt64() const { return i64_val; }
+    float GetFloat32() const { return f32_val; }
+    double GetFloat64() const { return f64_val; }
+    const std::string& GetString() const { return string_val; }
+    const std::vector<uint8_t>& GetBytes() const { return bytes_val; }
     fluss::Date GetDate() const { return {i32_val}; }
     fluss::Time GetTime() const { return {i32_val}; }
     fluss::Timestamp GetTimestamp() const { return {i64_val, i32_val}; }
