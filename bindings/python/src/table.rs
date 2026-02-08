@@ -315,7 +315,7 @@ fn resolve_projection_indices(
                 let idx = columns
                     .iter()
                     .position(|c| c.name() == name)
-                    .ok_or_else(|| FlussError::new_err(format!("Column '{}' not found", name)))?;
+                    .ok_or_else(|| FlussError::new_err(format!("Column '{name}' not found")))?;
                 indices.push(idx);
             }
             Ok(Some(indices))
@@ -796,9 +796,9 @@ pub fn python_pk_to_generic_row(
                 let field: &fcore::metadata::DataField = &fields[*pk_idx];
                 let value = dict
                     .get_item(pk_name)?
-                    .ok_or_else(|| FlussError::new_err(format!("Missing PK field: {}", pk_name)))?;
+                    .ok_or_else(|| FlussError::new_err(format!("Missing PK field: {pk_name}")))?;
                 datums[*pk_idx] = python_value_to_datum(&value, field.data_type())
-                    .map_err(|e| FlussError::new_err(format!("PK field '{}': {}", pk_name, e)))?;
+                    .map_err(|e| FlussError::new_err(format!("PK field '{pk_name}': {e}")))?;
             }
         }
 

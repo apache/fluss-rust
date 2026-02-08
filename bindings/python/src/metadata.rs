@@ -53,7 +53,7 @@ impl ChangeType {
     }
 
     fn __repr__(&self) -> String {
-        format!("ChangeType.{:?}", self)
+        format!("ChangeType.{self:?}")
     }
 }
 
@@ -655,5 +655,107 @@ impl LakeSnapshot {
             snapshot_id: snapshot.snapshot_id,
             table_buckets_offset: snapshot.table_buckets_offset,
         }
+    }
+}
+
+/// Descriptor for a Fluss database (comment and custom properties)
+#[pyclass]
+#[derive(Clone)]
+pub struct DatabaseDescriptor {
+    __descriptor: fcore::metadata::DatabaseDescriptor,
+}
+
+#[pymethods]
+impl DatabaseDescriptor {
+    /// Create a new DatabaseDescriptor
+    #[new]
+    #[pyo3(signature = (comment=None, custom_properties=None))]
+    pub fn new(
+        comment: Option<String>,
+        custom_properties: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        let mut builder = fcore::metadata::DatabaseDescriptor::builder();
+        if let Some(c) = comment {
+            builder = builder.comment(&c);
+        }
+        if let Some(props) = custom_properties {
+            builder = builder.custom_properties(props);
+        }
+        let __descriptor = builder.build();
+        Ok(Self { __descriptor })
+    }
+
+    /// Get comment if set
+    #[getter]
+    pub fn comment(&self) -> Option<String> {
+        self.__descriptor.comment().map(|s| s.to_string())
+    }
+
+    /// Get custom properties
+    pub fn get_custom_properties(&self) -> HashMap<String, String> {
+        self.__descriptor.custom_properties().clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DatabaseDescriptor(comment={:?}, custom_properties={:?})",
+            self.comment(),
+            self.get_custom_properties()
+        )
+    }
+}
+
+impl DatabaseDescriptor {
+    pub fn to_core(&self) -> &fcore::metadata::DatabaseDescriptor {
+        &self.__descriptor
+    }
+}
+
+/// Information about a Fluss database
+#[pyclass]
+pub struct DatabaseInfo {
+    __info: fcore::metadata::DatabaseInfo,
+}
+
+#[pymethods]
+impl DatabaseInfo {
+    /// Get the database name
+    #[getter]
+    pub fn database_name(&self) -> String {
+        self.__info.database_name().to_string()
+    }
+
+    /// Get the database descriptor
+    pub fn get_database_descriptor(&self) -> DatabaseDescriptor {
+        DatabaseDescriptor {
+            __descriptor: self.__info.database_descriptor().clone(),
+        }
+    }
+
+    /// Get created time
+    #[getter]
+    pub fn created_time(&self) -> i64 {
+        self.__info.created_time()
+    }
+
+    /// Get modified time
+    #[getter]
+    pub fn modified_time(&self) -> i64 {
+        self.__info.modified_time()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DatabaseInfo(database_name='{}', created_time={}, modified_time={})",
+            self.database_name(),
+            self.created_time(),
+            self.modified_time()
+        )
+    }
+}
+
+impl DatabaseInfo {
+    pub fn from_core(info: fcore::metadata::DatabaseInfo) -> Self {
+        Self { __info: info }
     }
 }
