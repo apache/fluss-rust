@@ -121,6 +121,45 @@ class FlussConnection:
     def __repr__(self) -> str: ...
 
 class FlussAdmin:
+    async def create_database(
+        self,
+        database_name: str,
+        ignore_if_exists: bool = False,
+        database_descriptor: Optional["DatabaseDescriptor"] = None,
+    ) -> None:
+        """Create a database."""
+        ...
+    async def drop_database(
+        self,
+        database_name: str,
+        ignore_if_not_exists: bool = False,
+        cascade: bool = True,
+    ) -> None:
+        """Drop a database."""
+        ...
+    async def list_databases(self) -> List[str]:
+        """List all databases."""
+        ...
+    async def database_exists(self, database_name: str) -> bool:
+        """Check if a database exists."""
+        ...
+    async def get_database_info(self, database_name: str) -> "DatabaseInfo":
+        """Get database information."""
+        ...
+    async def list_tables(self, database_name: str) -> List[str]:
+        """List all tables in a database."""
+        ...
+    async def table_exists(self, table_path: TablePath) -> bool:
+        """Check if a table exists."""
+        ...
+    async def drop_partition(
+        self,
+        table_path: TablePath,
+        partition_spec: Dict[str, str],
+        ignore_if_not_exists: bool = False,
+    ) -> None:
+        """Drop a partition from a partitioned table."""
+        ...
     async def create_table(
         self,
         table_path: TablePath,
@@ -201,6 +240,33 @@ class FlussAdmin:
             List of PartitionInfo objects
         """
         ...
+    def __repr__(self) -> str: ...
+
+
+class DatabaseDescriptor:
+    """Descriptor for a Fluss database (comment and custom properties)."""
+
+    def __init__(
+        self,
+        comment: Optional[str] = None,
+        custom_properties: Optional[Dict[str, str]] = None,
+    ) -> None: ...
+    @property
+    def comment(self) -> Optional[str]: ...
+    def get_custom_properties(self) -> Dict[str, str]: ...
+    def __repr__(self) -> str: ...
+
+
+class DatabaseInfo:
+    """Information about a Fluss database."""
+
+    @property
+    def database_name(self) -> str: ...
+    def get_database_descriptor(self) -> DatabaseDescriptor: ...
+    @property
+    def created_time(self) -> int: ...
+    @property
+    def modified_time(self) -> int: ...
     def __repr__(self) -> str: ...
 
 class TableScan:

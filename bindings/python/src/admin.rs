@@ -59,6 +59,243 @@ fn validate_bucket_ids(bucket_ids: &[i32]) -> PyResult<()> {
 
 #[pymethods]
 impl FlussAdmin {
+    /// Create a database.
+    ///
+    /// Args:
+    ///     database_name: Name of the database
+    ///     ignore_if_exists: If True, don't raise error if database already exists
+    ///     database_descriptor: Optional descriptor (comment, custom_properties)
+    ///
+    /// Returns:
+    ///     None
+    #[pyo3(signature = (database_name, ignore_if_exists=false, database_descriptor=None))]
+    pub fn create_database<'py>(
+        &self,
+        py: Python<'py>,
+        database_name: &str,
+        ignore_if_exists: bool,
+        database_descriptor: Option<&DatabaseDescriptor>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let name = database_name.to_string();
+        let descriptor = database_descriptor.map(|d| d.to_core().clone());
+
+        future_into_py(py, async move {
+            admin
+                .create_database(&name, ignore_if_exists, descriptor.as_ref())
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to create database: {e}")))?;
+
+            Python::attach(|py| Ok(py.None()))
+        })
+    }
+
+    /// Drop a database.
+    ///
+    /// Args:
+    ///     database_name: Name of the database
+    ///     ignore_if_not_exists: If True, don't raise error if database does not exist
+    ///     cascade: If True, drop tables in the database first
+    ///
+    /// Returns:
+    ///     None
+    #[pyo3(signature = (database_name, ignore_if_not_exists=false, cascade=true))]
+    pub fn drop_database<'py>(
+        &self,
+        py: Python<'py>,
+        database_name: &str,
+        ignore_if_not_exists: bool,
+        cascade: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let name = database_name.to_string();
+
+        future_into_py(py, async move {
+            admin
+                .drop_database(&name, ignore_if_not_exists, cascade)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to drop database: {e}")))?;
+
+            Python::attach(|py| Ok(py.None()))
+        })
+    }
+
+    /// List all databases.
+    ///
+    /// Returns:
+    ///     List[str]: Names of all databases
+    pub fn list_databases<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+
+        future_into_py(py, async move {
+            let names = admin
+                .list_databases()
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to list databases: {e}")))?;
+
+            Python::attach(|py| {
+                let py_list = pyo3::types::PyList::empty(py);
+                for name in names {
+                    py_list.append(name)?;
+                }
+                Ok(py_list.unbind())
+            })
+        })
+    }
+
+    /// Check if a database exists.
+    ///
+    /// Args:
+    ///     database_name: Name of the database
+    ///
+    /// Returns:
+    ///     bool: True if the database exists
+    pub fn database_exists<'py>(
+        &self,
+        py: Python<'py>,
+        database_name: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let name = database_name.to_string();
+
+        future_into_py(py, async move {
+            let exists = admin
+                .database_exists(&name)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to check database exists: {e}")))?;
+
+            Python::attach(|py| {
+                let builtins = py.import("builtins")?;
+                let val = if exists {
+                    builtins.getattr("True")?
+                } else {
+                    builtins.getattr("False")?
+                };
+                Ok(val.unbind())
+            })
+        })
+    }
+
+    /// Get database information.
+    ///
+    /// Args:
+    ///     database_name: Name of the database
+    ///
+    /// Returns:
+    ///     DatabaseInfo: Database metadata
+    pub fn get_database_info<'py>(
+        &self,
+        py: Python<'py>,
+        database_name: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let name = database_name.to_string();
+
+        future_into_py(py, async move {
+            let info = admin
+                .get_database_info(&name)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to get database info: {e}")))?;
+
+            Python::attach(|py| Py::new(py, DatabaseInfo::from_core(info)))
+        })
+    }
+
+    /// List all tables in a database.
+    ///
+    /// Args:
+    ///     database_name: Name of the database
+    ///
+    /// Returns:
+    ///     List[str]: Names of all tables in the database
+    pub fn list_tables<'py>(
+        &self,
+        py: Python<'py>,
+        database_name: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let name = database_name.to_string();
+
+        future_into_py(py, async move {
+            let names = admin
+                .list_tables(&name)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to list tables: {e}")))?;
+
+            Python::attach(|py| {
+                let py_list = pyo3::types::PyList::empty(py);
+                for name in names {
+                    py_list.append(name)?;
+                }
+                Ok(py_list.unbind())
+            })
+        })
+    }
+
+    /// Check if a table exists.
+    ///
+    /// Args:
+    ///     table_path: Path to the table (database, table)
+    ///
+    /// Returns:
+    ///     bool: True if the table exists
+    pub fn table_exists<'py>(
+        &self,
+        py: Python<'py>,
+        table_path: &TablePath,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let core_table_path = table_path.to_core();
+        let admin = self.__admin.clone();
+
+        future_into_py(py, async move {
+            let exists = admin
+                .table_exists(&core_table_path)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to check table exists: {e}")))?;
+
+            Python::attach(|py| {
+                let builtins = py.import("builtins")?;
+                let val = if exists {
+                    builtins.getattr("True")?
+                } else {
+                    builtins.getattr("False")?
+                };
+                Ok(val.unbind())
+            })
+        })
+    }
+
+    /// Drop a partition from a partitioned table.
+    ///
+    /// Args:
+    ///     table_path: Path to the table
+    ///     partition_spec: Dict mapping partition column name to value (e.g., {"region": "US"})
+    ///     ignore_if_not_exists: If True, don't raise error if partition does not exist
+    ///
+    /// Returns:
+    ///     None
+    #[pyo3(signature = (table_path, partition_spec, ignore_if_not_exists=false))]
+    pub fn drop_partition<'py>(
+        &self,
+        py: Python<'py>,
+        table_path: &TablePath,
+        partition_spec: std::collections::HashMap<String, String>,
+        ignore_if_not_exists: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let core_table_path = table_path.to_core();
+        let admin = self.__admin.clone();
+        let core_partition_spec = fcore::metadata::PartitionSpec::new(partition_spec);
+
+        future_into_py(py, async move {
+            admin
+                .drop_partition(&core_table_path, &core_partition_spec, ignore_if_not_exists)
+                .await
+                .map_err(|e| FlussError::new_err(format!("Failed to drop partition: {e}")))?;
+
+            Python::attach(|py| Ok(py.None()))
+        })
+    }
+
     /// Create a table with the given schema
     #[pyo3(signature = (table_path, table_descriptor, ignore_if_exists=None))]
     pub fn create_table<'py>(
