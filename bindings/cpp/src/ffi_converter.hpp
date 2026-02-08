@@ -290,5 +290,30 @@ inline LakeSnapshot from_ffi_lake_snapshot(const ffi::FfiLakeSnapshot& ffi_snaps
     return snapshot;
 }
 
+inline ffi::FfiDatabaseDescriptor to_ffi_database_descriptor(
+    const DatabaseDescriptor& desc) {
+    ffi::FfiDatabaseDescriptor ffi_desc;
+    ffi_desc.comment = rust::String(desc.comment);
+    for (const auto& [k, v] : desc.properties) {
+        ffi::HashMapValue kv;
+        kv.key = rust::String(k);
+        kv.value = rust::String(v);
+        ffi_desc.properties.push_back(std::move(kv));
+    }
+    return ffi_desc;
+}
+
+inline DatabaseInfo from_ffi_database_info(const ffi::FfiDatabaseInfo& ffi_info) {
+    DatabaseInfo info;
+    info.database_name = std::string(ffi_info.database_name);
+    info.comment = std::string(ffi_info.comment);
+    info.created_time = ffi_info.created_time;
+    info.modified_time = ffi_info.modified_time;
+    for (const auto& prop : ffi_info.properties) {
+        info.properties[std::string(prop.key)] = std::string(prop.value);
+    }
+    return info;
+}
+
 }  // namespace utils
 }  // namespace fluss
