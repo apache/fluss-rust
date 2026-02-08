@@ -803,8 +803,7 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
 impl AppendWriter {
     fn append(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
         let schema = self.table_info.get_schema();
-        let generic_row = types::ffi_row_to_core(row, Some(schema))
-            .map_err(|e| e.to_string())?;
+        let generic_row = types::ffi_row_to_core(row, Some(schema)).map_err(|e| e.to_string())?;
 
         let result_future = self
             .inner

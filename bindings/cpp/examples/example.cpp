@@ -131,6 +131,10 @@ int main() {
         row.SetString(1, "AckTest");
         row.SetFloat32(2, 99.9f);
         row.SetInt32(3, 42);
+        row.SetDate(4, fluss::Date::FromYMD(2025, 3, 1));
+        row.SetTime(5, fluss::Time::FromHMS(12, 0, 0));
+        row.SetTimestampNtz(6, fluss::Timestamp::FromMillis(1740787200000));
+        row.SetTimestampLtz(7, fluss::Timestamp::FromMillis(1740787200000));
         fluss::WriteResult wr;
         check("append", writer.Append(row, wr));
         check("wait", wr.Wait());
@@ -365,7 +369,7 @@ int main() {
         }
     }
 
-    // 11) Decimal support example
+    // 12) Decimal support example
     std::cout << "\n=== Decimal Support Example ===" << std::endl;
 
     fluss::TablePath decimal_table_path("fluss", "decimal_table_cpp_v1");
