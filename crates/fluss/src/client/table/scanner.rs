@@ -361,17 +361,8 @@ impl LogScannerInner {
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message:
-                    "The table is a partitioned table, subscribe_buckets is not supported currently."
+                    "The table is a partitioned table, please use \"subscribe_partition_buckets\" instead."
                         .to_string(),
-            });
-        }
-        self.metadata
-            .check_and_update_table_metadata(from_ref(&self.table_path))
-            .await?;
-        if bucket_offsets.is_empty() {
-            return Err(Error::UnexpectedError {
-                message: "Bucket offsets are empty.".to_string(),
-                source: None,
             });
         }
 
@@ -380,10 +371,7 @@ impl LogScannerInner {
             let table_bucket = TableBucket::new(self.table_id, *bucket_id);
             scan_bucket_offsets.insert(table_bucket, *offset);
         }
-
-        self.log_scanner_status
-            .assign_scan_buckets(scan_bucket_offsets);
-        Ok(())
+        self.do_subscribe_buckets(scan_bucket_offsets).await
     }
 
     async fn subscribe_partition(
@@ -406,6 +394,43 @@ impl LogScannerInner {
             .await?;
         self.log_scanner_status
             .assign_scan_bucket(table_bucket, offset);
+        Ok(())
+    }
+
+    async fn subscribe_partition_buckets(
+        &self,
+        partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
+    ) -> Result<()> {
+        if !self.is_partitioned_table {
+            return Err(UnsupportedOperation {
+                message: "The table is not a partitioned table, please use \"subscribe_buckets\" \
+                    to subscribe to non-partitioned buckets instead."
+                    .to_string(),
+            });
+        }
+
+        let mut scan_bucket_offsets = HashMap::new();
+        for (&(partition_id, bucket_id), &offset) in partition_bucket_offsets {
+            let table_bucket =
+                TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket_id);
+            scan_bucket_offsets.insert(table_bucket, offset);
+        }
+        self.do_subscribe_buckets(scan_bucket_offsets).await
+    }
+
+    async fn do_subscribe_buckets(&self, bucket_offsets: HashMap<TableBucket, i64>) -> Result<()> {
+        if bucket_offsets.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Bucket offsets are empty.".to_string(),
+                source: None,
+            });
+        }
+
+        self.metadata
+            .check_and_update_table_metadata(from_ref(&self.table_path))
+            .await?;
+
+        self.log_scanner_status.assign_scan_buckets(bucket_offsets);
         Ok(())
     }
 
@@ -501,6 +526,15 @@ impl LogScanner {
             .await
     }
 
+    pub async fn subscribe_partition_buckets(
+        &self,
+        partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_partition_buckets(partition_bucket_offsets)
+            .await
+    }
+
     pub async fn unsubscribe_partition(
         &self,
         partition_id: PartitionId,
@@ -544,6 +578,15 @@ impl RecordBatchLogScanner {
     /// Returns all subscribed buckets with their current offsets
     pub fn get_subscribed_buckets(&self) -> Vec<(TableBucket, i64)> {
         self.inner.log_scanner_status.get_all_subscriptions()
+    }
+
+    pub async fn subscribe_partition_buckets(
+        &self,
+        partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_partition_buckets(partition_bucket_offsets)
+            .await
     }
 
     pub async fn unsubscribe_partition(

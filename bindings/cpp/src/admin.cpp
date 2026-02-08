@@ -183,4 +183,25 @@ Result Admin::ListPartitionInfos(const TablePath& table_path,
     return result;
 }
 
+Result Admin::CreatePartition(const TablePath& table_path,
+                              const std::unordered_map<std::string, std::string>& partition_spec,
+                              bool ignore_if_exists) {
+    if (!Available()) {
+        return utils::make_error(1, "Admin not available");
+    }
+
+    auto ffi_path = utils::to_ffi_table_path(table_path);
+
+    rust::Vec<ffi::FfiPartitionKeyValue> rust_spec;
+    for (const auto& [key, value] : partition_spec) {
+        ffi::FfiPartitionKeyValue kv;
+        kv.key = rust::String(key);
+        kv.value = rust::String(value);
+        rust_spec.push_back(std::move(kv));
+    }
+
+    auto ffi_result = admin_->create_partition(ffi_path, std::move(rust_spec), ignore_if_exists);
+    return utils::from_ffi_result(ffi_result);
+}
+
 }  // namespace fluss

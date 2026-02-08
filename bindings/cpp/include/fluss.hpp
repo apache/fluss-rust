@@ -28,18 +28,18 @@
 
 // Forward declare Arrow classes to avoid including heavy Arrow headers in header
 namespace arrow {
-    class RecordBatch;
+class RecordBatch;
 }
 
 namespace fluss {
 
 namespace ffi {
-    struct Connection;
-    struct Admin;
-    struct Table;
-    struct AppendWriter;
-    struct WriteResult;
-    struct LogScanner;
+struct Connection;
+struct Admin;
+struct Table;
+struct AppendWriter;
+struct WriteResult;
+struct LogScanner;
 }  // namespace ffi
 
 struct Date {
@@ -62,8 +62,8 @@ struct Time {
 
     static Time FromMillis(int32_t ms) { return {ms}; }
     static Time FromHMS(int hour, int minute, int second, int millis = 0) {
-        return {hour * kMillisPerHour + minute * kMillisPerMinute +
-                second * kMillisPerSecond + millis};
+        return {hour * kMillisPerHour + minute * kMillisPerMinute + second * kMillisPerSecond +
+                millis};
     }
 
     int Hour() const { return millis_since_midnight / kMillisPerHour; }
@@ -87,9 +87,7 @@ struct Timestamp {
     }
     static Timestamp FromTimePoint(std::chrono::system_clock::time_point tp) {
         auto duration = tp.time_since_epoch();
-        auto ns =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(duration)
-                .count();
+        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
         auto ms = ns / kNanosPerMilli;
         auto nano_of_ms = static_cast<int32_t>(ns % kNanosPerMilli);
         if (nano_of_ms < 0) {
@@ -118,7 +116,7 @@ enum class TypeId {
 };
 
 class DataType {
-public:
+   public:
     explicit DataType(TypeId id, int32_t p = 0, int32_t s = 0)
         : id_(id), precision_(p), scale_(s) {}
 
@@ -147,7 +145,7 @@ public:
     int32_t precision() const { return precision_; }
     int32_t scale() const { return scale_; }
 
-private:
+   private:
     TypeId id_;
     int32_t precision_{0};
     int32_t scale_{0};
@@ -218,9 +216,8 @@ struct Schema {
     std::vector<std::string> primary_keys;
 
     class Builder {
-    public:
-        Builder& AddColumn(std::string name, DataType type,
-                           std::string comment = "") {
+       public:
+        Builder& AddColumn(std::string name, DataType type, std::string comment = "") {
             columns_.push_back({std::move(name), std::move(type), std::move(comment)});
             return *this;
         }
@@ -230,11 +227,9 @@ struct Schema {
             return *this;
         }
 
-        Schema Build() {
-            return Schema{std::move(columns_), std::move(primary_keys_)};
-        }
+        Schema Build() { return Schema{std::move(columns_), std::move(primary_keys_)}; }
 
-    private:
+       private:
         std::vector<Column> columns_;
         std::vector<std::string> primary_keys_;
     };
@@ -251,7 +246,7 @@ struct TableDescriptor {
     std::string comment;
 
     class Builder {
-    public:
+       public:
         Builder& SetSchema(Schema s) {
             schema_ = std::move(s);
             return *this;
@@ -283,15 +278,12 @@ struct TableDescriptor {
         }
 
         TableDescriptor Build() {
-            return TableDescriptor{std::move(schema_),
-                                   std::move(partition_keys_),
-                                   bucket_count_,
-                                   std::move(bucket_keys_),
-                                   std::move(properties_),
-                                   std::move(comment_)};
+            return TableDescriptor{std::move(schema_),     std::move(partition_keys_),
+                                   bucket_count_,          std::move(bucket_keys_),
+                                   std::move(properties_), std::move(comment_)};
         }
 
-    private:
+       private:
         Schema schema_;
         std::vector<std::string> partition_keys_;
         int32_t bucket_count_{0};
@@ -417,16 +409,17 @@ struct Datum {
     fluss::Timestamp GetTimestamp() const { return {i64_val, i32_val}; }
 
     bool IsDecimal() const {
-        return type == DatumType::DecimalI64 || type == DatumType::DecimalI128
-            || type == DatumType::DecimalString;
+        return type == DatumType::DecimalI64 || type == DatumType::DecimalI128 ||
+               type == DatumType::DecimalString;
     }
 
     std::string DecimalToString() const {
         if (type == DatumType::DecimalI64) {
             return FormatUnscaled64(i64_val, decimal_scale);
         } else if (type == DatumType::DecimalI128) {
-            unsigned __int128 uval = (static_cast<unsigned __int128>(static_cast<uint64_t>(i128_hi)) << 64) |
-                                     static_cast<unsigned __int128>(static_cast<uint64_t>(i128_lo));
+            unsigned __int128 uval =
+                (static_cast<unsigned __int128>(static_cast<uint64_t>(i128_hi)) << 64) |
+                static_cast<unsigned __int128>(static_cast<uint64_t>(i128_lo));
             __int128 val = static_cast<__int128>(uval);
             return FormatUnscaled128(val, decimal_scale);
         } else if (type == DatumType::DecimalString) {
@@ -435,10 +428,11 @@ struct Datum {
         return "";
     }
 
-private:
+   private:
     static std::string FormatUnscaled64(int64_t unscaled, int32_t scale) {
         bool negative = unscaled < 0;
-        uint64_t abs_val = negative ? -static_cast<uint64_t>(unscaled) : static_cast<uint64_t>(unscaled);
+        uint64_t abs_val =
+            negative ? -static_cast<uint64_t>(unscaled) : static_cast<uint64_t>(unscaled);
         std::string digits = std::to_string(abs_val);
         if (scale <= 0) {
             return (negative ? "-" : "") + digits;
@@ -452,8 +446,8 @@ private:
 
     static std::string FormatUnscaled128(__int128 val, int32_t scale) {
         bool negative = val < 0;
-        unsigned __int128 abs_val = negative ? -static_cast<unsigned __int128>(val)
-                                             : static_cast<unsigned __int128>(val);
+        unsigned __int128 abs_val =
+            negative ? -static_cast<unsigned __int128>(val) : static_cast<unsigned __int128>(val);
         std::string digits;
         if (abs_val == 0) {
             digits = "0";
@@ -542,7 +536,7 @@ struct GenericRow {
         fields[idx] = Datum::DecimalString(value);
     }
 
-private:
+   private:
     void EnsureSize(size_t idx) {
         if (fields.size() <= idx) {
             fields.resize(idx + 1);
@@ -569,15 +563,14 @@ struct ScanRecords {
 };
 
 class ArrowRecordBatch {
-public:
-
+   public:
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
     bool Available() const;
 
     // Get number of rows in the batch
     int64_t NumRows() const;
-    
+
     // Get ScanBatch metadata
     int64_t GetTableId() const;
     int64_t GetPartitionId() const;
@@ -585,14 +578,11 @@ public:
     int64_t GetBaseOffset() const;
     int64_t GetLastOffset() const;
 
-private:
+   private:
     friend class LogScanner;
-    explicit ArrowRecordBatch(
-        std::shared_ptr<arrow::RecordBatch> batch,
-        int64_t table_id,
-        int64_t partition_id,
-        int32_t bucket_id,
-        int64_t base_offset) noexcept;
+    explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
+                              int64_t partition_id, int32_t bucket_id,
+                              int64_t base_offset) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -601,7 +591,6 @@ private:
     int32_t bucket_id_;
     int64_t base_offset_;
 };
-
 
 struct ArrowRecordBatches {
     std::vector<std::unique_ptr<ArrowRecordBatch>> batches;
@@ -626,6 +615,12 @@ struct BucketSubscription {
     int64_t offset;
 };
 
+struct PartitionBucketSubscription {
+    int64_t partition_id;
+    int32_t bucket_id;
+    int64_t offset;
+};
+
 struct LakeSnapshot {
     int64_t snapshot_id;
     std::vector<BucketOffset> bucket_offsets;
@@ -644,7 +639,7 @@ class Table;
 class TableScan;
 
 class Connection {
-public:
+   public:
     Connection() noexcept;
     ~Connection() noexcept;
 
@@ -660,13 +655,13 @@ public:
     Result GetAdmin(Admin& out);
     Result GetTable(const TablePath& table_path, Table& out);
 
-private:
+   private:
     void Destroy() noexcept;
     ffi::Connection* conn_{nullptr};
 };
 
 class Admin {
-public:
+   public:
     Admin() noexcept;
     ~Admin() noexcept;
 
@@ -677,8 +672,7 @@ public:
 
     bool Available() const;
 
-    Result CreateTable(const TablePath& table_path,
-                       const TableDescriptor& descriptor,
+    Result CreateTable(const TablePath& table_path, const TableDescriptor& descriptor,
                        bool ignore_if_exists = false);
 
     Result DropTable(const TablePath& table_path, bool ignore_if_not_exists = false);
@@ -687,26 +681,24 @@ public:
 
     Result GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
 
-    Result ListOffsets(const TablePath& table_path,
-                       const std::vector<int32_t>& bucket_ids,
-                       const OffsetQuery& offset_query,
-                       std::unordered_map<int32_t, int64_t>& out);
+    Result ListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,
+                       const OffsetQuery& offset_query, std::unordered_map<int32_t, int64_t>& out);
 
-    Result ListPartitionOffsets(const TablePath& table_path,
-                              const std::string& partition_name,
-                              const std::vector<int32_t>& bucket_ids,
-                              const OffsetQuery& offset_query,
-                              std::unordered_map<int32_t, int64_t>& out);
+    Result ListPartitionOffsets(const TablePath& table_path, const std::string& partition_name,
+                                const std::vector<int32_t>& bucket_ids,
+                                const OffsetQuery& offset_query,
+                                std::unordered_map<int32_t, int64_t>& out);
 
-    Result ListPartitionInfos(const TablePath& table_path,
-                             std::vector<PartitionInfo>& out);
+    Result ListPartitionInfos(const TablePath& table_path, std::vector<PartitionInfo>& out);
 
-private:
-    Result DoListOffsets(const TablePath& table_path,
-                       const std::vector<int32_t>& bucket_ids,
-                       const OffsetQuery& offset_query,
-                       std::unordered_map<int32_t, int64_t>& out,
-                       const std::string* partition_name = nullptr);
+    Result CreatePartition(const TablePath& table_path,
+                           const std::unordered_map<std::string, std::string>& partition_spec,
+                           bool ignore_if_exists = false);
+
+   private:
+    Result DoListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,
+                         const OffsetQuery& offset_query, std::unordered_map<int32_t, int64_t>& out,
+                         const std::string* partition_name = nullptr);
 
     friend class Connection;
     Admin(ffi::Admin* admin) noexcept;
@@ -716,7 +708,7 @@ private:
 };
 
 class Table {
-public:
+   public:
     Table() noexcept;
     ~Table() noexcept;
 
@@ -734,7 +726,7 @@ public:
     TablePath GetTablePath() const;
     bool HasPrimaryKey() const;
 
-private:
+   private:
     friend class Connection;
     friend class TableScan;
     Table(ffi::Table* table) noexcept;
@@ -744,7 +736,7 @@ private:
 };
 
 class TableScan {
-public:
+   public:
     TableScan(const TableScan&) = delete;
     TableScan& operator=(const TableScan&) = delete;
     TableScan(TableScan&&) noexcept = default;
@@ -755,7 +747,7 @@ public:
     Result CreateLogScanner(LogScanner& out);
     Result CreateRecordBatchScanner(LogScanner& out);
 
-private:
+   private:
     friend class Table;
     explicit TableScan(ffi::Table* table) noexcept;
 
@@ -764,7 +756,7 @@ private:
 };
 
 class WriteResult {
-public:
+   public:
     WriteResult() noexcept;
     ~WriteResult() noexcept;
 
@@ -779,7 +771,7 @@ public:
     /// For fire-and-forget, simply let the WriteResult go out of scope.
     Result Wait();
 
-private:
+   private:
     friend class AppendWriter;
     WriteResult(ffi::WriteResult* inner) noexcept;
 
@@ -788,7 +780,7 @@ private:
 };
 
 class AppendWriter {
-public:
+   public:
     AppendWriter() noexcept;
     ~AppendWriter() noexcept;
 
@@ -803,7 +795,7 @@ public:
     Result Append(const GenericRow& row, WriteResult& out);
     Result Flush();
 
-private:
+   private:
     friend class Table;
     AppendWriter(ffi::AppendWriter* writer) noexcept;
 
@@ -812,7 +804,7 @@ private:
 };
 
 class LogScanner {
-public:
+   public:
     LogScanner() noexcept;
     ~LogScanner() noexcept;
 
@@ -825,12 +817,13 @@ public:
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
-    Result SubscribePartition(int64_t partition_id, int32_t bucket_id, int64_t start_offset);
+    Result SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id, int64_t start_offset);
+    Result SubscribePartitionBuckets(const std::vector<PartitionBucketSubscription>& subscriptions);
     Result UnsubscribePartition(int64_t partition_id, int32_t bucket_id);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
     Result PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out);
 
-private:
+   private:
     friend class Table;
     friend class TableScan;
     LogScanner(ffi::LogScanner* scanner) noexcept;

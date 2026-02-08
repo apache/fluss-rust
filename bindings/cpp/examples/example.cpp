@@ -26,8 +26,8 @@
 
 static void check(const char* step, const fluss::Result& r) {
     if (!r.Ok()) {
-        std::cerr << step << " failed: code=" << r.error_code
-                  << " msg=" << r.error_message << std::endl;
+        std::cerr << step << " failed: code=" << r.error_code << " msg=" << r.error_message
+                  << std::endl;
         std::exit(1);
     }
 }
@@ -54,15 +54,15 @@ int main() {
 
     // 3) Schema with scalar and temporal columns
     auto schema = fluss::Schema::NewBuilder()
-                        .AddColumn("id", fluss::DataType::Int())
-                        .AddColumn("name", fluss::DataType::String())
-                        .AddColumn("score", fluss::DataType::Float())
-                        .AddColumn("age", fluss::DataType::Int())
-                        .AddColumn("event_date", fluss::DataType::Date())
-                        .AddColumn("event_time", fluss::DataType::Time())
-                        .AddColumn("created_at", fluss::DataType::Timestamp())
-                        .AddColumn("updated_at", fluss::DataType::TimestampLtz())
-                        .Build();
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("name", fluss::DataType::String())
+                      .AddColumn("score", fluss::DataType::Float())
+                      .AddColumn("age", fluss::DataType::Int())
+                      .AddColumn("event_date", fluss::DataType::Date())
+                      .AddColumn("event_time", fluss::DataType::Time())
+                      .AddColumn("created_at", fluss::DataType::Timestamp())
+                      .AddColumn("updated_at", fluss::DataType::TimestampLtz())
+                      .Build();
 
     auto descriptor = fluss::TableDescriptor::NewBuilder()
                           .SetSchema(schema)
@@ -94,17 +94,13 @@ int main() {
 
     auto tp_now = std::chrono::system_clock::now();
     std::vector<RowData> rows = {
-        {1, "Alice", 95.2f, 25,
-         fluss::Date::FromYMD(2024, 6, 15), fluss::Time::FromHMS(14, 30, 45),
-         fluss::Timestamp::FromTimePoint(tp_now),
-         fluss::Timestamp::FromMillis(1718467200000)},
-        {2, "Bob", 87.2f, 30,
-         fluss::Date::FromYMD(2025, 1, 1), fluss::Time::FromHMS(0, 0, 0),
+        {1, "Alice", 95.2f, 25, fluss::Date::FromYMD(2024, 6, 15), fluss::Time::FromHMS(14, 30, 45),
+         fluss::Timestamp::FromTimePoint(tp_now), fluss::Timestamp::FromMillis(1718467200000)},
+        {2, "Bob", 87.2f, 30, fluss::Date::FromYMD(2025, 1, 1), fluss::Time::FromHMS(0, 0, 0),
          fluss::Timestamp::FromMillis(1735689600000),
          fluss::Timestamp::FromMillisNanos(1735689600000, 500000)},
-        {3, "Charlie", 92.1f, 35,
-         fluss::Date::FromYMD(1999, 12, 31), fluss::Time::FromHMS(23, 59, 59),
-         fluss::Timestamp::FromMillis(946684799999),
+        {3, "Charlie", 92.1f, 35, fluss::Date::FromYMD(1999, 12, 31),
+         fluss::Time::FromHMS(23, 59, 59), fluss::Timestamp::FromMillis(946684799999),
          fluss::Timestamp::FromMillis(946684799999)},
     };
 
@@ -160,23 +156,23 @@ int main() {
         const auto& f = rec.row.fields;
 
         if (f[4].type != fluss::DatumType::Date) {
-            std::cerr << "ERROR: field 4 expected Date, got "
-                      << static_cast<int>(f[4].type) << std::endl;
+            std::cerr << "ERROR: field 4 expected Date, got " << static_cast<int>(f[4].type)
+                      << std::endl;
             scan_ok = false;
         }
         if (f[5].type != fluss::DatumType::Time) {
-            std::cerr << "ERROR: field 5 expected Time, got "
-                      << static_cast<int>(f[5].type) << std::endl;
+            std::cerr << "ERROR: field 5 expected Time, got " << static_cast<int>(f[5].type)
+                      << std::endl;
             scan_ok = false;
         }
         if (f[6].type != fluss::DatumType::TimestampNtz) {
-            std::cerr << "ERROR: field 6 expected TimestampNtz, got "
-                      << static_cast<int>(f[6].type) << std::endl;
+            std::cerr << "ERROR: field 6 expected TimestampNtz, got " << static_cast<int>(f[6].type)
+                      << std::endl;
             scan_ok = false;
         }
         if (f[7].type != fluss::DatumType::TimestampLtz) {
-            std::cerr << "ERROR: field 7 expected TimestampLtz, got "
-                      << static_cast<int>(f[7].type) << std::endl;
+            std::cerr << "ERROR: field 7 expected TimestampLtz, got " << static_cast<int>(f[7].type)
+                      << std::endl;
             scan_ok = false;
         }
 
@@ -185,15 +181,11 @@ int main() {
         auto ts_ntz = f[6].GetTimestamp();
         auto ts_ltz = f[7].GetTimestamp();
 
-        std::cout << "  id=" << f[0].i32_val
-                  << " name=" << f[1].string_val
-                  << " score=" << f[2].f32_val
-                  << " age=" << f[3].i32_val
-                  << " date=" << date.Year() << "-" << date.Month() << "-" << date.Day()
-                  << " time=" << time.Hour() << ":" << time.Minute() << ":" << time.Second()
-                  << " ts_ntz=" << ts_ntz.epoch_millis
-                  << " ts_ltz=" << ts_ltz.epoch_millis
-                  << "+" << ts_ltz.nano_of_millisecond << "ns"
+        std::cout << "  id=" << f[0].i32_val << " name=" << f[1].string_val
+                  << " score=" << f[2].f32_val << " age=" << f[3].i32_val << " date=" << date.Year()
+                  << "-" << date.Month() << "-" << date.Day() << " time=" << time.Hour() << ":"
+                  << time.Minute() << ":" << time.Second() << " ts_ntz=" << ts_ntz.epoch_millis
+                  << " ts_ltz=" << ts_ltz.epoch_millis << "+" << ts_ltz.nano_of_millisecond << "ns"
                   << std::endl;
     }
 
@@ -237,9 +229,8 @@ int main() {
         }
 
         auto ts = f[1].GetTimestamp();
-        std::cout << "  id=" << f[0].i32_val
-                  << " updated_at=" << ts.epoch_millis
-                  << "+" << ts.nano_of_millisecond << "ns" << std::endl;
+        std::cout << "  id=" << f[0].i32_val << " updated_at=" << ts.epoch_millis << "+"
+                  << ts.nano_of_millisecond << "ns" << std::endl;
     }
 
     if (scan_ok) {
@@ -260,19 +251,16 @@ int main() {
 
     std::unordered_map<int32_t, int64_t> earliest_offsets;
     check("list_earliest_offsets",
-          admin.ListOffsets(table_path, all_bucket_ids,
-                           fluss::OffsetQuery::Earliest(),
-                           earliest_offsets));
+          admin.ListOffsets(table_path, all_bucket_ids, fluss::OffsetQuery::Earliest(),
+                            earliest_offsets));
     std::cout << "Earliest offsets:" << std::endl;
     for (const auto& [bucket_id, offset] : earliest_offsets) {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
     }
 
     std::unordered_map<int32_t, int64_t> latest_offsets;
-    check("list_latest_offsets",
-          admin.ListOffsets(table_path, all_bucket_ids,
-                           fluss::OffsetQuery::Latest(),
-                           latest_offsets));
+    check("list_latest_offsets", admin.ListOffsets(table_path, all_bucket_ids,
+                                                   fluss::OffsetQuery::Latest(), latest_offsets));
     std::cout << "Latest offsets:" << std::endl;
     for (const auto& [bucket_id, offset] : latest_offsets) {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
@@ -280,14 +268,14 @@ int main() {
 
     auto now = std::chrono::system_clock::now();
     auto one_hour_ago = now - std::chrono::hours(1);
-    auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        one_hour_ago.time_since_epoch()).count();
+    auto timestamp_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(one_hour_ago.time_since_epoch())
+            .count();
 
     std::unordered_map<int32_t, int64_t> timestamp_offsets;
     check("list_timestamp_offsets",
           admin.ListOffsets(table_path, all_bucket_ids,
-                           fluss::OffsetQuery::FromTimestamp(timestamp_ms),
-                           timestamp_offsets));
+                            fluss::OffsetQuery::FromTimestamp(timestamp_ms), timestamp_offsets));
     std::cout << "Offsets for timestamp " << timestamp_ms << " (1 hour ago):" << std::endl;
     for (const auto& [bucket_id, offset] : timestamp_offsets) {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
@@ -301,8 +289,8 @@ int main() {
     std::vector<fluss::BucketSubscription> subscriptions;
     for (const auto& [bucket_id, offset] : earliest_offsets) {
         subscriptions.push_back({bucket_id, offset});
-        std::cout << "Preparing subscription: bucket=" << bucket_id
-                  << ", offset=" << offset << std::endl;
+        std::cout << "Preparing subscription: bucket=" << bucket_id << ", offset=" << offset
+                  << std::endl;
     }
 
     check("subscribe_buckets", batch_scanner.Subscribe(subscriptions));
@@ -311,12 +299,12 @@ int main() {
     fluss::ScanRecords batch_records;
     check("poll_batch", batch_scanner.Poll(5000, batch_records));
 
-    std::cout << "Scanned " << batch_records.Size() << " records from batch subscription" << std::endl;
+    std::cout << "Scanned " << batch_records.Size() << " records from batch subscription"
+              << std::endl;
     for (size_t i = 0; i < batch_records.Size() && i < 5; ++i) {
         const auto& rec = batch_records[i];
         std::cout << "  Record " << i << ": bucket_id=" << rec.bucket_id
-                  << ", offset=" << rec.offset
-                  << ", timestamp=" << rec.timestamp << std::endl;
+                  << ", offset=" << rec.offset << ", timestamp=" << rec.timestamp << std::endl;
     }
     if (batch_records.Size() > 5) {
         std::cout << "  ... and " << (batch_records.Size() - 5) << " more records" << std::endl;
@@ -339,7 +327,8 @@ int main() {
     for (size_t i = 0; i < arrow_batches.Size(); ++i) {
         const auto& batch = arrow_batches[i];
         if (batch->Available()) {
-            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows() << " rows" << std::endl;
+            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows()
+                      << " rows" << std::endl;
         } else {
             std::cout << "  Batch " << i << ": not available" << std::endl;
         }
@@ -350,20 +339,25 @@ int main() {
 
     fluss::LogScanner projected_arrow_scanner;
     check("new_record_batch_log_scanner_with_projection",
-          table.NewScan().Project(projected_columns).CreateRecordBatchScanner(projected_arrow_scanner));
+          table.NewScan()
+              .Project(projected_columns)
+              .CreateRecordBatchScanner(projected_arrow_scanner));
 
     for (int b = 0; b < buckets; ++b) {
         check("subscribe_projected_arrow", projected_arrow_scanner.Subscribe(b, 0));
     }
 
     fluss::ArrowRecordBatches projected_arrow_batches;
-    check("poll_projected_record_batch", projected_arrow_scanner.PollRecordBatch(5000, projected_arrow_batches));
+    check("poll_projected_record_batch",
+          projected_arrow_scanner.PollRecordBatch(5000, projected_arrow_batches));
 
-    std::cout << "Polled " << projected_arrow_batches.Size() << " projected Arrow record batches" << std::endl;
+    std::cout << "Polled " << projected_arrow_batches.Size() << " projected Arrow record batches"
+              << std::endl;
     for (size_t i = 0; i < projected_arrow_batches.Size(); ++i) {
         const auto& batch = projected_arrow_batches[i];
         if (batch->Available()) {
-            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows() << " rows" << std::endl;
+            std::cout << "  Batch " << i << ": " << batch->GetArrowRecordBatch()->num_rows()
+                      << " rows" << std::endl;
         } else {
             std::cout << "  Batch " << i << ": not available" << std::endl;
         }
@@ -380,8 +374,8 @@ int main() {
     // Create schema with decimal columns
     auto decimal_schema = fluss::Schema::NewBuilder()
                               .AddColumn("id", fluss::DataType::Int())
-                              .AddColumn("price", fluss::DataType::Decimal(10, 2))    // compact
-                              .AddColumn("amount", fluss::DataType::Decimal(28, 8))   // i128
+                              .AddColumn("price", fluss::DataType::Decimal(10, 2))   // compact
+                              .AddColumn("amount", fluss::DataType::Decimal(28, 8))  // i128
                               .Build();
 
     auto decimal_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -403,8 +397,8 @@ int main() {
     {
         fluss::GenericRow row;
         row.SetInt32(0, 1);
-        row.SetDecimal(1, "123.45");       // Rust knows DECIMAL(10,2)
-        row.SetDecimal(2, "1.00000000");   // Rust knows DECIMAL(28,8)
+        row.SetDecimal(1, "123.45");      // Rust knows DECIMAL(10,2)
+        row.SetDecimal(2, "1.00000000");  // Rust knows DECIMAL(28,8)
         check("append_decimal", decimal_writer.Append(row));
     }
     {
@@ -436,13 +430,134 @@ int main() {
     for (const auto& rec : decimal_records) {
         auto& price = rec.row.fields[1];
         auto& amount = rec.row.fields[2];
-        std::cout << "  id=" << rec.row.fields[0].i32_val
-                  << " price=" << price.DecimalToString()
+        std::cout << "  id=" << rec.row.fields[0].i32_val << " price=" << price.DecimalToString()
                   << " (raw=" << price.i64_val << ")"
-                  << " amount=" << amount.DecimalToString()
-                  << " is_decimal=" << price.IsDecimal()
+                  << " amount=" << amount.DecimalToString() << " is_decimal=" << price.IsDecimal()
                   << std::endl;
     }
 
+    // 13) Partitioned table example
+    std::cout << "\n=== Partitioned Table Example ===" << std::endl;
+
+    fluss::TablePath partitioned_table_path("fluss", "partitioned_table_cpp_v1");
+
+    // Drop if exists
+    check("drop_partitioned_table_if_exists", admin.DropTable(partitioned_table_path, true));
+
+    // Create a partitioned table with a "region" partition key
+    auto partitioned_schema = fluss::Schema::NewBuilder()
+                                  .AddColumn("id", fluss::DataType::Int())
+                                  .AddColumn("region", fluss::DataType::String())
+                                  .AddColumn("value", fluss::DataType::BigInt())
+                                  .Build();
+
+    auto partitioned_descriptor = fluss::TableDescriptor::NewBuilder()
+                                      .SetSchema(partitioned_schema)
+                                      .SetPartitionKeys({"region"})
+                                      .SetBucketCount(1)
+                                      .SetComment("cpp partitioned table example")
+                                      .Build();
+
+    check("create_partitioned_table",
+          admin.CreateTable(partitioned_table_path, partitioned_descriptor, false));
+    std::cout << "Created partitioned table" << std::endl;
+
+    // Create partitions
+    check("create_partition_US",
+          admin.CreatePartition(partitioned_table_path, {{"region", "US"}}, true));
+    check("create_partition_EU",
+          admin.CreatePartition(partitioned_table_path, {{"region", "EU"}}, true));
+    std::cout << "Created partitions: US, EU" << std::endl;
+
+    // List partitions
+    std::vector<fluss::PartitionInfo> partition_infos;
+    check("list_partition_infos",
+          admin.ListPartitionInfos(partitioned_table_path, partition_infos));
+    for (const auto& pi : partition_infos) {
+        std::cout << "  Partition: " << pi.partition_name << " (id=" << pi.partition_id << ")"
+                  << std::endl;
+    }
+
+    // Write data to partitioned table
+    fluss::Table partitioned_table;
+    check("get_partitioned_table", conn.GetTable(partitioned_table_path, partitioned_table));
+
+    fluss::AppendWriter partitioned_writer;
+    check("new_partitioned_writer", partitioned_table.NewAppendWriter(partitioned_writer));
+
+    struct PartitionedRow {
+        int id;
+        const char* region;
+        int64_t value;
+    };
+
+    std::vector<PartitionedRow> partitioned_rows = {
+        {1, "US", 100},
+        {2, "US", 200},
+        {3, "EU", 300},
+        {4, "EU", 400},
+    };
+
+    for (const auto& r : partitioned_rows) {
+        fluss::GenericRow row;
+        row.SetInt32(0, r.id);
+        row.SetString(1, r.region);
+        row.SetInt64(2, r.value);
+        check("append_partitioned", partitioned_writer.Append(row));
+    }
+    check("flush_partitioned", partitioned_writer.Flush());
+    std::cout << "Wrote " << partitioned_rows.size() << " rows to partitioned table" << std::endl;
+
+    // 13.1) subscribe_partition_buckets: subscribe to each partition individually
+    std::cout << "\n--- Testing SubscribePartitionBuckets ---" << std::endl;
+    fluss::LogScanner partition_scanner;
+    check("new_partition_scanner", partitioned_table.NewScan().CreateLogScanner(partition_scanner));
+
+    for (const auto& pi : partition_infos) {
+        check("subscribe_partition_buckets",
+              partition_scanner.SubscribePartitionBuckets(pi.partition_id, 0, 0));
+        std::cout << "Subscribed to partition " << pi.partition_name << std::endl;
+    }
+
+    fluss::ScanRecords partition_records;
+    check("poll_partitioned", partition_scanner.Poll(5000, partition_records));
+    std::cout << "Scanned " << partition_records.Size() << " records from partitioned table"
+              << std::endl;
+    for (size_t i = 0; i < partition_records.Size(); ++i) {
+        const auto& rec = partition_records[i];
+        std::cout << "  Record " << i << ": id=" << rec.row.fields[0].i32_val
+                  << ", region=" << rec.row.fields[1].string_val
+                  << ", value=" << rec.row.fields[2].i64_val << std::endl;
+    }
+
+    // 13.2) subscribe_partition_buckets: batch subscribe to all partitions at once
+    std::cout << "\n--- Testing SubscribePartitionBuckets (batch) ---" << std::endl;
+    fluss::LogScanner partition_batch_scanner;
+    check("new_partition_batch_scanner",
+          partitioned_table.NewScan().CreateLogScanner(partition_batch_scanner));
+
+    std::vector<fluss::PartitionBucketSubscription> partition_subs;
+    for (const auto& pi : partition_infos) {
+        partition_subs.push_back({pi.partition_id, 0, 0});
+    }
+    check("subscribe_partition_buckets",
+          partition_batch_scanner.SubscribePartitionBuckets(partition_subs));
+    std::cout << "Batch subscribed to " << partition_subs.size() << " partition+bucket combinations"
+              << std::endl;
+
+    fluss::ScanRecords partition_batch_records;
+    check("poll_partition_batch", partition_batch_scanner.Poll(5000, partition_batch_records));
+    std::cout << "Scanned " << partition_batch_records.Size()
+              << " records from batch partition subscription" << std::endl;
+    for (size_t i = 0; i < partition_batch_records.Size(); ++i) {
+        const auto& rec = partition_batch_records[i];
+        std::cout << "  Record " << i << ": id=" << rec.row.fields[0].i32_val
+                  << ", region=" << rec.row.fields[1].string_val
+                  << ", value=" << rec.row.fields[2].i64_val << std::endl;
+    }
+
+    // Cleanup
+    check("drop_partitioned_table", admin.DropTable(partitioned_table_path, true));
+    std::cout << "Dropped partitioned table" << std::endl;
     return 0;
 }

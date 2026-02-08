@@ -17,14 +17,17 @@
  * under the License.
  */
 
+#include <arrow/c/bridge.h>
+
+#include <ctime>
+
+#include "ffi_converter.hpp"
 #include "fluss.hpp"
 #include "lib.rs.h"
-#include "ffi_converter.hpp"
 #include "rust/cxx.h"
-#include <arrow/c/bridge.h>
-#include <ctime>
 // todo:  bindings/cpp/BUILD.bazel still doesn’t declare Arrow include/link dependencies.
-// In environments where Bazel does not already have Arrow available, this will fail at compile/link time.
+// In environments where Bazel does not already have Arrow available, this will fail at compile/link
+// time.
 #include <arrow/record_batch.h>
 
 namespace fluss {
@@ -89,9 +92,7 @@ void Table::Destroy() noexcept {
     }
 }
 
-Table::Table(Table&& other) noexcept : table_(other.table_) {
-    other.table_ = nullptr;
-}
+Table::Table(Table&& other) noexcept : table_(other.table_) { other.table_ = nullptr; }
 
 Table& Table::operator=(Table&& other) noexcept {
     if (this != &other) {
@@ -119,9 +120,7 @@ Result Table::NewAppendWriter(AppendWriter& out) {
     }
 }
 
-TableScan Table::NewScan() {
-    return TableScan(table_);
-}
+TableScan Table::NewScan() { return TableScan(table_); }
 
 // TableScan implementation
 TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
@@ -167,7 +166,8 @@ Result TableScan::CreateRecordBatchScanner(LogScanner& out) {
             for (size_t idx : projection_) {
                 rust_indices.push_back(idx);
             }
-            out.scanner_ = table_->new_record_batch_log_scanner_with_projection(std::move(rust_indices));
+            out.scanner_ =
+                table_->new_record_batch_log_scanner_with_projection(std::move(rust_indices));
         }
         return utils::make_ok();
     } catch (const rust::Error& e) {
@@ -354,12 +354,32 @@ Result LogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offse
     return utils::from_ffi_result(ffi_result);
 }
 
-Result LogScanner::SubscribePartition(int64_t partition_id, int32_t bucket_id, int64_t start_offset) {
+Result LogScanner::SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id,
+                                             int64_t start_offset) {
     if (!Available()) {
         return utils::make_error(1, "LogScanner not available");
     }
 
     auto ffi_result = scanner_->subscribe_partition(partition_id, bucket_id, start_offset);
+    return utils::from_ffi_result(ffi_result);
+}
+
+Result LogScanner::SubscribePartitionBuckets(
+    const std::vector<PartitionBucketSubscription>& subscriptions) {
+    if (!Available()) {
+        return utils::make_error(1, "LogScanner not available");
+    }
+
+    rust::Vec<ffi::FfiPartitionBucketSubscription> rust_subs;
+    for (const auto& sub : subscriptions) {
+        ffi::FfiPartitionBucketSubscription ffi_sub;
+        ffi_sub.partition_id = sub.partition_id;
+        ffi_sub.bucket_id = sub.bucket_id;
+        ffi_sub.offset = sub.offset;
+        rust_subs.push_back(ffi_sub);
+    }
+
+    auto ffi_result = scanner_->subscribe_partition_buckets(std::move(rust_subs));
     return utils::from_ffi_result(ffi_result);
 }
 
@@ -387,12 +407,9 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     return utils::make_ok();
 }
 
-ArrowRecordBatch::ArrowRecordBatch(
-    std::shared_ptr<arrow::RecordBatch> batch,
-    int64_t table_id,
-    int64_t partition_id,
-    int32_t bucket_id,
-    int64_t base_offset) noexcept
+ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
+                                   int64_t partition_id, int32_t bucket_id,
+                                   int64_t base_offset) noexcept
     : batch_(std::move(batch)),
       table_id_(table_id),
       partition_id_(partition_id),
@@ -405,7 +422,6 @@ int64_t ArrowRecordBatch::NumRows() const {
     if (!Available()) return 0;
     return batch_->num_rows();
 }
-
 
 int64_t ArrowRecordBatch::GetTableId() const {
     if (!Available()) return 0;
@@ -453,26 +469,23 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
         if (import_result.ok()) {
             auto batch_ptr = import_result.ValueOrDie();
             auto batch_wrapper = std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
-                std::move(batch_ptr),
-                ffi_batch.table_id,
-                ffi_batch.partition_id,
-                ffi_batch.bucket_id,
-                ffi_batch.base_offset
-            ));
+                std::move(batch_ptr), ffi_batch.table_id, ffi_batch.partition_id,
+                ffi_batch.bucket_id, ffi_batch.base_offset));
             out.batches.push_back(std::move(batch_wrapper));
-            
+
             // Free the container structures that were allocated in Rust after successful import
             ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
         } else {
             // Import failed, free the container structures to avoid leaks and return error
             ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
-            
+
             // Return an error indicating that the import failed
-            std::string error_msg = "Failed to import Arrow record batch: " + import_result.status().ToString();
+            std::string error_msg =
+                "Failed to import Arrow record batch: " + import_result.status().ToString();
             return utils::make_error(1, error_msg);
         }
     }
-    
+
     return utils::make_ok();
 }
 

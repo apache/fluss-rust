@@ -166,6 +166,12 @@ mod ffi {
         offset: i64,
     }
 
+    struct FfiPartitionBucketSubscription {
+        partition_id: i64,
+        bucket_id: i32,
+        offset: i64,
+    }
+
     struct FfiBucketOffsetPair {
         bucket_id: i32,
         offset: i64,
@@ -179,6 +185,11 @@ mod ffi {
     struct FfiLakeSnapshotResult {
         result: FfiResult,
         lake_snapshot: FfiLakeSnapshot,
+    }
+
+    struct FfiPartitionKeyValue {
+        key: String,
+        value: String,
     }
 
     struct FfiPartitionInfo {
@@ -240,6 +251,12 @@ mod ffi {
             self: &Admin,
             table_path: &FfiTablePath,
         ) -> FfiListPartitionInfosResult;
+        fn create_partition(
+            self: &Admin,
+            table_path: &FfiTablePath,
+            partition_spec: Vec<FfiPartitionKeyValue>,
+            ignore_if_exists: bool,
+        ) -> FfiResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
@@ -278,6 +295,10 @@ mod ffi {
             partition_id: i64,
             bucket_id: i32,
             start_offset: i64,
+        ) -> FfiResult;
+        fn subscribe_partition_buckets(
+            self: &LogScanner,
+            subscriptions: Vec<FfiPartitionBucketSubscription>,
         ) -> FfiResult;
         fn unsubscribe_partition(self: &LogScanner, partition_id: i64, bucket_id: i32)
         -> FfiResult;
@@ -613,6 +634,33 @@ impl Admin {
             },
         }
     }
+    fn create_partition(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        partition_spec: Vec<ffi::FfiPartitionKeyValue>,
+        ignore_if_exists: bool,
+    ) -> ffi::FfiResult {
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+        let spec_map: std::collections::HashMap<String, String> = partition_spec
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect();
+        let partition_spec = fcore::metadata::PartitionSpec::new(spec_map);
+
+        let result = RUNTIME.block_on(async {
+            self.inner
+                .create_partition(&path, &partition_spec, ignore_if_exists)
+                .await
+        });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_result(1, e.to_string()),
+        }
+    }
 }
 
 // Table implementation
@@ -937,6 +985,41 @@ impl LogScanner {
         start_offset: i64,
     ) -> ffi::FfiResult {
         self.do_subscribe(Some(partition_id), bucket_id, start_offset)
+    }
+
+    fn subscribe_partition_buckets(
+        &self,
+        subscriptions: Vec<ffi::FfiPartitionBucketSubscription>,
+    ) -> ffi::FfiResult {
+        use std::collections::HashMap;
+        let mut partition_bucket_offsets: HashMap<(PartitionId, i32), i64> = HashMap::new();
+        for sub in subscriptions {
+            partition_bucket_offsets.insert((sub.partition_id, sub.bucket_id), sub.offset);
+        }
+
+        if let Some(ref inner) = self.inner {
+            let result = RUNTIME.block_on(async {
+                inner
+                    .subscribe_partition_buckets(&partition_bucket_offsets)
+                    .await
+            });
+            match result {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else if let Some(ref inner_batch) = self.inner_batch {
+            let result = RUNTIME.block_on(async {
+                inner_batch
+                    .subscribe_partition_buckets(&partition_bucket_offsets)
+                    .await
+            });
+            match result {
+                Ok(_) => ok_result(),
+                Err(e) => err_result(1, e.to_string()),
+            }
+        } else {
+            err_result(1, "LogScanner not initialized".to_string())
+        }
     }
 
     fn unsubscribe_partition(&self, partition_id: PartitionId, bucket_id: i32) -> ffi::FfiResult {

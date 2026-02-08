@@ -420,6 +420,16 @@ class LogScanner:
             start_offset: The offset to start reading from (use EARLIEST_OFFSET for beginning)
         """
         ...
+    def subscribe_partition_buckets(
+        self, partition_bucket_offsets: Dict[Tuple[int, int], int]
+    ) -> None:
+        """Subscribe to multiple partition+bucket combinations at once (partitioned tables only).
+
+        Args:
+            partition_bucket_offsets: Dict mapping (partition_id, bucket_id) tuples to start_offsets.
+                Example: {(partition_id_1, 0): EARLIEST_OFFSET, (partition_id_2, 1): 100}
+        """
+        ...
     def unsubscribe_partition(self, partition_id: int, bucket_id: int) -> None:
         """Unsubscribe from a specific partition bucket (partitioned tables only).
 

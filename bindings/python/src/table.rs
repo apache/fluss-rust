@@ -1657,6 +1657,26 @@ impl LogScanner {
         })
     }
 
+    /// Subscribe to multiple partition+bucket combinations at once (partitioned tables only).
+    ///
+    /// Args:
+    ///     partition_bucket_offsets: A dict mapping (partition_id, bucket_id) tuples to start_offsets
+    fn subscribe_partition_buckets(
+        &self,
+        py: Python,
+        partition_bucket_offsets: HashMap<(i64, i32), i64>,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            TOKIO_RUNTIME.block_on(async {
+                with_scanner!(
+                    &self.scanner,
+                    subscribe_partition_buckets(&partition_bucket_offsets)
+                )
+                .map_err(|e| FlussError::new_err(e.to_string()))
+            })
+        })
+    }
+
     /// Unsubscribe from a specific partition bucket (partitioned tables only).
     ///
     /// Args:
@@ -1813,7 +1833,7 @@ impl LogScanner {
     /// Reads from currently subscribed buckets until reaching their latest offsets.
     /// Works for both partitioned and non-partitioned tables.
     ///
-    /// You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
+    /// You must call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.
     ///
     /// Returns:
     ///     PyArrow Table containing all data from subscribed buckets
@@ -1822,7 +1842,7 @@ impl LogScanner {
         let subscribed = scanner.get_subscribed_buckets();
         if subscribed.is_empty() {
             return Err(FlussError::new_err(
-                "No buckets subscribed. Call subscribe(), subscribe_buckets(), or subscribe_partition() first.",
+                "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
             ));
         }
 
@@ -1838,7 +1858,7 @@ impl LogScanner {
     /// Reads from currently subscribed buckets until reaching their latest offsets.
     /// Works for both partitioned and non-partitioned tables.
     ///
-    /// You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
+    /// You must call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.
     ///
     /// Returns:
     ///     Pandas DataFrame containing all data from subscribed buckets
