@@ -56,27 +56,31 @@ gpg: Good signature from "Release Manager Name (CODE SIGNING KEY) <...@apache.or
 
 ## Verifying checksums
 
-Next, verify all the checksums:
+Next, verify the tarball(s) using the provided `.sha512` file(s). Each `.sha512` file lists the expected SHA-512 hash for the corresponding archive; `-c` reads that file and checks the archive.
+
+**On macOS (shasum):**
 
 ```bash
-shasum *.sha512 > checklist.chk; shasum -c checklist.chk
+shasum -a 512 -c fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.sha512
 ```
 
-On Linux, use `sha512sum` instead of `shasum`:
+**On Linux (sha512sum):**
 
 ```bash
-sha512sum *.sha512 > checklist.chk; sha512sum -c checklist.chk
+sha512sum -c fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.sha512
 ```
+
+If you have multiple archives, run `-c` on each `.sha512` file (or use `shasum -a 512 -c *.sha512` / `sha512sum -c *.sha512`).
 
 If the verification is successful, you will see a message like this:
 
 ```text
-fluss-rust-0.1.0-incubating.tar.gz.sha512: OK
+fluss-rust-0.1.0-incubating.tar.gz: OK
 ```
 
 ## Verifying build
 
-Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.11+** for bindings.
+Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.9+** for bindings.
 
 ```bash
 tar -xzf fluss-rust-${RELEASE_VERSION}-incubating.tar.gz
