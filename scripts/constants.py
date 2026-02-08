@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,23 +16,30 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "fluss-cpp"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
-publish = false
+import tomllib
+from pathlib import Path
 
-[lib]
-crate-type = ["staticlib"]
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
-[dependencies]
-anyhow = "1.0"
-arrow = { workspace = true, features = ["ffi"] }
-cxx = "1.0"
-fluss = { workspace = true, features = ["storage-all"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
-[build-dependencies]
-cxx-build = "1.0"
+def list_packages():
+    """Package directories from [workspace].members in root Cargo.toml, plus workspace root.
+    Each gets a DEPENDENCIES.rust.tsv. Avoids scanning target/, .git/, etc.
+    Requires Python 3.11+ (tomllib).
+    """
+    root_cargo = ROOT_DIR / "Cargo.toml"
+    if not root_cargo.exists():
+        return ["."]
+    with open(root_cargo, "rb") as f:
+        data = tomllib.load(f)
+    members = data.get("workspace", {}).get("members", [])
+    if not isinstance(members, list):
+        return ["."]
+    packages = ["."]
+    for m in members:
+        if isinstance(m, str) and m:
+            packages.append(m)
+    return packages
+
+
+PACKAGES = list_packages()
