@@ -648,6 +648,29 @@ pub fn python_to_generic_row(
     python_to_sparse_generic_row(row, table_info, &all_indices)
 }
 
+/// Process a Python sequence (list or tuple) into datums at the target column positions.
+fn process_sequence(
+    seq: &Bound<pyo3::types::PySequence>,
+    target_indices: &[usize],
+    fields: &[fcore::metadata::DataField],
+    datums: &mut [fcore::row::Datum<'static>],
+) -> PyResult<()> {
+    if seq.len()? != target_indices.len() {
+        return Err(FlussError::new_err(format!(
+            "Expected {} elements, got {}",
+            target_indices.len(),
+            seq.len()?
+        )));
+    }
+    for (i, &col_idx) in target_indices.iter().enumerate() {
+        let field = &fields[col_idx];
+        let value = seq.get_item(i)?;
+        datums[col_idx] = python_value_to_datum(&value, field.data_type())
+            .map_err(|e| FlussError::new_err(format!("Field '{}': {}", field.name(), e)))?;
+    }
+    Ok(())
+}
+
 /// Build a full-width GenericRow filling only the specified column
 /// indices from user input; all other columns are set to Null.
 pub fn python_to_sparse_generic_row(
@@ -703,35 +726,13 @@ pub fn python_to_sparse_generic_row(
         }
 
         RowInput::List(list) => {
-            if list.len() != target_indices.len() {
-                return Err(FlussError::new_err(format!(
-                    "Expected {} elements, got {}",
-                    target_indices.len(),
-                    list.len()
-                )));
-            }
-            for (i, &col_idx) in target_indices.iter().enumerate() {
-                let field = &fields[col_idx];
-                let value = list.get_item(i)?;
-                datums[col_idx] = python_value_to_datum(&value, field.data_type())
-                    .map_err(|e| FlussError::new_err(format!("Field '{}': {}", field.name(), e)))?;
-            }
+            let seq = list.as_sequence();
+            process_sequence(seq, target_indices, fields, &mut datums)?;
         }
 
         RowInput::Tuple(tuple) => {
-            if tuple.len() != target_indices.len() {
-                return Err(FlussError::new_err(format!(
-                    "Expected {} elements, got {}",
-                    target_indices.len(),
-                    tuple.len()
-                )));
-            }
-            for (i, &col_idx) in target_indices.iter().enumerate() {
-                let field = &fields[col_idx];
-                let value = tuple.get_item(i)?;
-                datums[col_idx] = python_value_to_datum(&value, field.data_type())
-                    .map_err(|e| FlussError::new_err(format!("Field '{}': {}", field.name(), e)))?;
-            }
+            let seq = tuple.as_sequence();
+            process_sequence(seq, target_indices, fields, &mut datums)?;
         }
     }
 
