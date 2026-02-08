@@ -1534,13 +1534,18 @@ impl LogScanner {
             let result = RUNTIME.block_on(async { inner.poll(timeout).await });
 
             match result {
-                Ok(records) => ffi::FfiScanRecordsResult {
-                    result: ok_result(),
-                    scan_records: types::core_scan_records_to_ffi(
-                        &records,
-                        &self.projected_columns,
-                    ),
-                },
+                Ok(records) => {
+                    match types::core_scan_records_to_ffi(&records, &self.projected_columns) {
+                        Ok(scan_records) => ffi::FfiScanRecordsResult {
+                            result: ok_result(),
+                            scan_records,
+                        },
+                        Err(e) => ffi::FfiScanRecordsResult {
+                            result: err_result(1, e.to_string()),
+                            scan_records: ffi::FfiScanRecords { records: vec![] },
+                        },
+                    }
+                }
                 Err(e) => ffi::FfiScanRecordsResult {
                     result: err_result(1, e.to_string()),
                     scan_records: ffi::FfiScanRecords { records: vec![] },
