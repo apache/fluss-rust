@@ -41,6 +41,8 @@ struct Table;
 struct AppendWriter;
 struct WriteResult;
 struct LogScanner;
+struct UpsertWriter;
+struct Lookuper;
 }  // namespace ffi
 
 struct Date {
@@ -490,6 +492,7 @@ struct GenericRow {
 
     size_t FieldCount() const { return fields.size(); }
 
+    // ── Index-based getters ──────────────────────────────────────────
     DatumType GetType(size_t idx) const { return GetField(idx).GetType(); }
     bool IsNull(size_t idx) const { return GetField(idx).IsNull(); }
     bool GetBool(size_t idx) const { return GetTypedField(idx, DatumType::Bool).GetBool(); }
@@ -528,6 +531,7 @@ struct GenericRow {
         return d.DecimalToString();
     }
 
+    // ── Index-based setters ──────────────────────────────────────────
     void SetNull(size_t idx) {
         EnsureSize(idx);
         fields[idx] = Datum::Null();
@@ -593,8 +597,68 @@ struct GenericRow {
         fields[idx] = Datum::DecimalString(value);
     }
 
+    // ── Name-based setters (require schema — see Table::NewRow()) ───
+    void Set(const std::string& name, std::nullptr_t) { SetNull(Resolve(name)); }
+    void Set(const std::string& name, bool v) { SetBool(Resolve(name), v); }
+    void Set(const std::string& name, int32_t v) { SetInt32(Resolve(name), v); }
+    void Set(const std::string& name, int64_t v) { SetInt64(Resolve(name), v); }
+    void Set(const std::string& name, float v) { SetFloat32(Resolve(name), v); }
+    void Set(const std::string& name, double v) { SetFloat64(Resolve(name), v); }
+    // const char* overload to prevent "string literal" → bool conversion
+    void Set(const std::string& name, const char* v) {
+        auto [idx, type] = ResolveColumn(name);
+        if (type == TypeId::Decimal) {
+            SetDecimal(idx, v);
+        } else {
+            SetString(idx, v);
+        }
+    }
+    void Set(const std::string& name, std::string v) {
+        auto [idx, type] = ResolveColumn(name);
+        if (type == TypeId::Decimal) {
+            SetDecimal(idx, v);
+        } else {
+            SetString(idx, std::move(v));
+        }
+    }
+    void Set(const std::string& name, std::vector<uint8_t> v) {
+        SetBytes(Resolve(name), std::move(v));
+    }
+    void Set(const std::string& name, fluss::Date d) { SetDate(Resolve(name), d); }
+    void Set(const std::string& name, fluss::Time t) { SetTime(Resolve(name), t); }
+    void Set(const std::string& name, fluss::Timestamp ts) {
+        auto [idx, type] = ResolveColumn(name);
+        if (type == TypeId::TimestampLtz) {
+            SetTimestampLtz(idx, ts);
+        } else {
+            SetTimestampNtz(idx, ts);
+        }
+    }
+
    private:
+    friend class Table;
+    struct ColumnInfo {
+        size_t index;
+        TypeId type_id;
+    };
+    using ColumnMap = std::unordered_map<std::string, ColumnInfo>;
     std::vector<Datum> fields;
+    std::shared_ptr<ColumnMap> column_map_;
+
+    size_t Resolve(const std::string& name) const { return ResolveColumn(name).index; }
+
+    const ColumnInfo& ResolveColumn(const std::string& name) const {
+        if (!column_map_) {
+            throw std::runtime_error(
+                "GenericRow: name-based Set() requires a schema. "
+                "Use Table::NewRow() to create a schema-aware row.");
+        }
+        auto it = column_map_->find(name);
+        if (it == column_map_->end()) {
+            throw std::runtime_error("GenericRow: unknown column '" + name + "'");
+        }
+        return it->second;
+    }
 
     const Datum& GetField(size_t idx) const {
         if (idx >= fields.size()) {
@@ -725,6 +789,8 @@ struct DatabaseInfo {
 };
 
 class AppendWriter;
+class UpsertWriter;
+class Lookuper;
 class WriteResult;
 class LogScanner;
 class Admin;
@@ -792,8 +858,7 @@ class Admin {
                          const std::unordered_map<std::string, std::string>& partition_spec,
                          bool ignore_if_not_exists = false);
 
-    Result CreateDatabase(const std::string& database_name,
-                          const DatabaseDescriptor& descriptor,
+    Result CreateDatabase(const std::string& database_name, const DatabaseDescriptor& descriptor,
                           bool ignore_if_exists = false);
 
     Result DropDatabase(const std::string& database_name, bool ignore_if_not_exists = false,
@@ -833,7 +898,13 @@ class Table {
 
     bool Available() const;
 
+    GenericRow NewRow() const;
+
     Result NewAppendWriter(AppendWriter& out);
+    Result NewUpsertWriter(UpsertWriter& out);
+    Result NewUpsertWriter(UpsertWriter& out, const std::vector<std::string>& column_names);
+    Result NewUpsertWriter(UpsertWriter& out, const std::vector<size_t>& column_indices);
+    Result NewLookuper(Lookuper& out);
     TableScan NewScan();
 
     TableInfo GetTableInfo() const;
@@ -846,7 +917,10 @@ class Table {
     Table(ffi::Table* table) noexcept;
 
     void Destroy() noexcept;
+    const std::shared_ptr<GenericRow::ColumnMap>& GetColumnMap() const;
+
     ffi::Table* table_{nullptr};
+    mutable std::shared_ptr<GenericRow::ColumnMap> column_map_;
 };
 
 class TableScan {
@@ -887,6 +961,7 @@ class WriteResult {
 
    private:
     friend class AppendWriter;
+    friend class UpsertWriter;
     WriteResult(ffi::WriteResult* inner) noexcept;
 
     void Destroy() noexcept;
@@ -915,6 +990,50 @@ class AppendWriter {
 
     void Destroy() noexcept;
     ffi::AppendWriter* writer_{nullptr};
+};
+
+class UpsertWriter {
+   public:
+    UpsertWriter() noexcept;
+    ~UpsertWriter() noexcept;
+
+    UpsertWriter(const UpsertWriter&) = delete;
+    UpsertWriter& operator=(const UpsertWriter&) = delete;
+    UpsertWriter(UpsertWriter&& other) noexcept;
+    UpsertWriter& operator=(UpsertWriter&& other) noexcept;
+
+    bool Available() const;
+
+    Result Upsert(const GenericRow& row);
+    Result Upsert(const GenericRow& row, WriteResult& out);
+    Result Delete(const GenericRow& row);
+    Result Delete(const GenericRow& row, WriteResult& out);
+    Result Flush();
+
+   private:
+    friend class Table;
+    void Destroy() noexcept;
+    ffi::UpsertWriter* writer_{nullptr};
+};
+
+class Lookuper {
+   public:
+    Lookuper() noexcept;
+    ~Lookuper() noexcept;
+
+    Lookuper(const Lookuper&) = delete;
+    Lookuper& operator=(const Lookuper&) = delete;
+    Lookuper(Lookuper&& other) noexcept;
+    Lookuper& operator=(Lookuper&& other) noexcept;
+
+    bool Available() const;
+
+    Result Lookup(const GenericRow& pk_row, bool& found, GenericRow& out);
+
+   private:
+    friend class Table;
+    void Destroy() noexcept;
+    ffi::Lookuper* lookuper_{nullptr};
 };
 
 class LogScanner {

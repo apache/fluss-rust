@@ -92,12 +92,16 @@ void Table::Destroy() noexcept {
     }
 }
 
-Table::Table(Table&& other) noexcept : table_(other.table_) { other.table_ = nullptr; }
+Table::Table(Table&& other) noexcept
+    : table_(other.table_), column_map_(std::move(other.column_map_)) {
+    other.table_ = nullptr;
+}
 
 Table& Table::operator=(Table&& other) noexcept {
     if (this != &other) {
         Destroy();
         table_ = other.table_;
+        column_map_ = std::move(other.column_map_);
         other.table_ = nullptr;
     }
     return *this;
@@ -175,6 +179,24 @@ Result TableScan::CreateRecordBatchScanner(LogScanner& out) {
     } catch (const std::exception& e) {
         return utils::make_error(1, e.what());
     }
+}
+
+const std::shared_ptr<GenericRow::ColumnMap>& Table::GetColumnMap() const {
+    if (!column_map_ && Available()) {
+        auto info = GetTableInfo();
+        column_map_ = std::make_shared<GenericRow::ColumnMap>();
+        for (size_t i = 0; i < info.schema.columns.size(); ++i) {
+            (*column_map_)[info.schema.columns[i].name] = {i,
+                                                           info.schema.columns[i].data_type.id()};
+        }
+    }
+    return column_map_;
+}
+
+GenericRow Table::NewRow() const {
+    GenericRow row;
+    row.column_map_ = GetColumnMap();
+    return row;
 }
 
 TableInfo Table::GetTableInfo() const {
@@ -297,6 +319,209 @@ Result AppendWriter::Flush() {
 
     auto ffi_result = writer_->flush();
     return utils::from_ffi_result(ffi_result);
+}
+
+// UpsertWriter implementation
+UpsertWriter::UpsertWriter() noexcept = default;
+
+UpsertWriter::~UpsertWriter() noexcept { Destroy(); }
+
+void UpsertWriter::Destroy() noexcept {
+    if (writer_) {
+        ffi::delete_upsert_writer(writer_);
+        writer_ = nullptr;
+    }
+}
+
+UpsertWriter::UpsertWriter(UpsertWriter&& other) noexcept : writer_(other.writer_) {
+    other.writer_ = nullptr;
+}
+
+UpsertWriter& UpsertWriter::operator=(UpsertWriter&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        writer_ = other.writer_;
+        other.writer_ = nullptr;
+    }
+    return *this;
+}
+
+bool UpsertWriter::Available() const { return writer_ != nullptr; }
+
+Result UpsertWriter::Upsert(const GenericRow& row) {
+    WriteResult wr;
+    return Upsert(row, wr);
+}
+
+Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
+    if (!Available()) {
+        return utils::make_error(1, "UpsertWriter not available");
+    }
+
+    try {
+        auto ffi_row = utils::to_ffi_generic_row(row);
+        auto rust_box = writer_->upsert(ffi_row);
+        out.inner_ = rust_box.into_raw();
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+Result UpsertWriter::Delete(const GenericRow& row) {
+    WriteResult wr;
+    return Delete(row, wr);
+}
+
+Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
+    if (!Available()) {
+        return utils::make_error(1, "UpsertWriter not available");
+    }
+
+    try {
+        auto ffi_row = utils::to_ffi_generic_row(row);
+        auto rust_box = writer_->delete_row(ffi_row);
+        out.inner_ = rust_box.into_raw();
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+Result UpsertWriter::Flush() {
+    if (!Available()) {
+        return utils::make_error(1, "UpsertWriter not available");
+    }
+
+    auto ffi_result = writer_->upsert_flush();
+    return utils::from_ffi_result(ffi_result);
+}
+
+// Lookuper implementation
+Lookuper::Lookuper() noexcept = default;
+
+Lookuper::~Lookuper() noexcept { Destroy(); }
+
+void Lookuper::Destroy() noexcept {
+    if (lookuper_) {
+        ffi::delete_lookuper(lookuper_);
+        lookuper_ = nullptr;
+    }
+}
+
+Lookuper::Lookuper(Lookuper&& other) noexcept : lookuper_(other.lookuper_) {
+    other.lookuper_ = nullptr;
+}
+
+Lookuper& Lookuper::operator=(Lookuper&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        lookuper_ = other.lookuper_;
+        other.lookuper_ = nullptr;
+    }
+    return *this;
+}
+
+bool Lookuper::Available() const { return lookuper_ != nullptr; }
+
+Result Lookuper::Lookup(const GenericRow& pk_row, bool& found, GenericRow& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Lookuper not available");
+    }
+
+    try {
+        auto ffi_row = utils::to_ffi_generic_row(pk_row);
+        auto ffi_result = lookuper_->lookup(ffi_row);
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (!result.Ok()) {
+            found = false;
+            return result;
+        }
+        found = ffi_result.found;
+        if (found) {
+            out = utils::from_ffi_generic_row(ffi_result.row);
+        }
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        found = false;
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        found = false;
+        return utils::make_error(1, e.what());
+    }
+}
+
+// Table KV methods
+Result Table::NewUpsertWriter(UpsertWriter& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        out.writer_ = table_->new_upsert_writer();
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+Result Table::NewUpsertWriter(UpsertWriter& out, const std::vector<std::string>& column_names) {
+    if (!Available()) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        rust::Vec<rust::String> rust_names;
+        for (const auto& name : column_names) {
+            rust_names.push_back(rust::String(name));
+        }
+        out.writer_ = table_->new_upsert_writer_with_column_names(std::move(rust_names));
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+Result Table::NewUpsertWriter(UpsertWriter& out, const std::vector<size_t>& column_indices) {
+    if (!Available()) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        rust::Vec<size_t> rust_indices;
+        for (size_t idx : column_indices) {
+            rust_indices.push_back(idx);
+        }
+        out.writer_ = table_->new_upsert_writer_with_column_indices(std::move(rust_indices));
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+Result Table::NewLookuper(Lookuper& out) {
+    if (!Available()) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        out.lookuper_ = table_->new_lookuper();
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
 }
 
 // LogScanner implementation

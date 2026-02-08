@@ -108,6 +108,12 @@ target_link_libraries(fluss_cpp_admin_example PRIVATE Arrow::arrow_shared)
 target_compile_definitions(fluss_cpp_admin_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_admin_example PUBLIC ${CPP_INCLUDE_DIR})
 
+add_executable(fluss_cpp_kv_example examples/kv_example.cpp)
+target_link_libraries(fluss_cpp_kv_example PRIVATE fluss_cpp)
+target_link_libraries(fluss_cpp_kv_example PRIVATE Arrow::arrow_shared)
+target_compile_definitions(fluss_cpp_kv_example PRIVATE ARROW_FOUND)
+target_include_directories(fluss_cpp_kv_example PUBLIC ${CPP_INCLUDE_DIR})
+
 set_target_properties(fluss_cpp
     PROPERTIES ADDITIONAL_CLEAN_FILES ${CARGO_TARGET_DIR}
 )
