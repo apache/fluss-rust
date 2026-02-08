@@ -38,8 +38,7 @@ fn parse_offset_spec(offset_type: &str, timestamp: Option<i64>) -> PyResult<Offs
             Ok(OffsetSpec::Timestamp(ts))
         }
         _ => Err(FlussError::new_err(format!(
-            "Invalid offset_type: '{}'. Must be 'earliest', 'latest', or 'timestamp'",
-            offset_type
+            "Invalid offset_type: '{offset_type}'. Must be 'earliest', 'latest', or 'timestamp'"
         ))),
     }
 }
@@ -49,8 +48,7 @@ fn validate_bucket_ids(bucket_ids: &[i32]) -> PyResult<()> {
     for &bucket_id in bucket_ids {
         if bucket_id < 0 {
             return Err(FlussError::new_err(format!(
-                "Invalid bucket_id: {}. Bucket IDs must be non-negative",
-                bucket_id
+                "Invalid bucket_id: {bucket_id}. Bucket IDs must be non-negative"
             )));
         }
     }
@@ -159,10 +157,9 @@ impl FlussAdmin {
         let name = database_name.to_string();
 
         future_into_py(py, async move {
-            let exists = admin
-                .database_exists(&name)
-                .await
-                .map_err(|e| FlussError::new_err(format!("Failed to check database exists: {e}")))?;
+            let exists = admin.database_exists(&name).await.map_err(|e| {
+                FlussError::new_err(format!("Failed to check database exists: {e}"))
+            })?;
 
             Python::attach(|py| {
                 let builtins = py.import("builtins")?;

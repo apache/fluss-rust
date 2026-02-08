@@ -53,7 +53,7 @@ impl ChangeType {
     }
 
     fn __repr__(&self) -> String {
-        format!("ChangeType.{:?}", self)
+        format!("ChangeType.{self:?}")
     }
 }
 

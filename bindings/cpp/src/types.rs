@@ -257,7 +257,7 @@ fn get_decimal_type(idx: usize, schema: Option<&fcore::metadata::Schema>) -> Res
         .ok_or_else(|| anyhow!("Schema not available for decimal column {idx}"))?;
     match col.data_type() {
         fcore::metadata::DataType::Decimal(dt) => Ok((dt.precision(), dt.scale())),
-        other => Err(anyhow!("Column {idx} is {:?}, not Decimal", other)),
+        other => Err(anyhow!("Column {idx} is {other:?}, not Decimal")),
     }
 }
 
