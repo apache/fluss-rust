@@ -47,8 +47,10 @@ inline ffi::FfiTablePath to_ffi_table_path(const TablePath& path) {
 inline ffi::FfiColumn to_ffi_column(const Column& col) {
     ffi::FfiColumn ffi_col;
     ffi_col.name = rust::String(col.name);
-    ffi_col.data_type = static_cast<int32_t>(col.data_type);
+    ffi_col.data_type = static_cast<int32_t>(col.data_type.id());
     ffi_col.comment = rust::String(col.comment);
+    ffi_col.precision = col.data_type.precision();
+    ffi_col.scale = col.data_type.scale();
     return ffi_col;
 }
 
@@ -112,6 +114,10 @@ inline ffi::FfiDatum to_ffi_datum(const Datum& datum) {
     ffi_datum.f32_val = datum.f32_val;
     ffi_datum.f64_val = datum.f64_val;
     ffi_datum.string_val = rust::String(datum.string_val);
+    ffi_datum.decimal_precision = datum.decimal_precision;
+    ffi_datum.decimal_scale = datum.decimal_scale;
+    ffi_datum.i128_hi = datum.i128_hi;
+    ffi_datum.i128_lo = datum.i128_lo;
 
     rust::Vec<uint8_t> bytes;
     for (auto b : datum.bytes_val) {
@@ -137,7 +143,7 @@ inline ffi::FfiGenericRow to_ffi_generic_row(const GenericRow& row) {
 inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
     return Column{
         std::string(ffi_col.name),
-        static_cast<DataType>(ffi_col.data_type),
+        DataType(static_cast<TypeId>(ffi_col.data_type), ffi_col.precision, ffi_col.scale),
         std::string(ffi_col.comment)};
 }
 
@@ -202,6 +208,10 @@ inline Datum from_ffi_datum(const ffi::FfiDatum& ffi_datum) {
     datum.f64_val = ffi_datum.f64_val;
     // todo: avoid copy string
     datum.string_val = std::string(ffi_datum.string_val);
+    datum.decimal_precision = ffi_datum.decimal_precision;
+    datum.decimal_scale = ffi_datum.decimal_scale;
+    datum.i128_hi = ffi_datum.i128_hi;
+    datum.i128_lo = ffi_datum.i128_lo;
 
     for (auto b : ffi_datum.bytes_val) {
         datum.bytes_val.push_back(b);

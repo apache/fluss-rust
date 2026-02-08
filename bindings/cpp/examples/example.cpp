@@ -54,14 +54,14 @@ int main() {
 
     // 3) Schema with scalar and temporal columns
     auto schema = fluss::Schema::NewBuilder()
-                        .AddColumn("id", fluss::DataType::Int)
-                        .AddColumn("name", fluss::DataType::String)
-                        .AddColumn("score", fluss::DataType::Float)
-                        .AddColumn("age", fluss::DataType::Int)
-                        .AddColumn("event_date", fluss::DataType::Date)
-                        .AddColumn("event_time", fluss::DataType::Time)
-                        .AddColumn("created_at", fluss::DataType::Timestamp)
-                        .AddColumn("updated_at", fluss::DataType::TimestampLtz)
+                        .AddColumn("id", fluss::DataType::Int())
+                        .AddColumn("name", fluss::DataType::String())
+                        .AddColumn("score", fluss::DataType::Float())
+                        .AddColumn("age", fluss::DataType::Int())
+                        .AddColumn("event_date", fluss::DataType::Date())
+                        .AddColumn("event_time", fluss::DataType::Time())
+                        .AddColumn("created_at", fluss::DataType::Timestamp())
+                        .AddColumn("updated_at", fluss::DataType::TimestampLtz())
                         .Build();
 
     auto descriptor = fluss::TableDescriptor::NewBuilder()
@@ -131,6 +131,10 @@ int main() {
         row.SetString(1, "AckTest");
         row.SetFloat32(2, 99.9f);
         row.SetInt32(3, 42);
+        row.SetDate(4, fluss::Date::FromYMD(2025, 3, 1));
+        row.SetTime(5, fluss::Time::FromHMS(12, 0, 0));
+        row.SetTimestampNtz(6, fluss::Timestamp::FromMillis(1740787200000));
+        row.SetTimestampLtz(7, fluss::Timestamp::FromMillis(1740787200000));
         fluss::WriteResult wr;
         check("append", writer.Append(row, wr));
         check("wait", wr.Wait());
@@ -363,6 +367,81 @@ int main() {
         } else {
             std::cout << "  Batch " << i << ": not available" << std::endl;
         }
+    }
+
+    // 12) Decimal support example
+    std::cout << "\n=== Decimal Support Example ===" << std::endl;
+
+    fluss::TablePath decimal_table_path("fluss", "decimal_table_cpp_v1");
+
+    // Drop table if exists
+    admin.DropTable(decimal_table_path, true);
+
+    // Create schema with decimal columns
+    auto decimal_schema = fluss::Schema::NewBuilder()
+                              .AddColumn("id", fluss::DataType::Int())
+                              .AddColumn("price", fluss::DataType::Decimal(10, 2))    // compact
+                              .AddColumn("amount", fluss::DataType::Decimal(28, 8))   // i128
+                              .Build();
+
+    auto decimal_descriptor = fluss::TableDescriptor::NewBuilder()
+                                  .SetSchema(decimal_schema)
+                                  .SetBucketCount(1)
+                                  .SetComment("cpp decimal example table")
+                                  .Build();
+
+    check("create_decimal_table", admin.CreateTable(decimal_table_path, decimal_descriptor, false));
+
+    // Get table and writer
+    fluss::Table decimal_table;
+    check("get_decimal_table", conn.GetTable(decimal_table_path, decimal_table));
+
+    fluss::AppendWriter decimal_writer;
+    check("new_decimal_writer", decimal_table.NewAppendWriter(decimal_writer));
+
+    // Just provide the value — Rust resolves (p,s) from schema
+    {
+        fluss::GenericRow row;
+        row.SetInt32(0, 1);
+        row.SetDecimal(1, "123.45");       // Rust knows DECIMAL(10,2)
+        row.SetDecimal(2, "1.00000000");   // Rust knows DECIMAL(28,8)
+        check("append_decimal", decimal_writer.Append(row));
+    }
+    {
+        fluss::GenericRow row;
+        row.SetInt32(0, 2);
+        row.SetDecimal(1, "-999.99");
+        row.SetDecimal(2, "3.14159265");
+        check("append_decimal", decimal_writer.Append(row));
+    }
+    {
+        fluss::GenericRow row;
+        row.SetInt32(0, 3);
+        row.SetDecimal(1, "500.00");
+        row.SetDecimal(2, "2.71828182");
+        check("append_decimal", decimal_writer.Append(row));
+    }
+    check("flush_decimal", decimal_writer.Flush());
+    std::cout << "Wrote 3 decimal rows" << std::endl;
+
+    // Scan and read back
+    fluss::LogScanner decimal_scanner;
+    check("new_decimal_scanner", decimal_table.NewScan().CreateLogScanner(decimal_scanner));
+    check("subscribe_decimal", decimal_scanner.Subscribe(0, 0));
+
+    fluss::ScanRecords decimal_records;
+    check("poll_decimal", decimal_scanner.Poll(5000, decimal_records));
+
+    std::cout << "Scanned decimal records: " << decimal_records.Size() << std::endl;
+    for (const auto& rec : decimal_records) {
+        auto& price = rec.row.fields[1];
+        auto& amount = rec.row.fields[2];
+        std::cout << "  id=" << rec.row.fields[0].i32_val
+                  << " price=" << price.DecimalToString()
+                  << " (raw=" << price.i64_val << ")"
+                  << " amount=" << amount.DecimalToString()
+                  << " is_decimal=" << price.IsDecimal()
+                  << std::endl;
     }
 
     return 0;

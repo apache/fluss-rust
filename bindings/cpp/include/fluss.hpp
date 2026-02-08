@@ -20,8 +20,8 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -100,7 +100,7 @@ struct Timestamp {
     }
 };
 
-enum class DataType {
+enum class TypeId {
     Boolean = 1,
     TinyInt = 2,
     SmallInt = 3,
@@ -114,6 +114,43 @@ enum class DataType {
     Time = 11,
     Timestamp = 12,
     TimestampLtz = 13,
+    Decimal = 14,
+};
+
+class DataType {
+public:
+    explicit DataType(TypeId id, int32_t p = 0, int32_t s = 0)
+        : id_(id), precision_(p), scale_(s) {}
+
+    static DataType Boolean() { return DataType(TypeId::Boolean); }
+    static DataType TinyInt() { return DataType(TypeId::TinyInt); }
+    static DataType SmallInt() { return DataType(TypeId::SmallInt); }
+    static DataType Int() { return DataType(TypeId::Int); }
+    static DataType BigInt() { return DataType(TypeId::BigInt); }
+    static DataType Float() { return DataType(TypeId::Float); }
+    static DataType Double() { return DataType(TypeId::Double); }
+    static DataType String() { return DataType(TypeId::String); }
+    static DataType Bytes() { return DataType(TypeId::Bytes); }
+    static DataType Date() { return DataType(TypeId::Date); }
+    static DataType Time() { return DataType(TypeId::Time); }
+    static DataType Timestamp(int32_t precision = 6) {
+        return DataType(TypeId::Timestamp, precision, 0);
+    }
+    static DataType TimestampLtz(int32_t precision = 6) {
+        return DataType(TypeId::TimestampLtz, precision, 0);
+    }
+    static DataType Decimal(int32_t precision, int32_t scale) {
+        return DataType(TypeId::Decimal, precision, scale);
+    }
+
+    TypeId id() const { return id_; }
+    int32_t precision() const { return precision_; }
+    int32_t scale() const { return scale_; }
+
+private:
+    TypeId id_;
+    int32_t precision_{0};
+    int32_t scale_{0};
 };
 
 enum class DatumType {
@@ -125,7 +162,9 @@ enum class DatumType {
     Float64 = 5,
     String = 6,
     Bytes = 7,
-    // 8-10 reserved for decimal types
+    DecimalI64 = 8,
+    DecimalI128 = 9,
+    DecimalString = 10,
     Date = 11,
     Time = 12,
     TimestampNtz = 13,
@@ -182,7 +221,7 @@ struct Schema {
     public:
         Builder& AddColumn(std::string name, DataType type,
                            std::string comment = "") {
-            columns_.push_back({std::move(name), type, std::move(comment)});
+            columns_.push_back({std::move(name), std::move(type), std::move(comment)});
             return *this;
         }
 
@@ -290,6 +329,10 @@ struct Datum {
     double f64_val{0.0};
     std::string string_val;
     std::vector<uint8_t> bytes_val;
+    int32_t decimal_precision{0};  // Decimal: precision (total digits)
+    int32_t decimal_scale{0};      // Decimal: scale (digits after decimal point)
+    int64_t i128_hi{0};            // Decimal (i128): high 64 bits of unscaled value
+    int64_t i128_lo{0};            // Decimal (i128): low 64 bits of unscaled value
 
     static Datum Null() { return {}; }
     static Datum Bool(bool v) {
@@ -360,10 +403,75 @@ struct Datum {
         dat.i32_val = ts.nano_of_millisecond;
         return dat;
     }
+    // Stores the decimal string as-is. Rust side will parse via BigDecimal,
+    // look up (p,s) from the schema, validate, and create the Decimal.
+    static Datum DecimalString(std::string str) {
+        Datum d;
+        d.type = DatumType::DecimalString;
+        d.string_val = std::move(str);
+        return d;
+    }
 
     fluss::Date GetDate() const { return {i32_val}; }
     fluss::Time GetTime() const { return {i32_val}; }
     fluss::Timestamp GetTimestamp() const { return {i64_val, i32_val}; }
+
+    bool IsDecimal() const {
+        return type == DatumType::DecimalI64 || type == DatumType::DecimalI128
+            || type == DatumType::DecimalString;
+    }
+
+    std::string DecimalToString() const {
+        if (type == DatumType::DecimalI64) {
+            return FormatUnscaled64(i64_val, decimal_scale);
+        } else if (type == DatumType::DecimalI128) {
+            unsigned __int128 uval = (static_cast<unsigned __int128>(static_cast<uint64_t>(i128_hi)) << 64) |
+                                     static_cast<unsigned __int128>(static_cast<uint64_t>(i128_lo));
+            __int128 val = static_cast<__int128>(uval);
+            return FormatUnscaled128(val, decimal_scale);
+        } else if (type == DatumType::DecimalString) {
+            return string_val;
+        }
+        return "";
+    }
+
+private:
+    static std::string FormatUnscaled64(int64_t unscaled, int32_t scale) {
+        bool negative = unscaled < 0;
+        uint64_t abs_val = negative ? -static_cast<uint64_t>(unscaled) : static_cast<uint64_t>(unscaled);
+        std::string digits = std::to_string(abs_val);
+        if (scale <= 0) {
+            return (negative ? "-" : "") + digits;
+        }
+        while (static_cast<int32_t>(digits.size()) <= scale) {
+            digits = "0" + digits;
+        }
+        auto pos = digits.size() - static_cast<size_t>(scale);
+        return (negative ? "-" : "") + digits.substr(0, pos) + "." + digits.substr(pos);
+    }
+
+    static std::string FormatUnscaled128(__int128 val, int32_t scale) {
+        bool negative = val < 0;
+        unsigned __int128 abs_val = negative ? -static_cast<unsigned __int128>(val)
+                                             : static_cast<unsigned __int128>(val);
+        std::string digits;
+        if (abs_val == 0) {
+            digits = "0";
+        } else {
+            while (abs_val > 0) {
+                digits = static_cast<char>('0' + static_cast<int>(abs_val % 10)) + digits;
+                abs_val /= 10;
+            }
+        }
+        if (scale <= 0) {
+            return (negative ? "-" : "") + digits;
+        }
+        while (static_cast<int32_t>(digits.size()) <= scale) {
+            digits = "0" + digits;
+        }
+        auto pos = digits.size() - static_cast<size_t>(scale);
+        return (negative ? "-" : "") + digits.substr(0, pos) + "." + digits.substr(pos);
+    }
 };
 
 struct GenericRow {
@@ -427,6 +535,11 @@ struct GenericRow {
     void SetTimestampLtz(size_t idx, fluss::Timestamp ts) {
         EnsureSize(idx);
         fields[idx] = Datum::TimestampLtz(ts);
+    }
+
+    void SetDecimal(size_t idx, const std::string& value) {
+        EnsureSize(idx);
+        fields[idx] = Datum::DecimalString(value);
     }
 
 private:
