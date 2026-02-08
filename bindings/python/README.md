@@ -53,6 +53,8 @@ Used for writing data to tables, supports PyArrow and Pandas
 
 Used for scanning table log data
 
+
+# todo: we may move the following part to DEVELOPMENT.md
 ## Development
 
 ## Requirements
@@ -142,6 +144,11 @@ bindings/python/
 └── example/              # Example code
     └── example.py
 ```
+
+## TODO
+
+- [ ] Add basic usage examples in API Overview (code snippets for Config, FlussConnection, FlussAdmin, FlussTable).
+- [ ] Add a "Verifying a release" subsection with install-from-TestPyPI/PyPI and smoke-test steps.
 
 ## License
 
