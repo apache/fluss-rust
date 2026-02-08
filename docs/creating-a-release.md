@@ -217,13 +217,13 @@ just release $RELEASE_VERSION
 
 This creates under `dist/`:
 
-- `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz`
-- `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.sha512`
-- `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.asc`
+- `fluss-rust-${RELEASE_VERSION}-incubating.tgz`
+- `fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512`
+- `fluss-rust-${RELEASE_VERSION}-incubating.tgz.asc`
 
 (Incubator policy requires the word "incubating" in release artifact names.)
 
-Verify with: `gpg --verify dist/fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.asc dist/fluss-rust-${RELEASE_VERSION}-incubating.tar.gz`
+Verify with: `gpg --verify dist/fluss-rust-${RELEASE_VERSION}-incubating.tgz.asc dist/fluss-rust-${RELEASE_VERSION}-incubating.tgz`
 
 ### 4. Stage artifacts to SVN (dist.apache.org dev)
 

@@ -24,12 +24,12 @@ This document describes how to verify a release candidate (RC) of the **Fluss cl
 
 The release vote email includes links to:
 
-- **Distribution archive:** source tarball (`fluss-rust-${RELEASE_VERSION}-incubating.tar.gz`) on [dist.apache.org dev](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
-- **Signature file:** `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.asc`
-- **Checksum file:** `fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.sha512`
+- **Distribution archive:** source tarball (`fluss-rust-${RELEASE_VERSION}-incubating.tgz`) on [dist.apache.org dev](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
+- **Signature file:** `fluss-rust-${RELEASE_VERSION}-incubating.tgz.asc`
+- **Checksum file:** `fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512`
 - **KEYS file:** [https://downloads.apache.org/incubator/fluss/KEYS](https://downloads.apache.org/incubator/fluss/KEYS)
 
-Download the archive, `.asc`, and `.sha512` from the RC directory (e.g. `fluss-rust-0.1.0-rc1/`) and the KEYS file. Then follow the steps below to verify signatures and checksums.
+Download the archive (`.tgz`), `.asc`, and `.sha512` from the RC directory (e.g. `fluss-rust-0.1.0-rc1/`) and the KEYS file. Then follow the steps below to verify signatures and checksums.
 
 ## Verifying signatures
 
@@ -61,13 +61,13 @@ Next, verify the tarball(s) using the provided `.sha512` file(s). Each `.sha512`
 **On macOS (shasum):**
 
 ```bash
-shasum -a 512 -c fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.sha512
+shasum -a 512 -c fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512
 ```
 
 **On Linux (sha512sum):**
 
 ```bash
-sha512sum -c fluss-rust-${RELEASE_VERSION}-incubating.tar.gz.sha512
+sha512sum -c fluss-rust-${RELEASE_VERSION}-incubating.tgz.sha512
 ```
 
 If you have multiple archives, run `-c` on each `.sha512` file (or use `shasum -a 512 -c *.sha512` / `sha512sum -c *.sha512`).
@@ -75,7 +75,7 @@ If you have multiple archives, run `-c` on each `.sha512` file (or use `shasum -
 If the verification is successful, you will see a message like this:
 
 ```text
-fluss-rust-0.1.0-incubating.tar.gz: OK
+fluss-rust-0.1.0-incubating.tgz: OK
 ```
 
 ## Verifying build
@@ -83,7 +83,7 @@ fluss-rust-0.1.0-incubating.tar.gz: OK
 Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.9+** for bindings.
 
 ```bash
-tar -xzf fluss-rust-${RELEASE_VERSION}-incubating.tar.gz
+tar -xzf fluss-rust-${RELEASE_VERSION}-incubating.tgz
 cd fluss-rust-${RELEASE_VERSION}-incubating
 ```
 

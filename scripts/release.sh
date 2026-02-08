@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Create ASF source release artifacts under dist/:
-#   fluss-rust-{version}-incubating.tar.gz
-#   fluss-rust-{version}-incubating.tar.gz.asc
-#   fluss-rust-{version}-incubating.tar.gz.sha512
+# Create ASF source release artifacts under dist/ (aligned with Fluss release package format):
+#   fluss-rust-{version}-incubating.tgz
+#   fluss-rust-{version}-incubating.tgz.asc
+#   fluss-rust-{version}-incubating.tgz.sha512
 # (Incubator policy requires "incubating" in the artifact name.)
 # Run from repo root. Check out the release tag first (e.g. git checkout v0.1.0-rc1).
 # Usage: ./scripts/release.sh [version]
@@ -40,7 +40,7 @@ fi
 
 PREFIX="fluss-rust-${VERSION}-incubating"
 DIST_DIR="${REPO_ROOT}/dist"
-TARBALL="${PREFIX}.tar.gz"
+TARBALL="${PREFIX}.tgz"
 
 echo "Creating ASF source release for fluss-rust ${VERSION}"
 mkdir -p "$DIST_DIR"
