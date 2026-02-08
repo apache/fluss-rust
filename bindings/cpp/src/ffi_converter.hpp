@@ -29,23 +29,79 @@ struct FfiAccess {
     static const std::vector<Datum>& fields(const GenericRow& row) { return row.fields; }
     static std::vector<Datum>& fields(GenericRow& row) { return row.fields; }
 
-    static int32_t decimal_precision(const Datum& d) { return d.decimal_precision; }
-    static int32_t decimal_scale(const Datum& d) { return d.decimal_scale; }
-    static int64_t i128_hi(const Datum& d) { return d.i128_hi; }
-    static int64_t i128_lo(const Datum& d) { return d.i128_lo; }
+    static ffi::FfiDatum to_ffi_datum(const Datum& datum) {
+        ffi::FfiDatum ffi_datum;
+        ffi_datum.datum_type = static_cast<int32_t>(datum.type);
+        ffi_datum.bool_val = datum.bool_val;
+        ffi_datum.i32_val = datum.i32_val;
+        ffi_datum.i64_val = datum.i64_val;
+        ffi_datum.f32_val = datum.f32_val;
+        ffi_datum.f64_val = datum.f64_val;
+        ffi_datum.string_val = rust::String(datum.string_val);
+        ffi_datum.decimal_precision = datum.decimal_precision;
+        ffi_datum.decimal_scale = datum.decimal_scale;
+        ffi_datum.i128_hi = datum.i128_hi;
+        ffi_datum.i128_lo = datum.i128_lo;
 
-    static Datum from_ffi_decimal(const ffi::FfiDatum& ffi_datum, DatumType dtype) {
-        Datum d;
-        d.type = dtype;
-        d.i64_val = ffi_datum.i64_val;
-        d.decimal_precision = ffi_datum.decimal_precision;
-        d.decimal_scale = ffi_datum.decimal_scale;
-        d.i128_hi = ffi_datum.i128_hi;
-        d.i128_lo = ffi_datum.i128_lo;
-        if (dtype == DatumType::DecimalString) {
-            d.string_val = std::string(ffi_datum.string_val);
+        rust::Vec<uint8_t> bytes;
+        for (auto b : datum.bytes_val) {
+            bytes.push_back(b);
         }
-        return d;
+        ffi_datum.bytes_val = std::move(bytes);
+
+        return ffi_datum;
+    }
+
+    static Datum from_ffi_datum(const ffi::FfiDatum& ffi_datum) {
+        auto dtype = static_cast<DatumType>(ffi_datum.datum_type);
+        switch (dtype) {
+            case DatumType::Null:
+                return Datum::Null();
+            case DatumType::Bool:
+                return Datum::Bool(ffi_datum.bool_val);
+            case DatumType::Int32:
+                return Datum::Int32(ffi_datum.i32_val);
+            case DatumType::Int64:
+                return Datum::Int64(ffi_datum.i64_val);
+            case DatumType::Float32:
+                return Datum::Float32(ffi_datum.f32_val);
+            case DatumType::Float64:
+                return Datum::Float64(ffi_datum.f64_val);
+            case DatumType::String:
+                return Datum::String(std::string(ffi_datum.string_val));
+            case DatumType::Bytes: {
+                std::vector<uint8_t> bytes;
+                for (auto b : ffi_datum.bytes_val) {
+                    bytes.push_back(b);
+                }
+                return Datum::Bytes(std::move(bytes));
+            }
+            case DatumType::Date:
+                return Datum::Date(fluss::Date{ffi_datum.i32_val});
+            case DatumType::Time:
+                return Datum::Time(fluss::Time{ffi_datum.i32_val});
+            case DatumType::TimestampNtz:
+                return Datum::TimestampNtz(fluss::Timestamp{ffi_datum.i64_val, ffi_datum.i32_val});
+            case DatumType::TimestampLtz:
+                return Datum::TimestampLtz(fluss::Timestamp{ffi_datum.i64_val, ffi_datum.i32_val});
+            case DatumType::DecimalI64:
+            case DatumType::DecimalI128:
+            case DatumType::DecimalString: {
+                Datum d;
+                d.type = dtype;
+                d.i64_val = ffi_datum.i64_val;
+                d.decimal_precision = ffi_datum.decimal_precision;
+                d.decimal_scale = ffi_datum.decimal_scale;
+                d.i128_hi = ffi_datum.i128_hi;
+                d.i128_lo = ffi_datum.i128_lo;
+                if (dtype == DatumType::DecimalString) {
+                    d.string_val = std::string(ffi_datum.string_val);
+                }
+                return d;
+            }
+            default:
+                return Datum::Null();
+        }
     }
 };
 }  // namespace detail
@@ -128,35 +184,12 @@ inline ffi::FfiTableDescriptor to_ffi_table_descriptor(const TableDescriptor& de
     return ffi_desc;
 }
 
-inline ffi::FfiDatum to_ffi_datum(const Datum& datum) {
-    ffi::FfiDatum ffi_datum;
-    ffi_datum.datum_type = static_cast<int32_t>(datum.GetType());
-    ffi_datum.bool_val = datum.GetBool();
-    ffi_datum.i32_val = datum.GetInt32();
-    ffi_datum.i64_val = datum.GetInt64();
-    ffi_datum.f32_val = datum.GetFloat32();
-    ffi_datum.f64_val = datum.GetFloat64();
-    ffi_datum.string_val = rust::String(datum.GetString());
-    ffi_datum.decimal_precision = detail::FfiAccess::decimal_precision(datum);
-    ffi_datum.decimal_scale = detail::FfiAccess::decimal_scale(datum);
-    ffi_datum.i128_hi = detail::FfiAccess::i128_hi(datum);
-    ffi_datum.i128_lo = detail::FfiAccess::i128_lo(datum);
-
-    rust::Vec<uint8_t> bytes;
-    for (auto b : datum.GetBytes()) {
-        bytes.push_back(b);
-    }
-    ffi_datum.bytes_val = std::move(bytes);
-
-    return ffi_datum;
-}
-
 inline ffi::FfiGenericRow to_ffi_generic_row(const GenericRow& row) {
     ffi::FfiGenericRow ffi_row;
 
     rust::Vec<ffi::FfiDatum> ffi_fields;
     for (const auto& field : detail::FfiAccess::fields(row)) {
-        ffi_fields.push_back(to_ffi_datum(field));
+        ffi_fields.push_back(detail::FfiAccess::to_ffi_datum(field));
     }
     ffi_row.fields = std::move(ffi_fields);
 
@@ -220,52 +253,11 @@ inline TableInfo from_ffi_table_info(const ffi::FfiTableInfo& ffi_info) {
     return info;
 }
 
-inline Datum from_ffi_datum(const ffi::FfiDatum& ffi_datum) {
-    auto dtype = static_cast<DatumType>(ffi_datum.datum_type);
-    switch (dtype) {
-        case DatumType::Null:
-            return Datum::Null();
-        case DatumType::Bool:
-            return Datum::Bool(ffi_datum.bool_val);
-        case DatumType::Int32:
-            return Datum::Int32(ffi_datum.i32_val);
-        case DatumType::Int64:
-            return Datum::Int64(ffi_datum.i64_val);
-        case DatumType::Float32:
-            return Datum::Float32(ffi_datum.f32_val);
-        case DatumType::Float64:
-            return Datum::Float64(ffi_datum.f64_val);
-        case DatumType::String:
-            return Datum::String(std::string(ffi_datum.string_val));
-        case DatumType::Bytes: {
-            std::vector<uint8_t> bytes;
-            for (auto b : ffi_datum.bytes_val) {
-                bytes.push_back(b);
-            }
-            return Datum::Bytes(std::move(bytes));
-        }
-        case DatumType::Date:
-            return Datum::Date(fluss::Date{ffi_datum.i32_val});
-        case DatumType::Time:
-            return Datum::Time(fluss::Time{ffi_datum.i32_val});
-        case DatumType::TimestampNtz:
-            return Datum::TimestampNtz(fluss::Timestamp{ffi_datum.i64_val, ffi_datum.i32_val});
-        case DatumType::TimestampLtz:
-            return Datum::TimestampLtz(fluss::Timestamp{ffi_datum.i64_val, ffi_datum.i32_val});
-        case DatumType::DecimalI64:
-        case DatumType::DecimalI128:
-        case DatumType::DecimalString:
-            return detail::FfiAccess::from_ffi_decimal(ffi_datum, dtype);
-        default:
-            return Datum::Null();
-    }
-}
-
 inline GenericRow from_ffi_generic_row(const ffi::FfiGenericRow& ffi_row) {
     GenericRow row;
 
     for (const auto& field : ffi_row.fields) {
-        detail::FfiAccess::fields(row).push_back(from_ffi_datum(field));
+        detail::FfiAccess::fields(row).push_back(detail::FfiAccess::from_ffi_datum(field));
     }
 
     return row;

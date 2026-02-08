@@ -399,6 +399,20 @@ struct Datum {
         return d;
     }
 
+   private:
+    DatumType type{DatumType::Null};
+    bool bool_val{false};
+    int32_t i32_val{0};
+    int64_t i64_val{0};
+    float f32_val{0.0F};
+    double f64_val{0.0};
+    std::string string_val;
+    std::vector<uint8_t> bytes_val;
+    int32_t decimal_precision{0};  // Decimal: precision (total digits)
+    int32_t decimal_scale{0};      // Decimal: scale (digits after decimal point)
+    int64_t i128_hi{0};            // Decimal (i128): high 64 bits of unscaled value
+    int64_t i128_lo{0};            // Decimal (i128): low 64 bits of unscaled value
+
     DatumType GetType() const { return type; }
     bool IsNull() const { return type == DatumType::Null; }
     bool GetBool() const { return bool_val; }
@@ -431,20 +445,6 @@ struct Datum {
         }
         return "";
     }
-
-   private:
-    DatumType type{DatumType::Null};
-    bool bool_val{false};
-    int32_t i32_val{0};
-    int64_t i64_val{0};
-    float f32_val{0.0F};
-    double f64_val{0.0};
-    std::string string_val;
-    std::vector<uint8_t> bytes_val;
-    int32_t decimal_precision{0};  // Decimal: precision (total digits)
-    int32_t decimal_scale{0};      // Decimal: scale (digits after decimal point)
-    int64_t i128_hi{0};            // Decimal (i128): high 64 bits of unscaled value
-    int64_t i128_lo{0};            // Decimal (i128): low 64 bits of unscaled value
 
     static std::string FormatUnscaled64(int64_t unscaled, int32_t scale) {
         bool negative = unscaled < 0;
