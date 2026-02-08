@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::table::{python_pk_to_generic_row, python_to_generic_row};
+use crate::table::{python_to_generic_row, python_to_sparse_generic_row};
 use crate::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::{Arc, Mutex};
@@ -46,6 +46,8 @@ struct UpsertWriterInner {
     /// Lazily initialized writer - created on first write operation
     writer: Mutex<Option<Arc<fcore::client::UpsertWriter>>>,
     table_info: fcore::metadata::TableInfo,
+    /// Column indices for partial updates (None = full row)
+    target_columns: Option<Vec<usize>>,
 }
 
 #[pymethods]
@@ -62,7 +64,11 @@ impl UpsertWriter {
     ///          For dict: keys are column names, values are column values.
     ///          For list/tuple: values must be in schema order.
     pub fn upsert(&self, row: &Bound<'_, PyAny>) -> PyResult<WriteResultHandle> {
-        let generic_row = python_to_generic_row(row, &self.inner.table_info)?;
+        let generic_row = if let Some(target_cols) = &self.inner.target_columns {
+            python_to_sparse_generic_row(row, &self.inner.table_info, target_cols)?
+        } else {
+            python_to_generic_row(row, &self.inner.table_info)?
+        };
 
         let writer = self.inner.get_or_create_writer()?;
         let result_future = writer
@@ -80,7 +86,8 @@ impl UpsertWriter {
     ///         For dict: keys are PK column names.
     ///         For list/tuple: values in PK column order.
     pub fn delete(&self, pk: &Bound<'_, PyAny>) -> PyResult<WriteResultHandle> {
-        let generic_row = python_pk_to_generic_row(pk, &self.inner.table_info)?;
+        let pk_indices = self.inner.table_info.get_schema().primary_key_indexes();
+        let generic_row = python_to_sparse_generic_row(pk, &self.inner.table_info, &pk_indices)?;
 
         let writer = self.inner.get_or_create_writer()?;
         let result_future = writer
@@ -134,15 +141,26 @@ impl UpsertWriter {
         columns: Option<Vec<String>>,
         column_indices: Option<Vec<usize>>,
     ) -> PyResult<Self> {
-        // Apply partial update configuration if specified
-        let table_upsert = if let Some(cols) = columns {
-            let col_refs: Vec<&str> = cols.iter().map(|s| s.as_str()).collect();
+        // Resolve target column indices (names → indices, or use provided indices directly)
+        let target_columns = if let Some(cols) = columns {
+            let row_type = table_info.row_type();
+            Some(
+                cols.iter()
+                    .map(|name| {
+                        row_type
+                            .get_field_index(name)
+                            .ok_or_else(|| FlussError::new_err(format!("Unknown column: {name}")))
+                    })
+                    .collect::<PyResult<Vec<usize>>>()?,
+            )
+        } else {
+            column_indices
+        };
+
+        // Apply partial update to the Rust core using resolved indices
+        let table_upsert = if let Some(ref indices) = target_columns {
             table_upsert
-                .partial_update_with_column_names(&col_refs)
-                .map_err(|e| FlussError::new_err(e.to_string()))?
-        } else if let Some(indices) = column_indices {
-            table_upsert
-                .partial_update(Some(indices))
+                .partial_update(Some(indices.clone()))
                 .map_err(|e| FlussError::new_err(e.to_string()))?
         } else {
             table_upsert
@@ -153,6 +171,7 @@ impl UpsertWriter {
                 table_upsert,
                 writer: Mutex::new(None),
                 table_info,
+                target_columns,
             }),
         })
     }

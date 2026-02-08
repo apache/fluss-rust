@@ -569,6 +569,49 @@ async def main():
         print(f"Error during delete: {e}")
         traceback.print_exc()
 
+    # --- Test Partial Update by column names ---
+    print("\n--- Testing Partial Update (by column names) ---")
+    try:
+        partial_writer = pk_table.new_upsert(columns=["user_id", "balance"])
+        handle = partial_writer.upsert({"user_id": 1, "balance": Decimal("9999.99")})
+        await handle.wait()
+        print("Partial update: set balance=9999.99 for user_id=1")
+
+        lookuper = pk_table.new_lookup()
+        result = await lookuper.lookup({"user_id": 1})
+        if result:
+            print(f"Partial update verified:"
+                  f"\n  name={result['name']} (unchanged)"
+                  f"\n  balance={result['balance']} (updated)")
+        else:
+            print("ERROR: Expected to find user_id=1")
+
+    except Exception as e:
+        print(f"Error during partial update by names: {e}")
+        traceback.print_exc()
+
+    # --- Test Partial Update by column indices ---
+    print("\n--- Testing Partial Update (by column indices) ---")
+    try:
+        # Columns: 0=user_id (PK), 1=name — update name only
+        partial_writer_idx = pk_table.new_upsert(column_indices=[0, 1])
+        handle = partial_writer_idx.upsert([1, "Alice Renamed"])
+        await handle.wait()
+        print("Partial update by indices: set name='Alice Renamed' for user_id=1")
+
+        lookuper = pk_table.new_lookup()
+        result = await lookuper.lookup({"user_id": 1})
+        if result:
+            print(f"Partial update by indices verified:"
+                  f"\n  name={result['name']} (updated)"
+                  f"\n  balance={result['balance']} (unchanged)")
+        else:
+            print("ERROR: Expected to find user_id=1")
+
+    except Exception as e:
+        print(f"Error during partial update by indices: {e}")
+        traceback.print_exc()
+
     # Demo: Column projection using builder pattern
     print("\n--- Testing Column Projection ---")
     try:
