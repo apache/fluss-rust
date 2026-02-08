@@ -420,6 +420,14 @@ class LogScanner:
             start_offset: The offset to start reading from (use EARLIEST_OFFSET for beginning)
         """
         ...
+    def unsubscribe_partition(self, partition_id: int, bucket_id: int) -> None:
+        """Unsubscribe from a specific partition bucket (partitioned tables only).
+
+        Args:
+            partition_id: The partition ID to unsubscribe from
+            bucket_id: The bucket ID within the partition
+        """
+        ...
     def poll(self, timeout_ms: int) -> List[ScanRecord]:
         """Poll for individual records with metadata.
 
