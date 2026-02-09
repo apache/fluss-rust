@@ -832,6 +832,7 @@ async def main():
         })
         await handle.wait()
         result = await lookuper.lookup({"region": "US", "user_id": 1})
+        assert result is not None, "Expected to find region=US user_id=1 after update"
         assert result["name"] == "Gustave Updated"
         assert result["score"] == 999
         print(f"Update verified: US/1 name={result['name']} score={result['score']}")
