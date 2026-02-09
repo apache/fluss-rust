@@ -290,8 +290,7 @@ inline LakeSnapshot from_ffi_lake_snapshot(const ffi::FfiLakeSnapshot& ffi_snaps
     return snapshot;
 }
 
-inline ffi::FfiDatabaseDescriptor to_ffi_database_descriptor(
-    const DatabaseDescriptor& desc) {
+inline ffi::FfiDatabaseDescriptor to_ffi_database_descriptor(const DatabaseDescriptor& desc) {
     ffi::FfiDatabaseDescriptor ffi_desc;
     ffi_desc.comment = rust::String(desc.comment);
     for (const auto& [k, v] : desc.properties) {

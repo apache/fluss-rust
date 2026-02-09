@@ -61,9 +61,8 @@ int main() {
 
     fluss::DatabaseInfo db_info;
     check("get_database_info", admin.GetDatabaseInfo(db_name, db_info));
-    std::cout << "Database info: name=" << db_info.database_name
-              << " comment=" << db_info.comment << " created_time=" << db_info.created_time
-              << std::endl;
+    std::cout << "Database info: name=" << db_info.database_name << " comment=" << db_info.comment
+              << " created_time=" << db_info.created_time << std::endl;
 
     std::vector<std::string> databases;
     check("list_databases", admin.ListDatabases(databases));

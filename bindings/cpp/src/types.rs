@@ -316,7 +316,22 @@ pub fn ffi_row_to_core<'a>(
         let datum = match field.datum_type {
             DATUM_TYPE_NULL => Datum::Null,
             DATUM_TYPE_BOOL => Datum::Bool(field.bool_val),
-            DATUM_TYPE_INT32 => Datum::Int32(field.i32_val),
+            DATUM_TYPE_INT32 => match schema
+                .and_then(|s| s.columns().get(idx))
+                .map(|c| c.data_type())
+            {
+                Some(fcore::metadata::DataType::TinyInt(_)) => {
+                    Datum::Int8(i8::try_from(field.i32_val).map_err(|_| {
+                        anyhow!("Column {idx}: {} overflows TinyInt", field.i32_val)
+                    })?)
+                }
+                Some(fcore::metadata::DataType::SmallInt(_)) => {
+                    Datum::Int16(i16::try_from(field.i32_val).map_err(|_| {
+                        anyhow!("Column {idx}: {} overflows SmallInt", field.i32_val)
+                    })?)
+                }
+                _ => Datum::Int32(field.i32_val),
+            },
             DATUM_TYPE_INT64 => Datum::Int64(field.i64_val),
             DATUM_TYPE_FLOAT32 => Datum::Float32(field.f32_val.into()),
             DATUM_TYPE_FLOAT64 => Datum::Float64(field.f64_val.into()),
@@ -360,11 +375,11 @@ pub fn ffi_row_to_core<'a>(
             DATUM_TYPE_TIME => Datum::Time(fcore::row::Time::new(field.i32_val)),
             DATUM_TYPE_TIMESTAMP_NTZ => Datum::TimestampNtz(
                 fcore::row::TimestampNtz::from_millis_nanos(field.i64_val, field.i32_val)
-                    .unwrap_or_else(|_| fcore::row::TimestampNtz::new(field.i64_val)),
+                    .map_err(|e| anyhow!("Column {idx}: {e}"))?,
             ),
             DATUM_TYPE_TIMESTAMP_LTZ => Datum::TimestampLtz(
                 fcore::row::TimestampLtz::from_millis_nanos(field.i64_val, field.i32_val)
-                    .unwrap_or_else(|_| fcore::row::TimestampLtz::new(field.i64_val)),
+                    .map_err(|e| anyhow!("Column {idx}: {e}"))?,
             ),
             other => return Err(anyhow!("Column {idx}: unknown datum type {other}")),
         };
@@ -377,7 +392,7 @@ pub fn ffi_row_to_core<'a>(
 pub fn core_scan_records_to_ffi(
     records: &fcore::record::ScanRecords,
     columns: &[fcore::metadata::Column],
-) -> ffi::FfiScanRecords {
+) -> Result<ffi::FfiScanRecords> {
     let mut ffi_records = Vec::new();
 
     // Iterate over all buckets and their records
@@ -385,7 +400,7 @@ pub fn core_scan_records_to_ffi(
         let bucket_id = table_bucket.bucket_id();
         for record in bucket_records {
             let row = record.row();
-            let fields = core_row_to_ffi_fields(row, columns);
+            let fields = core_row_to_ffi_fields(row, columns)?;
 
             ffi_records.push(ffi::FfiScanRecord {
                 bucket_id,
@@ -396,32 +411,15 @@ pub fn core_scan_records_to_ffi(
         }
     }
 
-    ffi::FfiScanRecords {
+    Ok(ffi::FfiScanRecords {
         records: ffi_records,
-    }
+    })
 }
 
 fn core_row_to_ffi_fields(
     row: &fcore::row::ColumnarRow,
     columns: &[fcore::metadata::Column],
-) -> Vec<ffi::FfiDatum> {
-    fn new_datum(datum_type: i32) -> ffi::FfiDatum {
-        ffi::FfiDatum {
-            datum_type,
-            bool_val: false,
-            i32_val: 0,
-            i64_val: 0,
-            f32_val: 0.0,
-            f64_val: 0.0,
-            string_val: String::new(),
-            bytes_val: vec![],
-            decimal_precision: 0,
-            decimal_scale: 0,
-            i128_hi: 0,
-            i128_lo: 0,
-        }
-    }
-
+) -> Result<Vec<ffi::FfiDatum>> {
     let record_batch = row.get_record_batch();
     let schema = record_batch.schema();
     let row_id = row.get_row_id();
@@ -430,124 +428,135 @@ fn core_row_to_ffi_fields(
 
     for (i, field) in schema.fields().iter().enumerate() {
         if row.is_null_at(i) {
-            fields.push(new_datum(DATUM_TYPE_NULL));
+            fields.push(ffi::FfiDatum::default());
             continue;
         }
 
         let datum = match field.data_type() {
-            ArrowDataType::Boolean => {
-                let mut datum = new_datum(DATUM_TYPE_BOOL);
-                datum.bool_val = row.get_boolean(i);
-                datum
-            }
-            ArrowDataType::Int8 => {
-                let mut datum = new_datum(DATUM_TYPE_INT32);
-                datum.i32_val = row.get_byte(i) as i32;
-                datum
-            }
-            ArrowDataType::Int16 => {
-                let mut datum = new_datum(DATUM_TYPE_INT32);
-                datum.i32_val = row.get_short(i) as i32;
-                datum
-            }
-            ArrowDataType::Int32 => {
-                let mut datum = new_datum(DATUM_TYPE_INT32);
-                datum.i32_val = row.get_int(i);
-                datum
-            }
-            ArrowDataType::Int64 => {
-                let mut datum = new_datum(DATUM_TYPE_INT64);
-                datum.i64_val = row.get_long(i);
-                datum
-            }
-            ArrowDataType::Float32 => {
-                let mut datum = new_datum(DATUM_TYPE_FLOAT32);
-                datum.f32_val = row.get_float(i);
-                datum
-            }
-            ArrowDataType::Float64 => {
-                let mut datum = new_datum(DATUM_TYPE_FLOAT64);
-                datum.f64_val = row.get_double(i);
-                datum
-            }
-            ArrowDataType::Utf8 => {
-                let mut datum = new_datum(DATUM_TYPE_STRING);
-                // todo: avoid copy string
-                datum.string_val = row.get_string(i).to_string();
-                datum
-            }
+            ArrowDataType::Boolean => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_BOOL,
+                bool_val: row.get_boolean(i),
+                ..Default::default()
+            },
+            ArrowDataType::Int8 => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT32,
+                i32_val: row.get_byte(i) as i32,
+                ..Default::default()
+            },
+            ArrowDataType::Int16 => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT32,
+                i32_val: row.get_short(i) as i32,
+                ..Default::default()
+            },
+            ArrowDataType::Int32 => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT32,
+                i32_val: row.get_int(i),
+                ..Default::default()
+            },
+            ArrowDataType::Int64 => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT64,
+                i64_val: row.get_long(i),
+                ..Default::default()
+            },
+            ArrowDataType::Float32 => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_FLOAT32,
+                f32_val: row.get_float(i),
+                ..Default::default()
+            },
+            ArrowDataType::Float64 => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_FLOAT64,
+                f64_val: row.get_double(i),
+                ..Default::default()
+            },
+            ArrowDataType::Utf8 => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_STRING,
+                string_val: row.get_string(i).to_string(),
+                ..Default::default()
+            },
             ArrowDataType::LargeUtf8 => {
                 let array = record_batch
                     .column(i)
                     .as_any()
                     .downcast_ref::<LargeStringArray>()
-                    .expect("LargeUtf8 column expected");
-                let mut datum = new_datum(DATUM_TYPE_STRING);
-                datum.string_val = array.value(row_id).to_string();
-                datum
+                    .ok_or_else(|| anyhow!("Column {i}: expected LargeUtf8 array"))?;
+                ffi::FfiDatum {
+                    datum_type: DATUM_TYPE_STRING,
+                    string_val: array.value(row_id).to_string(),
+                    ..Default::default()
+                }
             }
-            ArrowDataType::Binary => {
-                let mut datum = new_datum(DATUM_TYPE_BYTES);
-                // todo: avoid copy bytes for blob
-                datum.bytes_val = row.get_bytes(i).to_vec();
-                datum
-            }
-            ArrowDataType::FixedSizeBinary(len) => {
-                let mut datum = new_datum(DATUM_TYPE_BYTES);
-                datum.bytes_val = row.get_binary(i, *len as usize).to_vec();
-                datum
-            }
+            ArrowDataType::Binary => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_BYTES,
+                bytes_val: row.get_bytes(i).to_vec(),
+                ..Default::default()
+            },
+            ArrowDataType::FixedSizeBinary(len) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_BYTES,
+                bytes_val: row.get_binary(i, *len as usize).to_vec(),
+                ..Default::default()
+            },
             ArrowDataType::LargeBinary => {
                 let array = record_batch
                     .column(i)
                     .as_any()
                     .downcast_ref::<LargeBinaryArray>()
-                    .expect("LargeBinary column expected");
-                let mut datum = new_datum(DATUM_TYPE_BYTES);
-                datum.bytes_val = array.value(row_id).to_vec();
-                datum
+                    .ok_or_else(|| anyhow!("Column {i}: expected LargeBinary array"))?;
+                ffi::FfiDatum {
+                    datum_type: DATUM_TYPE_BYTES,
+                    bytes_val: array.value(row_id).to_vec(),
+                    ..Default::default()
+                }
             }
             ArrowDataType::Date32 => {
                 let array = record_batch
                     .column(i)
                     .as_any()
                     .downcast_ref::<Date32Array>()
-                    .expect("Date32 column expected");
-                let mut datum = new_datum(DATUM_TYPE_DATE);
-                datum.i32_val = array.value(row_id);
-                datum
+                    .ok_or_else(|| anyhow!("Column {i}: expected Date32 array"))?;
+                ffi::FfiDatum {
+                    datum_type: DATUM_TYPE_DATE,
+                    i32_val: array.value(row_id),
+                    ..Default::default()
+                }
             }
             ArrowDataType::Timestamp(unit, _tz) => {
                 let datum_type = match columns.get(i).map(|c| c.data_type()) {
                     Some(fcore::metadata::DataType::TimestampLTz(_)) => DATUM_TYPE_TIMESTAMP_LTZ,
                     _ => DATUM_TYPE_TIMESTAMP_NTZ,
                 };
-                let mut datum = new_datum(datum_type);
+                let mut datum = ffi::FfiDatum {
+                    datum_type,
+                    ..Default::default()
+                };
                 match unit {
                     TimeUnit::Second => {
                         let array = record_batch
                             .column(i)
                             .as_any()
                             .downcast_ref::<TimestampSecondArray>()
-                            .expect("Timestamp(second) column expected");
+                            .ok_or_else(|| {
+                                anyhow!("Column {i}: expected Timestamp(second) array")
+                            })?;
                         datum.i64_val = array.value(row_id) * MILLIS_PER_SECOND;
-                        datum.i32_val = 0;
                     }
                     TimeUnit::Millisecond => {
                         let array = record_batch
                             .column(i)
                             .as_any()
                             .downcast_ref::<TimestampMillisecondArray>()
-                            .expect("Timestamp(millisecond) column expected");
+                            .ok_or_else(|| {
+                                anyhow!("Column {i}: expected Timestamp(millisecond) array")
+                            })?;
                         datum.i64_val = array.value(row_id);
-                        datum.i32_val = 0;
                     }
                     TimeUnit::Microsecond => {
                         let array = record_batch
                             .column(i)
                             .as_any()
                             .downcast_ref::<TimestampMicrosecondArray>()
-                            .expect("Timestamp(microsecond) column expected");
+                            .ok_or_else(|| {
+                                anyhow!("Column {i}: expected Timestamp(microsecond) array")
+                            })?;
                         let micros = array.value(row_id);
                         datum.i64_val = micros.div_euclid(MICROS_PER_MILLI);
                         datum.i32_val =
@@ -558,7 +567,9 @@ fn core_row_to_ffi_fields(
                             .column(i)
                             .as_any()
                             .downcast_ref::<TimestampNanosecondArray>()
-                            .expect("Timestamp(nanosecond) column expected");
+                            .ok_or_else(|| {
+                                anyhow!("Column {i}: expected Timestamp(nanosecond) array")
+                            })?;
                         let nanos = array.value(row_id);
                         datum.i64_val = nanos.div_euclid(NANOS_PER_MILLI);
                         datum.i32_val = nanos.rem_euclid(NANOS_PER_MILLI) as i32;
@@ -572,22 +583,26 @@ fn core_row_to_ffi_fields(
                         .column(i)
                         .as_any()
                         .downcast_ref::<Time32SecondArray>()
-                        .expect("Time32(second) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_TIME);
-                    datum.i32_val = array.value(row_id) * MILLIS_PER_SECOND as i32;
-                    datum
+                        .ok_or_else(|| anyhow!("Column {i}: expected Time32(second) array"))?;
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_TIME,
+                        i32_val: array.value(row_id) * MILLIS_PER_SECOND as i32,
+                        ..Default::default()
+                    }
                 }
                 TimeUnit::Millisecond => {
                     let array = record_batch
                         .column(i)
                         .as_any()
                         .downcast_ref::<Time32MillisecondArray>()
-                        .expect("Time32(millisecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_TIME);
-                    datum.i32_val = array.value(row_id);
-                    datum
+                        .ok_or_else(|| anyhow!("Column {i}: expected Time32(millisecond) array"))?;
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_TIME,
+                        i32_val: array.value(row_id),
+                        ..Default::default()
+                    }
                 }
-                _ => panic!("Will never come here. Unsupported Time32 unit for column {i}"),
+                _ => return Err(anyhow!("Column {i}: unsupported Time32 unit")),
             },
             ArrowDataType::Time64(unit) => match unit {
                 TimeUnit::Microsecond => {
@@ -595,55 +610,210 @@ fn core_row_to_ffi_fields(
                         .column(i)
                         .as_any()
                         .downcast_ref::<Time64MicrosecondArray>()
-                        .expect("Time64(microsecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_TIME);
-                    datum.i32_val = (array.value(row_id) / MICROS_PER_MILLI) as i32;
-                    datum
+                        .ok_or_else(|| anyhow!("Column {i}: expected Time64(microsecond) array"))?;
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_TIME,
+                        i32_val: (array.value(row_id) / MICROS_PER_MILLI) as i32,
+                        ..Default::default()
+                    }
                 }
                 TimeUnit::Nanosecond => {
                     let array = record_batch
                         .column(i)
                         .as_any()
                         .downcast_ref::<Time64NanosecondArray>()
-                        .expect("Time64(nanosecond) column expected");
-                    let mut datum = new_datum(DATUM_TYPE_TIME);
-                    datum.i32_val = (array.value(row_id) / NANOS_PER_MILLI) as i32;
-                    datum
+                        .ok_or_else(|| anyhow!("Column {i}: expected Time64(nanosecond) array"))?;
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_TIME,
+                        i32_val: (array.value(row_id) / NANOS_PER_MILLI) as i32,
+                        ..Default::default()
+                    }
                 }
-                _ => panic!("Will never come here. Unsupported Time64 unit for column {i}"),
+                _ => return Err(anyhow!("Column {i}: unsupported Time64 unit")),
             },
             ArrowDataType::Decimal128(precision, scale) => {
                 let array = record_batch
                     .column(i)
                     .as_any()
                     .downcast_ref::<Decimal128Array>()
-                    .expect("Decimal128 column expected");
+                    .ok_or_else(|| anyhow!("Column {i}: expected Decimal128 array"))?;
                 let i128_val = array.value(row_id);
 
                 if fcore::row::Decimal::is_compact_precision(*precision as u32) {
-                    let mut datum = new_datum(DATUM_TYPE_DECIMAL_I64);
-                    datum.i64_val = i128_val as i64;
-                    datum.decimal_precision = *precision as i32;
-                    datum.decimal_scale = *scale as i32;
-                    datum
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_DECIMAL_I64,
+                        i64_val: i128_val as i64,
+                        decimal_precision: *precision as i32,
+                        decimal_scale: *scale as i32,
+                        ..Default::default()
+                    }
                 } else {
-                    let mut datum = new_datum(DATUM_TYPE_DECIMAL_I128);
-                    datum.i128_hi = (i128_val >> 64) as i64;
-                    datum.i128_lo = i128_val as i64;
-                    datum.decimal_precision = *precision as i32;
-                    datum.decimal_scale = *scale as i32;
-                    datum
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_DECIMAL_I128,
+                        i128_hi: (i128_val >> 64) as i64,
+                        i128_lo: i128_val as i64,
+                        decimal_precision: *precision as i32,
+                        decimal_scale: *scale as i32,
+                        ..Default::default()
+                    }
                 }
             }
-            other => panic!(
-                "Will never come here. Unsupported Arrow data type for column {i}: {other:?}"
-            ),
+            other => return Err(anyhow!("Column {i}: unsupported Arrow data type {other:?}")),
         };
 
         fields.push(datum);
     }
 
-    fields
+    Ok(fields)
+}
+
+impl Default for ffi::FfiDatum {
+    fn default() -> Self {
+        Self {
+            datum_type: DATUM_TYPE_NULL,
+            bool_val: false,
+            i32_val: 0,
+            i64_val: 0,
+            f32_val: 0.0,
+            f64_val: 0.0,
+            string_val: String::new(),
+            bytes_val: vec![],
+            decimal_precision: 0,
+            decimal_scale: 0,
+            i128_hi: 0,
+            i128_lo: 0,
+        }
+    }
+}
+
+/// Convert any InternalRow to FfiGenericRow using Fluss schema metadata.
+/// Used for lookup results (CompactedRow) where Arrow schema is unavailable.
+pub fn internal_row_to_ffi_row(
+    row: &dyn fcore::row::InternalRow,
+    table_info: &fcore::metadata::TableInfo,
+) -> Result<ffi::FfiGenericRow> {
+    let schema = table_info.get_schema();
+    let columns = schema.columns();
+    let mut fields = Vec::with_capacity(columns.len());
+
+    for (i, col) in columns.iter().enumerate() {
+        if row.is_null_at(i) {
+            fields.push(ffi::FfiDatum::default());
+            continue;
+        }
+
+        let datum = match col.data_type() {
+            fcore::metadata::DataType::Boolean(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_BOOL,
+                bool_val: row.get_boolean(i),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::TinyInt(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT32,
+                i32_val: row.get_byte(i) as i32,
+                ..Default::default()
+            },
+            fcore::metadata::DataType::SmallInt(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT32,
+                i32_val: row.get_short(i) as i32,
+                ..Default::default()
+            },
+            fcore::metadata::DataType::Int(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT32,
+                i32_val: row.get_int(i),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::BigInt(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_INT64,
+                i64_val: row.get_long(i),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::Float(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_FLOAT32,
+                f32_val: row.get_float(i),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::Double(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_FLOAT64,
+                f64_val: row.get_double(i),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::String(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_STRING,
+                string_val: row.get_string(i).to_string(),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::Bytes(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_BYTES,
+                bytes_val: row.get_bytes(i).to_vec(),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::Date(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_DATE,
+                i32_val: row.get_date(i).get_inner(),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::Time(_) => ffi::FfiDatum {
+                datum_type: DATUM_TYPE_TIME,
+                i32_val: row.get_time(i).get_inner(),
+                ..Default::default()
+            },
+            fcore::metadata::DataType::Timestamp(dt) => {
+                let ts = row.get_timestamp_ntz(i, dt.precision());
+                ffi::FfiDatum {
+                    datum_type: DATUM_TYPE_TIMESTAMP_NTZ,
+                    i64_val: ts.get_millisecond(),
+                    i32_val: ts.get_nano_of_millisecond(),
+                    ..Default::default()
+                }
+            }
+            fcore::metadata::DataType::TimestampLTz(dt) => {
+                let ts = row.get_timestamp_ltz(i, dt.precision());
+                ffi::FfiDatum {
+                    datum_type: DATUM_TYPE_TIMESTAMP_LTZ,
+                    i64_val: ts.get_epoch_millisecond(),
+                    i32_val: ts.get_nano_of_millisecond(),
+                    ..Default::default()
+                }
+            }
+            fcore::metadata::DataType::Decimal(dt) => {
+                let precision = dt.precision();
+                let scale = dt.scale();
+                let decimal = row.get_decimal(i, precision as usize, scale as usize);
+                if fcore::row::Decimal::is_compact_precision(precision) {
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_DECIMAL_I64,
+                        i64_val: decimal.to_unscaled_long().map_err(|e| {
+                            anyhow!("Column {i}: compact decimal conversion failed: {e}")
+                        })?,
+                        decimal_precision: precision as i32,
+                        decimal_scale: scale as i32,
+                        ..Default::default()
+                    }
+                } else {
+                    let bd = decimal.to_big_decimal();
+                    let (unscaled, _) = bd.into_bigint_and_exponent();
+                    use bigdecimal::ToPrimitive;
+                    let i128_val = unscaled.to_i128().ok_or_else(|| {
+                        anyhow!("Column {i}: decimal unscaled value does not fit in i128")
+                    })?;
+                    ffi::FfiDatum {
+                        datum_type: DATUM_TYPE_DECIMAL_I128,
+                        i128_hi: (i128_val >> 64) as i64,
+                        i128_lo: i128_val as i64,
+                        decimal_precision: precision as i32,
+                        decimal_scale: scale as i32,
+                        ..Default::default()
+                    }
+                }
+            }
+            other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
+        };
+
+        fields.push(datum);
+    }
+
+    Ok(ffi::FfiGenericRow { fields })
 }
 
 pub fn core_lake_snapshot_to_ffi(snapshot: &fcore::metadata::LakeSnapshot) -> ffi::FfiLakeSnapshot {

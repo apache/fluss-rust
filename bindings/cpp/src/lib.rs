@@ -182,6 +182,12 @@ mod ffi {
         bucket_offsets: Vec<FfiBucketOffsetPair>,
     }
 
+    struct FfiLookupResult {
+        result: FfiResult,
+        found: bool,
+        row: FfiGenericRow,
+    }
+
     struct FfiLakeSnapshotResult {
         result: FfiResult,
         lake_snapshot: FfiLakeSnapshot,
@@ -242,6 +248,8 @@ mod ffi {
         type AppendWriter;
         type WriteResult;
         type LogScanner;
+        type UpsertWriter;
+        type Lookuper;
 
         // Connection
         fn new_connection(bootstrap_server: &str) -> Result<*mut Connection>;
@@ -330,6 +338,16 @@ mod ffi {
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
+        fn new_upsert_writer(self: &Table) -> Result<*mut UpsertWriter>;
+        fn new_upsert_writer_with_column_names(
+            self: &Table,
+            column_names: Vec<String>,
+        ) -> Result<*mut UpsertWriter>;
+        fn new_upsert_writer_with_column_indices(
+            self: &Table,
+            column_indices: Vec<usize>,
+        ) -> Result<*mut UpsertWriter>;
+        fn new_lookuper(self: &Table) -> Result<*mut Lookuper>;
 
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
@@ -338,6 +356,16 @@ mod ffi {
 
         // WriteResult — dropped automatically via rust::Box, or call wait() for ack
         fn wait(self: &mut WriteResult) -> FfiResult;
+
+        // UpsertWriter
+        unsafe fn delete_upsert_writer(writer: *mut UpsertWriter);
+        fn upsert(self: &mut UpsertWriter, row: &FfiGenericRow) -> Result<Box<WriteResult>>;
+        fn delete_row(self: &mut UpsertWriter, row: &FfiGenericRow) -> Result<Box<WriteResult>>;
+        fn upsert_flush(self: &mut UpsertWriter) -> FfiResult;
+
+        // Lookuper
+        unsafe fn delete_lookuper(lookuper: *mut Lookuper);
+        fn lookup(self: &mut Lookuper, pk_row: &FfiGenericRow) -> FfiLookupResult;
 
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
@@ -397,6 +425,16 @@ pub struct LogScanner {
     /// Fluss columns matching the projected Arrow fields (1:1 by index).
     /// For non-projected scanners this is the full table schema columns.
     projected_columns: Vec<fcore::metadata::Column>,
+}
+
+pub struct UpsertWriter {
+    inner: fcore::client::UpsertWriter,
+    table_info: fcore::metadata::TableInfo,
+}
+
+pub struct Lookuper {
+    inner: fcore::client::Lookuper,
+    table_info: fcore::metadata::TableInfo,
 }
 
 fn ok_result() -> ffi::FfiResult {
@@ -1045,6 +1083,113 @@ impl Table {
     fn has_primary_key(&self) -> bool {
         self.has_pk
     }
+
+    fn new_upsert_writer(&self) -> Result<*mut UpsertWriter, String> {
+        let _enter = RUNTIME.enter();
+
+        let fluss_table = fcore::client::FlussTable::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        );
+
+        let table_upsert = fluss_table
+            .new_upsert()
+            .map_err(|e| format!("Failed to create upsert: {e}"))?;
+
+        let writer = table_upsert
+            .create_writer()
+            .map_err(|e| format!("Failed to create upsert writer: {e}"))?;
+
+        Ok(Box::into_raw(Box::new(UpsertWriter {
+            inner: writer,
+            table_info: self.table_info.clone(),
+        })))
+    }
+
+    fn new_upsert_writer_with_column_names(
+        &self,
+        column_names: Vec<String>,
+    ) -> Result<*mut UpsertWriter, String> {
+        let _enter = RUNTIME.enter();
+
+        let fluss_table = fcore::client::FlussTable::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        );
+
+        let table_upsert = fluss_table
+            .new_upsert()
+            .map_err(|e| format!("Failed to create upsert: {e}"))?;
+
+        let col_refs: Vec<&str> = column_names.iter().map(|s| s.as_str()).collect();
+        let table_upsert = table_upsert
+            .partial_update_with_column_names(&col_refs)
+            .map_err(|e| format!("Failed to set partial update columns: {e}"))?;
+
+        let writer = table_upsert
+            .create_writer()
+            .map_err(|e| format!("Failed to create upsert writer: {e}"))?;
+
+        Ok(Box::into_raw(Box::new(UpsertWriter {
+            inner: writer,
+            table_info: self.table_info.clone(),
+        })))
+    }
+
+    fn new_upsert_writer_with_column_indices(
+        &self,
+        column_indices: Vec<usize>,
+    ) -> Result<*mut UpsertWriter, String> {
+        let _enter = RUNTIME.enter();
+
+        let fluss_table = fcore::client::FlussTable::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        );
+
+        let table_upsert = fluss_table
+            .new_upsert()
+            .map_err(|e| format!("Failed to create upsert: {e}"))?;
+
+        let table_upsert = table_upsert
+            .partial_update(Some(column_indices))
+            .map_err(|e| format!("Failed to set partial update columns: {e}"))?;
+
+        let writer = table_upsert
+            .create_writer()
+            .map_err(|e| format!("Failed to create upsert writer: {e}"))?;
+
+        Ok(Box::into_raw(Box::new(UpsertWriter {
+            inner: writer,
+            table_info: self.table_info.clone(),
+        })))
+    }
+
+    fn new_lookuper(&self) -> Result<*mut Lookuper, String> {
+        let _enter = RUNTIME.enter();
+
+        let fluss_table = fcore::client::FlussTable::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        );
+
+        let table_lookup = fluss_table
+            .new_lookup()
+            .map_err(|e| format!("Failed to create lookup: {e}"))?;
+
+        let lookuper = table_lookup
+            .create_lookuper()
+            .map_err(|e| format!("Failed to create lookuper: {e}"))?;
+
+        Ok(Box::into_raw(Box::new(Lookuper {
+            inner: lookuper,
+            table_info: self.table_info.clone(),
+        })))
+    }
 }
 
 // AppendWriter implementation
@@ -1091,6 +1236,137 @@ impl WriteResult {
             }
         } else {
             err_result(1, "WriteResult already consumed".to_string())
+        }
+    }
+}
+
+// UpsertWriter implementation
+unsafe fn delete_upsert_writer(writer: *mut UpsertWriter) {
+    if !writer.is_null() {
+        unsafe {
+            drop(Box::from_raw(writer));
+        }
+    }
+}
+
+impl UpsertWriter {
+    /// Pad row with Null to full schema width.
+    /// This allows callers to only set the fields they care about.
+    fn pad_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
+        let num_columns = self.table_info.get_schema().columns().len();
+        if row.values.len() < num_columns {
+            row.values.resize(num_columns, fcore::row::Datum::Null);
+        }
+        row
+    }
+
+    fn upsert(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
+        let schema = self.table_info.get_schema();
+        let generic_row = types::ffi_row_to_core(row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row = self.pad_row(generic_row);
+
+        let result_future = self
+            .inner
+            .upsert(&generic_row)
+            .map_err(|e| format!("Failed to upsert: {e}"))?;
+
+        Ok(Box::new(WriteResult {
+            inner: Some(result_future),
+        }))
+    }
+
+    fn delete_row(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
+        let schema = self.table_info.get_schema();
+        let generic_row = types::ffi_row_to_core(row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row = self.pad_row(generic_row);
+
+        let result_future = self
+            .inner
+            .delete(&generic_row)
+            .map_err(|e| format!("Failed to delete: {e}"))?;
+
+        Ok(Box::new(WriteResult {
+            inner: Some(result_future),
+        }))
+    }
+
+    fn upsert_flush(&mut self) -> ffi::FfiResult {
+        let result = RUNTIME.block_on(async { self.inner.flush().await });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_result(1, e.to_string()),
+        }
+    }
+}
+
+// Lookuper implementation
+unsafe fn delete_lookuper(lookuper: *mut Lookuper) {
+    if !lookuper.is_null() {
+        unsafe {
+            drop(Box::from_raw(lookuper));
+        }
+    }
+}
+
+impl Lookuper {
+    /// Pad row with Null to full schema width (same as UpsertWriter::pad_row).
+    /// Ensures the PK row is always full-width, matching Python's behavior.
+    fn pad_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
+        let num_columns = self.table_info.get_schema().columns().len();
+        if row.values.len() < num_columns {
+            row.values.resize(num_columns, fcore::row::Datum::Null);
+        }
+        row
+    }
+
+    fn lookup(&mut self, pk_row: &ffi::FfiGenericRow) -> ffi::FfiLookupResult {
+        let schema = self.table_info.get_schema();
+        let generic_row = match types::ffi_row_to_core(pk_row, Some(schema)) {
+            Ok(r) => self.pad_row(r),
+            Err(e) => {
+                return ffi::FfiLookupResult {
+                    result: err_result(1, e.to_string()),
+                    found: false,
+                    row: ffi::FfiGenericRow { fields: vec![] },
+                };
+            }
+        };
+
+        let lookup_result = match RUNTIME.block_on(self.inner.lookup(&generic_row)) {
+            Ok(r) => r,
+            Err(e) => {
+                return ffi::FfiLookupResult {
+                    result: err_result(1, e.to_string()),
+                    found: false,
+                    row: ffi::FfiGenericRow { fields: vec![] },
+                };
+            }
+        };
+
+        match lookup_result.get_single_row() {
+            Ok(Some(row)) => match types::internal_row_to_ffi_row(&row, &self.table_info) {
+                Ok(ffi_row) => ffi::FfiLookupResult {
+                    result: ok_result(),
+                    found: true,
+                    row: ffi_row,
+                },
+                Err(e) => ffi::FfiLookupResult {
+                    result: err_result(1, e.to_string()),
+                    found: false,
+                    row: ffi::FfiGenericRow { fields: vec![] },
+                },
+            },
+            Ok(None) => ffi::FfiLookupResult {
+                result: ok_result(),
+                found: false,
+                row: ffi::FfiGenericRow { fields: vec![] },
+            },
+            Err(e) => ffi::FfiLookupResult {
+                result: err_result(1, e.to_string()),
+                found: false,
+                row: ffi::FfiGenericRow { fields: vec![] },
+            },
         }
     }
 }
@@ -1258,13 +1534,18 @@ impl LogScanner {
             let result = RUNTIME.block_on(async { inner.poll(timeout).await });
 
             match result {
-                Ok(records) => ffi::FfiScanRecordsResult {
-                    result: ok_result(),
-                    scan_records: types::core_scan_records_to_ffi(
-                        &records,
-                        &self.projected_columns,
-                    ),
-                },
+                Ok(records) => {
+                    match types::core_scan_records_to_ffi(&records, &self.projected_columns) {
+                        Ok(scan_records) => ffi::FfiScanRecordsResult {
+                            result: ok_result(),
+                            scan_records,
+                        },
+                        Err(e) => ffi::FfiScanRecordsResult {
+                            result: err_result(1, e.to_string()),
+                            scan_records: ffi::FfiScanRecords { records: vec![] },
+                        },
+                    }
+                }
                 Err(e) => ffi::FfiScanRecordsResult {
                     result: err_result(1, e.to_string()),
                     scan_records: ffi::FfiScanRecords { records: vec![] },
