@@ -939,7 +939,8 @@ class TableScan {
     TableScan(TableScan&&) noexcept = default;
     TableScan& operator=(TableScan&&) noexcept = default;
 
-    TableScan& Project(std::vector<size_t> column_indices);
+    TableScan& ProjectByIndex(std::vector<size_t> column_indices);
+    TableScan& ProjectByName(std::vector<std::string> column_names);
 
     Result CreateLogScanner(LogScanner& out);
     Result CreateRecordBatchScanner(LogScanner& out);
@@ -948,8 +949,11 @@ class TableScan {
     friend class Table;
     explicit TableScan(ffi::Table* table) noexcept;
 
+    std::vector<size_t> ResolveNameProjection() const;
+
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;
+    std::vector<std::string> name_projection_;
 };
 
 class WriteResult {
