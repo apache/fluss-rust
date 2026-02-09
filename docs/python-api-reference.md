@@ -158,7 +158,7 @@ Supports `with` statement (context manager).
 
 | Method | Description |
 |---|---|
-| `TableDescriptor(schema, *, partition_keys=None, bucket_count=None, bucket_keys=None, comment=None, **properties)` | Create table descriptor |
+| `TableDescriptor(schema, *, partition_keys=None, bucket_count=None, bucket_keys=None, comment=None, log_format=None, kv_format=None, properties=None, custom_properties=None)` | Create table descriptor |
 | `.get_schema() -> Schema` | Get the schema |
 
 ## `TablePath`
