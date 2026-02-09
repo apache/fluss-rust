@@ -162,7 +162,7 @@ let exists = admin.database_exists("my_database").await?;
 // Get database information
 let db_info = admin.get_database_info("my_database").await?;
 
-// Drop database (with cascade option to drop all tables)
+// Drop database
 admin.drop_database("my_database", true, false).await?;
 ```
 
