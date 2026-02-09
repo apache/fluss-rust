@@ -18,7 +18,7 @@
 
 # Python API Reference
 
-Complete API reference for the Fluss Python client. For a usage guide with examples, see the [Python Client Guide](python-client.md).
+Complete API reference for the Fluss Python client. For a usage guide with examples, see the [README](README.md).
 
 ## `Config`
 
