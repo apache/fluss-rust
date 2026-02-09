@@ -609,16 +609,22 @@ struct GenericRow {
         auto [idx, type] = ResolveColumn(name);
         if (type == TypeId::Decimal) {
             SetDecimal(idx, v);
-        } else {
+        } else if (type == TypeId::String) {
             SetString(idx, v);
+        } else {
+            throw std::runtime_error("GenericRow::Set: column '" + name +
+                                     "' is not a string or decimal column");
         }
     }
     void Set(const std::string& name, std::string v) {
         auto [idx, type] = ResolveColumn(name);
         if (type == TypeId::Decimal) {
             SetDecimal(idx, v);
-        } else {
+        } else if (type == TypeId::String) {
             SetString(idx, std::move(v));
+        } else {
+            throw std::runtime_error("GenericRow::Set: column '" + name +
+                                     "' is not a string or decimal column");
         }
     }
     void Set(const std::string& name, std::vector<uint8_t> v) {
@@ -630,8 +636,11 @@ struct GenericRow {
         auto [idx, type] = ResolveColumn(name);
         if (type == TypeId::TimestampLtz) {
             SetTimestampLtz(idx, ts);
-        } else {
+        } else if (type == TypeId::Timestamp) {
             SetTimestampNtz(idx, ts);
+        } else {
+            throw std::runtime_error("GenericRow::Set: column '" + name +
+                                     "' is not a timestamp column");
         }
     }
 
@@ -1012,6 +1021,7 @@ class UpsertWriter {
 
    private:
     friend class Table;
+    UpsertWriter(ffi::UpsertWriter* writer) noexcept;
     void Destroy() noexcept;
     ffi::UpsertWriter* writer_{nullptr};
 };
@@ -1032,6 +1042,7 @@ class Lookuper {
 
    private:
     friend class Table;
+    Lookuper(ffi::Lookuper* lookuper) noexcept;
     void Destroy() noexcept;
     ffi::Lookuper* lookuper_{nullptr};
 };

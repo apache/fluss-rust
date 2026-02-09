@@ -115,7 +115,7 @@ Result Table::NewAppendWriter(AppendWriter& out) {
     }
 
     try {
-        out.writer_ = table_->new_append_writer();
+        out = AppendWriter(table_->new_append_writer());
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -303,7 +303,7 @@ Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
     try {
         auto ffi_row = utils::to_ffi_generic_row(row);
         auto rust_box = writer_->append(ffi_row);
-        out.inner_ = rust_box.into_raw();
+        out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -323,6 +323,8 @@ Result AppendWriter::Flush() {
 
 // UpsertWriter implementation
 UpsertWriter::UpsertWriter() noexcept = default;
+
+UpsertWriter::UpsertWriter(ffi::UpsertWriter* writer) noexcept : writer_(writer) {}
 
 UpsertWriter::~UpsertWriter() noexcept { Destroy(); }
 
@@ -361,7 +363,7 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
     try {
         auto ffi_row = utils::to_ffi_generic_row(row);
         auto rust_box = writer_->upsert(ffi_row);
-        out.inner_ = rust_box.into_raw();
+        out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -383,7 +385,7 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
     try {
         auto ffi_row = utils::to_ffi_generic_row(row);
         auto rust_box = writer_->delete_row(ffi_row);
-        out.inner_ = rust_box.into_raw();
+        out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -403,6 +405,8 @@ Result UpsertWriter::Flush() {
 
 // Lookuper implementation
 Lookuper::Lookuper() noexcept = default;
+
+Lookuper::Lookuper(ffi::Lookuper* lookuper) noexcept : lookuper_(lookuper) {}
 
 Lookuper::~Lookuper() noexcept { Destroy(); }
 
@@ -462,7 +466,7 @@ Result Table::NewUpsertWriter(UpsertWriter& out) {
     }
 
     try {
-        out.writer_ = table_->new_upsert_writer();
+        out = UpsertWriter(table_->new_upsert_writer());
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -481,7 +485,7 @@ Result Table::NewUpsertWriter(UpsertWriter& out, const std::vector<std::string>&
         for (const auto& name : column_names) {
             rust_names.push_back(rust::String(name));
         }
-        out.writer_ = table_->new_upsert_writer_with_column_names(std::move(rust_names));
+        out = UpsertWriter(table_->new_upsert_writer_with_column_names(std::move(rust_names)));
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -500,7 +504,7 @@ Result Table::NewUpsertWriter(UpsertWriter& out, const std::vector<size_t>& colu
         for (size_t idx : column_indices) {
             rust_indices.push_back(idx);
         }
-        out.writer_ = table_->new_upsert_writer_with_column_indices(std::move(rust_indices));
+        out = UpsertWriter(table_->new_upsert_writer_with_column_indices(std::move(rust_indices)));
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -515,7 +519,7 @@ Result Table::NewLookuper(Lookuper& out) {
     }
 
     try {
-        out.lookuper_ = table_->new_lookuper();
+        out = Lookuper(table_->new_lookuper());
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
