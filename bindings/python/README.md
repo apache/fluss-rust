@@ -16,7 +16,7 @@
  limitations under the License.
 -->
 
-# Python Client Guide
+# Fluss Python Client
 
 This guide covers how to use the Fluss Python client for reading and writing data to log tables and primary key tables.
 
@@ -450,4 +450,4 @@ The Python client uses PyArrow types for schema definitions:
 
 All Python native types (`date`, `time`, `datetime`, `Decimal`) work when appending rows via dicts.
 
-For a complete list of classes, methods, and properties, see the [Python API Reference](python-api-reference.md).
+For a complete list of classes, methods, and properties, see the [API Reference](API_REFERENCE.md).

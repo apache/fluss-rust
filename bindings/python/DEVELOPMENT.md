@@ -17,45 +17,7 @@
   ~ under the License.
 -->
 
-# Apache Fluss™ Python Bindings
-
-Python bindings for Fluss using PyO3 and Maturin.
-
-## API Overview
-
-### Basic Usage
-
-TODO: Add basic usage examples here
-
-### Core Classes
-
-#### `Config`
-
-Configuration for Fluss connection parameters
-
-#### `FlussConnection`
-
-Main interface for connecting to Fluss cluster
-
-#### `FlussAdmin`
-
-Administrative operations for managing tables (create, delete, etc.)
-
-#### `FlussTable`
-
-Represents a Fluss table, providing read and write operations
-
-#### `TableWriter`
-
-Used for writing data to tables, supports PyArrow and Pandas
-
-#### `LogScanner`
-
-Used for scanning table log data
-
-
-# todo: we may move the following part to DEVELOPMENT.md
-## Development
+# Development
 
 ## Requirements
 
@@ -64,56 +26,56 @@ Used for scanning table log data
 - [uv](https://docs.astral.sh/uv/) package manager
 - Linux or MacOS
 
-> **⚠️ Before you start:**  
-> Please make sure you can successfully build and run the [Fluss Rust client](../../crates/fluss/README.md) on your machine.  
+> **Before you start:**
+> Please make sure you can successfully build and run the [Fluss Rust client](../../crates/fluss/README.md) on your machine.
 > The Python bindings require a working Fluss Rust backend and compatible environment.
 
-### Install Development Dependencies
+## Install Development Dependencies
 
 ```bash
 cd bindings/python
 uv sync --all-extras
 ```
 
-### Build Development Version
+## Build Development Version
 
 ```bash
 source .venv/bin/activate
 uv run maturin develop
 ```
 
-### Build Release Version
+## Build Release Version
 
 ```bash
 uv run maturin build --release
 ```
 
-### Code Formatting and Linting
+## Code Formatting and Linting
 
 ```bash
 uv run ruff format python/
 uv run ruff check python/
 ```
 
-### Type Checking
+## Type Checking
 
 ```bash
 uv run mypy python/
 ```
 
-### Run Examples
+## Run Examples
 
 ```bash
 uv run python example/example.py
 ```
 
-### Build API docs:
+## Build API Docs
 
 ```bash
 uv run pdoc fluss
 ```
 
-### Release
+## Release
 
 ```bash
 # Build wheel
@@ -124,31 +86,28 @@ uv run maturin publish
 ```
 
 ## Project Structure
+
 ```
 bindings/python/
 ├── Cargo.toml            # Rust dependency configuration
-├── pyproject.toml        # Python project configuration
-├── README.md             # This file
-├── src/                  # Rust source code
-│   ├── lib.rs            # Main entry module
-│   ├── config.rs         # Configuration related
-│   ├── connection.rs     # Connection management
-│   ├── admin.rs          # Admin operations
-│   ├── table.rs          # Table operations
-│   ├── types.rs          # Data types
-│   └── error.rs          # Error handling
-├── fluss/                # Python package source
-│   ├── __init__.py       # Python package entry
-│   ├── __init__.pyi      # Stub file
-│   └── py.typed          # Type declarations
-└── example/              # Example code
+├── pyproject.toml         # Python project configuration
+├── README.md              # User guide
+├── DEVELOPMENT.md         # This file
+├── API_REFERENCE.md       # API reference
+├── src/                   # Rust source code (PyO3 bindings)
+│   ├── lib.rs
+│   ├── config.rs
+│   ├── connection.rs
+│   ├── admin.rs
+│   ├── table.rs
+│   └── error.rs
+├── fluss/                 # Python package
+│   ├── __init__.py
+│   ├── __init__.pyi       # Type stubs
+│   └── py.typed
+└── example/
     └── example.py
 ```
-
-## TODO
-
-- [ ] Add basic usage examples in API Overview (code snippets for Config, FlussConnection, FlussAdmin, FlussTable).
-- [ ] Add a "Verifying a release" subsection with install-from-TestPyPI/PyPI and smoke-test steps.
 
 ## License
 
