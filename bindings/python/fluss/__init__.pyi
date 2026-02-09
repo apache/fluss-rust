@@ -378,14 +378,13 @@ class AppendWriter:
             WriteResultHandle: Ignore for fire-and-forget, or await handle.wait() for acknowledgement.
 
         Supported Types:
-            Currently supports primitive types only:
             - Boolean, TinyInt, SmallInt, Int, BigInt (integers)
             - Float, Double (floating point)
             - String, Char (text)
             - Bytes, Binary (binary data)
+            - Date, Time, Timestamp, TimestampLTZ (temporal)
+            - Decimal (arbitrary precision)
             - Null values
-
-            Temporal types (Date, Timestamp, Decimal) are not yet supported.
 
         Example:
             writer.append({'id': 1, 'name': 'Alice', 'score': 95.5})
@@ -712,5 +711,7 @@ class OffsetType:
 
 # Constant for earliest offset (-2)
 EARLIEST_OFFSET: int
+# Constant for latest offset (-1)
+LATEST_OFFSET: int
 
 __version__: str

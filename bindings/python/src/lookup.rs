@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::table::{internal_row_to_dict, python_pk_to_generic_row};
+use crate::table::{internal_row_to_dict, python_to_sparse_generic_row};
 use crate::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
@@ -52,7 +52,8 @@ impl Lookuper {
         py: Python<'py>,
         pk: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let generic_row = python_pk_to_generic_row(pk, &self.table_info)?;
+        let pk_indices = self.table_info.get_schema().primary_key_indexes();
+        let generic_row = python_to_sparse_generic_row(pk, &self.table_info, &pk_indices)?;
         let inner = self.inner.clone();
         let table_info = self.table_info.clone();
 
