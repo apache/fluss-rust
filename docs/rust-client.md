@@ -20,11 +20,6 @@
 
 This guide covers how to use the Fluss Rust client for reading and writing data to log tables and primary key tables.
 
-## Prerequisites
-
-- Rust 1.85+
-- Protobuf compiler (`protoc`) - only required when [building from source](#building-from-source)
-
 ## Adding to Your Project
 
 The Fluss Rust client is published to [crates.io](https://crates.io/crates/fluss-rs) as `fluss-rs`. The crate's library name is `fluss`, so you import it with `use fluss::...`.
@@ -56,7 +51,7 @@ fluss-rs = { version = "0.1", features = ["storage-all"] }
 
 Available features:
 - `storage-memory` (default) - In-memory storage
-- `storage-fs` (default) - Filesystem storage
+- `storage-fs` (default) - Local filesystem storage
 - `storage-s3` - Amazon S3 storage
 - `storage-oss` - Alibaba OSS storage
 - `storage-all` - All storage backends
@@ -77,6 +72,12 @@ fluss = { path = "/path/to/fluss-rust/crates/fluss", package = "fluss-rs" }
 > **Note:** When using `git` or `path` dependencies, the `package = "fluss-rs"` field is required so that Cargo resolves the correct package while still allowing `use fluss::...` imports.
 
 ## Building from Source
+
+### Prerequisites
+
+- Rust 1.85+
+- Protobuf compiler (`protoc`) - only required when [building from source](#building-from-source)
+
 
 ### 1. Clone the Repository
 
@@ -105,16 +106,6 @@ sudo apt-get install protobuf-compiler
 
 ```bash
 cargo build --workspace --all-targets
-```
-
-### 4. Run Tests
-
-```bash
-# Unit tests
-cargo test --workspace
-
-# Integration tests (requires running Fluss cluster)
-RUST_TEST_THREADS=1 cargo test --features integration_tests --workspace
 ```
 
 ## Connection Setup
@@ -738,11 +729,20 @@ if let Some(row) = result.get_single_row()? {
 
 | Fluss Type | Rust Type | Method |
 |------------|-----------|--------|
+| `boolean` | `bool` | `get_boolean()`, `set_field(idx, bool)` |
+| `tinyint` | `i8` | `get_byte()`, `set_field(idx, i8)` |
+| `smallint` | `i16` | `get_short()`, `set_field(idx, i16)` |
 | `int` | `i32` | `get_int()`, `set_field(idx, i32)` |
 | `bigint` | `i64` | `get_long()`, `set_field(idx, i64)` |
 | `float` | `f32` | `get_float()`, `set_field(idx, f32)` |
 | `double` | `f64` | `get_double()`, `set_field(idx, f64)` |
+| `char(n)` | `&str` | `get_char(idx, length)`, `set_field(idx, &str)` |
 | `string` | `&str` | `get_string()`, `set_field(idx, &str)` |
-| `boolean` | `bool` | `get_boolean()`, `set_field(idx, bool)` |
+| `decimal(p,s)` | `Decimal` | `get_decimal(idx, precision, scale)`, `set_field(idx, Decimal)` |
+| `date` | `Date` | `get_date()`, `set_field(idx, Date)` |
+| `time` | `Time` | `get_time()`, `set_field(idx, Time)` |
+| `timestamp` | `TimestampNtz` | `get_timestamp_ntz(idx, precision)`, `set_field(idx, TimestampNtz)` |
+| `timestamp_ltz` | `TimestampLtz` | `get_timestamp_ltz(idx, precision)`, `set_field(idx, TimestampLtz)` |
 | `bytes` | `&[u8]` | `get_bytes()`, `set_field(idx, &[u8])` |
+| `binary(n)` | `&[u8]` | `get_binary(idx, length)`, `set_field(idx, &[u8])` |
 
