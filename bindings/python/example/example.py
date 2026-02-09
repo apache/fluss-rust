@@ -766,37 +766,37 @@ async def main():
     print("--- Testing Partitioned KV Table ---")
     print("=" * 60)
 
-    part_kv_fields = [
+    partitioned_kv_fields = [
         pa.field("region", pa.string()),   # partition key + part of PK
         pa.field("user_id", pa.int32()),   # part of PK
         pa.field("name", pa.string()),
         pa.field("score", pa.int64()),
     ]
-    part_kv_schema = pa.schema(part_kv_fields)
-    fluss_part_kv_schema = fluss.Schema(
-        part_kv_schema, primary_keys=["region", "user_id"]
+    partitioned_kv_schema = pa.schema(partitioned_kv_fields)
+    fluss_partitioned_kv_schema = fluss.Schema(
+        partitioned_kv_schema, primary_keys=["region", "user_id"]
     )
 
-    part_kv_descriptor = fluss.TableDescriptor(
-        fluss_part_kv_schema,
+    partitioned_kv_descriptor = fluss.TableDescriptor(
+        fluss_partitioned_kv_schema,
         partition_keys=["region"],
     )
 
-    part_kv_path = fluss.TablePath("fluss", "partitioned_kv_table_py")
+    partitioned_kv_path = fluss.TablePath("fluss", "partitioned_kv_table_py")
 
     try:
-        await admin.drop_table(part_kv_path, ignore_if_not_exists=True)
-        await admin.create_table(part_kv_path, part_kv_descriptor, False)
-        print(f"Created partitioned KV table: {part_kv_path}")
+        await admin.drop_table(partitioned_kv_path, ignore_if_not_exists=True)
+        await admin.create_table(partitioned_kv_path, partitioned_kv_descriptor, False)
+        print(f"Created partitioned KV table: {partitioned_kv_path}")
 
         # Create partitions
-        await admin.create_partition(part_kv_path, {"region": "US"})
-        await admin.create_partition(part_kv_path, {"region": "EU"})
-        await admin.create_partition(part_kv_path, {"region": "APAC"})
+        await admin.create_partition(partitioned_kv_path, {"region": "US"})
+        await admin.create_partition(partitioned_kv_path, {"region": "EU"})
+        await admin.create_partition(partitioned_kv_path, {"region": "APAC"})
         print("Created partitions: US, EU, APAC")
 
-        part_kv_table = await conn.get_table(part_kv_path)
-        upsert_writer = part_kv_table.new_upsert()
+        partitioned_kv_table = await conn.get_table(partitioned_kv_path)
+        upsert_writer = partitioned_kv_table.new_upsert()
 
         # Upsert rows across partitions
         test_data = [
@@ -816,7 +816,7 @@ async def main():
 
         # Lookup all rows across partitions
         print("\n--- Lookup across partitions ---")
-        lookuper = part_kv_table.new_lookup()
+        lookuper = partitioned_kv_table.new_lookup()
         for region, user_id, name, score in test_data:
             result = await lookuper.lookup({"region": region, "user_id": user_id})
             assert result is not None, f"Expected to find region={region} user_id={user_id}"
@@ -857,8 +857,8 @@ async def main():
         print(f"EU/2 still exists: name={result['name']}")
 
         # Cleanup
-        await admin.drop_table(part_kv_path, ignore_if_not_exists=True)
-        print(f"\nDropped partitioned KV table: {part_kv_path}")
+        await admin.drop_table(partitioned_kv_path, ignore_if_not_exists=True)
+        print(f"\nDropped partitioned KV table: {partitioned_kv_path}")
 
     except Exception as e:
         print(f"Error with partitioned KV table: {e}")
