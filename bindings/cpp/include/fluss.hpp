@@ -812,7 +812,7 @@ struct Configuration {
     std::string bootstrap_server{"127.0.0.1:9123"};
     // Max request size in bytes (10 MB)
     int32_t request_max_size{10 * 1024 * 1024};
-    // Writer acknowledgment mode: "all" or "leader_only"
+    // Writer acknowledgment mode: "all", "0", "1", or "-1"
     std::string writer_acks{"all"};
     // Max number of writer retries
     int32_t writer_retries{std::numeric_limits<int32_t>::max()};
