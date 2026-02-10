@@ -610,7 +610,8 @@ class TableDescriptor:
         comment: Optional[str] = None,
         log_format: Optional[str] = None,
         kv_format: Optional[str] = None,
-        **properties: str,
+        properties: Optional[Dict[str, str]] = None,
+        custom_properties: Optional[Dict[str, str]] = None,
     ) -> None: ...
     def get_schema(self) -> Schema: ...
 
