@@ -129,9 +129,37 @@ TableScan Table::NewScan() { return TableScan(table_); }
 // TableScan implementation
 TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
 
-TableScan& TableScan::Project(std::vector<size_t> column_indices) {
+TableScan& TableScan::ProjectByIndex(std::vector<size_t> column_indices) {
     projection_ = std::move(column_indices);
+    name_projection_.clear();
     return *this;
+}
+
+TableScan& TableScan::ProjectByName(std::vector<std::string> column_names) {
+    name_projection_ = std::move(column_names);
+    projection_.clear();
+    return *this;
+}
+
+std::vector<size_t> TableScan::ResolveNameProjection() const {
+    auto ffi_info = table_->get_table_info_from_table();
+    const auto& columns = ffi_info.schema.columns;
+
+    std::vector<size_t> indices;
+    for (const auto& name : name_projection_) {
+        bool found = false;
+        for (size_t i = 0; i < columns.size(); ++i) {
+            if (std::string(columns[i].name) == name) {
+                indices.push_back(i);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            throw std::runtime_error("Column '" + name + "' not found");
+        }
+    }
+    return indices;
 }
 
 Result TableScan::CreateLogScanner(LogScanner& out) {
@@ -140,14 +168,15 @@ Result TableScan::CreateLogScanner(LogScanner& out) {
     }
 
     try {
-        if (projection_.empty()) {
-            out.scanner_ = table_->new_log_scanner();
-        } else {
+        auto resolved_indices = !name_projection_.empty() ? ResolveNameProjection() : projection_;
+        if (!resolved_indices.empty()) {
             rust::Vec<size_t> rust_indices;
-            for (size_t idx : projection_) {
+            for (size_t idx : resolved_indices) {
                 rust_indices.push_back(idx);
             }
             out.scanner_ = table_->new_log_scanner_with_projection(std::move(rust_indices));
+        } else {
+            out.scanner_ = table_->new_log_scanner();
         }
         return utils::make_ok();
     } catch (const rust::Error& e) {
@@ -163,15 +192,16 @@ Result TableScan::CreateRecordBatchScanner(LogScanner& out) {
     }
 
     try {
-        if (projection_.empty()) {
-            out.scanner_ = table_->new_record_batch_log_scanner();
-        } else {
+        auto resolved_indices = !name_projection_.empty() ? ResolveNameProjection() : projection_;
+        if (!resolved_indices.empty()) {
             rust::Vec<size_t> rust_indices;
-            for (size_t idx : projection_) {
+            for (size_t idx : resolved_indices) {
                 rust_indices.push_back(idx);
             }
             out.scanner_ =
                 table_->new_record_batch_log_scanner_with_projection(std::move(rust_indices));
+        } else {
+            out.scanner_ = table_->new_record_batch_log_scanner();
         }
         return utils::make_ok();
     } catch (const rust::Error& e) {

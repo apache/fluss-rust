@@ -192,12 +192,12 @@ int main() {
         std::exit(1);
     }
 
-    // 7) Projected scan — project [id, updated_at(TimestampLtz)] to verify
-    //    NTZ/LTZ disambiguation works with column index remapping
+    // 7a) Projected scan by index — project [id, updated_at(TimestampLtz)] to verify
+    //     NTZ/LTZ disambiguation works with column index remapping
     std::vector<size_t> projected_columns = {0, 7};
     fluss::LogScanner projected_scanner;
     check("new_log_scanner_with_projection",
-          table.NewScan().Project(projected_columns).CreateLogScanner(projected_scanner));
+          table.NewScan().ProjectByIndex(projected_columns).CreateLogScanner(projected_scanner));
 
     for (int b = 0; b < buckets; ++b) {
         check("subscribe_projected", projected_scanner.Subscribe(b, 0));
@@ -220,6 +220,42 @@ int main() {
         }
         if (rec.row.GetType(1) != fluss::DatumType::TimestampLtz) {
             std::cerr << "ERROR: projected field 1 expected TimestampLtz, got "
+                      << static_cast<int>(rec.row.GetType(1)) << std::endl;
+            scan_ok = false;
+        }
+
+        auto ts = rec.row.GetTimestamp(1);
+        std::cout << "  id=" << rec.row.GetInt32(0) << " updated_at=" << ts.epoch_millis << "+"
+                  << ts.nano_of_millisecond << "ns" << std::endl;
+    }
+
+    // 7b) Projected scan by column names — same columns as above but using names
+    fluss::LogScanner name_projected_scanner;
+    check("project_by_name_scanner", table.NewScan()
+                                         .ProjectByName({"id", "updated_at"})
+                                         .CreateLogScanner(name_projected_scanner));
+
+    for (int b = 0; b < buckets; ++b) {
+        check("subscribe_name_projected", name_projected_scanner.Subscribe(b, 0));
+    }
+
+    fluss::ScanRecords name_projected_records;
+    check("poll_name_projected", name_projected_scanner.Poll(5000, name_projected_records));
+
+    std::cout << "Name-projected records: " << name_projected_records.Size() << std::endl;
+    for (const auto& rec : name_projected_records.records) {
+        if (rec.row.FieldCount() != 2) {
+            std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
+            scan_ok = false;
+            continue;
+        }
+        if (rec.row.GetType(0) != fluss::DatumType::Int32) {
+            std::cerr << "ERROR: name-projected field 0 expected Int32, got "
+                      << static_cast<int>(rec.row.GetType(0)) << std::endl;
+            scan_ok = false;
+        }
+        if (rec.row.GetType(1) != fluss::DatumType::TimestampLtz) {
+            std::cerr << "ERROR: name-projected field 1 expected TimestampLtz, got "
                       << static_cast<int>(rec.row.GetType(1)) << std::endl;
             scan_ok = false;
         }
@@ -336,7 +372,7 @@ int main() {
     fluss::LogScanner projected_arrow_scanner;
     check("new_record_batch_log_scanner_with_projection",
           table.NewScan()
-              .Project(projected_columns)
+              .ProjectByIndex(projected_columns)
               .CreateRecordBatchScanner(projected_arrow_scanner));
 
     for (int b = 0; b < buckets; ++b) {
