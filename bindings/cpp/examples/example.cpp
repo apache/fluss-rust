@@ -34,8 +34,11 @@ static void check(const char* step, const fluss::Result& r) {
 
 int main() {
     // 1) Connect
+    fluss::Configuration config;
+    config.bootstrap_server = "127.0.0.1:9123";
+
     fluss::Connection conn;
-    check("connect", fluss::Connection::Connect("127.0.0.1:9123", conn));
+    check("create", fluss::Connection::Create(config, conn));
 
     // 2) Admin
     fluss::Admin admin;

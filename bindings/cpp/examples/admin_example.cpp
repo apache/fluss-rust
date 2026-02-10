@@ -31,13 +31,15 @@ static void check(const char* step, const fluss::Result& r) {
 }
 
 int main() {
-    const std::string bootstrap = "127.0.0.1:9123";
     const std::string db_name = "admin_example_db";
     const std::string table_name = "admin_example_table";
 
     // 1) Connect and get Admin
+    fluss::Configuration config;
+    config.bootstrap_server = "127.0.0.1:9123";
+
     fluss::Connection conn;
-    check("connect", fluss::Connection::Connect(bootstrap, conn));
+    check("create", fluss::Connection::Create(config, conn));
 
     fluss::Admin admin;
     check("get_admin", conn.GetAdmin(admin));
