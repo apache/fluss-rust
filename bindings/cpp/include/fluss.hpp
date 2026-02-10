@@ -939,7 +939,7 @@ class TableScan {
     TableScan(TableScan&&) noexcept = default;
     TableScan& operator=(TableScan&&) noexcept = default;
 
-    TableScan& ProjectByIndex(std::vector<size_t> column_indices);
+    TableScan& Project(std::vector<size_t> column_indices);
     TableScan& ProjectByName(std::vector<std::string> column_names);
 
     Result CreateLogScanner(LogScanner& out);
