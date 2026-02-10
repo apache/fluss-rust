@@ -129,7 +129,7 @@ TableScan Table::NewScan() { return TableScan(table_); }
 // TableScan implementation
 TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
 
-TableScan& TableScan::Project(std::vector<size_t> column_indices) {
+TableScan& TableScan::ProjectByIndex(std::vector<size_t> column_indices) {
     projection_ = std::move(column_indices);
     name_projection_.clear();
     return *this;

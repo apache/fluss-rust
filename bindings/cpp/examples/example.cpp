@@ -197,7 +197,7 @@ int main() {
     std::vector<size_t> projected_columns = {0, 7};
     fluss::LogScanner projected_scanner;
     check("new_log_scanner_with_projection",
-          table.NewScan().Project(projected_columns).CreateLogScanner(projected_scanner));
+          table.NewScan().ProjectByIndex(projected_columns).CreateLogScanner(projected_scanner));
 
     for (int b = 0; b < buckets; ++b) {
         check("subscribe_projected", projected_scanner.Subscribe(b, 0));
@@ -372,7 +372,7 @@ int main() {
     fluss::LogScanner projected_arrow_scanner;
     check("new_record_batch_log_scanner_with_projection",
           table.NewScan()
-              .Project(projected_columns)
+              .ProjectByIndex(projected_columns)
               .CreateRecordBatchScanner(projected_arrow_scanner));
 
     for (int b = 0; b < buckets; ++b) {
