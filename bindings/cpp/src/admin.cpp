@@ -17,9 +17,9 @@
  * under the License.
  */
 
+#include "ffi_converter.hpp"
 #include "fluss.hpp"
 #include "lib.rs.h"
-#include "ffi_converter.hpp"
 #include "rust/cxx.h"
 
 namespace fluss {
@@ -37,9 +37,7 @@ void Admin::Destroy() noexcept {
     }
 }
 
-Admin::Admin(Admin&& other) noexcept : admin_(other.admin_) {
-    other.admin_ = nullptr;
-}
+Admin::Admin(Admin&& other) noexcept : admin_(other.admin_) { other.admin_ = nullptr; }
 
 Admin& Admin::operator=(Admin&& other) noexcept {
     if (this != &other) {
@@ -52,8 +50,7 @@ Admin& Admin::operator=(Admin&& other) noexcept {
 
 bool Admin::Available() const { return admin_ != nullptr; }
 
-Result Admin::CreateTable(const TablePath& table_path,
-                          const TableDescriptor& descriptor,
+Result Admin::CreateTable(const TablePath& table_path, const TableDescriptor& descriptor,
                           bool ignore_if_exists) {
     if (!Available()) {
         return utils::make_error(1, "Admin not available");
@@ -109,17 +106,16 @@ Result Admin::GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& o
 }
 
 // function for common list offsets functionality
-Result Admin::DoListOffsets(const TablePath& table_path,
-                         const std::vector<int32_t>& bucket_ids,
-                         const OffsetQuery& offset_query,
-                         std::unordered_map<int32_t, int64_t>& out,
-                         const std::string* partition_name) {
+Result Admin::DoListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,
+                            const OffsetQuery& offset_query,
+                            std::unordered_map<int32_t, int64_t>& out,
+                            const std::string* partition_name) {
     if (!Available()) {
         return utils::make_error(1, "Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
-    
+
     rust::Vec<int32_t> rust_bucket_ids;
     for (int32_t id : bucket_ids) {
         rust_bucket_ids.push_back(id);
@@ -131,11 +127,12 @@ Result Admin::DoListOffsets(const TablePath& table_path,
 
     ffi::FfiListOffsetsResult ffi_result;
     if (partition_name != nullptr) {
-        ffi_result = admin_->list_partition_offsets(ffi_path, rust::String(*partition_name), std::move(rust_bucket_ids), ffi_query);
+        ffi_result = admin_->list_partition_offsets(ffi_path, rust::String(*partition_name),
+                                                    std::move(rust_bucket_ids), ffi_query);
     } else {
         ffi_result = admin_->list_offsets(ffi_path, std::move(rust_bucket_ids), ffi_query);
     }
-    
+
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out.clear();
@@ -147,23 +144,20 @@ Result Admin::DoListOffsets(const TablePath& table_path,
     return result;
 }
 
-Result Admin::ListOffsets(const TablePath& table_path,
-                          const std::vector<int32_t>& bucket_ids,
+Result Admin::ListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,
                           const OffsetQuery& offset_query,
                           std::unordered_map<int32_t, int64_t>& out) {
     return DoListOffsets(table_path, bucket_ids, offset_query, out);
 }
 
-Result Admin::ListPartitionOffsets(const TablePath& table_path,
-                                const std::string& partition_name,
-                                const std::vector<int32_t>& bucket_ids,
-                                const OffsetQuery& offset_query,
-                                std::unordered_map<int32_t, int64_t>& out) {
+Result Admin::ListPartitionOffsets(const TablePath& table_path, const std::string& partition_name,
+                                   const std::vector<int32_t>& bucket_ids,
+                                   const OffsetQuery& offset_query,
+                                   std::unordered_map<int32_t, int64_t>& out) {
     return DoListOffsets(table_path, bucket_ids, offset_query, out, &partition_name);
 }
 
-Result Admin::ListPartitionInfos(const TablePath& table_path,
-                                 std::vector<PartitionInfo>& out) {
+Result Admin::ListPartitionInfos(const TablePath& table_path, std::vector<PartitionInfo>& out) {
     if (!Available()) {
         return utils::make_error(1, "Admin not available");
     }
@@ -221,21 +215,18 @@ Result Admin::DropPartition(const TablePath& table_path,
         rust_spec.push_back(std::move(kv));
     }
 
-    auto ffi_result =
-        admin_->drop_partition(ffi_path, std::move(rust_spec), ignore_if_not_exists);
+    auto ffi_result = admin_->drop_partition(ffi_path, std::move(rust_spec), ignore_if_not_exists);
     return utils::from_ffi_result(ffi_result);
 }
 
-Result Admin::CreateDatabase(const std::string& database_name,
-                             const DatabaseDescriptor& descriptor,
+Result Admin::CreateDatabase(const std::string& database_name, const DatabaseDescriptor& descriptor,
                              bool ignore_if_exists) {
     if (!Available()) {
         return utils::make_error(1, "Admin not available");
     }
 
     auto ffi_desc = utils::to_ffi_database_descriptor(descriptor);
-    auto ffi_result =
-        admin_->create_database(rust::Str(database_name), ffi_desc, ignore_if_exists);
+    auto ffi_result = admin_->create_database(rust::Str(database_name), ffi_desc, ignore_if_exists);
     return utils::from_ffi_result(ffi_result);
 }
 

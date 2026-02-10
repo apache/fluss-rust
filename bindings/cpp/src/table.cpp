@@ -109,8 +109,19 @@ Table& Table::operator=(Table&& other) noexcept {
 
 bool Table::Available() const { return table_ != nullptr; }
 
-Result Table::NewAppendWriter(AppendWriter& out) {
-    if (!Available()) {
+TableAppend Table::NewAppend() { return TableAppend(table_); }
+
+TableUpsert Table::NewUpsert() { return TableUpsert(table_); }
+
+TableLookup Table::NewLookup() { return TableLookup(table_); }
+
+TableScan Table::NewScan() { return TableScan(table_); }
+
+// TableAppend implementation
+TableAppend::TableAppend(ffi::Table* table) noexcept : table_(table) {}
+
+Result TableAppend::CreateWriter(AppendWriter& out) {
+    if (table_ == nullptr) {
         return utils::make_error(1, "Table not available");
     }
 
@@ -124,7 +135,86 @@ Result Table::NewAppendWriter(AppendWriter& out) {
     }
 }
 
-TableScan Table::NewScan() { return TableScan(table_); }
+// TableUpsert implementation
+TableUpsert::TableUpsert(ffi::Table* table) noexcept : table_(table) {}
+
+TableUpsert& TableUpsert::PartialUpdateByIndex(std::vector<size_t> column_indices) {
+    if (column_indices.empty()) {
+        throw std::invalid_argument("PartialUpdateByIndex requires at least one column");
+    }
+    column_indices_ = std::move(column_indices);
+    column_names_.clear();
+    return *this;
+}
+
+TableUpsert& TableUpsert::PartialUpdateByName(std::vector<std::string> column_names) {
+    if (column_names.empty()) {
+        throw std::invalid_argument("PartialUpdateByName requires at least one column");
+    }
+    column_names_ = std::move(column_names);
+    column_indices_.clear();
+    return *this;
+}
+
+std::vector<size_t> TableUpsert::ResolveNameProjection() const {
+    auto ffi_info = table_->get_table_info_from_table();
+    const auto& columns = ffi_info.schema.columns;
+
+    std::vector<size_t> indices;
+    for (const auto& name : column_names_) {
+        bool found = false;
+        for (size_t i = 0; i < columns.size(); ++i) {
+            if (std::string(columns[i].name) == name) {
+                indices.push_back(i);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            throw std::runtime_error("Column '" + name + "' not found");
+        }
+    }
+    return indices;
+}
+
+Result TableUpsert::CreateWriter(UpsertWriter& out) {
+    if (table_ == nullptr) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        auto resolved_indices = !column_names_.empty() ? ResolveNameProjection() : column_indices_;
+
+        rust::Vec<size_t> rust_indices;
+        for (size_t idx : resolved_indices) {
+            rust_indices.push_back(idx);
+        }
+        out = UpsertWriter(table_->create_upsert_writer(std::move(rust_indices)));
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
+
+// TableLookup implementation
+TableLookup::TableLookup(ffi::Table* table) noexcept : table_(table) {}
+
+Result TableLookup::CreateLookuper(Lookuper& out) {
+    if (table_ == nullptr) {
+        return utils::make_error(1, "Table not available");
+    }
+
+    try {
+        out = Lookuper(table_->new_lookuper());
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_error(1, e.what());
+    } catch (const std::exception& e) {
+        return utils::make_error(1, e.what());
+    }
+}
 
 // TableScan implementation
 TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
@@ -169,15 +259,11 @@ Result TableScan::CreateLogScanner(LogScanner& out) {
 
     try {
         auto resolved_indices = !name_projection_.empty() ? ResolveNameProjection() : projection_;
-        if (!resolved_indices.empty()) {
-            rust::Vec<size_t> rust_indices;
-            for (size_t idx : resolved_indices) {
-                rust_indices.push_back(idx);
-            }
-            out.scanner_ = table_->new_log_scanner_with_projection(std::move(rust_indices));
-        } else {
-            out.scanner_ = table_->new_log_scanner();
+        rust::Vec<size_t> rust_indices;
+        for (size_t idx : resolved_indices) {
+            rust_indices.push_back(idx);
         }
+        out.scanner_ = table_->create_scanner(std::move(rust_indices), false);
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -193,16 +279,11 @@ Result TableScan::CreateRecordBatchScanner(LogScanner& out) {
 
     try {
         auto resolved_indices = !name_projection_.empty() ? ResolveNameProjection() : projection_;
-        if (!resolved_indices.empty()) {
-            rust::Vec<size_t> rust_indices;
-            for (size_t idx : resolved_indices) {
-                rust_indices.push_back(idx);
-            }
-            out.scanner_ =
-                table_->new_record_batch_log_scanner_with_projection(std::move(rust_indices));
-        } else {
-            out.scanner_ = table_->new_record_batch_log_scanner();
+        rust::Vec<size_t> rust_indices;
+        for (size_t idx : resolved_indices) {
+            rust_indices.push_back(idx);
         }
+        out.scanner_ = table_->create_scanner(std::move(rust_indices), true);
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());
@@ -485,75 +566,6 @@ Result Lookuper::Lookup(const GenericRow& pk_row, bool& found, GenericRow& out) 
         return utils::make_error(1, e.what());
     } catch (const std::exception& e) {
         found = false;
-        return utils::make_error(1, e.what());
-    }
-}
-
-// Table KV methods
-Result Table::NewUpsertWriter(UpsertWriter& out) {
-    if (!Available()) {
-        return utils::make_error(1, "Table not available");
-    }
-
-    try {
-        out = UpsertWriter(table_->new_upsert_writer());
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
-    } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
-    }
-}
-
-Result Table::NewUpsertWriter(UpsertWriter& out, const std::vector<std::string>& column_names) {
-    if (!Available()) {
-        return utils::make_error(1, "Table not available");
-    }
-
-    try {
-        rust::Vec<rust::String> rust_names;
-        for (const auto& name : column_names) {
-            rust_names.push_back(rust::String(name));
-        }
-        out = UpsertWriter(table_->new_upsert_writer_with_column_names(std::move(rust_names)));
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
-    } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
-    }
-}
-
-Result Table::NewUpsertWriter(UpsertWriter& out, const std::vector<size_t>& column_indices) {
-    if (!Available()) {
-        return utils::make_error(1, "Table not available");
-    }
-
-    try {
-        rust::Vec<size_t> rust_indices;
-        for (size_t idx : column_indices) {
-            rust_indices.push_back(idx);
-        }
-        out = UpsertWriter(table_->new_upsert_writer_with_column_indices(std::move(rust_indices)));
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
-    } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
-    }
-}
-
-Result Table::NewLookuper(Lookuper& out) {
-    if (!Available()) {
-        return utils::make_error(1, "Table not available");
-    }
-
-    try {
-        out = Lookuper(table_->new_lookuper());
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
-    } catch (const std::exception& e) {
         return utils::make_error(1, e.what());
     }
 }

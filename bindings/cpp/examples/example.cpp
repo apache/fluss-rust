@@ -79,7 +79,7 @@ int main() {
 
     // 5) Write rows with scalar and temporal values
     fluss::AppendWriter writer;
-    check("new_append_writer", table.NewAppendWriter(writer));
+    check("new_append_writer", table.NewAppend().CreateWriter(writer));
 
     struct RowData {
         int id;
@@ -423,7 +423,7 @@ int main() {
     check("get_decimal_table", conn.GetTable(decimal_table_path, decimal_table));
 
     fluss::AppendWriter decimal_writer;
-    check("new_decimal_writer", decimal_table.NewAppendWriter(decimal_writer));
+    check("new_decimal_writer", decimal_table.NewAppend().CreateWriter(decimal_writer));
 
     // Just provide the value — Rust resolves (p,s) from schema
     {
@@ -512,7 +512,7 @@ int main() {
     check("get_partitioned_table", conn.GetTable(partitioned_table_path, partitioned_table));
 
     fluss::AppendWriter partitioned_writer;
-    check("new_partitioned_writer", partitioned_table.NewAppendWriter(partitioned_writer));
+    check("new_partitioned_writer", partitioned_table.NewAppend().CreateWriter(partitioned_writer));
 
     struct PartitionedRow {
         int id;

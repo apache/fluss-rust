@@ -804,6 +804,9 @@ class WriteResult;
 class LogScanner;
 class Admin;
 class Table;
+class TableAppend;
+class TableUpsert;
+class TableLookup;
 class TableScan;
 
 class Connection {
@@ -909,11 +912,9 @@ class Table {
 
     GenericRow NewRow() const;
 
-    Result NewAppendWriter(AppendWriter& out);
-    Result NewUpsertWriter(UpsertWriter& out);
-    Result NewUpsertWriter(UpsertWriter& out, const std::vector<std::string>& column_names);
-    Result NewUpsertWriter(UpsertWriter& out, const std::vector<size_t>& column_indices);
-    Result NewLookuper(Lookuper& out);
+    TableAppend NewAppend();
+    TableUpsert NewUpsert();
+    TableLookup NewLookup();
     TableScan NewScan();
 
     TableInfo GetTableInfo() const;
@@ -922,6 +923,9 @@ class Table {
 
    private:
     friend class Connection;
+    friend class TableAppend;
+    friend class TableUpsert;
+    friend class TableLookup;
     friend class TableScan;
     Table(ffi::Table* table) noexcept;
 
@@ -930,6 +934,61 @@ class Table {
 
     ffi::Table* table_{nullptr};
     mutable std::shared_ptr<GenericRow::ColumnMap> column_map_;
+};
+
+class TableAppend {
+   public:
+    TableAppend(const TableAppend&) = delete;
+    TableAppend& operator=(const TableAppend&) = delete;
+    TableAppend(TableAppend&&) noexcept = default;
+    TableAppend& operator=(TableAppend&&) noexcept = default;
+
+    Result CreateWriter(AppendWriter& out);
+
+   private:
+    friend class Table;
+    explicit TableAppend(ffi::Table* table) noexcept;
+
+    ffi::Table* table_{nullptr};
+};
+
+class TableUpsert {
+   public:
+    TableUpsert(const TableUpsert&) = delete;
+    TableUpsert& operator=(const TableUpsert&) = delete;
+    TableUpsert(TableUpsert&&) noexcept = default;
+    TableUpsert& operator=(TableUpsert&&) noexcept = default;
+
+    TableUpsert& PartialUpdateByIndex(std::vector<size_t> column_indices);
+    TableUpsert& PartialUpdateByName(std::vector<std::string> column_names);
+
+    Result CreateWriter(UpsertWriter& out);
+
+   private:
+    friend class Table;
+    explicit TableUpsert(ffi::Table* table) noexcept;
+
+    std::vector<size_t> ResolveNameProjection() const;
+
+    ffi::Table* table_{nullptr};
+    std::vector<size_t> column_indices_;
+    std::vector<std::string> column_names_;
+};
+
+class TableLookup {
+   public:
+    TableLookup(const TableLookup&) = delete;
+    TableLookup& operator=(const TableLookup&) = delete;
+    TableLookup(TableLookup&&) noexcept = default;
+    TableLookup& operator=(TableLookup&&) noexcept = default;
+
+    Result CreateLookuper(Lookuper& out);
+
+   private:
+    friend class Table;
+    explicit TableLookup(ffi::Table* table) noexcept;
+
+    ffi::Table* table_{nullptr};
 };
 
 class TableScan {
@@ -999,6 +1058,7 @@ class AppendWriter {
 
    private:
     friend class Table;
+    friend class TableAppend;
     AppendWriter(ffi::AppendWriter* writer) noexcept;
 
     void Destroy() noexcept;
@@ -1025,6 +1085,7 @@ class UpsertWriter {
 
    private:
     friend class Table;
+    friend class TableUpsert;
     UpsertWriter(ffi::UpsertWriter* writer) noexcept;
     void Destroy() noexcept;
     ffi::UpsertWriter* writer_{nullptr};
@@ -1046,6 +1107,7 @@ class Lookuper {
 
    private:
     friend class Table;
+    friend class TableLookup;
     Lookuper(ffi::Lookuper* lookuper) noexcept;
     void Destroy() noexcept;
     ffi::Lookuper* lookuper_{nullptr};

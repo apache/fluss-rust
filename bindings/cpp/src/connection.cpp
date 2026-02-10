@@ -17,9 +17,9 @@
  * under the License.
  */
 
+#include "ffi_converter.hpp"
 #include "fluss.hpp"
 #include "lib.rs.h"
-#include "ffi_converter.hpp"
 #include "rust/cxx.h"
 
 namespace fluss {
@@ -35,9 +35,7 @@ void Connection::Destroy() noexcept {
     }
 }
 
-Connection::Connection(Connection&& other) noexcept : conn_(other.conn_) {
-    other.conn_ = nullptr;
-}
+Connection::Connection(Connection&& other) noexcept : conn_(other.conn_) { other.conn_ = nullptr; }
 
 Connection& Connection::operator=(Connection&& other) noexcept {
     if (this != &other) {
