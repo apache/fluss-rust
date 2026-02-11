@@ -325,25 +325,15 @@ mod ffi {
         // Table
         unsafe fn delete_table(table: *mut Table);
         fn new_append_writer(self: &Table) -> Result<*mut AppendWriter>;
-        fn new_log_scanner(self: &Table) -> Result<*mut LogScanner>;
-        fn new_log_scanner_with_projection(
+        fn create_scanner(
             self: &Table,
             column_indices: Vec<usize>,
-        ) -> Result<*mut LogScanner>;
-        fn new_record_batch_log_scanner(self: &Table) -> Result<*mut LogScanner>;
-        fn new_record_batch_log_scanner_with_projection(
-            self: &Table,
-            column_indices: Vec<usize>,
+            batch: bool,
         ) -> Result<*mut LogScanner>;
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
-        fn new_upsert_writer(self: &Table) -> Result<*mut UpsertWriter>;
-        fn new_upsert_writer_with_column_names(
-            self: &Table,
-            column_names: Vec<String>,
-        ) -> Result<*mut UpsertWriter>;
-        fn new_upsert_writer_with_column_indices(
+        fn create_upsert_writer(
             self: &Table,
             column_indices: Vec<usize>,
         ) -> Result<*mut UpsertWriter>;
@@ -919,153 +909,86 @@ unsafe fn delete_table(table: *mut Table) {
 }
 
 impl Table {
-    fn new_append_writer(&self) -> Result<*mut AppendWriter, String> {
-        let _enter = RUNTIME.enter();
-
-        let fluss_table = fcore::client::FlussTable::new(
+    fn fluss_table(&self) -> fcore::client::FlussTable<'_> {
+        fcore::client::FlussTable::new(
             &self.connection,
             self.metadata.clone(),
             self.table_info.clone(),
-        );
+        )
+    }
 
-        let table_append = match fluss_table.new_append() {
-            Ok(a) => a,
-            Err(e) => return Err(format!("Failed to create append: {e}")),
-        };
+    fn resolve_projected_columns(
+        &self,
+        indices: &[usize],
+    ) -> Result<Vec<fcore::metadata::Column>, String> {
+        let all_columns = self.table_info.get_schema().columns();
+        indices
+            .iter()
+            .map(|&i| {
+                all_columns.get(i).cloned().ok_or_else(|| {
+                    format!(
+                        "Invalid column index {i}: schema has {} columns",
+                        all_columns.len()
+                    )
+                })
+            })
+            .collect()
+    }
 
-        let writer = match table_append.create_writer() {
-            Ok(w) => w,
-            Err(e) => return Err(format!("Failed to create writer: {e}")),
-        };
-        let writer = Box::into_raw(Box::new(AppendWriter {
+    fn new_append_writer(&self) -> Result<*mut AppendWriter, String> {
+        let _enter = RUNTIME.enter();
+
+        let table_append = self
+            .fluss_table()
+            .new_append()
+            .map_err(|e| format!("Failed to create append: {e}"))?;
+
+        let writer = table_append
+            .create_writer()
+            .map_err(|e| format!("Failed to create writer: {e}"))?;
+
+        Ok(Box::into_raw(Box::new(AppendWriter {
             inner: writer,
             table_info: self.table_info.clone(),
-        }));
-        Ok(writer)
+        })))
     }
 
-    fn new_log_scanner(&self) -> Result<*mut LogScanner, String> {
-        RUNTIME.block_on(async {
-            let fluss_table = fcore::client::FlussTable::new(
-                &self.connection,
-                self.metadata.clone(),
-                self.table_info.clone(),
-            );
-
-            let scanner = fluss_table
-                .new_scan()
-                .create_log_scanner()
-                .map_err(|e| format!("Failed to create log scanner: {e}"))?;
-
-            let scanner_ptr = Box::into_raw(Box::new(LogScanner {
-                inner: Some(scanner),
-                inner_batch: None,
-                projected_columns: self.table_info.get_schema().columns().to_vec(),
-            }));
-
-            Ok(scanner_ptr)
-        })
-    }
-
-    fn new_log_scanner_with_projection(
+    fn create_scanner(
         &self,
         column_indices: Vec<usize>,
+        batch: bool,
     ) -> Result<*mut LogScanner, String> {
         RUNTIME.block_on(async {
-            let fluss_table = fcore::client::FlussTable::new(
-                &self.connection,
-                self.metadata.clone(),
-                self.table_info.clone(),
-            );
+            let fluss_table = self.fluss_table();
+            let scan = fluss_table.new_scan();
 
-            let all_columns = self.table_info.get_schema().columns();
-            let projected_columns: Vec<_> = column_indices
-                .iter()
-                .map(|&i| {
-                    all_columns.get(i).cloned().ok_or_else(|| {
-                        format!(
-                            "Invalid column index {i}: schema has {} columns",
-                            all_columns.len()
-                        )
-                    })
-                })
-                .collect::<Result<_, String>>()?;
+            let (projected_columns, scan) = if column_indices.is_empty() {
+                (self.table_info.get_schema().columns().to_vec(), scan)
+            } else {
+                let cols = self.resolve_projected_columns(&column_indices)?;
+                let scan = scan
+                    .project(&column_indices)
+                    .map_err(|e| format!("Failed to project columns: {e}"))?;
+                (cols, scan)
+            };
 
-            let log_scanner = fluss_table
-                .new_scan()
-                .project(&column_indices)
-                .map_err(|e| format!("Failed to project columns: {e}"))?
-                .create_log_scanner()
-                .map_err(|e| format!("Failed to create log scanner: {e}"))?;
+            let (inner, inner_batch) = if batch {
+                let batch_scanner = scan
+                    .create_record_batch_log_scanner()
+                    .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
+                (None, Some(batch_scanner))
+            } else {
+                let log_scanner = scan
+                    .create_log_scanner()
+                    .map_err(|e| format!("Failed to create log scanner: {e}"))?;
+                (Some(log_scanner), None)
+            };
 
-            let scanner = Box::into_raw(Box::new(LogScanner {
-                inner: Some(log_scanner),
-                inner_batch: None,
+            Ok(Box::into_raw(Box::new(LogScanner {
+                inner,
+                inner_batch,
                 projected_columns,
-            }));
-            Ok(scanner)
-        })
-    }
-
-    fn new_record_batch_log_scanner(&self) -> Result<*mut LogScanner, String> {
-        RUNTIME.block_on(async {
-            let fluss_table = fcore::client::FlussTable::new(
-                &self.connection,
-                self.metadata.clone(),
-                self.table_info.clone(),
-            );
-
-            let batch_scanner = fluss_table
-                .new_scan()
-                .create_record_batch_log_scanner()
-                .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
-
-            let scanner = Box::into_raw(Box::new(LogScanner {
-                inner: None,
-                inner_batch: Some(batch_scanner),
-                projected_columns: self.table_info.get_schema().columns().to_vec(),
-            }));
-            Ok(scanner)
-        })
-    }
-
-    fn new_record_batch_log_scanner_with_projection(
-        &self,
-        column_indices: Vec<usize>,
-    ) -> Result<*mut LogScanner, String> {
-        RUNTIME.block_on(async {
-            let fluss_table = fcore::client::FlussTable::new(
-                &self.connection,
-                self.metadata.clone(),
-                self.table_info.clone(),
-            );
-
-            let all_columns = self.table_info.get_schema().columns();
-            let projected_columns: Vec<_> = column_indices
-                .iter()
-                .map(|&i| {
-                    all_columns.get(i).cloned().ok_or_else(|| {
-                        format!(
-                            "Invalid column index {i}: schema has {} columns",
-                            all_columns.len()
-                        )
-                    })
-                })
-                .collect::<Result<_, String>>()?;
-
-            let batch_scanner = fluss_table
-                .new_scan()
-                .project(&column_indices)
-                .map_err(|e| format!("Failed to project columns: {e}"))?
-                .create_record_batch_log_scanner()
-                .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
-
-            let scanner = Box::into_raw(Box::new(LogScanner {
-                inner: None,
-                inner_batch: Some(batch_scanner),
-                projected_columns,
-            }));
-            Ok(scanner)
+            })))
         })
     }
 
@@ -1084,79 +1007,24 @@ impl Table {
         self.has_pk
     }
 
-    fn new_upsert_writer(&self) -> Result<*mut UpsertWriter, String> {
-        let _enter = RUNTIME.enter();
-
-        let fluss_table = fcore::client::FlussTable::new(
-            &self.connection,
-            self.metadata.clone(),
-            self.table_info.clone(),
-        );
-
-        let table_upsert = fluss_table
-            .new_upsert()
-            .map_err(|e| format!("Failed to create upsert: {e}"))?;
-
-        let writer = table_upsert
-            .create_writer()
-            .map_err(|e| format!("Failed to create upsert writer: {e}"))?;
-
-        Ok(Box::into_raw(Box::new(UpsertWriter {
-            inner: writer,
-            table_info: self.table_info.clone(),
-        })))
-    }
-
-    fn new_upsert_writer_with_column_names(
-        &self,
-        column_names: Vec<String>,
-    ) -> Result<*mut UpsertWriter, String> {
-        let _enter = RUNTIME.enter();
-
-        let fluss_table = fcore::client::FlussTable::new(
-            &self.connection,
-            self.metadata.clone(),
-            self.table_info.clone(),
-        );
-
-        let table_upsert = fluss_table
-            .new_upsert()
-            .map_err(|e| format!("Failed to create upsert: {e}"))?;
-
-        let col_refs: Vec<&str> = column_names.iter().map(|s| s.as_str()).collect();
-        let table_upsert = table_upsert
-            .partial_update_with_column_names(&col_refs)
-            .map_err(|e| format!("Failed to set partial update columns: {e}"))?;
-
-        let writer = table_upsert
-            .create_writer()
-            .map_err(|e| format!("Failed to create upsert writer: {e}"))?;
-
-        Ok(Box::into_raw(Box::new(UpsertWriter {
-            inner: writer,
-            table_info: self.table_info.clone(),
-        })))
-    }
-
-    fn new_upsert_writer_with_column_indices(
+    fn create_upsert_writer(
         &self,
         column_indices: Vec<usize>,
     ) -> Result<*mut UpsertWriter, String> {
         let _enter = RUNTIME.enter();
 
-        let fluss_table = fcore::client::FlussTable::new(
-            &self.connection,
-            self.metadata.clone(),
-            self.table_info.clone(),
-        );
-
-        let table_upsert = fluss_table
+        let table_upsert = self
+            .fluss_table()
             .new_upsert()
             .map_err(|e| format!("Failed to create upsert: {e}"))?;
 
-        let table_upsert = table_upsert
-            .partial_update(Some(column_indices))
-            .map_err(|e| format!("Failed to set partial update columns: {e}"))?;
+        let table_upsert = if column_indices.is_empty() {
+            table_upsert
+        } else {
+            table_upsert
+                .partial_update(Some(column_indices))
+                .map_err(|e| format!("Failed to set partial update columns: {e}"))?
+        };
 
         let writer = table_upsert
             .create_writer()
@@ -1171,13 +1039,8 @@ impl Table {
     fn new_lookuper(&self) -> Result<*mut Lookuper, String> {
         let _enter = RUNTIME.enter();
 
-        let fluss_table = fcore::client::FlussTable::new(
-            &self.connection,
-            self.metadata.clone(),
-            self.table_info.clone(),
-        );
-
-        let table_lookup = fluss_table
+        let table_lookup = self
+            .fluss_table()
             .new_lookup()
             .map_err(|e| format!("Failed to create lookup: {e}"))?;
 
