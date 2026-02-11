@@ -123,6 +123,18 @@ inline ffi::FfiTablePath to_ffi_table_path(const TablePath& path) {
     return ffi_path;
 }
 
+inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
+    ffi::FfiConfig ffi_config;
+    ffi_config.bootstrap_server = rust::String(config.bootstrap_server);
+    ffi_config.request_max_size = config.request_max_size;
+    ffi_config.writer_acks = rust::String(config.writer_acks);
+    ffi_config.writer_retries = config.writer_retries;
+    ffi_config.writer_batch_size = config.writer_batch_size;
+    ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
+    ffi_config.scanner_remote_log_download_threads = config.scanner_remote_log_download_threads;
+    return ffi_config;
+}
+
 inline ffi::FfiColumn to_ffi_column(const Column& col) {
     ffi::FfiColumn ffi_col;
     ffi_col.name = rust::String(col.name);

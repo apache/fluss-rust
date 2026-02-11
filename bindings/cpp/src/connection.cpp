@@ -46,9 +46,10 @@ Connection& Connection::operator=(Connection&& other) noexcept {
     return *this;
 }
 
-Result Connection::Connect(const std::string& bootstrap_server, Connection& out) {
+Result Connection::Create(const Configuration& config, Connection& out) {
     try {
-        out.conn_ = ffi::new_connection(bootstrap_server);
+        auto ffi_config = utils::to_ffi_config(config);
+        out.conn_ = ffi::new_connection(ffi_config);
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_error(1, e.what());

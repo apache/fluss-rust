@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -809,6 +810,23 @@ class TableUpsert;
 class TableLookup;
 class TableScan;
 
+struct Configuration {
+    // Coordinator server address
+    std::string bootstrap_server{"127.0.0.1:9123"};
+    // Max request size in bytes (10 MB)
+    int32_t request_max_size{10 * 1024 * 1024};
+    // Writer acknowledgment mode: "all", "0", "1", or "-1"
+    std::string writer_acks{"all"};
+    // Max number of writer retries
+    int32_t writer_retries{std::numeric_limits<int32_t>::max()};
+    // Writer batch size in bytes (2 MB)
+    int32_t writer_batch_size{2 * 1024 * 1024};
+    // Number of remote log batches to prefetch during scanning
+    size_t scanner_remote_log_prefetch_num{4};
+    // Number of threads for downloading remote log data
+    size_t scanner_remote_log_download_threads{3};
+};
+
 class Connection {
    public:
     Connection() noexcept;
@@ -819,7 +837,7 @@ class Connection {
     Connection(Connection&& other) noexcept;
     Connection& operator=(Connection&& other) noexcept;
 
-    static Result Connect(const std::string& bootstrap_server, Connection& out);
+    static Result Create(const Configuration& config, Connection& out);
 
     bool Available() const;
 

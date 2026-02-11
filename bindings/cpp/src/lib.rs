@@ -37,6 +37,16 @@ mod ffi {
         value: String,
     }
 
+    struct FfiConfig {
+        bootstrap_server: String,
+        request_max_size: i32,
+        writer_acks: String,
+        writer_retries: i32,
+        writer_batch_size: i32,
+        scanner_remote_log_prefetch_num: usize,
+        scanner_remote_log_download_threads: usize,
+    }
+
     struct FfiResult {
         error_code: i32,
         error_message: String,
@@ -252,7 +262,7 @@ mod ffi {
         type Lookuper;
 
         // Connection
-        fn new_connection(bootstrap_server: &str) -> Result<*mut Connection>;
+        fn new_connection(config: &FfiConfig) -> Result<*mut Connection>;
         unsafe fn delete_connection(conn: *mut Connection);
         fn get_admin(self: &Connection) -> Result<*mut Admin>;
         fn get_table(self: &Connection, table_path: &FfiTablePath) -> Result<*mut Table>;
@@ -442,10 +452,15 @@ fn err_result(code: i32, msg: String) -> ffi::FfiResult {
 }
 
 // Connection implementation
-fn new_connection(bootstrap_server: &str) -> Result<*mut Connection, String> {
+fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
     let config = fluss::config::Config {
-        bootstrap_server: bootstrap_server.to_string(),
-        ..Default::default()
+        bootstrap_server: config.bootstrap_server.to_string(),
+        request_max_size: config.request_max_size,
+        writer_acks: config.writer_acks.to_string(),
+        writer_retries: config.writer_retries,
+        writer_batch_size: config.writer_batch_size,
+        scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
+        scanner_remote_log_download_threads: config.scanner_remote_log_download_threads,
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config).await });
