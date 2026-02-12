@@ -7,7 +7,7 @@ The Python client uses PyArrow types for schema definitions:
 
 | PyArrow Type | Fluss Type | Python Type |
 |---|---|---|
-| `pa.boolean()` | Boolean | `bool` |
+| `pa.bool_()` | Boolean | `bool` |
 | `pa.int8()` / `int16()` / `int32()` / `int64()` | TinyInt / SmallInt / Int / BigInt | `int` |
 | `pa.float32()` / `float64()` | Float / Double | `float` |
 | `pa.string()` | String | `str` |

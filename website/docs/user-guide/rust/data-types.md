@@ -44,3 +44,14 @@ let ts_ltz = TimestampLtz::new(1704067200000);
 // Decimal: from an unscaled long value with precision and scale
 let decimal = Decimal::from_unscaled_long(12345, 10, 2)?; // represents 123.45
 ```
+
+## Creating Rows from Data
+
+`GenericRow::from_data` accepts a `Vec<Datum>`. Because multiple crates implement `From<&str>`, Rust cannot infer the target type from `.into()` alone. Annotate the vector type explicitly:
+
+```rust
+use fluss::row::{Datum, GenericRow};
+
+let data: Vec<Datum> = vec![1i32.into(), "hello".into()];
+let row = GenericRow::from_data(data);
+```

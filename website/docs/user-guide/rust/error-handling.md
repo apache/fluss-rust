@@ -27,11 +27,11 @@ match result {
     Ok(val) => {
         // handle success
     }
-    Err(Error::InvalidTableError { message }) => {
-        eprintln!("Invalid table: {}", message);
-    }
-    Err(Error::RpcError { message, source }) => {
+    Err(Error::RpcError { message, .. }) => {
         eprintln!("RPC failure: {}", message);
+    }
+    Err(Error::UnsupportedOperation { message }) => {
+        eprintln!("Unsupported: {}", message);
     }
     Err(Error::FlussAPIError { api_error }) => {
         eprintln!("Server error: {}", api_error);
@@ -49,16 +49,31 @@ match result {
 | `UnexpectedError` | General unexpected errors with a message and optional source |
 | `IoUnexpectedError` | I/O errors (network, file system) |
 | `RemoteStorageUnexpectedError` | Remote storage errors (OpenDAL backend failures) |
-| `InvalidTableError` | Invalid table configuration or table not found |
 | `RpcError` | RPC communication failures (connection refused, timeout) |
 | `RowConvertError` | Row conversion failures (type mismatch, invalid data) |
 | `ArrowError` | Arrow data handling errors (schema mismatch, encoding) |
 | `IllegalArgument` | Invalid arguments passed to an API method |
-| `InvalidPartition` | Invalid partition configuration |
-| `PartitionNotExist` | Partition does not exist |
 | `UnsupportedOperation` | Operation not supported on the table type |
-| `LeaderNotAvailable` | Leader not available for the requested bucket |
 | `FlussAPIError` | Server-side API errors returned by the Fluss cluster |
+
+Server side errors are represented as `FlussAPIError` with a specific error code. Use the `api_error()` helper to match them ergonomically:
+
+```rust
+use fluss::error::FlussError;
+
+match result {
+    Err(ref e) if e.api_error() == Some(FlussError::InvalidTableException) => {
+        eprintln!("Invalid table: {}", e);
+    }
+    Err(ref e) if e.api_error() == Some(FlussError::PartitionNotExists) => {
+        eprintln!("Partition does not exist: {}", e);
+    }
+    Err(ref e) if e.api_error() == Some(FlussError::LeaderNotAvailableException) => {
+        eprintln!("Leader not available: {}", e);
+    }
+    _ => {}
+}
+```
 
 ## Common Error Scenarios
 
@@ -81,10 +96,12 @@ match result {
 The table does not exist or has been dropped.
 
 ```rust
+use fluss::error::FlussError;
+
 let result = conn.get_table(&table_path).await;
 match result {
-    Err(Error::InvalidTableError { message }) => {
-        eprintln!("Table not found: {}", message);
+    Err(ref e) if e.api_error() == Some(FlussError::TableNotExist) => {
+        eprintln!("Table not found: {}", e);
     }
     _ => {}
 }
@@ -95,10 +112,12 @@ match result {
 The partition does not exist on a partitioned table.
 
 ```rust
+use fluss::error::FlussError;
+
 let result = admin.drop_partition(&table_path, &spec, false).await;
 match result {
-    Err(Error::PartitionNotExist { .. }) => {
-        eprintln!("Partition does not exist");
+    Err(ref e) if e.api_error() == Some(FlussError::PartitionNotExists) => {
+        eprintln!("Partition does not exist: {}", e);
     }
     _ => {}
 }

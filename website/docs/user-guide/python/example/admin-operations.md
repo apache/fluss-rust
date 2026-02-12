@@ -32,7 +32,7 @@ schema = fluss.Schema(pa.schema([
 table_path = fluss.TablePath("my_database", "my_table")
 await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=True)
 
-table_info = await admin.get_table(table_path)
+table_info = await admin.get_table_info(table_path)
 tables = await admin.list_tables("my_database")
 await admin.drop_table(table_path, ignore_if_not_exists=True)
 ```

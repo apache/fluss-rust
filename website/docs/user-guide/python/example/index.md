@@ -13,7 +13,7 @@ import fluss
 async def main():
     # Connect
     config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
-    conn = await fluss.FlussConnection.connect(config)
+    conn = await fluss.FlussConnection.create(config)
     admin = await conn.get_admin()
 
     # Create a log table
@@ -27,14 +27,14 @@ async def main():
 
     # Write
     table = await conn.get_table(table_path)
-    writer = await table.new_append_writer()
+    writer = table.new_append().create_writer()
     writer.append({"id": 1, "name": "Alice", "score": 95.5})
     writer.append({"id": 2, "name": "Bob", "score": 87.0})
     await writer.flush()
 
     # Read
-    num_buckets = (await admin.get_table(table_path)).num_buckets
-    scanner = await table.new_scan().create_batch_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
     print(scanner.to_pandas())
 

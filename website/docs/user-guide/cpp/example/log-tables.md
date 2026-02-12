@@ -77,7 +77,7 @@ check("subscribe_batch", scanner.Subscribe(subscriptions));
 #include <arrow/record_batch.h>
 
 fluss::LogScanner arrow_scanner;
-check("new_scanner", table.NewScan().CreateRecordBatchScanner(arrow_scanner));
+check("new_scanner", table.NewScan().CreateRecordBatchLogScanner(arrow_scanner));
 
 for (int b = 0; b < info.num_buckets; ++b) {
     check("subscribe", arrow_scanner.Subscribe(b, 0));
@@ -113,5 +113,5 @@ check("new_scanner",
 // Arrow RecordBatch with projection
 fluss::LogScanner projected_arrow_scanner;
 check("new_scanner",
-      table.NewScan().ProjectByIndex({0, 2}).CreateRecordBatchScanner(projected_arrow_scanner));
+      table.NewScan().ProjectByIndex({0, 2}).CreateRecordBatchLogScanner(projected_arrow_scanner));
 ```

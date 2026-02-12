@@ -13,7 +13,7 @@ let admin = conn.get_admin().await?;
 
 ```rust
 // Create database
-admin.create_database("my_database", true, None).await?;
+admin.create_database("my_database", None, true).await?;
 
 // List all databases
 let databases = admin.list_databases().await?;
@@ -50,7 +50,7 @@ let table_path = TablePath::new("my_database", "my_table");
 admin.create_table(&table_path, &table_descriptor, true).await?;
 
 // Get table information
-let table_info = admin.get_table(&table_path).await?;
+let table_info = admin.get_table_info(&table_path).await?;
 println!("Table: {}", table_info);
 
 // List tables in database

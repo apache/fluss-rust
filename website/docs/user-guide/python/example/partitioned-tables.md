@@ -37,7 +37,7 @@ Same as non-partitioned tables - include partition column values in each row. **
 
 ```python
 table = await conn.get_table(table_path)
-writer = await table.new_append_writer()
+writer = table.new_append().create_writer()
 writer.append({"id": 1, "region": "US", "value": 100})
 writer.append({"id": 2, "region": "EU", "value": 200})
 await writer.flush()
@@ -48,7 +48,7 @@ await writer.flush()
 Use `subscribe_partition()` or `subscribe_partition_buckets()` instead of `subscribe()`:
 
 ```python
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 
 # Subscribe to individual partitions
 for p in partition_infos:
@@ -86,11 +86,11 @@ await admin.create_table(
 await admin.create_partition(table_path, {"region": "US"}, ignore_if_exists=True)
 
 table = await conn.get_table(table_path)
-writer = table.new_upsert()
+writer = table.new_upsert().create_writer()
 writer.upsert({"user_id": 1, "region": "US", "score": 1234})
 await writer.flush()
 
 # Lookup includes partition columns
-lookuper = table.new_lookup()
+lookuper = table.new_lookup().create_lookuper()
 result = await lookuper.lookup({"user_id": 1, "region": "US"})
 ```

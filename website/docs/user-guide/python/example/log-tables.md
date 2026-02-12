@@ -28,7 +28,7 @@ Write methods like `append()` and `write_arrow_batch()` return a `WriteResultHan
 
 ```python
 table = await conn.get_table(table_path)
-writer = await table.new_append_writer()
+writer = table.new_append().create_writer()
 
 # Fire-and-forget: queue writes, flush at the end
 writer.append({"id": 1, "name": "Alice", "score": 95.5})
@@ -49,7 +49,7 @@ await writer.flush()
 ## Reading
 
 There are two scanner types:
-- **Batch scanner** (`create_batch_scanner()`) — returns Arrow Tables or DataFrames, best for analytics
+- **Batch scanner** (`create_record_batch_log_scanner()`) — returns Arrow Tables or DataFrames, best for analytics
 - **Record scanner** (`create_log_scanner()`) — returns individual records with metadata (offset, timestamp, change type), best for streaming
 
 And two reading modes:
@@ -59,9 +59,9 @@ And two reading modes:
 ### Batch Read (One-Shot)
 
 ```python
-num_buckets = (await admin.get_table(table_path)).num_buckets
+num_buckets = (await admin.get_table_info(table_path)).num_buckets
 
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
 # Reads everything up to current latest offset, then returns
@@ -75,7 +75,7 @@ Use `poll_arrow()` or `poll()` in a loop for streaming consumption:
 
 ```python
 # Batch scanner: poll as Arrow Tables
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe(bucket_id=0, start_offset=fluss.EARLIEST_OFFSET)
 
 while True:
@@ -97,14 +97,14 @@ while True:
 To only consume new records (skip existing data), use `LATEST_OFFSET`:
 
 ```python
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe(bucket_id=0, start_offset=fluss.LATEST_OFFSET)
 ```
 
 ## Column Projection
 
 ```python
-scanner = await table.new_scan().project([0, 2]).create_batch_scanner()
+scanner = await table.new_scan().project([0, 2]).create_record_batch_log_scanner()
 # or by name
-scanner = await table.new_scan().project_by_name(["id", "score"]).create_batch_scanner()
+scanner = await table.new_scan().project_by_name(["id", "score"]).create_record_batch_log_scanner()
 ```

@@ -17,13 +17,13 @@ Complete API reference for the Fluss C++ client.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `bootstrap_server` | `std::string` | `"127.0.0.1:9123"` | Coordinator server address |
-| `request_max_size` | `int32_t` | `10485760` (10 MB) | Maximum request size in bytes |
+| `bootstrap_servers` | `std::string` | `"127.0.0.1:9123"` | Coordinator server address |
+| `writer_request_max_size` | `int32_t` | `10485760` (10 MB) | Maximum request size in bytes |
 | `writer_acks` | `std::string` | `"all"` | Acknowledgment setting (`"all"`, `"0"`, `"1"`, or `"-1"`) |
 | `writer_retries` | `int32_t` | `INT32_MAX` | Number of retries on failure |
 | `writer_batch_size` | `int32_t` | `2097152` (2 MB) | Batch size for writes in bytes |
 | `scanner_remote_log_prefetch_num` | `size_t` | `4` | Number of remote log segments to prefetch |
-| `scanner_remote_log_download_threads` | `size_t` | `3` | Number of threads for remote log downloads |
+| `remote_file_download_thread_num` | `size_t` | `3` | Number of threads for remote log downloads |
 
 ## `Connection`
 
@@ -52,7 +52,7 @@ Complete API reference for the Fluss C++ client.
 |---|---|
 | `CreateTable(const TablePath& path, const TableDescriptor& descriptor, bool ignore_if_exists) -> Result` | Create a table |
 | `DropTable(const TablePath& path, bool ignore_if_not_exists) -> Result` | Drop a table |
-| `GetTable(const TablePath& path, TableInfo& out) -> Result` | Get table metadata |
+| `GetTableInfo(const TablePath& path, TableInfo& out) -> Result` | Get table metadata |
 | `ListTables(const std::string& database_name, std::vector<std::string>& out) -> Result` | List tables in a database |
 | `TableExists(const TablePath& path, bool& out) -> Result` | Check if a table exists |
 
@@ -117,7 +117,7 @@ Complete API reference for the Fluss C++ client.
 | `ProjectByIndex(std::vector<size_t> column_indices) -> TableScan&` | Project columns by index |
 | `ProjectByName(std::vector<std::string> column_names) -> TableScan&` | Project columns by name |
 | `CreateLogScanner(LogScanner& out) -> Result` | Create a record-based log scanner |
-| `CreateRecordBatchScanner(LogScanner& out) -> Result` | Create an Arrow RecordBatch-based log scanner |
+| `CreateRecordBatchLogScanner(LogScanner& out) -> Result` | Create an Arrow RecordBatch-based log scanner |
 
 ## `AppendWriter`
 

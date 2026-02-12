@@ -7,13 +7,13 @@ sidebar_position: 2
 import fluss
 
 config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
-conn = await fluss.FlussConnection.connect(config)
+conn = await fluss.FlussConnection.create(config)
 ```
 
 The connection also supports context managers:
 
 ```python
-with await fluss.FlussConnection.connect(config) as conn:
+with await fluss.FlussConnection.create(config) as conn:
     ...
 ```
 

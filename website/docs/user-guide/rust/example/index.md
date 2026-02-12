@@ -17,7 +17,7 @@ use std::time::Duration;
 async fn main() -> Result<()> {
     // Connect
     let mut config = Config::default();
-    config.bootstrap_server = "127.0.0.1:9123".to_string();
+    config.bootstrap_servers = "127.0.0.1:9123".to_string();
     let conn = FlussConnection::new(config).await?;
     let admin = conn.get_admin().await?;
 

@@ -38,7 +38,7 @@ static void check(const char* step, const fluss::Result& r) {
 
 // Usage
 fluss::Configuration config;
-config.bootstrap_server = "127.0.0.1:9123";
+config.bootstrap_servers = "127.0.0.1:9123";
 check("create", fluss::Connection::Create(config, conn));
 check("create_table", admin.CreateTable(table_path, descriptor, true));
 check("flush", writer.Flush());
@@ -55,7 +55,7 @@ if (!conn.Available()) {
 }
 
 fluss::Configuration config;
-config.bootstrap_server = "127.0.0.1:9123";
+config.bootstrap_servers = "127.0.0.1:9123";
 fluss::Result result = fluss::Connection::Create(config, conn);
 if (result.Ok() && conn.Available()) {
     // Connection is ready to use
@@ -70,7 +70,7 @@ The cluster is not running or the address is incorrect:
 
 ```cpp
 fluss::Configuration config;
-config.bootstrap_server = "127.0.0.1:9123";
+config.bootstrap_servers = "127.0.0.1:9123";
 fluss::Connection conn;
 fluss::Result result = fluss::Connection::Create(config, conn);
 if (!result.Ok()) {

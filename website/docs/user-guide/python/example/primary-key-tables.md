@@ -30,7 +30,7 @@ await admin.create_table(table_path, fluss.TableDescriptor(schema, bucket_count=
 table = await conn.get_table(table_path)
 
 # Upsert (fire-and-forget, flush at the end)
-writer = table.new_upsert()
+writer = table.new_upsert().create_writer()
 writer.upsert({"id": 1, "name": "Alice", "age": 25})
 writer.upsert({"id": 2, "name": "Bob", "age": 30})
 await writer.flush()
@@ -44,7 +44,7 @@ handle = writer.delete({"id": 2})
 await handle.wait()
 
 # Lookup
-lookuper = table.new_lookup()
+lookuper = table.new_lookup().create_lookuper()
 result = await lookuper.lookup({"id": 1})
 if result:
     print(f"Found: name={result['name']}, age={result['age']}")
@@ -55,7 +55,7 @@ if result:
 Update specific columns while preserving others:
 
 ```python
-partial_writer = table.new_upsert(columns=["id", "age"])
+partial_writer = table.new_upsert().partial_update_by_name(["id", "age"]).create_writer()
 partial_writer.upsert({"id": 1, "age": 27})  # only updates age
 await partial_writer.flush()
 ```

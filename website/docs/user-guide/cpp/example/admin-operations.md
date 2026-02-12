@@ -33,7 +33,7 @@ check("create_table", admin.CreateTable(table_path, descriptor, true));
 
 // Get table information
 fluss::TableInfo table_info;
-check("get_table", admin.GetTable(table_path, table_info));
+check("get_table", admin.GetTableInfo(table_path, table_info));
 std::cout << "Table ID: " << table_info.table_id << std::endl;
 std::cout << "Number of buckets: " << table_info.num_buckets << std::endl;
 std::cout << "Has primary key: " << table_info.has_primary_key << std::endl;

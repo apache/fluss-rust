@@ -9,13 +9,13 @@ Complete API reference for the Fluss Rust client.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `bootstrap_server` | `String` | `"127.0.0.1:9123"` | Coordinator server address |
-| `request_max_size` | `i32` | `10485760` (10 MB) | Maximum request size in bytes |
+| `bootstrap_servers` | `String` | `"127.0.0.1:9123"` | Coordinator server address |
+| `writer_request_max_size` | `i32` | `10485760` (10 MB) | Maximum request size in bytes |
 | `writer_acks` | `String` | `"all"` | Acknowledgment setting (`"all"` waits for all replicas) |
 | `writer_retries` | `i32` | `i32::MAX` | Number of retries on failure |
 | `writer_batch_size` | `i32` | `2097152` (2 MB) | Batch size for writes in bytes |
 | `scanner_remote_log_prefetch_num` | `usize` | `4` | Number of remote log segments to prefetch |
-| `scanner_remote_log_download_threads` | `usize` | `3` | Number of threads for remote log downloads |
+| `remote_file_download_thread_num` | `usize` | `3` | Number of threads for remote log downloads |
 
 ## `FlussConnection`
 
@@ -32,7 +32,7 @@ Complete API reference for the Fluss Rust client.
 
 | Method | Description |
 |---|---|
-| `async fn create_database(&self, name: &str, ignore_if_exists: bool, descriptor: Option<&DatabaseDescriptor>) -> Result<()>` | Create a database |
+| `async fn create_database(&self, name: &str, descriptor: Option<&DatabaseDescriptor>, ignore_if_exists: bool) -> Result<()>` | Create a database |
 | `async fn drop_database(&self, name: &str, ignore_if_not_exists: bool, cascade: bool) -> Result<()>` | Drop a database |
 | `async fn list_databases(&self) -> Result<Vec<String>>` | List all databases |
 | `async fn database_exists(&self, name: &str) -> Result<bool>` | Check if a database exists |
@@ -44,7 +44,7 @@ Complete API reference for the Fluss Rust client.
 |---|---|
 | `async fn create_table(&self, table_path: &TablePath, descriptor: &TableDescriptor, ignore_if_exists: bool) -> Result<()>` | Create a table |
 | `async fn drop_table(&self, table_path: &TablePath, ignore_if_not_exists: bool) -> Result<()>` | Drop a table |
-| `async fn get_table(&self, table_path: &TablePath) -> Result<TableInfo>` | Get table metadata |
+| `async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo>` | Get table metadata |
 | `async fn list_tables(&self, database_name: &str) -> Result<Vec<String>>` | List tables in a database |
 | `async fn table_exists(&self, table_path: &TablePath) -> Result<bool>` | Check if a table exists |
 
@@ -357,7 +357,7 @@ Implements the `InternalRow` trait (see below).
 | `fn get_float(&self, idx: usize) -> f32` | Get float value |
 | `fn get_double(&self, idx: usize) -> f64` | Get double value |
 | `fn get_string(&self, idx: usize) -> &str` | Get string value |
-| `fn get_decimal(&self, idx: usize, precision: u32, scale: u32) -> Decimal` | Get decimal value |
+| `fn get_decimal(&self, idx: usize, precision: usize, scale: usize) -> Decimal` | Get decimal value |
 | `fn get_date(&self, idx: usize) -> Date` | Get date value |
 | `fn get_time(&self, idx: usize) -> Time` | Get time value |
 | `fn get_timestamp_ntz(&self, idx: usize, precision: u32) -> TimestampNtz` | Get timestamp value |
