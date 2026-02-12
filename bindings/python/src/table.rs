@@ -223,11 +223,14 @@ impl TableScan {
     /// Create a batch-based log scanner.
     ///
     /// Use this scanner with `poll_arrow()` to get Arrow Tables, or with
-    /// `poll_batches()` to get individual batches with metadata.
+    /// `poll_record_batch()` to get individual batches with metadata.
     ///
     /// Returns:
-    ///     LogScanner for batch-based scanning with `poll_arrow()` or `poll_batches()`
-    pub fn create_batch_scanner<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    ///     LogScanner for batch-based scanning with `poll_arrow()` or `poll_record_batch()`
+    pub fn create_record_batch_log_scanner<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         self.create_scanner_internal(py, ScannerType::Batch)
     }
 
@@ -260,22 +263,22 @@ impl TableScan {
             let admin = conn
                 .get_admin()
                 .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             let (projected_schema, projected_row_type) =
                 calculate_projected_types(&table_info, projection_indices)?;
 
             let scanner_kind = match scanner_type {
                 ScannerType::Record => {
-                    let s = table_scan.create_log_scanner().map_err(|e| {
-                        FlussError::new_err(format!("Failed to create log scanner: {e}"))
-                    })?;
+                    let s = table_scan
+                        .create_log_scanner()
+                        .map_err(|e| FlussError::from_core_error(&e))?;
                     ScannerKind::Record(s)
                 }
                 ScannerType::Batch => {
-                    let s = table_scan.create_record_batch_log_scanner().map_err(|e| {
-                        FlussError::new_err(format!("Failed to create batch scanner: {e}"))
-                    })?;
+                    let s = table_scan
+                        .create_record_batch_log_scanner()
+                        .map_err(|e| FlussError::from_core_error(&e))?;
                     ScannerKind::Batch(s)
                 }
             };
@@ -332,12 +335,12 @@ fn apply_projection(
     match projection {
         Some(ProjectionType::Indices(indices)) => table_scan
             .project(&indices)
-            .map_err(|e| FlussError::new_err(format!("Failed to project columns: {e}"))),
+            .map_err(|e| FlussError::from_core_error(&e)),
         Some(ProjectionType::Names(names)) => {
             let column_name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
             table_scan
                 .project_by_name(&column_name_refs)
-                .map_err(|e| FlussError::new_err(format!("Failed to project columns: {e}")))
+                .map_err(|e| FlussError::from_core_error(&e))
         }
         None => Ok(table_scan),
     }
@@ -348,8 +351,8 @@ fn calculate_projected_types(
     table_info: &fcore::metadata::TableInfo,
     projection_indices: Option<Vec<usize>>,
 ) -> PyResult<(SchemaRef, fcore::metadata::RowType)> {
-    let full_schema = to_arrow_schema(table_info.get_row_type())
-        .map_err(|e| FlussError::new_err(format!("Failed to get arrow schema: {e}")))?;
+    let full_schema =
+        to_arrow_schema(table_info.get_row_type()).map_err(|e| FlussError::from_core_error(&e))?;
     let full_row_type = table_info.get_row_type();
 
     match projection_indices {
@@ -388,7 +391,7 @@ impl FlussTable {
     }
 
     /// Create a new append writer for the table
-    fn new_append_writer<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn new_append<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let conn = self.connection.clone();
         let metadata = self.metadata.clone();
         let table_info = self.table_info.clone();
@@ -398,11 +401,11 @@ impl FlussTable {
 
             let table_append = fluss_table
                 .new_append()
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             let rust_writer = table_append
                 .create_writer()
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             let py_writer = AppendWriter::from_core(rust_writer, table_info);
 
@@ -479,7 +482,7 @@ impl FlussTable {
 
         let table_upsert = fluss_table
             .new_upsert()
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         crate::UpsertWriter::new(
             table_upsert,
@@ -553,7 +556,7 @@ impl AppendWriter {
         let result_future = self
             .inner
             .append_arrow_batch(rust_batch)
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
         Ok(WriteResultHandle::new(result_future))
     }
 
@@ -568,7 +571,7 @@ impl AppendWriter {
         let result_future = self
             .inner
             .append(&generic_row)
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
         Ok(WriteResultHandle::new(result_future))
     }
 
@@ -577,7 +580,7 @@ impl AppendWriter {
         // Get the expected Arrow schema from the Fluss table
         let row_type = self.table_info.get_row_type();
         let expected_schema = fcore::record::to_arrow_schema(row_type)
-            .map_err(|e| FlussError::new_err(format!("Failed to get table schema: {e}")))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         // Convert Arrow schema to PyArrow schema
         let py_schema = expected_schema
@@ -609,7 +612,7 @@ impl AppendWriter {
             inner
                 .flush()
                 .await
-                .map_err(|e| FlussError::new_err(e.to_string()))
+                .map_err(|e| FlussError::from_core_error(&e))
         })
     }
 
@@ -1466,7 +1469,7 @@ impl ScannerKind {
         match self {
             Self::Batch(s) => Ok(s),
             Self::Record(_) => Err(FlussError::new_err(
-                "This method requires a batch-based scanner. Use new_scan().create_batch_scanner().",
+                "This method requires a batch-based scanner. Use new_scan().create_record_batch_log_scanner().",
             )),
         }
     }
@@ -1487,7 +1490,7 @@ macro_rules! with_scanner {
 ///
 /// This scanner supports two modes:
 /// - Record-based scanning via `poll()` - returns individual records with metadata
-/// - Batch-based scanning via `poll_arrow()` / `poll_batches()` - returns Arrow batches
+/// - Batch-based scanning via `poll_arrow()` / `poll_record_batch()` - returns Arrow batches
 #[pyclass]
 pub struct LogScanner {
     scanner: ScannerKind,
@@ -1512,7 +1515,7 @@ impl LogScanner {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
                 with_scanner!(&self.scanner, subscribe(bucket_id, start_offset))
-                    .map_err(|e| FlussError::new_err(e.to_string()))
+                    .map_err(|e| FlussError::from_core_error(&e))
             })
         })
     }
@@ -1525,7 +1528,7 @@ impl LogScanner {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
                 with_scanner!(&self.scanner, subscribe_buckets(&bucket_offsets))
-                    .map_err(|e| FlussError::new_err(e.to_string()))
+                    .map_err(|e| FlussError::from_core_error(&e))
             })
         })
     }
@@ -1549,7 +1552,7 @@ impl LogScanner {
                     &self.scanner,
                     subscribe_partition(partition_id, bucket_id, start_offset)
                 )
-                .map_err(|e| FlussError::new_err(e.to_string()))
+                .map_err(|e| FlussError::from_core_error(&e))
             })
         })
     }
@@ -1569,7 +1572,7 @@ impl LogScanner {
                     &self.scanner,
                     subscribe_partition_buckets(&partition_bucket_offsets)
                 )
-                .map_err(|e| FlussError::new_err(e.to_string()))
+                .map_err(|e| FlussError::from_core_error(&e))
             })
         })
     }
@@ -1586,7 +1589,7 @@ impl LogScanner {
                     &self.scanner,
                     unsubscribe_partition(partition_id, bucket_id)
                 )
-                .map_err(|e| FlussError::new_err(e.to_string()))
+                .map_err(|e| FlussError::from_core_error(&e))
             })
         })
     }
@@ -1616,7 +1619,7 @@ impl LogScanner {
         let timeout = Duration::from_millis(timeout_ms as u64);
         let scan_records = py
             .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         // Convert ScanRecords to Python ScanRecord list
         // Use projected_row_type to handle column projection correctly
@@ -1643,10 +1646,10 @@ impl LogScanner {
     ///     bucket, base_offset, and last_offset metadata.
     ///
     /// Note:
-    ///     - Requires a batch-based scanner (created with new_scan().create_batch_scanner())
+    ///     - Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner())
     ///     - Returns an empty list if no batches are available
     ///     - When timeout expires, returns an empty list (NOT an error)
-    fn poll_batches(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<RecordBatch>> {
+    fn poll_record_batch(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<RecordBatch>> {
         let scanner = self.scanner.as_batch()?;
 
         if timeout_ms < 0 {
@@ -1658,7 +1661,7 @@ impl LogScanner {
         let timeout = Duration::from_millis(timeout_ms as u64);
         let scan_batches = py
             .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         // Convert ScanBatch to RecordBatch with metadata
         let result = scan_batches
@@ -1678,7 +1681,7 @@ impl LogScanner {
     ///     PyArrow Table containing the polled records (batches merged)
     ///
     /// Note:
-    ///     - Requires a batch-based scanner (created with new_scan().create_batch_scanner())
+    ///     - Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner())
     ///     - Returns an empty table (with correct schema) if no records are available
     ///     - When timeout expires, returns an empty table (NOT an error)
     fn poll_arrow(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
@@ -1693,7 +1696,7 @@ impl LogScanner {
         let timeout = Duration::from_millis(timeout_ms as u64);
         let scan_batches = py
             .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         // Convert ScanBatch to Arrow batches
         if scan_batches.is_empty() {
@@ -1809,7 +1812,7 @@ impl LogScanner {
             .detach(|| {
                 TOKIO_RUNTIME.block_on(async { self.admin.list_partition_infos(table_path).await })
             })
-            .map_err(|e| FlussError::new_err(format!("Failed to list partition infos: {e}")))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         // Build and cache the mapping
         let map: HashMap<i64, String> = partition_infos
@@ -1848,7 +1851,7 @@ impl LogScanner {
                             .await
                     })
                 })
-                .map_err(|e| FlussError::new_err(format!("Failed to list offsets: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             // Convert to TableBucket-keyed map
             let table_id = self.table_info.table_id;
@@ -1912,11 +1915,7 @@ impl LogScanner {
                             .await
                     })
                 })
-                .map_err(|e| {
-                    FlussError::new_err(format!(
-                        "Failed to list offsets for partition {partition_name}: {e}"
-                    ))
-                })?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             for (bucket_id, offset) in offsets {
                 if offset > 0 {
@@ -1947,7 +1946,7 @@ impl LogScanner {
                 .detach(|| {
                     TOKIO_RUNTIME.block_on(async { scanner.poll(Duration::from_millis(500)).await })
                 })
-                .map_err(|e| FlussError::new_err(format!("Failed to poll: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             if scan_batches.is_empty() {
                 continue;

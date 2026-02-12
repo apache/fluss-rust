@@ -29,13 +29,13 @@ pub struct FlussConnection {
 impl FlussConnection {
     /// Create a new FlussConnection (async)
     #[staticmethod]
-    fn connect<'py>(py: Python<'py>, config: &Config) -> PyResult<Bound<'py, PyAny>> {
+    fn create<'py>(py: Python<'py>, config: &Config) -> PyResult<Bound<'py, PyAny>> {
         let rust_config = config.get_core_config();
 
         future_into_py(py, async move {
             let connection = fcore::client::FlussConnection::new(rust_config)
                 .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             let py_connection = FlussConnection {
                 inner: Arc::new(connection),
@@ -53,7 +53,7 @@ impl FlussConnection {
             let admin = client
                 .get_admin()
                 .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             let py_admin = FlussAdmin::from_core(admin);
 
@@ -74,7 +74,7 @@ impl FlussConnection {
             let core_table = client
                 .get_table(&core_path)
                 .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             let py_table = FlussTable::new_table(
                 client.clone(),

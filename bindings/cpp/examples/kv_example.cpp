@@ -32,7 +32,7 @@ static void check(const char* step, const fluss::Result& r) {
 int main() {
     // 1) Connect and get Admin
     fluss::Configuration config;
-    config.bootstrap_server = "127.0.0.1:9123";
+    config.bootstrap_servers = "127.0.0.1:9123";
 
     fluss::Connection conn;
     check("create", fluss::Connection::Create(config, conn));
@@ -79,7 +79,7 @@ int main() {
     fluss::UpsertWriter upsert_writer;
     check("new_upsert_writer", kv_table.NewUpsert().CreateWriter(upsert_writer));
 
-    // Fire-and-forget upserts
+    // Fire-and-forget upserts (flush at the end)
     {
         auto row = kv_table.NewRow();
         row.Set("user_id", 1);

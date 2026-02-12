@@ -36,7 +36,7 @@ mod upsert;
 pub use append::{AppendWriter, TableAppend};
 pub use lookup::{LookupResult, Lookuper, TableLookup};
 pub use remote_log::{
-    DEFAULT_SCANNER_REMOTE_LOG_DOWNLOAD_THREADS, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
+    DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
 pub use upsert::{TableUpsert, UpsertWriter};

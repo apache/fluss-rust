@@ -83,7 +83,7 @@ impl FlussAdmin {
             admin
                 .create_database(&name, ignore_if_exists, descriptor.as_ref())
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to create database: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(py.None()))
         })
@@ -113,7 +113,7 @@ impl FlussAdmin {
             admin
                 .drop_database(&name, ignore_if_not_exists, cascade)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to drop database: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(py.None()))
         })
@@ -130,7 +130,7 @@ impl FlussAdmin {
             let names = admin
                 .list_databases()
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to list databases: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| {
                 let py_list = pyo3::types::PyList::empty(py);
@@ -158,9 +158,10 @@ impl FlussAdmin {
         let name = database_name.to_string();
 
         future_into_py(py, async move {
-            let exists = admin.database_exists(&name).await.map_err(|e| {
-                FlussError::new_err(format!("Failed to check database exists: {e}"))
-            })?;
+            let exists = admin
+                .database_exists(&name)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(exists.into_pyobject(py)?.to_owned().into_any().unbind()))
         })
@@ -185,7 +186,7 @@ impl FlussAdmin {
             let info = admin
                 .get_database_info(&name)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to get database info: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Py::new(py, DatabaseInfo::from_core(info)))
         })
@@ -210,7 +211,7 @@ impl FlussAdmin {
             let names = admin
                 .list_tables(&name)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to list tables: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| {
                 let py_list = pyo3::types::PyList::empty(py);
@@ -241,7 +242,7 @@ impl FlussAdmin {
             let exists = admin
                 .table_exists(&core_table_path)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to check table exists: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(exists.into_pyobject(py)?.to_owned().into_any().unbind()))
         })
@@ -272,7 +273,7 @@ impl FlussAdmin {
             admin
                 .drop_partition(&core_table_path, &core_partition_spec, ignore_if_not_exists)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to drop partition: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(py.None()))
         })
@@ -297,14 +298,14 @@ impl FlussAdmin {
             admin
                 .create_table(&core_table_path, &core_descriptor, ignore)
                 .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(py.None()))
         })
     }
 
     /// Get table information
-    pub fn get_table<'py>(
+    pub fn get_table_info<'py>(
         &self,
         py: Python<'py>,
         table_path: &TablePath,
@@ -314,9 +315,9 @@ impl FlussAdmin {
 
         future_into_py(py, async move {
             let core_table_info = admin
-                .get_table(&core_table_path)
+                .get_table_info(&core_table_path)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to get table: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| {
                 let table_info = TableInfo::from_core(core_table_info);
@@ -338,7 +339,7 @@ impl FlussAdmin {
             let core_lake_snapshot = admin
                 .get_latest_lake_snapshot(&core_table_path)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to get lake snapshot: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| {
                 let lake_snapshot = LakeSnapshot::from_core(core_lake_snapshot);

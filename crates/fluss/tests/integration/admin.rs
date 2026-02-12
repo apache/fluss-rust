@@ -69,7 +69,7 @@ mod admin_test {
 
         let db_name = "test_create_database";
 
-        assert_eq!(admin.database_exists(db_name).await.unwrap(), false);
+        assert!(!admin.database_exists(db_name).await.unwrap());
 
         // create database
         admin
@@ -78,7 +78,7 @@ mod admin_test {
             .expect("should create database");
 
         // database should exist
-        assert_eq!(admin.database_exists(db_name).await.unwrap(), true);
+        assert!(admin.database_exists(db_name).await.unwrap());
 
         // get database
         let db_info = admin
@@ -96,7 +96,7 @@ mod admin_test {
             .expect("should drop_database");
 
         // database shouldn't exist now
-        assert_eq!(admin.database_exists(db_name).await.unwrap(), false);
+        assert!(!admin.database_exists(db_name).await.unwrap());
 
         // Note: We don't stop the shared cluster here as it's used by other tests
     }
@@ -115,7 +115,7 @@ mod admin_test {
             .comment("Database for test_create_table")
             .build();
 
-        assert_eq!(admin.database_exists(test_db_name).await.unwrap(), false);
+        assert!(!admin.database_exists(test_db_name).await.unwrap());
         admin
             .create_database(test_db_name, false, Some(&db_descriptor))
             .await
@@ -170,7 +170,7 @@ mod admin_test {
         );
 
         let table_info = admin
-            .get_table(&table_path)
+            .get_table_info(&table_path)
             .await
             .expect("Failed to get table info");
 
@@ -212,7 +212,7 @@ mod admin_test {
             .await
             .expect("Failed to drop table");
         // table shouldn't exist now
-        assert_eq!(admin.table_exists(&table_path).await.unwrap(), false);
+        assert!(!admin.table_exists(&table_path).await.unwrap());
 
         // drop database
         admin
@@ -221,7 +221,7 @@ mod admin_test {
             .expect("Should drop database");
 
         // database shouldn't exist now
-        assert_eq!(admin.database_exists(test_db_name).await.unwrap(), false);
+        assert!(!admin.database_exists(test_db_name).await.unwrap());
     }
 
     #[tokio::test]
@@ -374,7 +374,7 @@ mod admin_test {
 
         let table_path = TablePath::new("fluss", "not_exist");
 
-        let result = admin.get_table(&table_path).await;
+        let result = admin.get_table_info(&table_path).await;
         assert!(result.is_err(), "Expected error but got Ok");
 
         let error = result.unwrap_err();
@@ -392,5 +392,181 @@ mod admin_test {
             }
             other => panic!("Expected FlussAPIError, got {:?}", other),
         }
+    }
+
+    /// Helper to assert that an error is a FlussAPIError with the expected code.
+    fn assert_api_error(error: fluss::error::Error, expected: FlussError) {
+        match error {
+            fluss::error::Error::FlussAPIError { api_error } => {
+                assert_eq!(
+                    api_error.code,
+                    expected.code(),
+                    "Expected error code {} ({:?}), got {}",
+                    expected.code(),
+                    expected,
+                    api_error.code
+                );
+            }
+            other => panic!("Expected FlussAPIError({:?}), got {:?}", expected, other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_database_not_exist() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.unwrap();
+
+        // get_database_info for non-existent database
+        let result = admin.get_database_info("no_such_db").await;
+        assert_api_error(result.unwrap_err(), FlussError::DatabaseNotExist);
+
+        // drop_database without ignore flag
+        let result = admin.drop_database("no_such_db", false, false).await;
+        assert_api_error(result.unwrap_err(), FlussError::DatabaseNotExist);
+
+        // list_tables for non-existent database
+        let result = admin.list_tables("no_such_db").await;
+        assert_api_error(result.unwrap_err(), FlussError::DatabaseNotExist);
+    }
+
+    #[tokio::test]
+    async fn test_error_database_already_exist() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.unwrap();
+
+        let db_name = "test_error_db_already_exist";
+        let descriptor = DatabaseDescriptorBuilder::default().build();
+
+        admin
+            .create_database(db_name, false, Some(&descriptor))
+            .await
+            .unwrap();
+
+        // create same database again without ignore flag
+        let result = admin
+            .create_database(db_name, false, Some(&descriptor))
+            .await;
+        assert_api_error(result.unwrap_err(), FlussError::DatabaseAlreadyExist);
+
+        // with ignore flag should succeed
+        admin
+            .create_database(db_name, true, Some(&descriptor))
+            .await
+            .expect("create_database with ignore_if_exists should succeed");
+
+        // cleanup
+        admin.drop_database(db_name, true, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_error_table_already_exist() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.unwrap();
+
+        let db_name = "test_error_tbl_already_exist_db";
+        let descriptor = DatabaseDescriptorBuilder::default().build();
+        admin
+            .create_database(db_name, true, Some(&descriptor))
+            .await
+            .unwrap();
+
+        let table_path = TablePath::new(db_name, "my_table");
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .unwrap();
+        let table_descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![])
+            .property("table.replication.factor", "1")
+            .build()
+            .unwrap();
+
+        admin
+            .create_table(&table_path, &table_descriptor, false)
+            .await
+            .unwrap();
+
+        // create same table again without ignore flag
+        let result = admin
+            .create_table(&table_path, &table_descriptor, false)
+            .await;
+        assert_api_error(result.unwrap_err(), FlussError::TableAlreadyExist);
+
+        // with ignore flag should succeed
+        admin
+            .create_table(&table_path, &table_descriptor, true)
+            .await
+            .expect("create_table with ignore_if_exists should succeed");
+
+        // cleanup
+        admin.drop_table(&table_path, true).await.unwrap();
+        admin.drop_database(db_name, true, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_error_table_not_exist() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.unwrap();
+
+        let table_path = TablePath::new("fluss", "no_such_table");
+
+        // drop without ignore flag
+        let result = admin.drop_table(&table_path, false).await;
+        assert_api_error(result.unwrap_err(), FlussError::TableNotExist);
+
+        // drop with ignore flag should succeed
+        admin
+            .drop_table(&table_path, true)
+            .await
+            .expect("drop_table with ignore_if_not_exists should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_error_table_not_partitioned() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.unwrap();
+
+        let db_name = "test_error_not_partitioned_db";
+        let descriptor = DatabaseDescriptorBuilder::default().build();
+        admin
+            .create_database(db_name, true, Some(&descriptor))
+            .await
+            .unwrap();
+
+        let table_path = TablePath::new(db_name, "non_partitioned_table");
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .unwrap();
+        let table_descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .distributed_by(Some(1), vec![])
+            .property("table.replication.factor", "1")
+            .build()
+            .unwrap();
+
+        admin
+            .create_table(&table_path, &table_descriptor, false)
+            .await
+            .unwrap();
+
+        // list_partition_infos on non-partitioned table
+        let result = admin.list_partition_infos(&table_path).await;
+        assert_api_error(
+            result.unwrap_err(),
+            FlussError::TableNotPartitionedException,
+        );
+
+        // cleanup
+        admin.drop_table(&table_path, true).await.unwrap();
+        admin.drop_database(db_name, true, true).await.unwrap();
     }
 }

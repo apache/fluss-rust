@@ -97,15 +97,19 @@ impl FlussAdmin {
         Ok(())
     }
 
-    pub async fn drop_table(&self, table_path: &TablePath, ignore_if_exists: bool) -> Result<()> {
+    pub async fn drop_table(
+        &self,
+        table_path: &TablePath,
+        ignore_if_not_exists: bool,
+    ) -> Result<()> {
         let _response = self
             .admin_gateway
-            .request(DropTableRequest::new(table_path, ignore_if_exists))
+            .request(DropTableRequest::new(table_path, ignore_if_not_exists))
             .await?;
         Ok(())
     }
 
-    pub async fn get_table(&self, table_path: &TablePath) -> Result<TableInfo> {
+    pub async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {
         let response = self
             .admin_gateway
             .request(GetTableRequest::new(table_path))

@@ -812,9 +812,9 @@ class TableScan;
 
 struct Configuration {
     // Coordinator server address
-    std::string bootstrap_server{"127.0.0.1:9123"};
+    std::string bootstrap_servers{"127.0.0.1:9123"};
     // Max request size in bytes (10 MB)
-    int32_t request_max_size{10 * 1024 * 1024};
+    int32_t writer_request_max_size{10 * 1024 * 1024};
     // Writer acknowledgment mode: "all", "0", "1", or "-1"
     std::string writer_acks{"all"};
     // Max number of writer retries
@@ -824,7 +824,7 @@ struct Configuration {
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
-    size_t scanner_remote_log_download_threads{3};
+    size_t remote_file_download_thread_num{3};
 };
 
 class Connection {
@@ -866,7 +866,7 @@ class Admin {
 
     Result DropTable(const TablePath& table_path, bool ignore_if_not_exists = false);
 
-    Result GetTable(const TablePath& table_path, TableInfo& out);
+    Result GetTableInfo(const TablePath& table_path, TableInfo& out);
 
     Result GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
 
@@ -1020,13 +1020,14 @@ class TableScan {
     TableScan& ProjectByName(std::vector<std::string> column_names);
 
     Result CreateLogScanner(LogScanner& out);
-    Result CreateRecordBatchScanner(LogScanner& out);
+    Result CreateRecordBatchLogScanner(LogScanner& out);
 
    private:
     friend class Table;
     explicit TableScan(ffi::Table* table) noexcept;
 
     std::vector<size_t> ResolveNameProjection() const;
+    Result DoCreateScanner(LogScanner& out, bool is_record_batch);
 
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;

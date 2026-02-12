@@ -32,15 +32,15 @@ async def main():
     config_spec = {
         "bootstrap.servers": "127.0.0.1:9123",
         # Add other configuration options as needed
-        "request.max.size": "10485760",  # 10 MB
+        "writer.request-max-size": "10485760",  # 10 MB
         "writer.acks": "all",  # Wait for all replicas to acknowledge
         "writer.retries": "3",  # Retry up to 3 times on failure
-        "writer.batch.size": "1000",  # Batch size for writes
+        "writer.batch-size": "1000",  # Batch size for writes
     }
     config = fluss.Config(config_spec)
 
-    # Create connection using the static connect method
-    conn = await fluss.FlussConnection.connect(config)
+    # Create connection using the static create method
+    conn = await fluss.FlussConnection.create(config)
 
     # Define fields for PyArrow
     fields = [
@@ -78,7 +78,7 @@ async def main():
 
     # Get table information via admin
     try:
-        table_info = await admin.get_table(table_path)
+        table_info = await admin.get_table_info(table_path)
         print(f"Table info: {table_info}")
         print(f"Table ID: {table_info.table_id}")
         print(f"Schema ID: {table_info.schema_id}")
@@ -105,7 +105,7 @@ async def main():
     print(f"Got table: {table}")
 
     # Create a writer for the table
-    append_writer = await table.new_append_writer()
+    append_writer = await table.new_append()
     print(f"Created append writer: {append_writer}")
 
     try:
@@ -264,13 +264,13 @@ async def main():
     # Now scan the table to verify data was written
     print("\n--- Scanning table (batch scanner) ---")
     try:
-        # Use new_scan().create_batch_scanner() for batch-based operations
-        batch_scanner = await table.new_scan().create_batch_scanner()
+        # Use new_scan().create_record_batch_log_scanner() for batch-based operations
+        batch_scanner = await table.new_scan().create_record_batch_log_scanner()
         print(f"Created batch scanner: {batch_scanner}")
 
         # Subscribe to buckets (required before to_arrow/to_pandas)
         # Use subscribe_buckets to subscribe all buckets from EARLIEST_OFFSET
-        num_buckets = (await admin.get_table(table_path)).num_buckets
+        num_buckets = (await admin.get_table_info(table_path)).num_buckets
         batch_scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
         print(f"Subscribed to {num_buckets} buckets from EARLIEST_OFFSET")
 
@@ -285,7 +285,7 @@ async def main():
             print(f"Could not convert to PyArrow: {e}")
 
         # Create a new batch scanner for to_pandas() test
-        batch_scanner2 = await table.new_scan().create_batch_scanner()
+        batch_scanner2 = await table.new_scan().create_record_batch_log_scanner()
         batch_scanner2.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
         # Try to get as Pandas DataFrame
@@ -302,7 +302,7 @@ async def main():
 
         # Test poll_arrow() method for incremental reading as Arrow Table
         print("\n--- Testing poll_arrow() method ---")
-        batch_scanner3 = await table.new_scan().create_batch_scanner()
+        batch_scanner3 = await table.new_scan().create_record_batch_log_scanner()
         batch_scanner3.subscribe(bucket_id=0, start_offset=fluss.EARLIEST_OFFSET)
         print(f"Subscribed to bucket 0 at EARLIEST_OFFSET ({fluss.EARLIEST_OFFSET})")
 
@@ -323,13 +323,13 @@ async def main():
         except Exception as e:
             print(f"Error during poll_arrow: {e}")
 
-        # Test poll_batches() method for batches with metadata
-        print("\n--- Testing poll_batches() method ---")
-        batch_scanner4 = await table.new_scan().create_batch_scanner()
+        # Test poll_record_batch() method for batches with metadata
+        print("\n--- Testing poll_record_batch() method ---")
+        batch_scanner4 = await table.new_scan().create_record_batch_log_scanner()
         batch_scanner4.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
         try:
-            batches = batch_scanner4.poll_batches(5000)
+            batches = batch_scanner4.poll_record_batch(5000)
             print(f"Number of batches: {len(batches)}")
 
             for i, batch in enumerate(batches):
@@ -338,7 +338,7 @@ async def main():
                       f"rows={batch.batch.num_rows}")
 
         except Exception as e:
-            print(f"Error during poll_batches: {e}")
+            print(f"Error during poll_record_batch: {e}")
 
     except Exception as e:
         print(f"Error during batch scanning: {e}")
@@ -616,11 +616,11 @@ async def main():
     print("\n--- Testing Column Projection ---")
     try:
         # Get bucket count for subscriptions
-        num_buckets = (await admin.get_table(table_path)).num_buckets
+        num_buckets = (await admin.get_table_info(table_path)).num_buckets
 
         # Project specific columns by index (using batch scanner for to_pandas)
         print("\n1. Projection by index [0, 1] (id, name):")
-        scanner_index = await table.new_scan().project([0, 1]).create_batch_scanner()
+        scanner_index = await table.new_scan().project([0, 1]).create_record_batch_log_scanner()
         scanner_index.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
         df_projected = scanner_index.to_pandas()
         print(df_projected.head())
@@ -632,7 +632,7 @@ async def main():
         print("\n2. Projection by name ['name', 'score'] (Pythonic):")
         scanner_names = await table.new_scan() \
             .project_by_name(["name", "score"]) \
-            .create_batch_scanner()
+            .create_record_batch_log_scanner()
         scanner_names.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
         df_named = scanner_names.to_pandas()
         print(df_named.head())
@@ -640,7 +640,7 @@ async def main():
 
         # Test empty result schema with projection
         print("\n3. Testing empty result schema with projection:")
-        scanner_proj = await table.new_scan().project([0, 2]).create_batch_scanner()
+        scanner_proj = await table.new_scan().project([0, 2]).create_record_batch_log_scanner()
         scanner_proj.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
         # Quick poll that may return empty
         result = scanner_proj.poll_arrow(100)
@@ -709,7 +709,7 @@ async def main():
 
         # Get the table and write some data
         partitioned_table = await conn.get_table(partitioned_table_path)
-        partitioned_writer = await partitioned_table.new_append_writer()
+        partitioned_writer = await partitioned_table.new_append()
 
         # Append data to US partition
         partitioned_writer.append({"id": 1, "region": "US", "value": 100})
@@ -744,7 +744,7 @@ async def main():
 
         # Demo: subscribe_partition for reading partitioned data
         print("\n--- Testing subscribe_partition + to_arrow() ---")
-        partitioned_scanner = await partitioned_table.new_scan().create_batch_scanner()
+        partitioned_scanner = await partitioned_table.new_scan().create_record_batch_log_scanner()
 
         # Subscribe to each partition using partition_id
         for p in partition_infos:
@@ -762,7 +762,7 @@ async def main():
 
         # Demo: subscribe_partition_buckets for batch subscribing to multiple partitions at once
         print("\n--- Testing subscribe_partition_buckets + to_arrow() ---")
-        partitioned_scanner_batch = await partitioned_table.new_scan().create_batch_scanner()
+        partitioned_scanner_batch = await partitioned_table.new_scan().create_record_batch_log_scanner()
         partition_bucket_offsets = {
             (p.partition_id, 0): fluss.EARLIEST_OFFSET for p in partition_infos
         }
@@ -774,7 +774,7 @@ async def main():
 
         # Demo: unsubscribe_partition - unsubscribe from one partition, read remaining
         print("\n--- Testing unsubscribe_partition ---")
-        partitioned_scanner3 = await partitioned_table.new_scan().create_batch_scanner()
+        partitioned_scanner3 = await partitioned_table.new_scan().create_record_batch_log_scanner()
         for p in partition_infos:
             partitioned_scanner3.subscribe_partition(p.partition_id, 0, fluss.EARLIEST_OFFSET)
         # Unsubscribe from the first partition
@@ -787,7 +787,7 @@ async def main():
 
         # Demo: to_pandas() also works for partitioned tables
         print("\n--- Testing to_pandas() on partitioned table ---")
-        partitioned_scanner2 = await partitioned_table.new_scan().create_batch_scanner()
+        partitioned_scanner2 = await partitioned_table.new_scan().create_record_batch_log_scanner()
         for p in partition_infos:
             partitioned_scanner2.subscribe_partition(p.partition_id, 0, fluss.EARLIEST_OFFSET)
         partitioned_df = partitioned_scanner2.to_pandas()

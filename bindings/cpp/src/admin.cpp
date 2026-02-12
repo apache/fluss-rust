@@ -73,7 +73,7 @@ Result Admin::DropTable(const TablePath& table_path, bool ignore_if_not_exists) 
     return utils::from_ffi_result(ffi_result);
 }
 
-Result Admin::GetTable(const TablePath& table_path, TableInfo& out) {
+Result Admin::GetTableInfo(const TablePath& table_path, TableInfo& out) {
     if (!Available()) {
         return utils::make_error(1, "Admin not available");
     }

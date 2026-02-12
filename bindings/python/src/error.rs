@@ -24,22 +24,41 @@ use pyo3::prelude::*;
 pub struct FlussError {
     #[pyo3(get)]
     pub message: String,
+    #[pyo3(get)]
+    pub error_code: i32,
 }
 
 #[pymethods]
 impl FlussError {
     #[new]
-    fn new(message: String) -> Self {
-        Self { message }
+    #[pyo3(signature = (message, error_code=0))]
+    fn new(message: String, error_code: i32) -> Self {
+        Self {
+            message,
+            error_code,
+        }
     }
 
     fn __str__(&self) -> String {
-        format!("FlussError: {}", self.message)
+        if self.error_code != 0 {
+            format!("FlussError(code={}): {}", self.error_code, self.message)
+        } else {
+            format!("FlussError: {}", self.message)
+        }
     }
 }
 
 impl FlussError {
     pub fn new_err(message: impl ToString) -> PyErr {
-        PyErr::new::<FlussError, _>(message.to_string())
+        PyErr::new::<FlussError, _>((message.to_string(), 0i32))
+    }
+
+    /// Create a PyErr from a core Error, extracting the API error code if available.
+    pub fn from_core_error(error: &fluss::error::Error) -> PyErr {
+        if let fluss::error::Error::FlussAPIError { api_error } = error {
+            PyErr::new::<FlussError, _>((api_error.message.clone(), api_error.code))
+        } else {
+            PyErr::new::<FlussError, _>((error.to_string(), 0i32))
+        }
     }
 }

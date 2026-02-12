@@ -73,7 +73,7 @@ impl UpsertWriter {
         let writer = self.inner.get_or_create_writer()?;
         let result_future = writer
             .upsert(&generic_row)
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
         Ok(WriteResultHandle::new(result_future))
     }
 
@@ -92,7 +92,7 @@ impl UpsertWriter {
         let writer = self.inner.get_or_create_writer()?;
         let result_future = writer
             .delete(&generic_row)
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
         Ok(WriteResultHandle::new(result_future))
     }
 
@@ -119,7 +119,7 @@ impl UpsertWriter {
                 writer
                     .flush()
                     .await
-                    .map_err(|e| FlussError::new_err(e.to_string()))
+                    .map_err(|e| FlussError::from_core_error(&e))
             } else {
                 Ok(())
             }
@@ -161,7 +161,7 @@ impl UpsertWriter {
         let table_upsert = if let Some(ref indices) = target_columns {
             table_upsert
                 .partial_update(Some(indices.clone()))
-                .map_err(|e| FlussError::new_err(e.to_string()))?
+                .map_err(|e| FlussError::from_core_error(&e))?
         } else {
             table_upsert
         };
@@ -188,7 +188,7 @@ impl UpsertWriterInner {
             let writer = self
                 .table_upsert
                 .create_writer()
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
             *guard = Some(Arc::new(writer));
         }
         Ok(guard.as_ref().unwrap().clone())

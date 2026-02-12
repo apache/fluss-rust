@@ -52,7 +52,7 @@ impl WriterClient {
         let mut sender = Sender::new(
             metadata.clone(),
             accumulator.clone(),
-            config.request_max_size,
+            config.writer_request_max_size,
             30_000,
             Self::get_ack(&config)?,
             config.writer_retries,
@@ -70,7 +70,7 @@ impl WriterClient {
         });
 
         Ok(Self {
-            max_request_size: config.request_max_size,
+            max_request_size: config.writer_request_max_size,
             config,
             shutdown_tx,
             sender_join_handle: join_handle,

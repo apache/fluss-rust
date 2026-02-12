@@ -64,13 +64,13 @@ impl Lookuper {
                 lookuper
                     .lookup(&generic_row)
                     .await
-                    .map_err(|e| FlussError::new_err(e.to_string()))?
+                    .map_err(|e| FlussError::from_core_error(&e))?
             };
 
             // Extract row data
             let row_opt = result
                 .get_single_row()
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             // Convert to Python with GIL
             Python::attach(|py| match row_opt {
@@ -98,11 +98,11 @@ impl Lookuper {
 
         let table_lookup = fluss_table
             .new_lookup()
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         let lookuper = table_lookup
             .create_lookuper()
-            .map_err(|e| FlussError::new_err(e.to_string()))?;
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
         Ok(Self {
             inner: Arc::new(Mutex::new(lookuper)),

@@ -62,9 +62,7 @@ impl WriteResultHandle {
             .ok_or_else(|| FlussError::new_err("WriteResultHandle already consumed"))?;
 
         future_into_py(py, async move {
-            future
-                .await
-                .map_err(|e| FlussError::new_err(e.to_string()))?;
+            future.await.map_err(|e| FlussError::from_core_error(&e))?;
             Ok(())
         })
     }

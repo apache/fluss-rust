@@ -54,7 +54,7 @@ import fluss
 async def main():
     # Connect
     config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
-    conn = await fluss.FlussConnection.connect(config)
+    conn = await fluss.FlussConnection.create(config)
     admin = await conn.get_admin()
 
     # Create a log table
@@ -68,14 +68,14 @@ async def main():
 
     # Write
     table = await conn.get_table(table_path)
-    writer = await table.new_append_writer()
+    writer = await table.new_append()
     writer.append({"id": 1, "name": "Alice", "score": 95.5})
     writer.append({"id": 2, "name": "Bob", "score": 87.0})
     await writer.flush()
 
     # Read
-    num_buckets = (await admin.get_table(table_path)).num_buckets
-    scanner = await table.new_scan().create_batch_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
     print(scanner.to_pandas())
 
@@ -90,13 +90,13 @@ asyncio.run(main())
 
 ```python
 config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
-conn = await fluss.FlussConnection.connect(config)
+conn = await fluss.FlussConnection.create(config)
 ```
 
 The connection also supports context managers:
 
 ```python
-with await fluss.FlussConnection.connect(config) as conn:
+with await fluss.FlussConnection.create(config) as conn:
     ...
 ```
 
@@ -141,7 +141,7 @@ schema = fluss.Schema(pa.schema([
 table_path = fluss.TablePath("my_database", "my_table")
 await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=True)
 
-table_info = await admin.get_table(table_path)
+table_info = await admin.get_table_info(table_path)
 tables = await admin.list_tables("my_database")
 await admin.drop_table(table_path, ignore_if_not_exists=True)
 ```
@@ -184,7 +184,7 @@ Write methods like `append()` and `write_arrow_batch()` return a `WriteResultHan
 
 ```python
 table = await conn.get_table(table_path)
-writer = await table.new_append_writer()
+writer = await table.new_append()
 
 # Fire-and-forget: queue writes, flush at the end
 writer.append({"id": 1, "name": "Alice", "score": 95.5})
@@ -205,19 +205,19 @@ await writer.flush()
 ### Reading
 
 There are two scanner types:
-- **Batch scanner** (`create_batch_scanner()`) — returns Arrow Tables or DataFrames, best for analytics
+- **Batch scanner** (`create_record_batch_log_scanner()`) — returns Arrow Tables or DataFrames, best for analytics
 - **Record scanner** (`create_log_scanner()`) — returns individual records with metadata (offset, timestamp, change type), best for streaming
 
 And two reading modes:
 - **`to_arrow()` / `to_pandas()`** — reads all data from subscribed buckets up to the current latest offset, then returns. Best for one-shot batch reads.
-- **`poll_arrow()` / `poll()` / `poll_batches()`** — returns whatever data is available within the timeout, then returns. Call in a loop for continuous streaming.
+- **`poll_arrow()` / `poll()` / `poll_record_batch()`** — returns whatever data is available within the timeout, then returns. Call in a loop for continuous streaming.
 
 #### Batch Read (One-Shot)
 
 ```python
-num_buckets = (await admin.get_table(table_path)).num_buckets
+num_buckets = (await admin.get_table_info(table_path)).num_buckets
 
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
 # Reads everything up to current latest offset, then returns
@@ -231,7 +231,7 @@ Use `poll_arrow()` or `poll()` in a loop for streaming consumption:
 
 ```python
 # Batch scanner: poll as Arrow Tables
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe(bucket_id=0, start_offset=fluss.EARLIEST_OFFSET)
 
 while True:
@@ -253,16 +253,16 @@ while True:
 To only consume new records (skip existing data), use `LATEST_OFFSET`:
 
 ```python
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe(bucket_id=0, start_offset=fluss.LATEST_OFFSET)
 ```
 
 ### Column Projection
 
 ```python
-scanner = await table.new_scan().project([0, 2]).create_batch_scanner()
+scanner = await table.new_scan().project([0, 2]).create_record_batch_log_scanner()
 # or by name
-scanner = await table.new_scan().project_by_name(["id", "score"]).create_batch_scanner()
+scanner = await table.new_scan().project_by_name(["id", "score"]).create_record_batch_log_scanner()
 ```
 
 ## Primary Key Tables
@@ -356,7 +356,7 @@ Same as non-partitioned tables — include partition column values in each row:
 
 ```python
 table = await conn.get_table(table_path)
-writer = await table.new_append_writer()
+writer = await table.new_append()
 writer.append({"id": 1, "region": "US", "value": 100})
 writer.append({"id": 2, "region": "EU", "value": 200})
 await writer.flush()
@@ -367,7 +367,7 @@ await writer.flush()
 Use `subscribe_partition()` or `subscribe_partition_buckets()` instead of `subscribe()`:
 
 ```python
-scanner = await table.new_scan().create_batch_scanner()
+scanner = await table.new_scan().create_record_batch_log_scanner()
 
 # Subscribe to individual partitions
 for p in partition_infos:

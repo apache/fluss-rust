@@ -47,7 +47,7 @@ pub const DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM: usize = 4;
 
 /// Default maximum concurrent remote log downloads
 /// Matches Java's REMOTE_FILE_DOWNLOAD_THREAD_NUM (default: 3)
-pub const DEFAULT_SCANNER_REMOTE_LOG_DOWNLOAD_THREADS: usize = 3;
+pub const DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM: usize = 3;
 
 /// Initial retry backoff delay (milliseconds)
 /// Prevents hot-spin retry loops on persistent failures
