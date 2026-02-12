@@ -86,6 +86,9 @@ impl ErrorCode {
     /// Client-side error (not from server API protocol). Check the error message for details.
     #[classattr]
     const CLIENT_ERROR: i32 = -2;
+    /// No error.
+    #[classattr]
+    const NONE: i32 = 0;
     /// The server experienced an unexpected error when processing the request.
     #[classattr]
     const UNKNOWN_SERVER_ERROR: i32 = -1;

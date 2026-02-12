@@ -56,6 +56,8 @@ struct Lookuper;
 struct ErrorCode {
     /// Client-side error (not from server API protocol). Check error_message for details.
     static constexpr int CLIENT_ERROR = -2;
+    /// No error.
+    static constexpr int NONE = 0;
     /// The server experienced an unexpected error when processing the request.
     static constexpr int UNKNOWN_SERVER_ERROR = -1;
     /// The server disconnected before a response was received.
