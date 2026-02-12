@@ -456,7 +456,7 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
     if let fcore::error::Error::FlussAPIError { api_error } = e {
         err_result(api_error.code, api_error.message.clone())
     } else {
-        err_result(0, e.to_string())
+        err_result(-1, e.to_string())
     }
 }
 
