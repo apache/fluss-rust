@@ -54,7 +54,7 @@ There are two scanner types:
 
 And two reading modes:
 - **`to_arrow()` / `to_pandas()`** — reads all data from subscribed buckets up to the current latest offset, then returns. Best for one-shot batch reads.
-- **`poll_arrow()` / `poll()` / `poll_batches()`** — returns whatever data is available within the timeout, then returns. Call in a loop for continuous streaming.
+- **`poll_arrow()` / `poll()` / `poll_record_batch()`** — returns whatever data is available within the timeout, then returns. Call in a loop for continuous streaming.
 
 ### Batch Read (One-Shot)
 

@@ -96,12 +96,22 @@ match result {
 The table does not exist or has been dropped.
 
 ```rust
-use fluss::error::FlussError;
+use fluss::error::{Error, FlussError};
 
-let result = conn.get_table(&table_path).await;
+// Admin operations return FlussError::TableNotExist (code 7)
+let result = admin.drop_table(&table_path, false).await;
 match result {
     Err(ref e) if e.api_error() == Some(FlussError::TableNotExist) => {
         eprintln!("Table not found: {}", e);
+    }
+    _ => {}
+}
+
+// conn.get_table() wraps the error differently — match on FlussAPIError directly
+let result = conn.get_table(&table_path).await;
+match result {
+    Err(Error::FlussAPIError { ref api_error }) => {
+        eprintln!("Server error (code {}): {}", api_error.code, api_error.message);
     }
     _ => {}
 }

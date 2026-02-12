@@ -366,7 +366,7 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 | Method | Description |
 |---|---|
-| `Time::FromMillis(int64_t millis)` | Create from milliseconds since midnight |
+| `Time::FromMillis(int32_t millis)` | Create from milliseconds since midnight |
 | `Time::FromHMS(int hour, int minute, int second)` | Create from hour, minute, second |
 | `Hour() -> int` | Get hour |
 | `Minute() -> int` | Get minute |
