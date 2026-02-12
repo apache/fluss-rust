@@ -19,11 +19,11 @@ use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use crate::row::Decimal;
 use arrow::array::{
-    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder,
-    Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder,
-    Time32MillisecondBuilder, Time32SecondBuilder, Time64MicrosecondBuilder,
-    Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
-    TimestampNanosecondBuilder, TimestampSecondBuilder,
+    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
+    FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
+    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
 };
 use arrow::datatypes as arrow_schema;
 use jiff::ToSpan;
@@ -474,6 +474,7 @@ impl Datum<'_> {
                 append_null_to_arrow!(Float64Builder);
                 append_null_to_arrow!(StringBuilder);
                 append_null_to_arrow!(BinaryBuilder);
+                append_null_to_arrow!(FixedSizeBinaryBuilder);
                 append_null_to_arrow!(Decimal128Builder);
                 append_null_to_arrow!(Date32Builder);
                 append_null_to_arrow!(Time32SecondBuilder);
@@ -493,7 +494,17 @@ impl Datum<'_> {
             Datum::Float32(v) => append_value_to_arrow!(Float32Builder, v.into_inner()),
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, v.as_ref()),
-            Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
+            Datum::Blob(v) => {
+                append_value_to_arrow!(BinaryBuilder, v.as_ref());
+                if let Some(b) = builder
+                    .as_any_mut()
+                    .downcast_mut::<FixedSizeBinaryBuilder>()
+                {
+                    return b.append_value(v.as_ref()).map_err(|e| RowConvertError {
+                        message: format!("Failed to append FixedSizeBinary: {e}"),
+                    });
+                }
+            }
             Datum::Decimal(decimal) => {
                 // Extract target precision and scale from Arrow schema
                 let (p, s) = match data_type {

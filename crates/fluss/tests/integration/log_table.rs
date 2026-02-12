@@ -634,6 +634,8 @@ mod table_test {
                     )
                     // Bytes type
                     .column("col_bytes", DataTypes::bytes())
+                    // Fixed-size binary type
+                    .column("col_binary", DataTypes::binary(4))
                     // Timestamp types with negative values (before Unix epoch)
                     .column(
                         "col_timestamp_us_neg",
@@ -701,6 +703,7 @@ mod table_test {
         let col_timestamp_ltz_us = TimestampLtz::from_millis_nanos(1769163227123, 456000).unwrap();
         let col_timestamp_ltz_ns = TimestampLtz::from_millis_nanos(1769163227123, 999_999).unwrap();
         let col_bytes: Vec<u8> = b"binary data".to_vec();
+        let col_binary: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
 
         // 1960-06-15 08:30:45.123456 UTC (before 1970)
         let col_timestamp_us_neg = TimestampNtz::from_millis_nanos(-301234154877, 456000).unwrap();
@@ -737,10 +740,11 @@ mod table_test {
         row.set_field(21, col_timestamp_ltz_us.clone());
         row.set_field(22, col_timestamp_ltz_ns.clone());
         row.set_field(23, col_bytes.as_slice());
-        row.set_field(24, col_timestamp_us_neg.clone());
-        row.set_field(25, col_timestamp_ns_neg.clone());
-        row.set_field(26, col_timestamp_ltz_us_neg.clone());
-        row.set_field(27, col_timestamp_ltz_ns_neg.clone());
+        row.set_field(24, col_binary.as_slice());
+        row.set_field(25, col_timestamp_us_neg.clone());
+        row.set_field(26, col_timestamp_ns_neg.clone());
+        row.set_field(27, col_timestamp_ltz_us_neg.clone());
+        row.set_field(28, col_timestamp_ltz_ns_neg.clone());
 
         append_writer
             .append(&row)
@@ -898,9 +902,14 @@ mod table_test {
             "col_timestamp_ltz_ns nanos mismatch"
         );
         assert_eq!(found_row.get_bytes(23), col_bytes, "col_bytes mismatch");
+        assert_eq!(
+            found_row.get_binary(24, 4),
+            col_binary,
+            "col_binary mismatch"
+        );
 
         // Verify timestamps before Unix epoch (negative timestamps)
-        let read_ts_us_neg = found_row.get_timestamp_ntz(24, 6);
+        let read_ts_us_neg = found_row.get_timestamp_ntz(25, 6);
         assert_eq!(
             read_ts_us_neg.get_millisecond(),
             col_timestamp_us_neg.get_millisecond(),
@@ -912,7 +921,7 @@ mod table_test {
             "col_timestamp_us_neg nanos mismatch"
         );
 
-        let read_ts_ns_neg = found_row.get_timestamp_ntz(25, 9);
+        let read_ts_ns_neg = found_row.get_timestamp_ntz(26, 9);
         assert_eq!(
             read_ts_ns_neg.get_millisecond(),
             col_timestamp_ns_neg.get_millisecond(),
@@ -924,7 +933,7 @@ mod table_test {
             "col_timestamp_ns_neg nanos mismatch"
         );
 
-        let read_ts_ltz_us_neg = found_row.get_timestamp_ltz(26, 6);
+        let read_ts_ltz_us_neg = found_row.get_timestamp_ltz(27, 6);
         assert_eq!(
             read_ts_ltz_us_neg.get_epoch_millisecond(),
             col_timestamp_ltz_us_neg.get_epoch_millisecond(),
@@ -936,7 +945,7 @@ mod table_test {
             "col_timestamp_ltz_us_neg nanos mismatch"
         );
 
-        let read_ts_ltz_ns_neg = found_row.get_timestamp_ltz(27, 9);
+        let read_ts_ltz_ns_neg = found_row.get_timestamp_ltz(28, 9);
         assert_eq!(
             read_ts_ltz_ns_neg.get_epoch_millisecond(),
             col_timestamp_ltz_ns_neg.get_epoch_millisecond(),
