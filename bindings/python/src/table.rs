@@ -570,8 +570,12 @@ impl TableUpsert {
         let row_type = self.table_info.row_type();
         let indices: Vec<usize> = columns
             .iter()
-            .map(|name| row_type.get_field_index(name).unwrap())
-            .collect();
+            .map(|name| {
+                row_type.get_field_index(name).ok_or_else(|| {
+                    FlussError::new_err(format!("Unknown column name '{name}' for partial update"))
+                })
+            })
+            .collect::<PyResult<Vec<usize>>>()?;
         Ok(TableUpsert {
             inner: updated,
             table_info: self.table_info.clone(),

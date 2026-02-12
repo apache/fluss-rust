@@ -68,7 +68,7 @@ async def main():
 
     # Write
     table = await conn.get_table(table_path)
-    writer = await table.new_append()
+    writer = table.new_append().create_writer()
     writer.append({"id": 1, "name": "Alice", "score": 95.5})
     writer.append({"id": 2, "name": "Bob", "score": 87.0})
     await writer.flush()
@@ -184,7 +184,7 @@ Write methods like `append()` and `write_arrow_batch()` return a `WriteResultHan
 
 ```python
 table = await conn.get_table(table_path)
-writer = await table.new_append()
+writer = table.new_append().create_writer()
 
 # Fire-and-forget: queue writes, flush at the end
 writer.append({"id": 1, "name": "Alice", "score": 95.5})
@@ -356,7 +356,7 @@ Same as non-partitioned tables — include partition column values in each row:
 
 ```python
 table = await conn.get_table(table_path)
-writer = await table.new_append()
+writer = table.new_append().create_writer()
 writer.append({"id": 1, "region": "US", "value": 100})
 writer.append({"id": 2, "region": "EU", "value": 200})
 await writer.flush()

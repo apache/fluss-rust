@@ -508,7 +508,7 @@ impl TableDescriptor {
             .get("table.replication.factor")
             .ok_or_else(|| Error::invalid_table("Replication factor is not set"))?
             .parse()
-            .map_err(|_e| Error::invalid_table("Replication factor can't be convert into int"))
+            .map_err(|_e| Error::invalid_table("Replication factor can't be converted to int"))
     }
 
     pub fn with_properties<K: Into<String>, V: Into<String>>(

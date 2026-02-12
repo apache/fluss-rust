@@ -366,7 +366,7 @@ log_scanner.subscribe(0, LATEST_OFFSET).await?;
 log_scanner.subscribe(0, 42).await?;
 
 // Subscribe to all buckets
-let num_buckets = table.table_info().get_num_buckets();
+let num_buckets = table.get_table_info().get_num_buckets();
 for bucket_id in 0..num_buckets {
     log_scanner.subscribe(bucket_id, 0).await?;
 }
@@ -454,7 +454,7 @@ let log_scanner = table.new_scan().create_log_scanner()?;
 // Subscribe to each partition's buckets
 for partition_info in &partitions {
     let partition_id = partition_info.get_partition_id();
-    let num_buckets = table.table_info().get_num_buckets();
+    let num_buckets = table.get_table_info().get_num_buckets();
 
     for bucket_id in 0..num_buckets {
         log_scanner.subscribe_partition(partition_id, bucket_id, 0).await?;
