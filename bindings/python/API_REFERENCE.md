@@ -44,7 +44,7 @@ Supports `with` statement (context manager).
 
 | Method | Description |
 |---|---|
-| `await create_database(name, ignore_if_exists=False, database_descriptor=None)` | Create a database |
+| `await create_database(name, database_descriptor=None, ignore_if_exists=False)` | Create a database |
 | `await drop_database(name, ignore_if_not_exists=False, cascade=True)` | Drop a database |
 | `await list_databases() -> list[str]` | List all databases |
 | `await database_exists(name) -> bool` | Check if a database exists |
@@ -66,9 +66,9 @@ Supports `with` statement (context manager).
 | Method | Description |
 |---|---|
 | `new_scan() -> TableScan` | Create a scan builder |
-| `await new_append() -> AppendWriter` | Create writer for log tables |
-| `new_upsert(columns=None, column_indices=None) -> UpsertWriter` | Create writer for PK tables (optionally partial) |
-| `new_lookup() -> Lookuper` | Create lookuper for PK tables |
+| `new_append() -> TableAppend` | Create an append builder for log tables |
+| `new_upsert() -> TableUpsert` | Create an upsert builder for PK tables |
+| `new_lookup() -> TableLookup` | Create a lookup builder for PK tables |
 | `get_table_info() -> TableInfo` | Get table metadata |
 | `get_table_path() -> TablePath` | Get table path |
 | `has_primary_key() -> bool` | Check if table has a primary key |
@@ -81,6 +81,32 @@ Supports `with` statement (context manager).
 | `.project_by_name(names) -> TableScan` | Project columns by name |
 | `await .create_log_scanner() -> LogScanner` | Create record-based scanner (for `poll()`) |
 | `await .create_record_batch_log_scanner() -> LogScanner` | Create batch-based scanner (for `poll_arrow()`, `to_arrow()`, etc.) |
+
+## `TableAppend`
+
+Builder for creating an `AppendWriter`. Obtain via `FlussTable.new_append()`.
+
+| Method | Description |
+|---|---|
+| `.create_writer() -> AppendWriter` | Create the append writer |
+
+## `TableUpsert`
+
+Builder for creating an `UpsertWriter`. Obtain via `FlussTable.new_upsert()`.
+
+| Method | Description |
+|---|---|
+| `.partial_update_by_name(columns) -> TableUpsert` | Configure partial update by column names |
+| `.partial_update_by_index(indices) -> TableUpsert` | Configure partial update by column indices |
+| `.create_writer() -> UpsertWriter` | Create the upsert writer |
+
+## `TableLookup`
+
+Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
+
+| Method | Description |
+|---|---|
+| `.create_lookuper() -> Lookuper` | Create the lookuper |
 
 ## `AppendWriter`
 

@@ -79,7 +79,7 @@ impl FlussConnection {
             let py_table = FlussTable::new_table(
                 client.clone(),
                 core_table.metadata().clone(),
-                core_table.table_info().clone(),
+                core_table.get_table_info().clone(),
                 core_table.table_path().clone(),
                 core_table.has_primary_key(),
             );

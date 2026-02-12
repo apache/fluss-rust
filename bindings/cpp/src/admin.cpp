@@ -53,7 +53,7 @@ bool Admin::Available() const { return admin_ != nullptr; }
 Result Admin::CreateTable(const TablePath& table_path, const TableDescriptor& descriptor,
                           bool ignore_if_exists) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -65,7 +65,7 @@ Result Admin::CreateTable(const TablePath& table_path, const TableDescriptor& de
 
 Result Admin::DropTable(const TablePath& table_path, bool ignore_if_not_exists) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -75,7 +75,7 @@ Result Admin::DropTable(const TablePath& table_path, bool ignore_if_not_exists) 
 
 Result Admin::GetTableInfo(const TablePath& table_path, TableInfo& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -91,7 +91,7 @@ Result Admin::GetTableInfo(const TablePath& table_path, TableInfo& out) {
 
 Result Admin::GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -111,7 +111,7 @@ Result Admin::DoListOffsets(const TablePath& table_path, const std::vector<int32
                             std::unordered_map<int32_t, int64_t>& out,
                             const std::string* partition_name) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -159,7 +159,7 @@ Result Admin::ListPartitionOffsets(const TablePath& table_path, const std::strin
 
 Result Admin::ListPartitionInfos(const TablePath& table_path, std::vector<PartitionInfo>& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -181,7 +181,7 @@ Result Admin::CreatePartition(const TablePath& table_path,
                               const std::unordered_map<std::string, std::string>& partition_spec,
                               bool ignore_if_exists) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -202,7 +202,7 @@ Result Admin::DropPartition(const TablePath& table_path,
                             const std::unordered_map<std::string, std::string>& partition_spec,
                             bool ignore_if_not_exists) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
@@ -222,7 +222,7 @@ Result Admin::DropPartition(const TablePath& table_path,
 Result Admin::CreateDatabase(const std::string& database_name, const DatabaseDescriptor& descriptor,
                              bool ignore_if_exists) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_desc = utils::to_ffi_database_descriptor(descriptor);
@@ -233,7 +233,7 @@ Result Admin::CreateDatabase(const std::string& database_name, const DatabaseDes
 Result Admin::DropDatabase(const std::string& database_name, bool ignore_if_not_exists,
                            bool cascade) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_result =
@@ -243,7 +243,7 @@ Result Admin::DropDatabase(const std::string& database_name, bool ignore_if_not_
 
 Result Admin::ListDatabases(std::vector<std::string>& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_result = admin_->list_databases();
@@ -260,7 +260,7 @@ Result Admin::ListDatabases(std::vector<std::string>& out) {
 
 Result Admin::DatabaseExists(const std::string& database_name, bool& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_result = admin_->database_exists(rust::Str(database_name));
@@ -273,7 +273,7 @@ Result Admin::DatabaseExists(const std::string& database_name, bool& out) {
 
 Result Admin::GetDatabaseInfo(const std::string& database_name, DatabaseInfo& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_result = admin_->get_database_info(rust::Str(database_name));
@@ -286,7 +286,7 @@ Result Admin::GetDatabaseInfo(const std::string& database_name, DatabaseInfo& ou
 
 Result Admin::ListTables(const std::string& database_name, std::vector<std::string>& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_result = admin_->list_tables(rust::Str(database_name));
@@ -303,7 +303,7 @@ Result Admin::ListTables(const std::string& database_name, std::vector<std::stri
 
 Result Admin::TableExists(const TablePath& table_path, bool& out) {
     if (!Available()) {
-        return utils::make_error(1, "Admin not available");
+        return utils::make_client_error("Admin not available");
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);

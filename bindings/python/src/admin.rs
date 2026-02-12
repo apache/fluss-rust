@@ -67,13 +67,13 @@ impl FlussAdmin {
     ///
     /// Returns:
     ///     None
-    #[pyo3(signature = (database_name, ignore_if_exists=false, database_descriptor=None))]
+    #[pyo3(signature = (database_name, database_descriptor=None, ignore_if_exists=false))]
     pub fn create_database<'py>(
         &self,
         py: Python<'py>,
         database_name: &str,
-        ignore_if_exists: bool,
         database_descriptor: Option<&DatabaseDescriptor>,
+        ignore_if_exists: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let admin = self.__admin.clone();
         let name = database_name.to_string();
@@ -81,7 +81,7 @@ impl FlussAdmin {
 
         future_into_py(py, async move {
             admin
-                .create_database(&name, ignore_if_exists, descriptor.as_ref())
+                .create_database(&name, descriptor.as_ref(), ignore_if_exists)
                 .await
                 .map_err(|e| FlussError::from_core_error(&e))?;
 

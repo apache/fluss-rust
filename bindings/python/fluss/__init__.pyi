@@ -93,21 +93,37 @@ class RecordBatch:
 class Config:
     def __init__(self, properties: Optional[Dict[str, str]] = None) -> None: ...
     @property
-    def bootstrap_server(self) -> Optional[str]: ...
-    @bootstrap_server.setter
-    def bootstrap_server(self, server: str) -> None: ...
+    def bootstrap_servers(self) -> str: ...
+    @bootstrap_servers.setter
+    def bootstrap_servers(self, server: str) -> None: ...
     @property
-    def request_max_size(self) -> int: ...
-    @request_max_size.setter
-    def request_max_size(self, size: int) -> None: ...
+    def writer_request_max_size(self) -> int: ...
+    @writer_request_max_size.setter
+    def writer_request_max_size(self, size: int) -> None: ...
+    @property
+    def writer_acks(self) -> str: ...
+    @writer_acks.setter
+    def writer_acks(self, acks: str) -> None: ...
+    @property
+    def writer_retries(self) -> int: ...
+    @writer_retries.setter
+    def writer_retries(self, retries: int) -> None: ...
     @property
     def writer_batch_size(self) -> int: ...
     @writer_batch_size.setter
     def writer_batch_size(self, size: int) -> None: ...
+    @property
+    def scanner_remote_log_prefetch_num(self) -> int: ...
+    @scanner_remote_log_prefetch_num.setter
+    def scanner_remote_log_prefetch_num(self, num: int) -> None: ...
+    @property
+    def remote_file_download_thread_num(self) -> int: ...
+    @remote_file_download_thread_num.setter
+    def remote_file_download_thread_num(self, num: int) -> None: ...
 
 class FlussConnection:
     @staticmethod
-    async def connect(config: Config) -> FlussConnection: ...
+    async def create(config: Config) -> FlussConnection: ...
     async def get_admin(self) -> FlussAdmin: ...
     async def get_table(self, table_path: TablePath) -> FlussTable: ...
     def close(self) -> None: ...
@@ -124,8 +140,8 @@ class FlussAdmin:
     async def create_database(
         self,
         database_name: str,
-        ignore_if_exists: bool = False,
         database_descriptor: Optional["DatabaseDescriptor"] = None,
+        ignore_if_exists: bool = False,
     ) -> None:
         """Create a database."""
         ...
@@ -166,7 +182,7 @@ class FlussAdmin:
         table_descriptor: TableDescriptor,
         ignore_if_exists: Optional[bool] = False,
     ) -> None: ...
-    async def get_table(self, table_path: TablePath) -> TableInfo: ...
+    async def get_table_info(self, table_path: TablePath) -> TableInfo: ...
     async def get_latest_lake_snapshot(self, table_path: TablePath) -> LakeSnapshot: ...
     async def drop_table(
         self,
@@ -285,7 +301,7 @@ class TableScan:
         # Batch-based scanning with column names
         scanner = await table.new_scan() \\
             .project_by_name(["id", "name"]) \\
-            .create_batch_scanner()
+            .create_record_batch_log_scanner()
         ```
     """
 
@@ -319,14 +335,14 @@ class TableScan:
             LogScanner for record-by-record scanning with `poll()`
         """
         ...
-    async def create_batch_scanner(self) -> LogScanner:
+    async def create_record_batch_log_scanner(self) -> LogScanner:
         """Create a batch-based log scanner.
 
         Use this scanner with `poll_arrow()` to get Arrow Tables, or with
-        `poll_batches()` to get individual batches with metadata.
+        `poll_record_batch()` to get individual batches with metadata.
 
         Returns:
-            LogScanner for batch-based scanning with `poll_arrow()` or `poll_batches()`
+            LogScanner for batch-based scanning with `poll_arrow()` or `poll_record_batch()`
         """
         ...
     def __repr__(self) -> str: ...
@@ -347,23 +363,66 @@ class FlussTable:
             # Batch-based scanning
             scanner = await table.new_scan() \\
                 .project_by_name(["id", "name"]) \\
-                .create_batch_scanner()
+                .create_record_batch_log_scanner()
             ```
 
         Returns:
             TableScan builder for configuring the scanner.
         """
         ...
-    async def new_append_writer(self) -> AppendWriter: ...
-    def new_upsert(
-        self,
-        columns: Optional[List[str]] = None,
-        column_indices: Optional[List[int]] = None,
-    ) -> UpsertWriter: ...
-    def new_lookup(self) -> Lookuper: ...
+    def new_append(self) -> TableAppend: ...
+    def new_upsert(self) -> TableUpsert: ...
+    def new_lookup(self) -> TableLookup: ...
     def get_table_info(self) -> TableInfo: ...
     def get_table_path(self) -> TablePath: ...
     def has_primary_key(self) -> bool: ...
+    def __repr__(self) -> str: ...
+
+class TableAppend:
+    """Builder for creating an AppendWriter.
+
+    Obtain via `FlussTable.new_append()`, then call `create_writer()`.
+
+    Example:
+        writer = table.new_append().create_writer()
+    """
+
+    def create_writer(self) -> AppendWriter: ...
+    def __repr__(self) -> str: ...
+
+class TableUpsert:
+    """Builder for creating an UpsertWriter, with optional partial update.
+
+    Obtain via `FlussTable.new_upsert()`, then optionally call
+    `partial_update_by_name()` or `partial_update_by_index()`,
+    then call `create_writer()`.
+
+    Example:
+        # Full row upsert
+        writer = table.new_upsert().create_writer()
+
+        # Partial update by column names
+        writer = table.new_upsert().partial_update_by_name(["col1", "col2"]).create_writer()
+
+        # Partial update by column indices
+        writer = table.new_upsert().partial_update_by_index([0, 1]).create_writer()
+    """
+
+    def partial_update_by_name(self, columns: List[str]) -> "TableUpsert": ...
+    def partial_update_by_index(self, column_indices: List[int]) -> "TableUpsert": ...
+    def create_writer(self) -> UpsertWriter: ...
+    def __repr__(self) -> str: ...
+
+class TableLookup:
+    """Builder for creating a Lookuper.
+
+    Obtain via `FlussTable.new_lookup()`, then call `create_lookuper()`.
+
+    Example:
+        lookuper = table.new_lookup().create_lookuper()
+    """
+
+    def create_lookuper(self) -> Lookuper: ...
     def __repr__(self) -> str: ...
 
 class AppendWriter:
@@ -465,14 +524,14 @@ class LogScanner:
 
     This scanner supports two modes:
     - Record-based scanning via `poll()` - returns individual records with metadata
-    - Batch-based scanning via `poll_arrow()` / `poll_batches()` - returns Arrow batches
+    - Batch-based scanning via `poll_arrow()` / `poll_record_batch()` - returns Arrow batches
 
     Create scanners using the builder pattern:
         # Record-based scanning
         scanner = await table.new_scan().create_log_scanner()
 
         # Batch-based scanning
-        scanner = await table.new_scan().create_batch_scanner()
+        scanner = await table.new_scan().create_record_batch_log_scanner()
 
         # With projection
         scanner = await table.new_scan().project([0, 1]).create_log_scanner()
@@ -538,10 +597,10 @@ class LogScanner:
             Returns an empty list if no records are available or timeout expires.
         """
         ...
-    def poll_batches(self, timeout_ms: int) -> List[RecordBatch]:
+    def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]:
         """Poll for batches with metadata.
 
-        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
+        Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
 
         Args:
             timeout_ms: Timeout in milliseconds to wait for batches.
@@ -557,7 +616,7 @@ class LogScanner:
     def poll_arrow(self, timeout_ms: int) -> pa.Table:
         """Poll for records as an Arrow Table.
 
-        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
+        Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
 
         Args:
             timeout_ms: Timeout in milliseconds to wait for records.
@@ -573,7 +632,7 @@ class LogScanner:
     def to_pandas(self) -> pd.DataFrame:
         """Convert all data to Pandas DataFrame.
 
-        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
+        Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
         Reads from currently subscribed buckets until reaching their latest offsets.
 
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
@@ -582,7 +641,7 @@ class LogScanner:
     def to_arrow(self) -> pa.Table:
         """Convert all data to Arrow Table.
 
-        Requires a batch-based scanner (created with new_scan().create_batch_scanner()).
+        Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
         Reads from currently subscribed buckets until reaching their latest offsets.
 
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
@@ -655,7 +714,8 @@ class TableInfo:
 
 class FlussError(Exception):
     message: str
-    def __init__(self, message: str) -> None: ...
+    error_code: int
+    def __init__(self, message: str, error_code: int = -2) -> None: ...
     def __str__(self) -> str: ...
 
 class LakeSnapshot:
@@ -702,6 +762,75 @@ class PartitionInfo:
         """Get the partition name."""
         ...
     def __repr__(self) -> str: ...
+
+class ErrorCode:
+    """Named constants for Fluss API error codes.
+
+    Server API errors have error_code > 0 or == -1.
+    Client-side errors have error_code == CLIENT_ERROR (-2).
+    These constants are convenience names — new server error codes work
+    automatically since error_code is a raw int, not a closed enum.
+    """
+
+    CLIENT_ERROR: int
+    UNKNOWN_SERVER_ERROR: int
+    NETWORK_EXCEPTION: int
+    UNSUPPORTED_VERSION: int
+    CORRUPT_MESSAGE: int
+    DATABASE_NOT_EXIST: int
+    DATABASE_NOT_EMPTY: int
+    DATABASE_ALREADY_EXIST: int
+    TABLE_NOT_EXIST: int
+    TABLE_ALREADY_EXIST: int
+    SCHEMA_NOT_EXIST: int
+    LOG_STORAGE_EXCEPTION: int
+    KV_STORAGE_EXCEPTION: int
+    NOT_LEADER_OR_FOLLOWER: int
+    RECORD_TOO_LARGE_EXCEPTION: int
+    CORRUPT_RECORD_EXCEPTION: int
+    INVALID_TABLE_EXCEPTION: int
+    INVALID_DATABASE_EXCEPTION: int
+    INVALID_REPLICATION_FACTOR: int
+    INVALID_REQUIRED_ACKS: int
+    LOG_OFFSET_OUT_OF_RANGE_EXCEPTION: int
+    NON_PRIMARY_KEY_TABLE_EXCEPTION: int
+    UNKNOWN_TABLE_OR_BUCKET_EXCEPTION: int
+    INVALID_UPDATE_VERSION_EXCEPTION: int
+    INVALID_COORDINATOR_EXCEPTION: int
+    FENCED_LEADER_EPOCH_EXCEPTION: int
+    REQUEST_TIME_OUT: int
+    STORAGE_EXCEPTION: int
+    OPERATION_NOT_ATTEMPTED_EXCEPTION: int
+    NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION: int
+    NOT_ENOUGH_REPLICAS_EXCEPTION: int
+    SECURITY_TOKEN_EXCEPTION: int
+    OUT_OF_ORDER_SEQUENCE_EXCEPTION: int
+    DUPLICATE_SEQUENCE_EXCEPTION: int
+    UNKNOWN_WRITER_ID_EXCEPTION: int
+    INVALID_COLUMN_PROJECTION: int
+    INVALID_TARGET_COLUMN: int
+    PARTITION_NOT_EXISTS: int
+    TABLE_NOT_PARTITIONED_EXCEPTION: int
+    INVALID_TIMESTAMP_EXCEPTION: int
+    INVALID_CONFIG_EXCEPTION: int
+    LAKE_STORAGE_NOT_CONFIGURED_EXCEPTION: int
+    KV_SNAPSHOT_NOT_EXIST: int
+    PARTITION_ALREADY_EXISTS: int
+    PARTITION_SPEC_INVALID_EXCEPTION: int
+    LEADER_NOT_AVAILABLE_EXCEPTION: int
+    PARTITION_MAX_NUM_EXCEPTION: int
+    AUTHENTICATE_EXCEPTION: int
+    SECURITY_DISABLED_EXCEPTION: int
+    AUTHORIZATION_EXCEPTION: int
+    BUCKET_MAX_NUM_EXCEPTION: int
+    FENCED_TIERING_EPOCH_EXCEPTION: int
+    RETRIABLE_AUTHENTICATE_EXCEPTION: int
+    INVALID_SERVER_RACK_INFO_EXCEPTION: int
+    LAKE_SNAPSHOT_NOT_EXIST: int
+    LAKE_TABLE_ALREADY_EXIST: int
+    INELIGIBLE_REPLICA_EXCEPTION: int
+    INVALID_ALTER_TABLE_EXCEPTION: int
+    DELETION_DISABLED_EXCEPTION: int
 
 class OffsetType:
     """Offset type constants for list_offsets()."""

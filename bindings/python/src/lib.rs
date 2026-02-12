@@ -78,6 +78,9 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FlussAdmin>()?;
     m.add_class::<FlussTable>()?;
     m.add_class::<TableScan>()?;
+    m.add_class::<TableAppend>()?;
+    m.add_class::<TableUpsert>()?;
+    m.add_class::<TableLookup>()?;
     m.add_class::<AppendWriter>()?;
     m.add_class::<UpsertWriter>()?;
     m.add_class::<Lookuper>()?;
@@ -98,8 +101,9 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("EARLIEST_OFFSET", fcore::client::EARLIEST_OFFSET)?;
     m.add("LATEST_OFFSET", fcore::client::LATEST_OFFSET)?;
 
-    // Register exception types
+    // Register exception types and error codes
     m.add_class::<FlussError>()?;
+    m.add_class::<ErrorCode>()?;
 
     Ok(())
 }

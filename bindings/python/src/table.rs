@@ -390,26 +390,25 @@ impl FlussTable {
         }
     }
 
-    /// Create a new append writer for the table
-    fn new_append<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let conn = self.connection.clone();
-        let metadata = self.metadata.clone();
-        let table_info = self.table_info.clone();
+    /// Create a new TableAppend builder for the table.
+    ///
+    /// Returns:
+    ///     TableAppend builder. Call `create_writer()` to get an AppendWriter.
+    fn new_append(&self) -> PyResult<TableAppend> {
+        let _guard = TOKIO_RUNTIME.enter();
+        let fluss_table = fcore::client::FlussTable::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        );
 
-        future_into_py(py, async move {
-            let fluss_table = fcore::client::FlussTable::new(&conn, metadata, table_info.clone());
+        let table_append = fluss_table
+            .new_append()
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
-            let table_append = fluss_table
-                .new_append()
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let rust_writer = table_append
-                .create_writer()
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let py_writer = AppendWriter::from_core(rust_writer, table_info);
-
-            Python::attach(|py| Py::new(py, py_writer))
+        Ok(TableAppend {
+            inner: table_append,
+            table_info: self.table_info.clone(),
         })
     }
 
@@ -428,52 +427,41 @@ impl FlussTable {
         self.has_primary_key
     }
 
-    /// Create a new lookuper for primary key lookups.
+    /// Create a new TableLookup builder for primary key lookups.
     ///
     /// This is only available for tables with a primary key.
-    pub fn new_lookup(&self, _py: Python) -> PyResult<crate::Lookuper> {
+    ///
+    /// Returns:
+    ///     TableLookup builder. Call `create_lookuper()` to get a Lookuper.
+    pub fn new_lookup(&self) -> PyResult<TableLookup> {
         if !self.has_primary_key {
             return Err(FlussError::new_err(
                 "Lookup is only supported for primary key tables",
             ));
         }
 
-        crate::Lookuper::new(
-            &self.connection,
-            self.metadata.clone(),
-            self.table_info.clone(),
-        )
+        Ok(TableLookup {
+            connection: self.connection.clone(),
+            metadata: self.metadata.clone(),
+            table_info: self.table_info.clone(),
+        })
     }
 
-    /// Create a new upsert writer for the table.
+    /// Create a new TableUpsert builder for the table.
     ///
     /// This is only available for tables with a primary key.
     ///
-    /// Args:
-    ///     columns: Optional list of column names for partial update.
-    ///              Only the specified columns will be updated.
-    ///     column_indices: Optional list of column indices (0-based) for partial update.
-    ///                     Alternative to `columns` parameter.
-    #[pyo3(signature = (columns=None, column_indices=None))]
-    pub fn new_upsert(
-        &self,
-        _py: Python,
-        columns: Option<Vec<String>>,
-        column_indices: Option<Vec<usize>>,
-    ) -> PyResult<crate::UpsertWriter> {
+    /// Returns:
+    ///     TableUpsert builder. Call `create_writer()` to get an UpsertWriter,
+    ///     or use `partial_update_by_name()` / `partial_update_by_index()` first.
+    pub fn new_upsert(&self) -> PyResult<TableUpsert> {
         if !self.has_primary_key {
             return Err(FlussError::new_err(
                 "Upsert is only supported for primary key tables",
             ));
         }
 
-        // Validate that at most one parameter is specified
-        if columns.is_some() && column_indices.is_some() {
-            return Err(FlussError::new_err(
-                "Specify only one of 'columns' or 'column_indices', not both",
-            ));
-        }
-
+        let _guard = TOKIO_RUNTIME.enter();
         let fluss_table = fcore::client::FlussTable::new(
             &self.connection,
             self.metadata.clone(),
@@ -484,12 +472,11 @@ impl FlussTable {
             .new_upsert()
             .map_err(|e| FlussError::from_core_error(&e))?;
 
-        crate::UpsertWriter::new(
-            table_upsert,
-            self.table_info.clone(),
-            columns,
-            column_indices,
-        )
+        Ok(TableUpsert {
+            inner: table_upsert,
+            table_info: self.table_info.clone(),
+            target_columns: None,
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -517,6 +504,141 @@ impl FlussTable {
             table_path,
             has_primary_key,
         }
+    }
+}
+
+/// Builder for creating an AppendWriter.
+///
+/// Obtain via `FlussTable.new_append()`, then call `create_writer()`.
+#[pyclass]
+pub struct TableAppend {
+    inner: fcore::client::TableAppend,
+    table_info: fcore::metadata::TableInfo,
+}
+
+#[pymethods]
+impl TableAppend {
+    /// Create an AppendWriter from this builder.
+    pub fn create_writer(&self) -> PyResult<AppendWriter> {
+        let rust_writer = self
+            .inner
+            .create_writer()
+            .map_err(|e| FlussError::from_core_error(&e))?;
+        Ok(AppendWriter::from_core(
+            rust_writer,
+            self.table_info.clone(),
+        ))
+    }
+
+    fn __repr__(&self) -> String {
+        "TableAppend()".to_string()
+    }
+}
+
+/// Builder for creating an UpsertWriter, with optional partial update configuration.
+///
+/// Obtain via `FlussTable.new_upsert()`, then optionally call
+/// `partial_update_by_name()` or `partial_update_by_index()`,
+/// then call `create_writer()`.
+#[pyclass]
+pub struct TableUpsert {
+    inner: fcore::client::TableUpsert,
+    table_info: fcore::metadata::TableInfo,
+    /// Column indices for partial updates, tracked for Python's dict→GenericRow conversion.
+    target_columns: Option<Vec<usize>>,
+}
+
+#[pymethods]
+impl TableUpsert {
+    /// Configure partial update by column names.
+    ///
+    /// Only the specified columns will be updated on upsert.
+    ///
+    /// Args:
+    ///     columns: List of column names to update.
+    ///
+    /// Returns:
+    ///     A new TableUpsert configured for partial update.
+    pub fn partial_update_by_name(&self, columns: Vec<String>) -> PyResult<TableUpsert> {
+        let col_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
+        // Core validates and resolves names → indices internally
+        let updated = self
+            .inner
+            .partial_update_with_column_names(&col_refs)
+            .map_err(|e| FlussError::from_core_error(&e))?;
+        // Resolve indices for Python's row conversion layer (core validated names above)
+        let row_type = self.table_info.row_type();
+        let indices: Vec<usize> = columns
+            .iter()
+            .map(|name| row_type.get_field_index(name).unwrap())
+            .collect();
+        Ok(TableUpsert {
+            inner: updated,
+            table_info: self.table_info.clone(),
+            target_columns: Some(indices),
+        })
+    }
+
+    /// Configure partial update by column indices.
+    ///
+    /// Only the specified columns will be updated on upsert.
+    ///
+    /// Args:
+    ///     column_indices: List of column indices (0-based) to update.
+    ///
+    /// Returns:
+    ///     A new TableUpsert configured for partial update.
+    pub fn partial_update_by_index(&self, column_indices: Vec<usize>) -> PyResult<TableUpsert> {
+        let target = column_indices.clone();
+        // Core validates indices internally
+        let updated = self
+            .inner
+            .partial_update(Some(column_indices))
+            .map_err(|e| FlussError::from_core_error(&e))?;
+        Ok(TableUpsert {
+            inner: updated,
+            table_info: self.table_info.clone(),
+            target_columns: Some(target),
+        })
+    }
+
+    /// Create an UpsertWriter from this builder.
+    pub fn create_writer(&self) -> PyResult<crate::UpsertWriter> {
+        crate::UpsertWriter::new(
+            &self.inner,
+            self.table_info.clone(),
+            self.target_columns.clone(),
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        "TableUpsert()".to_string()
+    }
+}
+
+/// Builder for creating a Lookuper.
+///
+/// Obtain via `FlussTable.new_lookup()`, then call `create_lookuper()`.
+#[pyclass]
+pub struct TableLookup {
+    connection: Arc<fcore::client::FlussConnection>,
+    metadata: Arc<fcore::client::Metadata>,
+    table_info: fcore::metadata::TableInfo,
+}
+
+#[pymethods]
+impl TableLookup {
+    /// Create a Lookuper from this builder.
+    pub fn create_lookuper(&self) -> PyResult<crate::Lookuper> {
+        crate::Lookuper::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        "TableLookup()".to_string()
     }
 }
 

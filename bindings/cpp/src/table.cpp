@@ -122,16 +122,16 @@ TableAppend::TableAppend(ffi::Table* table) noexcept : table_(table) {}
 
 Result TableAppend::CreateWriter(AppendWriter& out) {
     if (table_ == nullptr) {
-        return utils::make_error(1, "Table not available");
+        return utils::make_client_error("Table not available");
     }
 
     try {
         out = AppendWriter(table_->new_append_writer());
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
@@ -179,7 +179,7 @@ std::vector<size_t> TableUpsert::ResolveNameProjection() const {
 
 Result TableUpsert::CreateWriter(UpsertWriter& out) {
     if (table_ == nullptr) {
-        return utils::make_error(1, "Table not available");
+        return utils::make_client_error("Table not available");
     }
 
     try {
@@ -192,9 +192,9 @@ Result TableUpsert::CreateWriter(UpsertWriter& out) {
         out = UpsertWriter(table_->create_upsert_writer(std::move(rust_indices)));
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
@@ -203,16 +203,16 @@ TableLookup::TableLookup(ffi::Table* table) noexcept : table_(table) {}
 
 Result TableLookup::CreateLookuper(Lookuper& out) {
     if (table_ == nullptr) {
-        return utils::make_error(1, "Table not available");
+        return utils::make_client_error("Table not available");
     }
 
     try {
         out = Lookuper(table_->new_lookuper());
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
@@ -260,7 +260,7 @@ Result TableScan::CreateRecordBatchLogScanner(LogScanner& out) {
 
 Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
     if (table_ == nullptr) {
-        return utils::make_error(1, "Table not available");
+        return utils::make_client_error("Table not available");
     }
 
     try {
@@ -272,9 +272,9 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
         out.scanner_ = table_->create_scanner(std::move(rust_indices), is_record_batch);
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
@@ -394,7 +394,7 @@ Result AppendWriter::Append(const GenericRow& row) {
 
 Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
     if (!Available()) {
-        return utils::make_error(1, "AppendWriter not available");
+        return utils::make_client_error("AppendWriter not available");
     }
 
     try {
@@ -403,15 +403,15 @@ Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
         out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
 Result AppendWriter::Flush() {
     if (!Available()) {
-        return utils::make_error(1, "AppendWriter not available");
+        return utils::make_client_error("AppendWriter not available");
     }
 
     auto ffi_result = writer_->flush();
@@ -454,7 +454,7 @@ Result UpsertWriter::Upsert(const GenericRow& row) {
 
 Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
     if (!Available()) {
-        return utils::make_error(1, "UpsertWriter not available");
+        return utils::make_client_error("UpsertWriter not available");
     }
 
     try {
@@ -463,9 +463,9 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
         out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
@@ -476,7 +476,7 @@ Result UpsertWriter::Delete(const GenericRow& row) {
 
 Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
     if (!Available()) {
-        return utils::make_error(1, "UpsertWriter not available");
+        return utils::make_client_error("UpsertWriter not available");
     }
 
     try {
@@ -485,15 +485,15 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
         out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
 Result UpsertWriter::Flush() {
     if (!Available()) {
-        return utils::make_error(1, "UpsertWriter not available");
+        return utils::make_client_error("UpsertWriter not available");
     }
 
     auto ffi_result = writer_->upsert_flush();
@@ -531,7 +531,7 @@ bool Lookuper::Available() const { return lookuper_ != nullptr; }
 
 Result Lookuper::Lookup(const GenericRow& pk_row, bool& found, GenericRow& out) {
     if (!Available()) {
-        return utils::make_error(1, "Lookuper not available");
+        return utils::make_client_error("Lookuper not available");
     }
 
     try {
@@ -549,10 +549,10 @@ Result Lookuper::Lookup(const GenericRow& pk_row, bool& found, GenericRow& out) 
         return utils::make_ok();
     } catch (const rust::Error& e) {
         found = false;
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
         found = false;
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
@@ -587,7 +587,7 @@ bool LogScanner::Available() const { return scanner_ != nullptr; }
 
 Result LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
     if (!Available()) {
-        return utils::make_error(1, "LogScanner not available");
+        return utils::make_client_error("LogScanner not available");
     }
 
     auto ffi_result = scanner_->subscribe(bucket_id, start_offset);
@@ -596,7 +596,7 @@ Result LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
 
 Result LogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offsets) {
     if (!Available()) {
-        return utils::make_error(1, "LogScanner not available");
+        return utils::make_client_error("LogScanner not available");
     }
 
     rust::Vec<ffi::FfiBucketSubscription> rust_subs;
@@ -614,7 +614,7 @@ Result LogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offse
 Result LogScanner::SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id,
                                              int64_t start_offset) {
     if (!Available()) {
-        return utils::make_error(1, "LogScanner not available");
+        return utils::make_client_error("LogScanner not available");
     }
 
     auto ffi_result = scanner_->subscribe_partition(partition_id, bucket_id, start_offset);
@@ -624,7 +624,7 @@ Result LogScanner::SubscribePartitionBuckets(int64_t partition_id, int32_t bucke
 Result LogScanner::SubscribePartitionBuckets(
     const std::vector<PartitionBucketSubscription>& subscriptions) {
     if (!Available()) {
-        return utils::make_error(1, "LogScanner not available");
+        return utils::make_client_error("LogScanner not available");
     }
 
     rust::Vec<ffi::FfiPartitionBucketSubscription> rust_subs;
@@ -642,7 +642,7 @@ Result LogScanner::SubscribePartitionBuckets(
 
 Result LogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id) {
     if (!Available()) {
-        return utils::make_error(1, "LogScanner not available");
+        return utils::make_client_error("LogScanner not available");
     }
 
     auto ffi_result = scanner_->unsubscribe_partition(partition_id, bucket_id);
@@ -651,7 +651,7 @@ Result LogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id)
 
 Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
-        return utils::make_error(1, "LogScanner not available");
+        return utils::make_client_error("LogScanner not available");
     }
 
     auto ffi_result = scanner_->poll(timeout_ms);
@@ -707,7 +707,7 @@ int64_t ArrowRecordBatch::GetLastOffset() const {
 
 Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) {
     if (!Available()) {
-        return utils::make_error(1, "LogScanner not available");
+        return utils::make_client_error("LogScanner not available");
     }
 
     auto ffi_result = scanner_->poll_record_batch(timeout_ms);
@@ -739,7 +739,7 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
             // Return an error indicating that the import failed
             std::string error_msg =
                 "Failed to import Arrow record batch: " + import_result.status().ToString();
-            return utils::make_error(1, error_msg);
+            return utils::make_client_error(error_msg);
         }
     }
 

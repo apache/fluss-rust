@@ -437,6 +437,12 @@ pub struct Lookuper {
     table_info: fcore::metadata::TableInfo,
 }
 
+/// Error code for client-side errors that did not originate from the server API protocol.
+/// Must be non-zero so that CPP `Result::Ok()` (which checks `error_code == 0`) correctly
+/// detects client-side errors as failures. The value -2 is outside the server API error
+/// code range (-1 .. 57+), so it will never collide with current or future API codes.
+const CLIENT_ERROR_CODE: i32 = -2;
+
 fn ok_result() -> ffi::FfiResult {
     ffi::FfiResult {
         error_code: 0,
@@ -451,12 +457,19 @@ fn err_result(code: i32, msg: String) -> ffi::FfiResult {
     }
 }
 
-/// Convert a core Error to FfiResult, extracting the API error code when available.
+/// Create a client-side error result (not from server API).
+fn client_err(msg: String) -> ffi::FfiResult {
+    err_result(CLIENT_ERROR_CODE, msg)
+}
+
+/// Convert a core Error to FfiResult.
+/// `FlussAPIError` variants carry the server protocol error code directly.
+/// All other error kinds are client-side and use CLIENT_ERROR_CODE.
 fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
-    if let fcore::error::Error::FlussAPIError { api_error } = e {
-        err_result(api_error.code, api_error.message.clone())
-    } else {
-        err_result(-1, e.to_string())
+    use fcore::error::Error;
+    match e {
+        Error::FlussAPIError { api_error } => err_result(api_error.code, api_error.message.clone()),
+        _ => client_err(e.to_string()),
     }
 }
 
@@ -520,7 +533,7 @@ impl Connection {
                 let table = Box::into_raw(Box::new(Table {
                     connection: self.inner.clone(),
                     metadata: t.metadata().clone(),
-                    table_info: t.table_info().clone(),
+                    table_info: t.get_table_info().clone(),
                     table_path: t.table_path().clone(),
                     has_pk: t.has_primary_key(),
                 }));
@@ -554,7 +567,7 @@ impl Admin {
 
         let core_descriptor = match types::ffi_descriptor_to_core(descriptor) {
             Ok(d) => d,
-            Err(e) => return err_result(1, e.to_string()),
+            Err(e) => return client_err(e.to_string()),
         };
 
         let result = RUNTIME.block_on(async {
@@ -655,10 +668,10 @@ impl Admin {
             2 => OffsetSpec::Timestamp(offset_query.timestamp),
             _ => {
                 return ffi::FfiListOffsetsResult {
-                    result: err_result(
-                        1,
-                        format!("Invalid offset_type: {}", offset_query.offset_type),
-                    ),
+                    result: client_err(format!(
+                        "Invalid offset_type: {}",
+                        offset_query.offset_type
+                    )),
                     bucket_offsets: vec![],
                 };
             }
@@ -808,7 +821,7 @@ impl Admin {
 
         let result = RUNTIME.block_on(async {
             self.inner
-                .create_database(database_name, ignore_if_exists, descriptor_opt.as_ref())
+                .create_database(database_name, descriptor_opt.as_ref(), ignore_if_exists)
                 .await
         });
 
@@ -1122,7 +1135,7 @@ impl WriteResult {
                 Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "WriteResult already consumed".to_string())
+            client_err("WriteResult already consumed".to_string())
         }
     }
 }
@@ -1213,7 +1226,7 @@ impl Lookuper {
             Ok(r) => self.pad_row(r),
             Err(e) => {
                 return ffi::FfiLookupResult {
-                    result: err_result(1, e.to_string()),
+                    result: client_err(e.to_string()),
                     found: false,
                     row: ffi::FfiGenericRow { fields: vec![] },
                 };
@@ -1239,7 +1252,7 @@ impl Lookuper {
                     row: ffi_row,
                 },
                 Err(e) => ffi::FfiLookupResult {
-                    result: err_result(1, e.to_string()),
+                    result: client_err(e.to_string()),
                     found: false,
                     row: ffi::FfiGenericRow { fields: vec![] },
                 },
@@ -1318,7 +1331,7 @@ impl LogScanner {
                 Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1345,7 +1358,7 @@ impl LogScanner {
                 Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1389,7 +1402,7 @@ impl LogScanner {
                 Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1411,7 +1424,7 @@ impl LogScanner {
                 Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1428,7 +1441,7 @@ impl LogScanner {
                             scan_records,
                         },
                         Err(e) => ffi::FfiScanRecordsResult {
-                            result: err_result(1, e.to_string()),
+                            result: client_err(e.to_string()),
                             scan_records: ffi::FfiScanRecords { records: vec![] },
                         },
                     }
@@ -1440,7 +1453,7 @@ impl LogScanner {
             }
         } else {
             ffi::FfiScanRecordsResult {
-                result: err_result(1, "Record-based scanner not available".to_string()),
+                result: client_err("Record-based scanner not available".to_string()),
                 scan_records: ffi::FfiScanRecords { records: vec![] },
             }
         }
@@ -1458,7 +1471,7 @@ impl LogScanner {
                         arrow_batches,
                     },
                     Err(e) => ffi::FfiArrowRecordBatchesResult {
-                        result: err_result(1, e),
+                        result: client_err(e),
                         arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
                     },
                 },
@@ -1469,7 +1482,7 @@ impl LogScanner {
             }
         } else {
             ffi::FfiArrowRecordBatchesResult {
-                result: err_result(1, "Batch-based scanner not available".to_string()),
+                result: client_err("Batch-based scanner not available".to_string()),
                 arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
             }
         }

@@ -37,8 +37,8 @@ pub struct CreateDatabaseRequest {
 impl CreateDatabaseRequest {
     pub fn new(
         database_name: &str,
-        ignore_if_exists: bool,
         database_descriptor: Option<&DatabaseDescriptor>,
+        ignore_if_exists: bool,
     ) -> FlussResult<Self> {
         let database_json = if let Some(descriptor) = database_descriptor {
             Some(descriptor.to_json_bytes()?)

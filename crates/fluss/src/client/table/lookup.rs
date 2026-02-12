@@ -254,20 +254,19 @@ impl Lookuper {
             .metadata
             .leader_for(self.table_path.as_ref(), &table_bucket)
             .await?
-            .ok_or_else(|| Error::LeaderNotAvailable {
-                message: format!("No leader found for table bucket: {table_bucket}"),
+            .ok_or_else(|| {
+                Error::leader_not_available(format!(
+                    "No leader found for table bucket: {table_bucket}"
+                ))
             })?;
 
         // Get connection to the tablet server
-        let tablet_server =
-            cluster
-                .get_tablet_server(leader.id())
-                .ok_or_else(|| Error::LeaderNotAvailable {
-                    message: format!(
-                        "Tablet server {} is not found in metadata cache",
-                        leader.id()
-                    ),
-                })?;
+        let tablet_server = cluster.get_tablet_server(leader.id()).ok_or_else(|| {
+            Error::leader_not_available(format!(
+                "Tablet server {} is not found in metadata cache",
+                leader.id()
+            ))
+        })?;
 
         let connection = self.rpc_client.get_connection(tablet_server).await?;
 

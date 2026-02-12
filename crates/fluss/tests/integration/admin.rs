@@ -73,7 +73,7 @@ mod admin_test {
 
         // create database
         admin
-            .create_database(db_name, false, Some(&db_descriptor))
+            .create_database(db_name, Some(&db_descriptor), false)
             .await
             .expect("should create database");
 
@@ -117,7 +117,7 @@ mod admin_test {
 
         assert!(!admin.database_exists(test_db_name).await.unwrap());
         admin
-            .create_database(test_db_name, false, Some(&db_descriptor))
+            .create_database(test_db_name, Some(&db_descriptor), false)
             .await
             .expect("Failed to create test database");
 
@@ -239,7 +239,7 @@ mod admin_test {
             .build();
 
         admin
-            .create_database(test_db_name, true, Some(&db_descriptor))
+            .create_database(test_db_name, Some(&db_descriptor), true)
             .await
             .expect("Failed to create test database");
 
@@ -378,37 +378,23 @@ mod admin_test {
         assert!(result.is_err(), "Expected error but got Ok");
 
         let error = result.unwrap_err();
-        match error {
-            fluss::error::Error::FlussAPIError { api_error } => {
-                assert_eq!(
-                    api_error.code,
-                    FlussError::TableNotExist.code(),
-                    "Expected error code 7 (TableNotExist)"
-                );
-                assert_eq!(
-                    api_error.message, "Table 'fluss.not_exist' does not exist.",
-                    "Expected specific error message"
-                );
-            }
-            other => panic!("Expected FlussAPIError, got {:?}", other),
-        }
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::TableNotExist),
+            "Expected TableNotExist error, got {:?}",
+            error
+        );
     }
 
     /// Helper to assert that an error is a FlussAPIError with the expected code.
     fn assert_api_error(error: fluss::error::Error, expected: FlussError) {
-        match error {
-            fluss::error::Error::FlussAPIError { api_error } => {
-                assert_eq!(
-                    api_error.code,
-                    expected.code(),
-                    "Expected error code {} ({:?}), got {}",
-                    expected.code(),
-                    expected,
-                    api_error.code
-                );
-            }
-            other => panic!("Expected FlussAPIError({:?}), got {:?}", expected, other),
-        }
+        assert_eq!(
+            error.api_error(),
+            Some(expected),
+            "Expected {:?}, got {:?}",
+            expected,
+            error
+        );
     }
 
     #[tokio::test]
@@ -440,19 +426,19 @@ mod admin_test {
         let descriptor = DatabaseDescriptorBuilder::default().build();
 
         admin
-            .create_database(db_name, false, Some(&descriptor))
+            .create_database(db_name, Some(&descriptor), false)
             .await
             .unwrap();
 
         // create same database again without ignore flag
         let result = admin
-            .create_database(db_name, false, Some(&descriptor))
+            .create_database(db_name, Some(&descriptor), false)
             .await;
         assert_api_error(result.unwrap_err(), FlussError::DatabaseAlreadyExist);
 
         // with ignore flag should succeed
         admin
-            .create_database(db_name, true, Some(&descriptor))
+            .create_database(db_name, Some(&descriptor), true)
             .await
             .expect("create_database with ignore_if_exists should succeed");
 
@@ -469,7 +455,7 @@ mod admin_test {
         let db_name = "test_error_tbl_already_exist_db";
         let descriptor = DatabaseDescriptorBuilder::default().build();
         admin
-            .create_database(db_name, true, Some(&descriptor))
+            .create_database(db_name, Some(&descriptor), true)
             .await
             .unwrap();
 
@@ -536,7 +522,7 @@ mod admin_test {
         let db_name = "test_error_not_partitioned_db";
         let descriptor = DatabaseDescriptorBuilder::default().build();
         admin
-            .create_database(db_name, true, Some(&descriptor))
+            .create_database(db_name, Some(&descriptor), true)
             .await
             .unwrap();
 

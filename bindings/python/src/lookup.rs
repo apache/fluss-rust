@@ -27,7 +27,7 @@ use tokio::sync::Mutex;
 /// repeated lookups efficient. Create once and reuse for multiple lookups.
 ///
 /// # Example:
-///     lookuper = table.new_lookup()
+///     lookuper = table.new_lookup().create_lookuper()
 ///     result = await lookuper.lookup({"user_id": 1})
 ///     result2 = await lookuper.lookup({"user_id": 2})  # Reuses cached encoders
 #[pyclass]

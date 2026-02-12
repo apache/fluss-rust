@@ -105,7 +105,7 @@ async def main():
     print(f"Got table: {table}")
 
     # Create a writer for the table
-    append_writer = await table.new_append()
+    append_writer = table.new_append().create_writer()
     print(f"Created append writer: {append_writer}")
 
     try:
@@ -419,7 +419,7 @@ async def main():
     # --- Test Upsert ---
     print("\n--- Testing Upsert (fire-and-forget) ---")
     try:
-        upsert_writer = pk_table.new_upsert()
+        upsert_writer = pk_table.new_upsert().create_writer()
         print(f"Created upsert writer: {upsert_writer}")
 
         # Fire-and-forget: queue writes synchronously, flush at end.
@@ -504,7 +504,7 @@ async def main():
     # --- Test Lookup ---
     print("\n--- Testing Lookup ---")
     try:
-        lookuper = pk_table.new_lookup()
+        lookuper = pk_table.new_lookup().create_lookuper()
         print(f"Created lookuper: {lookuper}")
 
         result = await lookuper.lookup({"user_id": 1})
@@ -552,13 +552,13 @@ async def main():
     # --- Test Delete ---
     print("\n--- Testing Delete ---")
     try:
-        upsert_writer = pk_table.new_upsert()
+        upsert_writer = pk_table.new_upsert().create_writer()
 
         handle = upsert_writer.delete({"user_id": 3})
         await handle.wait()
         print("Deleted user_id=3 — server acknowledged")
 
-        lookuper = pk_table.new_lookup()
+        lookuper = pk_table.new_lookup().create_lookuper()
         result = await lookuper.lookup({"user_id": 3})
         if result:
             print(f"Lookup user_id=3 after delete: Still found! -> {result}")
@@ -572,12 +572,12 @@ async def main():
     # --- Test Partial Update by column names ---
     print("\n--- Testing Partial Update (by column names) ---")
     try:
-        partial_writer = pk_table.new_upsert(columns=["user_id", "balance"])
+        partial_writer = pk_table.new_upsert().partial_update_by_name(["user_id", "balance"]).create_writer()
         handle = partial_writer.upsert({"user_id": 1, "balance": Decimal("9999.99")})
         await handle.wait()
         print("Partial update: set balance=9999.99 for user_id=1")
 
-        lookuper = pk_table.new_lookup()
+        lookuper = pk_table.new_lookup().create_lookuper()
         result = await lookuper.lookup({"user_id": 1})
         if result:
             print(f"Partial update verified:"
@@ -594,12 +594,12 @@ async def main():
     print("\n--- Testing Partial Update (by column indices) ---")
     try:
         # Columns: 0=user_id (PK), 1=name — update name only
-        partial_writer_idx = pk_table.new_upsert(column_indices=[0, 1])
+        partial_writer_idx = pk_table.new_upsert().partial_update_by_index([0, 1]).create_writer()
         handle = partial_writer_idx.upsert([1, "Alice Renamed"])
         await handle.wait()
         print("Partial update by indices: set name='Alice Renamed' for user_id=1")
 
-        lookuper = pk_table.new_lookup()
+        lookuper = pk_table.new_lookup().create_lookuper()
         result = await lookuper.lookup({"user_id": 1})
         if result:
             print(f"Partial update by indices verified:"
@@ -709,7 +709,7 @@ async def main():
 
         # Get the table and write some data
         partitioned_table = await conn.get_table(partitioned_table_path)
-        partitioned_writer = await partitioned_table.new_append()
+        partitioned_writer = partitioned_table.new_append().create_writer()
 
         # Append data to US partition
         partitioned_writer.append({"id": 1, "region": "US", "value": 100})
@@ -839,7 +839,7 @@ async def main():
         print("Created partitions: US, EU, APAC")
 
         partitioned_kv_table = await conn.get_table(partitioned_kv_path)
-        upsert_writer = partitioned_kv_table.new_upsert()
+        upsert_writer = partitioned_kv_table.new_upsert().create_writer()
 
         # Upsert rows across partitions
         test_data = [
@@ -859,7 +859,7 @@ async def main():
 
         # Lookup all rows across partitions
         print("\n--- Lookup across partitions ---")
-        lookuper = partitioned_kv_table.new_lookup()
+        lookuper = partitioned_kv_table.new_lookup().create_lookuper()
         for region, user_id, name, score in test_data:
             result = await lookuper.lookup({"region": region, "user_id": user_id})
             assert result is not None, f"Expected to find region={region} user_id={user_id}"

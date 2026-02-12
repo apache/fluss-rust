@@ -110,6 +110,10 @@ namespace utils {
 
 inline Result make_error(int32_t code, std::string msg) { return Result{code, std::move(msg)}; }
 
+inline Result make_client_error(std::string msg) {
+    return Result{ErrorCode::CLIENT_ERROR, std::move(msg)};
+}
+
 inline Result make_ok() { return Result{0, {}}; }
 
 inline Result from_ffi_result(const ffi::FfiResult& ffi_result) {

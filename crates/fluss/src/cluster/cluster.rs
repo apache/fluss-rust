@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::cluster::{BucketLocation, ServerNode, ServerType};
-use crate::error::Error::PartitionNotExist;
 use crate::error::{Error, Result};
 use crate::metadata::{
     JsonSerde, PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
@@ -318,12 +317,10 @@ impl Cluster {
         let partition_id = self.get_partition_id(physical_table_path);
 
         if physical_table_path.get_partition_name().is_some() && partition_id.is_none() {
-            return Err(PartitionNotExist {
-                message: format!(
-                    "The partition {} is not found in cluster",
-                    physical_table_path.get_partition_name().unwrap()
-                ),
-            });
+            return Err(Error::partition_not_exist(format!(
+                "The partition {} is not found in cluster",
+                physical_table_path.get_partition_name().unwrap()
+            )));
         }
 
         Ok(TableBucket::new_with_partition(
@@ -390,9 +387,7 @@ impl Cluster {
     pub fn get_table(&self, table_path: &TablePath) -> Result<&TableInfo> {
         self.table_info_by_path
             .get(table_path)
-            .ok_or_else(|| Error::InvalidTableError {
-                message: format!("Table info not found for {table_path}"),
-            })
+            .ok_or_else(|| Error::invalid_table(format!("Table info not found for {table_path}")))
     }
 
     pub fn opt_get_table(&self, table_path: &TablePath) -> Option<&TableInfo> {

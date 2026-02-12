@@ -59,12 +59,6 @@ pub enum Error {
 
     #[snafu(
         visibility(pub(crate)),
-        display("Fluss hitting invalid table error {}.", message)
-    )]
-    InvalidTableError { message: String },
-
-    #[snafu(
-        visibility(pub(crate)),
         display("Fluss hitting json serde error {}.", message)
     )]
     JsonSerdeError { message: String },
@@ -95,18 +89,6 @@ pub enum Error {
 
     #[snafu(
         visibility(pub(crate)),
-        display("Fluss hitting invalid partition error {}.", message)
-    )]
-    InvalidPartition { message: String },
-
-    #[snafu(
-        visibility(pub(crate)),
-        display("Fluss hitting partition not exist error {}.", message)
-    )]
-    PartitionNotExist { message: String },
-
-    #[snafu(
-        visibility(pub(crate)),
         display("Fluss hitting IO not supported error {}.", message)
     )]
     IoUnsupported { message: String },
@@ -122,14 +104,58 @@ pub enum Error {
     )]
     UnsupportedOperation { message: String },
 
-    #[snafu(
-        visibility(pub(crate)),
-        display("Fluss hitting leader not available error {}.", message)
-    )]
-    LeaderNotAvailable { message: String },
-
     #[snafu(visibility(pub(crate)), display("Fluss API Error: {}.", api_error))]
     FlussAPIError { api_error: ApiError },
+}
+
+/// Convenience constructors for API errors that may be raised client-side.
+/// These create `FlussAPIError` with the correct protocol error code,
+/// consistent with Java where e.g. `InvalidTableException` always carries code 15.
+impl Error {
+    pub fn invalid_table(message: impl Into<String>) -> Self {
+        Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::InvalidTableException.code(),
+                message: message.into(),
+            },
+        }
+    }
+
+    pub fn partition_not_exist(message: impl Into<String>) -> Self {
+        Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::PartitionNotExists.code(),
+                message: message.into(),
+            },
+        }
+    }
+
+    pub fn invalid_partition(message: impl Into<String>) -> Self {
+        Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::PartitionSpecInvalidException.code(),
+                message: message.into(),
+            },
+        }
+    }
+
+    pub fn leader_not_available(message: impl Into<String>) -> Self {
+        Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::LeaderNotAvailableException.code(),
+                message: message.into(),
+            },
+        }
+    }
+
+    /// Returns the API error kind if this is an API error, for ergonomic pattern matching.
+    pub fn api_error(&self) -> Option<FlussError> {
+        if let Error::FlussAPIError { api_error } = self {
+            Some(FlussError::for_code(api_error.code))
+        } else {
+            None
+        }
+    }
 }
 
 impl From<ArrowError> for Error {
