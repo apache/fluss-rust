@@ -35,7 +35,7 @@ static void check(const char* step, const fluss::Result& r) {
 int main() {
     // 1) Connect
     fluss::Configuration config;
-    config.bootstrap_server = "127.0.0.1:9123";
+    config.bootstrap_servers = "127.0.0.1:9123";
 
     fluss::Connection conn;
     check("create", fluss::Connection::Create(config, conn));
@@ -349,7 +349,8 @@ int main() {
     std::cout << "\n=== Testing Arrow Record Batch Polling ===" << std::endl;
 
     fluss::LogScanner arrow_scanner;
-    check("new_record_batch_log_scanner", table.NewScan().CreateRecordBatchScanner(arrow_scanner));
+    check("new_record_batch_log_scanner",
+          table.NewScan().CreateRecordBatchLogScanner(arrow_scanner));
 
     for (int b = 0; b < buckets; ++b) {
         check("subscribe_arrow", arrow_scanner.Subscribe(b, 0));
@@ -376,7 +377,7 @@ int main() {
     check("new_record_batch_log_scanner_with_projection",
           table.NewScan()
               .ProjectByIndex(projected_columns)
-              .CreateRecordBatchScanner(projected_arrow_scanner));
+              .CreateRecordBatchLogScanner(projected_arrow_scanner));
 
     for (int b = 0; b < buckets; ++b) {
         check("subscribe_projected_arrow", projected_arrow_scanner.Subscribe(b, 0));

@@ -52,9 +52,9 @@ Result Connection::Create(const Configuration& config, Connection& out) {
         out.conn_ = ffi::new_connection(ffi_config);
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
@@ -62,22 +62,22 @@ bool Connection::Available() const { return conn_ != nullptr; }
 
 Result Connection::GetAdmin(Admin& out) {
     if (!Available()) {
-        return utils::make_error(1, "Connection not available");
+        return utils::make_client_error("Connection not available");
     }
 
     try {
         out.admin_ = conn_->get_admin();
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 
 Result Connection::GetTable(const TablePath& table_path, Table& out) {
     if (!Available()) {
-        return utils::make_error(1, "Connection not available");
+        return utils::make_client_error("Connection not available");
     }
 
     try {
@@ -85,9 +85,9 @@ Result Connection::GetTable(const TablePath& table_path, Table& out) {
         out.table_ = conn_->get_table(ffi_path);
         return utils::make_ok();
     } catch (const rust::Error& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
-        return utils::make_error(1, e.what());
+        return utils::make_client_error(e.what());
     }
 }
 

@@ -115,7 +115,7 @@ mod table_test {
             .get_table(&table_path)
             .await
             .expect("Failed to get table");
-        let num_buckets = table.table_info().get_num_buckets();
+        let num_buckets = table.get_table_info().get_num_buckets();
         let log_scanner = table
             .new_scan()
             .create_log_scanner()
@@ -134,7 +134,7 @@ mod table_test {
             .expect("Failed to poll records");
 
         // Verify the scanned records
-        let table_bucket = TableBucket::new(table.table_info().table_id, 0);
+        let table_bucket = TableBucket::new(table.get_table_info().table_id, 0);
         let records = scan_records.records(&table_bucket);
 
         assert_eq!(records.len(), 6, "Expected 6 records");
@@ -664,7 +664,7 @@ mod table_test {
             .await
             .expect("Failed to get table");
 
-        let field_count = table.table_info().schema.columns().len();
+        let field_count = table.get_table_info().schema.columns().len();
 
         let append_writer = table
             .new_append()

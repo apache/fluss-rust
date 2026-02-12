@@ -31,10 +31,10 @@ const DEFAULT_ACKS: &str = "all";
 #[command(author, version, about, long_about = None)]
 pub struct Config {
     #[arg(long, default_value_t = String::from(DEFAULT_BOOTSTRAP_SERVER))]
-    pub bootstrap_server: String,
+    pub bootstrap_servers: String,
 
     #[arg(long, default_value_t = DEFAULT_REQUEST_MAX_SIZE)]
-    pub request_max_size: i32,
+    pub writer_request_max_size: i32,
 
     #[arg(long, default_value_t = String::from(DEFAULT_ACKS))]
     pub writer_acks: String,
@@ -53,19 +53,19 @@ pub struct Config {
     /// Maximum concurrent remote log downloads
     /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
     #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
-    pub scanner_remote_log_download_threads: usize,
+    pub remote_file_download_thread_num: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            bootstrap_server: String::from(DEFAULT_BOOTSTRAP_SERVER),
-            request_max_size: DEFAULT_REQUEST_MAX_SIZE,
+            bootstrap_servers: String::from(DEFAULT_BOOTSTRAP_SERVER),
+            writer_request_max_size: DEFAULT_REQUEST_MAX_SIZE,
             writer_acks: String::from(DEFAULT_ACKS),
             writer_retries: i32::MAX,
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
-            scanner_remote_log_download_threads: DEFAULT_DOWNLOAD_THREADS,
+            remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
         }
     }
 }

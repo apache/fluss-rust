@@ -38,13 +38,13 @@ mod ffi {
     }
 
     struct FfiConfig {
-        bootstrap_server: String,
-        request_max_size: i32,
+        bootstrap_servers: String,
+        writer_request_max_size: i32,
         writer_acks: String,
         writer_retries: i32,
         writer_batch_size: i32,
         scanner_remote_log_prefetch_num: usize,
-        scanner_remote_log_download_threads: usize,
+        remote_file_download_thread_num: usize,
     }
 
     struct FfiResult {
@@ -437,6 +437,12 @@ pub struct Lookuper {
     table_info: fcore::metadata::TableInfo,
 }
 
+/// Error code for client-side errors that did not originate from the server API protocol.
+/// Must be non-zero so that CPP `Result::Ok()` (which checks `error_code == 0`) correctly
+/// detects client-side errors as failures. The value -2 is outside the server API error
+/// code range (-1 .. 57+), so it will never collide with current or future API codes.
+const CLIENT_ERROR_CODE: i32 = -2;
+
 fn ok_result() -> ffi::FfiResult {
     ffi::FfiResult {
         error_code: 0,
@@ -451,16 +457,32 @@ fn err_result(code: i32, msg: String) -> ffi::FfiResult {
     }
 }
 
+/// Create a client-side error result (not from server API).
+fn client_err(msg: String) -> ffi::FfiResult {
+    err_result(CLIENT_ERROR_CODE, msg)
+}
+
+/// Convert a core Error to FfiResult.
+/// `FlussAPIError` variants carry the server protocol error code directly.
+/// All other error kinds are client-side and use CLIENT_ERROR_CODE.
+fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
+    use fcore::error::Error;
+    match e {
+        Error::FlussAPIError { api_error } => err_result(api_error.code, api_error.message.clone()),
+        _ => client_err(e.to_string()),
+    }
+}
+
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
     let config = fluss::config::Config {
-        bootstrap_server: config.bootstrap_server.to_string(),
-        request_max_size: config.request_max_size,
+        bootstrap_servers: config.bootstrap_servers.to_string(),
+        writer_request_max_size: config.writer_request_max_size,
         writer_acks: config.writer_acks.to_string(),
         writer_retries: config.writer_retries,
         writer_batch_size: config.writer_batch_size,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
-        scanner_remote_log_download_threads: config.scanner_remote_log_download_threads,
+        remote_file_download_thread_num: config.remote_file_download_thread_num,
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config).await });
@@ -511,7 +533,7 @@ impl Connection {
                 let table = Box::into_raw(Box::new(Table {
                     connection: self.inner.clone(),
                     metadata: t.metadata().clone(),
-                    table_info: t.table_info().clone(),
+                    table_info: t.get_table_info().clone(),
                     table_path: t.table_path().clone(),
                     has_pk: t.has_primary_key(),
                 }));
@@ -545,7 +567,7 @@ impl Admin {
 
         let core_descriptor = match types::ffi_descriptor_to_core(descriptor) {
             Ok(d) => d,
-            Err(e) => return err_result(1, e.to_string()),
+            Err(e) => return client_err(e.to_string()),
         };
 
         let result = RUNTIME.block_on(async {
@@ -556,7 +578,7 @@ impl Admin {
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(2, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 
@@ -575,7 +597,7 @@ impl Admin {
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 
@@ -585,7 +607,7 @@ impl Admin {
             table_path.table_name.clone(),
         );
 
-        let result = RUNTIME.block_on(async { self.inner.get_table(&path).await });
+        let result = RUNTIME.block_on(async { self.inner.get_table_info(&path).await });
 
         match result {
             Ok(info) => ffi::FfiTableInfoResult {
@@ -593,7 +615,7 @@ impl Admin {
                 table_info: types::core_table_info_to_ffi(&info),
             },
             Err(e) => ffi::FfiTableInfoResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 table_info: types::empty_table_info(),
             },
         }
@@ -616,7 +638,7 @@ impl Admin {
                 lake_snapshot: types::core_lake_snapshot_to_ffi(&snapshot),
             },
             Err(e) => ffi::FfiLakeSnapshotResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 lake_snapshot: ffi::FfiLakeSnapshot {
                     snapshot_id: -1,
                     bucket_offsets: vec![],
@@ -646,10 +668,10 @@ impl Admin {
             2 => OffsetSpec::Timestamp(offset_query.timestamp),
             _ => {
                 return ffi::FfiListOffsetsResult {
-                    result: err_result(
-                        1,
-                        format!("Invalid offset_type: {}", offset_query.offset_type),
-                    ),
+                    result: client_err(format!(
+                        "Invalid offset_type: {}",
+                        offset_query.offset_type
+                    )),
                     bucket_offsets: vec![],
                 };
             }
@@ -679,7 +701,7 @@ impl Admin {
                 }
             }
             Err(e) => ffi::FfiListOffsetsResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 bucket_offsets: vec![],
             },
         }
@@ -728,7 +750,7 @@ impl Admin {
                 }
             }
             Err(e) => ffi::FfiListPartitionInfosResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 partition_infos: vec![],
             },
         }
@@ -757,7 +779,7 @@ impl Admin {
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 
@@ -785,7 +807,7 @@ impl Admin {
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 
@@ -799,13 +821,13 @@ impl Admin {
 
         let result = RUNTIME.block_on(async {
             self.inner
-                .create_database(database_name, ignore_if_exists, descriptor_opt.as_ref())
+                .create_database(database_name, descriptor_opt.as_ref(), ignore_if_exists)
                 .await
         });
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 
@@ -823,7 +845,7 @@ impl Admin {
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 
@@ -836,7 +858,7 @@ impl Admin {
                 database_names: names,
             },
             Err(e) => ffi::FfiListDatabasesResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 database_names: vec![],
             },
         }
@@ -851,7 +873,7 @@ impl Admin {
                 value: exists,
             },
             Err(e) => ffi::FfiBoolResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 value: false,
             },
         }
@@ -866,7 +888,7 @@ impl Admin {
                 database_info: types::core_database_info_to_ffi(&info),
             },
             Err(e) => ffi::FfiDatabaseInfoResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 database_info: ffi::FfiDatabaseInfo {
                     database_name: String::new(),
                     comment: String::new(),
@@ -887,7 +909,7 @@ impl Admin {
                 table_names: names,
             },
             Err(e) => ffi::FfiListTablesResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 table_names: vec![],
             },
         }
@@ -907,7 +929,7 @@ impl Admin {
                 value: exists,
             },
             Err(e) => ffi::FfiBoolResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 value: false,
             },
         }
@@ -1099,7 +1121,7 @@ impl AppendWriter {
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 }
@@ -1110,10 +1132,10 @@ impl WriteResult {
             let result = RUNTIME.block_on(future);
             match result {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "WriteResult already consumed".to_string())
+            client_err("WriteResult already consumed".to_string())
         }
     }
 }
@@ -1173,7 +1195,7 @@ impl UpsertWriter {
 
         match result {
             Ok(_) => ok_result(),
-            Err(e) => err_result(1, e.to_string()),
+            Err(e) => err_from_core_error(&e),
         }
     }
 }
@@ -1204,7 +1226,7 @@ impl Lookuper {
             Ok(r) => self.pad_row(r),
             Err(e) => {
                 return ffi::FfiLookupResult {
-                    result: err_result(1, e.to_string()),
+                    result: client_err(e.to_string()),
                     found: false,
                     row: ffi::FfiGenericRow { fields: vec![] },
                 };
@@ -1215,7 +1237,7 @@ impl Lookuper {
             Ok(r) => r,
             Err(e) => {
                 return ffi::FfiLookupResult {
-                    result: err_result(1, e.to_string()),
+                    result: err_from_core_error(&e),
                     found: false,
                     row: ffi::FfiGenericRow { fields: vec![] },
                 };
@@ -1230,7 +1252,7 @@ impl Lookuper {
                     row: ffi_row,
                 },
                 Err(e) => ffi::FfiLookupResult {
-                    result: err_result(1, e.to_string()),
+                    result: client_err(e.to_string()),
                     found: false,
                     row: ffi::FfiGenericRow { fields: vec![] },
                 },
@@ -1241,7 +1263,7 @@ impl Lookuper {
                 row: ffi::FfiGenericRow { fields: vec![] },
             },
             Err(e) => ffi::FfiLookupResult {
-                result: err_result(1, e.to_string()),
+                result: err_from_core_error(&e),
                 found: false,
                 row: ffi::FfiGenericRow { fields: vec![] },
             },
@@ -1292,7 +1314,7 @@ impl LogScanner {
             });
             match result {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else if let Some(ref inner_batch) = self.inner_batch {
             let result = RUNTIME.block_on(async {
@@ -1306,10 +1328,10 @@ impl LogScanner {
             });
             match result {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1325,7 +1347,7 @@ impl LogScanner {
 
             match result {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else if let Some(ref inner_batch) = self.inner_batch {
             let result =
@@ -1333,10 +1355,10 @@ impl LogScanner {
 
             match result {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1367,7 +1389,7 @@ impl LogScanner {
             });
             match result {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else if let Some(ref inner_batch) = self.inner_batch {
             let result = RUNTIME.block_on(async {
@@ -1377,10 +1399,10 @@ impl LogScanner {
             });
             match result {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1390,7 +1412,7 @@ impl LogScanner {
                 .block_on(async { inner.unsubscribe_partition(partition_id, bucket_id).await })
             {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else if let Some(ref inner_batch) = self.inner_batch {
             match RUNTIME.block_on(async {
@@ -1399,10 +1421,10 @@ impl LogScanner {
                     .await
             }) {
                 Ok(_) => ok_result(),
-                Err(e) => err_result(1, e.to_string()),
+                Err(e) => err_from_core_error(&e),
             }
         } else {
-            err_result(1, "LogScanner not initialized".to_string())
+            client_err("LogScanner not initialized".to_string())
         }
     }
 
@@ -1419,19 +1441,19 @@ impl LogScanner {
                             scan_records,
                         },
                         Err(e) => ffi::FfiScanRecordsResult {
-                            result: err_result(1, e.to_string()),
+                            result: client_err(e.to_string()),
                             scan_records: ffi::FfiScanRecords { records: vec![] },
                         },
                     }
                 }
                 Err(e) => ffi::FfiScanRecordsResult {
-                    result: err_result(1, e.to_string()),
+                    result: err_from_core_error(&e),
                     scan_records: ffi::FfiScanRecords { records: vec![] },
                 },
             }
         } else {
             ffi::FfiScanRecordsResult {
-                result: err_result(1, "Record-based scanner not available".to_string()),
+                result: client_err("Record-based scanner not available".to_string()),
                 scan_records: ffi::FfiScanRecords { records: vec![] },
             }
         }
@@ -1449,18 +1471,18 @@ impl LogScanner {
                         arrow_batches,
                     },
                     Err(e) => ffi::FfiArrowRecordBatchesResult {
-                        result: err_result(1, e),
+                        result: client_err(e),
                         arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
                     },
                 },
                 Err(e) => ffi::FfiArrowRecordBatchesResult {
-                    result: err_result(1, e.to_string()),
+                    result: err_from_core_error(&e),
                     arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
                 },
             }
         } else {
             ffi::FfiArrowRecordBatchesResult {
-                result: err_result(1, "Batch-based scanner not available".to_string()),
+                result: client_err("Batch-based scanner not available".to_string()),
                 arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
             }
         }

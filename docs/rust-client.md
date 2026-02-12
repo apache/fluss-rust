@@ -118,7 +118,7 @@ use fluss::error::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut config = Config::default();
-    config.bootstrap_server = "127.0.0.1:9123".to_string();
+    config.bootstrap_servers = "127.0.0.1:9123".to_string();
 
     let conn = FlussConnection::new(config).await?;
 
@@ -132,8 +132,8 @@ async fn main() -> Result<()> {
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `bootstrap_server` | Coordinator server address | `127.0.0.1:9123` |
-| `request_max_size` | Maximum request size in bytes | 10 MB |
+| `bootstrap_servers` | Coordinator server address | `127.0.0.1:9123` |
+| `writer_request_max_size` | Maximum request size in bytes | 10 MB |
 | `writer_acks` | Acknowledgment setting (`all` waits for all replicas) | `all` |
 | `writer_retries` | Number of retries on failure | `i32::MAX` |
 | `writer_batch_size` | Batch size for writes | 2 MB |
@@ -150,7 +150,7 @@ let admin = conn.get_admin().await?;
 
 ```rust
 // Create database
-admin.create_database("my_database", true, None).await?;
+admin.create_database("my_database", None, true).await?;
 
 // List all databases
 let databases = admin.list_databases().await?;
@@ -188,7 +188,7 @@ let table_path = TablePath::new("my_database", "my_table");
 admin.create_table(&table_path, &table_descriptor, true).await?;
 
 // Get table information
-let table_info = admin.get_table(&table_path).await?;
+let table_info = admin.get_table_info(&table_path).await?;
 println!("Table: {}", table_info);
 
 // List tables in database

@@ -98,13 +98,9 @@ impl Sender {
                 .update_tables_metadata(&table_paths, &physical_table_paths, vec![])
                 .await
             {
-                match &e {
-                    crate::error::Error::FlussAPIError { api_error }
-                        if api_error.code == FlussError::PartitionNotExists.code() =>
-                    {
-                        warn!(
-                            "Partition does not exist during metadata update, continuing: {api_error}"
-                        );
+                match e.api_error() {
+                    Some(FlussError::PartitionNotExists) => {
+                        warn!("Partition does not exist during metadata update, continuing: {e}");
                     }
                     _ => return Err(e),
                 }

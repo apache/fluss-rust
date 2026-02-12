@@ -26,7 +26,7 @@ use fluss::row::{GenericRow, InternalRow};
 #[allow(dead_code)]
 pub async fn main() -> Result<()> {
     let mut config = Config::parse();
-    config.bootstrap_server = "127.0.0.1:9123".to_string();
+    config.bootstrap_servers = "127.0.0.1:9123".to_string();
 
     let conn = FlussConnection::new(config).await?;
 
@@ -49,7 +49,7 @@ pub async fn main() -> Result<()> {
         .await?;
     println!(
         "Created KV Table:\n {}\n",
-        admin.get_table(&table_path).await?
+        admin.get_table_info(&table_path).await?
     );
 
     let table = conn.get_table(&table_path).await?;

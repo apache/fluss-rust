@@ -66,15 +66,15 @@ impl FlussAdmin {
     pub async fn create_database(
         &self,
         database_name: &str,
-        ignore_if_exists: bool,
         database_descriptor: Option<&DatabaseDescriptor>,
+        ignore_if_exists: bool,
     ) -> Result<()> {
         let _response = self
             .admin_gateway
             .request(CreateDatabaseRequest::new(
                 database_name,
-                ignore_if_exists,
                 database_descriptor,
+                ignore_if_exists,
             )?)
             .await?;
         Ok(())
@@ -97,15 +97,19 @@ impl FlussAdmin {
         Ok(())
     }
 
-    pub async fn drop_table(&self, table_path: &TablePath, ignore_if_exists: bool) -> Result<()> {
+    pub async fn drop_table(
+        &self,
+        table_path: &TablePath,
+        ignore_if_not_exists: bool,
+    ) -> Result<()> {
         let _response = self
             .admin_gateway
-            .request(DropTableRequest::new(table_path, ignore_if_exists))
+            .request(DropTableRequest::new(table_path, ignore_if_not_exists))
             .await?;
         Ok(())
     }
 
-    pub async fn get_table(&self, table_path: &TablePath) -> Result<TableInfo> {
+    pub async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {
         let response = self
             .admin_gateway
             .request(GetTableRequest::new(table_path))
@@ -349,8 +353,10 @@ impl FlussAdmin {
             Some(
                 cluster
                     .get_partition_id(&physical_table_path)
-                    .ok_or_else(|| Error::PartitionNotExist {
-                        message: format!("Partition '{name}' not found for table '{table_path}'"),
+                    .ok_or_else(|| {
+                        Error::partition_not_exist(format!(
+                            "Partition '{name}' not found for table '{table_path}'"
+                        ))
                     })?,
             )
         } else {
@@ -424,11 +430,9 @@ impl FlussAdmin {
             let task = tokio::spawn(async move {
                 let cluster = metadata.get_cluster();
                 let tablet_server = cluster.get_tablet_server(leader_id).ok_or_else(|| {
-                    Error::LeaderNotAvailable {
-                        message: format!(
-                            "Tablet server {leader_id} is not found in metadata cache."
-                        ),
-                    }
+                    Error::leader_not_available(format!(
+                        "Tablet server {leader_id} is not found in metadata cache."
+                    ))
                 })?;
                 let connection = rpc_client.get_connection(tablet_server).await?;
                 let list_offsets_response = connection.request(request).await?;

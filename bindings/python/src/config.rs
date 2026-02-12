@@ -40,11 +40,11 @@ impl Config {
 
                 match key.as_str() {
                     "bootstrap.servers" => {
-                        config.bootstrap_server = value;
+                        config.bootstrap_servers = value;
                     }
-                    "request.max.size" => {
+                    "writer.request-max-size" => {
                         if let Ok(size) = value.parse::<i32>() {
-                            config.request_max_size = size;
+                            config.writer_request_max_size = size;
                         }
                     }
                     "writer.acks" => {
@@ -55,9 +55,19 @@ impl Config {
                             config.writer_retries = retries;
                         }
                     }
-                    "writer.batch.size" => {
+                    "writer.batch-size" => {
                         if let Ok(size) = value.parse::<i32>() {
                             config.writer_batch_size = size;
+                        }
+                    }
+                    "scanner.remote-log.prefetch-num" => {
+                        if let Ok(num) = value.parse::<usize>() {
+                            config.scanner_remote_log_prefetch_num = num;
+                        }
+                    }
+                    "remote-file.download-thread-num" => {
+                        if let Ok(num) = value.parse::<usize>() {
+                            config.remote_file_download_thread_num = num;
                         }
                     }
                     _ => {
@@ -70,28 +80,52 @@ impl Config {
         Ok(Self { inner: config })
     }
 
-    /// Get the bootstrap server
+    /// Get the bootstrap servers
     #[getter]
-    fn bootstrap_server(&self) -> String {
-        self.inner.bootstrap_server.clone()
+    fn bootstrap_servers(&self) -> String {
+        self.inner.bootstrap_servers.clone()
     }
 
-    /// Set the bootstrap server
+    /// Set the bootstrap servers
     #[setter]
-    fn set_bootstrap_server(&mut self, server: String) {
-        self.inner.bootstrap_server = server;
+    fn set_bootstrap_servers(&mut self, server: String) {
+        self.inner.bootstrap_servers = server;
     }
 
-    /// Get the request max size
+    /// Get the writer request max size
     #[getter]
-    fn request_max_size(&self) -> i32 {
-        self.inner.request_max_size
+    fn writer_request_max_size(&self) -> i32 {
+        self.inner.writer_request_max_size
     }
 
-    /// Set the request max size
+    /// Set the writer request max size
     #[setter]
-    fn set_request_max_size(&mut self, size: i32) {
-        self.inner.request_max_size = size;
+    fn set_writer_request_max_size(&mut self, size: i32) {
+        self.inner.writer_request_max_size = size;
+    }
+
+    /// Get the writer acks
+    #[getter]
+    fn writer_acks(&self) -> String {
+        self.inner.writer_acks.clone()
+    }
+
+    /// Set the writer acks
+    #[setter]
+    fn set_writer_acks(&mut self, acks: String) {
+        self.inner.writer_acks = acks;
+    }
+
+    /// Get the writer retries
+    #[getter]
+    fn writer_retries(&self) -> i32 {
+        self.inner.writer_retries
+    }
+
+    /// Set the writer retries
+    #[setter]
+    fn set_writer_retries(&mut self, retries: i32) {
+        self.inner.writer_retries = retries;
     }
 
     /// Get the writer batch size
@@ -104,6 +138,30 @@ impl Config {
     #[setter]
     fn set_writer_batch_size(&mut self, size: i32) {
         self.inner.writer_batch_size = size;
+    }
+
+    /// Get the scanner remote log prefetch num
+    #[getter]
+    fn scanner_remote_log_prefetch_num(&self) -> usize {
+        self.inner.scanner_remote_log_prefetch_num
+    }
+
+    /// Set the scanner remote log prefetch num
+    #[setter]
+    fn set_scanner_remote_log_prefetch_num(&mut self, num: usize) {
+        self.inner.scanner_remote_log_prefetch_num = num;
+    }
+
+    /// Get the remote file download thread num
+    #[getter]
+    fn remote_file_download_thread_num(&self) -> usize {
+        self.inner.remote_file_download_thread_num
+    }
+
+    /// Set the remote file download thread num
+    #[setter]
+    fn set_remote_file_download_thread_num(&mut self, num: usize) {
+        self.inner.remote_file_download_thread_num = num;
     }
 }
 

@@ -240,9 +240,11 @@ impl FlussTestingCluster {
     }
 
     pub async fn get_fluss_connection(&self) -> FlussConnection {
-        let mut config = Config::default();
-        config.writer_acks = "all".to_string();
-        config.bootstrap_server = self.bootstrap_servers.clone();
+        let config = Config {
+            writer_acks: "all".to_string(),
+            bootstrap_servers: self.bootstrap_servers.clone(),
+            ..Default::default()
+        };
 
         // Retry mechanism: retry for up to 1 minute
         let max_retries = 60; // 60 retry attempts

@@ -88,7 +88,7 @@ impl<'a> TableScan<'a> {
     ///
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
-    ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
+    ///     config.bootstrap_servers = "127.0.0.1:9123".to_string();
     ///     let conn = FlussConnection::new(config).await?;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
@@ -104,7 +104,7 @@ impl<'a> TableScan<'a> {
     ///     let admin = conn.get_admin().await?;
     ///     admin.create_table(&table_path, &table_descriptor, true)
     ///         .await?;
-    ///     let table_info = admin.get_table(&table_path).await?;
+    ///     let table_info = admin.get_table_info(&table_path).await?;
     ///     let table = conn.get_table(&table_path).await?;
     ///
     ///     // Project columns by indices
@@ -164,7 +164,7 @@ impl<'a> TableScan<'a> {
     ///
     /// # pub async fn example() -> Result<()> {
     ///     let mut config = Config::default();
-    ///     config.bootstrap_server = "127.0.0.1:9123".to_string();
+    ///     config.bootstrap_servers = "127.0.0.1:9123".to_string();
     ///     let conn = FlussConnection::new(config).await?;
     ///
     ///     let table_descriptor = TableDescriptor::builder()
@@ -652,7 +652,7 @@ impl LogFetcher {
         let remote_log_downloader = Arc::new(RemoteLogDownloader::new(
             tmp_dir,
             config.scanner_remote_log_prefetch_num,
-            config.scanner_remote_log_download_threads,
+            config.remote_file_download_thread_num,
             credentials_rx,
         )?);
 

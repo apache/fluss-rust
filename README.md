@@ -68,7 +68,7 @@ The example code is as follows:
 pub async fn main() -> Result<()> {
     // 1: create the table;
     let mut args = Args::default();
-    args.bootstrap_server = "127.0.0.1:9123".to_string();
+    args.bootstrap_servers = "127.0.0.1:9123".to_string();
     let conn_config = ConnectionConfig::from_args(args);
     let conn = FlussConnection::new(conn_config).await;
 
@@ -91,7 +91,7 @@ pub async fn main() -> Result<()> {
         .unwrap();
 
     // 2: get the table
-    let table_info = admin.get_table(&table_path).await.unwrap();
+    let table_info = admin.get_table_info(&table_path).await.unwrap();
     print!("Get created table:\n {}\n", table_info);
 
     // let's sleep 2 seconds to wait leader ready

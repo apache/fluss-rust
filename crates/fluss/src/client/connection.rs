@@ -37,7 +37,7 @@ pub struct FlussConnection {
 impl FlussConnection {
     pub async fn new(arg: Config) -> Result<Self> {
         let connections = Arc::new(RpcClient::new());
-        let metadata = Metadata::new(arg.bootstrap_server.as_str(), connections.clone()).await?;
+        let metadata = Metadata::new(arg.bootstrap_servers.as_str(), connections.clone()).await?;
 
         Ok(FlussConnection {
             metadata: Arc::new(metadata),

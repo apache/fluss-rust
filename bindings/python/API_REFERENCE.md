@@ -25,15 +25,15 @@ Complete API reference for the Fluss Python client. For a usage guide with examp
 | Method / Property | Description |
 |---|---|
 | `Config(properties: dict = None)` | Create config from a dict of key-value pairs |
-| `.bootstrap_server` | Get/set coordinator server address |
-| `.request_max_size` | Get/set max request size in bytes |
+| `.bootstrap_servers` | Get/set coordinator server address |
+| `.writer_request_max_size` | Get/set max request size in bytes |
 | `.writer_batch_size` | Get/set write batch size in bytes |
 
 ## `FlussConnection`
 
 | Method | Description |
 |---|---|
-| `await FlussConnection.connect(config) -> FlussConnection` | Connect to a Fluss cluster |
+| `await FlussConnection.create(config) -> FlussConnection` | Connect to a Fluss cluster |
 | `await conn.get_admin() -> FlussAdmin` | Get admin interface |
 | `await conn.get_table(table_path) -> FlussTable` | Get a table for read/write operations |
 | `conn.close()` | Close the connection |
@@ -44,14 +44,14 @@ Supports `with` statement (context manager).
 
 | Method | Description |
 |---|---|
-| `await create_database(name, ignore_if_exists=False, database_descriptor=None)` | Create a database |
+| `await create_database(name, database_descriptor=None, ignore_if_exists=False)` | Create a database |
 | `await drop_database(name, ignore_if_not_exists=False, cascade=True)` | Drop a database |
 | `await list_databases() -> list[str]` | List all databases |
 | `await database_exists(name) -> bool` | Check if a database exists |
 | `await get_database_info(name) -> DatabaseInfo` | Get database metadata |
 | `await create_table(table_path, table_descriptor, ignore_if_exists=False)` | Create a table |
 | `await drop_table(table_path, ignore_if_not_exists=False)` | Drop a table |
-| `await get_table(table_path) -> TableInfo` | Get table metadata |
+| `await get_table_info(table_path) -> TableInfo` | Get table metadata |
 | `await list_tables(database_name) -> list[str]` | List tables in a database |
 | `await table_exists(table_path) -> bool` | Check if a table exists |
 | `await list_offsets(table_path, bucket_ids, offset_type, timestamp=None) -> dict[int, int]` | Get offsets for buckets |
@@ -66,9 +66,9 @@ Supports `with` statement (context manager).
 | Method | Description |
 |---|---|
 | `new_scan() -> TableScan` | Create a scan builder |
-| `await new_append_writer() -> AppendWriter` | Create writer for log tables |
-| `new_upsert(columns=None, column_indices=None) -> UpsertWriter` | Create writer for PK tables (optionally partial) |
-| `new_lookup() -> Lookuper` | Create lookuper for PK tables |
+| `new_append() -> TableAppend` | Create an append builder for log tables |
+| `new_upsert() -> TableUpsert` | Create an upsert builder for PK tables |
+| `new_lookup() -> TableLookup` | Create a lookup builder for PK tables |
 | `get_table_info() -> TableInfo` | Get table metadata |
 | `get_table_path() -> TablePath` | Get table path |
 | `has_primary_key() -> bool` | Check if table has a primary key |
@@ -80,7 +80,33 @@ Supports `with` statement (context manager).
 | `.project(indices) -> TableScan` | Project columns by index |
 | `.project_by_name(names) -> TableScan` | Project columns by name |
 | `await .create_log_scanner() -> LogScanner` | Create record-based scanner (for `poll()`) |
-| `await .create_batch_scanner() -> LogScanner` | Create batch-based scanner (for `poll_arrow()`, `to_arrow()`, etc.) |
+| `await .create_record_batch_log_scanner() -> LogScanner` | Create batch-based scanner (for `poll_arrow()`, `to_arrow()`, etc.) |
+
+## `TableAppend`
+
+Builder for creating an `AppendWriter`. Obtain via `FlussTable.new_append()`.
+
+| Method | Description |
+|---|---|
+| `.create_writer() -> AppendWriter` | Create the append writer |
+
+## `TableUpsert`
+
+Builder for creating an `UpsertWriter`. Obtain via `FlussTable.new_upsert()`.
+
+| Method | Description |
+|---|---|
+| `.partial_update_by_name(columns) -> TableUpsert` | Configure partial update by column names |
+| `.partial_update_by_index(indices) -> TableUpsert` | Configure partial update by column indices |
+| `.create_writer() -> UpsertWriter` | Create the upsert writer |
+
+## `TableLookup`
+
+Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
+
+| Method | Description |
+|---|---|
+| `.create_lookuper() -> Lookuper` | Create the lookuper |
 
 ## `AppendWriter`
 
@@ -123,7 +149,7 @@ Supports `with` statement (context manager).
 | `.unsubscribe_partition(partition_id, bucket_id)` | Unsubscribe from a partition bucket |
 | `.poll(timeout_ms) -> list[ScanRecord]` | Poll individual records (record scanner only) |
 | `.poll_arrow(timeout_ms) -> pa.Table` | Poll as Arrow Table (batch scanner only) |
-| `.poll_batches(timeout_ms) -> list[RecordBatch]` | Poll batches with metadata (batch scanner only) |
+| `.poll_record_batch(timeout_ms) -> list[RecordBatch]` | Poll batches with metadata (batch scanner only) |
 | `.to_arrow() -> pa.Table` | Read all subscribed data as Arrow Table (batch scanner only) |
 | `.to_pandas() -> pd.DataFrame` | Read all subscribed data as DataFrame (batch scanner only) |
 

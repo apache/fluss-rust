@@ -36,7 +36,7 @@ int main() {
 
     // 1) Connect and get Admin
     fluss::Configuration config;
-    config.bootstrap_server = "127.0.0.1:9123";
+    config.bootstrap_servers = "127.0.0.1:9123";
 
     fluss::Connection conn;
     check("create", fluss::Connection::Create(config, conn));

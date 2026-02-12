@@ -29,7 +29,7 @@ use std::time::Duration;
 #[tokio::main]
 pub async fn main() -> Result<()> {
     let mut config = Config::parse();
-    config.bootstrap_server = "127.0.0.1:9123".to_string();
+    config.bootstrap_servers = "127.0.0.1:9123".to_string();
 
     let conn = FlussConnection::new(config).await?;
 
@@ -52,7 +52,7 @@ pub async fn main() -> Result<()> {
         .await?;
 
     // 2: get the table
-    let table_info = admin.get_table(&table_path).await?;
+    let table_info = admin.get_table_info(&table_path).await?;
     print!("Get created table:\n {table_info}\n");
 
     // write row

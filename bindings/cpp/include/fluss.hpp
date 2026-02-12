@@ -46,6 +46,136 @@ struct UpsertWriter;
 struct Lookuper;
 }  // namespace ffi
 
+/// Named constants for Fluss API error codes.
+///
+/// Server API errors have error_code > 0 or == -1.
+/// Client-side errors have error_code == CLIENT_ERROR (-2).
+/// These constants match the Rust core FlussError enum and are stable across protocol versions.
+/// New server error codes work automatically (error_code is a raw int, not a closed enum) —
+/// these constants are convenience names, not an exhaustive list.
+struct ErrorCode {
+    /// Client-side error (not from server API protocol). Check error_message for details.
+    static constexpr int CLIENT_ERROR = -2;
+    /// No error.
+    static constexpr int NONE = 0;
+    /// The server experienced an unexpected error when processing the request.
+    static constexpr int UNKNOWN_SERVER_ERROR = -1;
+    /// The server disconnected before a response was received.
+    static constexpr int NETWORK_EXCEPTION = 1;
+    /// The version of API is not supported.
+    static constexpr int UNSUPPORTED_VERSION = 2;
+    /// This message has failed its CRC checksum, exceeds the valid size, or is otherwise corrupt.
+    static constexpr int CORRUPT_MESSAGE = 3;
+    /// The database does not exist.
+    static constexpr int DATABASE_NOT_EXIST = 4;
+    /// The database is not empty.
+    static constexpr int DATABASE_NOT_EMPTY = 5;
+    /// The database already exists.
+    static constexpr int DATABASE_ALREADY_EXIST = 6;
+    /// The table does not exist.
+    static constexpr int TABLE_NOT_EXIST = 7;
+    /// The table already exists.
+    static constexpr int TABLE_ALREADY_EXIST = 8;
+    /// The schema does not exist.
+    static constexpr int SCHEMA_NOT_EXIST = 9;
+    /// Exception occurred while storing data for log in server.
+    static constexpr int LOG_STORAGE_EXCEPTION = 10;
+    /// Exception occurred while storing data for kv in server.
+    static constexpr int KV_STORAGE_EXCEPTION = 11;
+    /// Not leader or follower.
+    static constexpr int NOT_LEADER_OR_FOLLOWER = 12;
+    /// The record is too large.
+    static constexpr int RECORD_TOO_LARGE_EXCEPTION = 13;
+    /// The record is corrupt.
+    static constexpr int CORRUPT_RECORD_EXCEPTION = 14;
+    /// The client has attempted to perform an operation on an invalid table.
+    static constexpr int INVALID_TABLE_EXCEPTION = 15;
+    /// The client has attempted to perform an operation on an invalid database.
+    static constexpr int INVALID_DATABASE_EXCEPTION = 16;
+    /// The replication factor is larger than the number of available tablet servers.
+    static constexpr int INVALID_REPLICATION_FACTOR = 17;
+    /// Produce request specified an invalid value for required acks.
+    static constexpr int INVALID_REQUIRED_ACKS = 18;
+    /// The log offset is out of range.
+    static constexpr int LOG_OFFSET_OUT_OF_RANGE_EXCEPTION = 19;
+    /// The table is not a primary key table.
+    static constexpr int NON_PRIMARY_KEY_TABLE_EXCEPTION = 20;
+    /// The table or bucket does not exist.
+    static constexpr int UNKNOWN_TABLE_OR_BUCKET_EXCEPTION = 21;
+    /// The update version is invalid.
+    static constexpr int INVALID_UPDATE_VERSION_EXCEPTION = 22;
+    /// The coordinator is invalid.
+    static constexpr int INVALID_COORDINATOR_EXCEPTION = 23;
+    /// The leader epoch is invalid.
+    static constexpr int FENCED_LEADER_EPOCH_EXCEPTION = 24;
+    /// The request timed out.
+    static constexpr int REQUEST_TIME_OUT = 25;
+    /// The general storage exception.
+    static constexpr int STORAGE_EXCEPTION = 26;
+    /// The server did not attempt to execute this operation.
+    static constexpr int OPERATION_NOT_ATTEMPTED_EXCEPTION = 27;
+    /// Records are written to the server already, but to fewer in-sync replicas than required.
+    static constexpr int NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION = 28;
+    /// Messages are rejected since there are fewer in-sync replicas than required.
+    static constexpr int NOT_ENOUGH_REPLICAS_EXCEPTION = 29;
+    /// Get file access security token exception.
+    static constexpr int SECURITY_TOKEN_EXCEPTION = 30;
+    /// The tablet server received an out of order sequence batch.
+    static constexpr int OUT_OF_ORDER_SEQUENCE_EXCEPTION = 31;
+    /// The tablet server received a duplicate sequence batch.
+    static constexpr int DUPLICATE_SEQUENCE_EXCEPTION = 32;
+    /// The tablet server could not locate the writer metadata.
+    static constexpr int UNKNOWN_WRITER_ID_EXCEPTION = 33;
+    /// The requested column projection is invalid.
+    static constexpr int INVALID_COLUMN_PROJECTION = 34;
+    /// The requested target column to write is invalid.
+    static constexpr int INVALID_TARGET_COLUMN = 35;
+    /// The partition does not exist.
+    static constexpr int PARTITION_NOT_EXISTS = 36;
+    /// The table is not partitioned.
+    static constexpr int TABLE_NOT_PARTITIONED_EXCEPTION = 37;
+    /// The timestamp is invalid.
+    static constexpr int INVALID_TIMESTAMP_EXCEPTION = 38;
+    /// The config is invalid.
+    static constexpr int INVALID_CONFIG_EXCEPTION = 39;
+    /// The lake storage is not configured.
+    static constexpr int LAKE_STORAGE_NOT_CONFIGURED_EXCEPTION = 40;
+    /// The kv snapshot does not exist.
+    static constexpr int KV_SNAPSHOT_NOT_EXIST = 41;
+    /// The partition already exists.
+    static constexpr int PARTITION_ALREADY_EXISTS = 42;
+    /// The partition spec is invalid.
+    static constexpr int PARTITION_SPEC_INVALID_EXCEPTION = 43;
+    /// There is no currently available leader for the given partition.
+    static constexpr int LEADER_NOT_AVAILABLE_EXCEPTION = 44;
+    /// Exceed the maximum number of partitions.
+    static constexpr int PARTITION_MAX_NUM_EXCEPTION = 45;
+    /// Authentication failed.
+    static constexpr int AUTHENTICATE_EXCEPTION = 46;
+    /// Security is disabled.
+    static constexpr int SECURITY_DISABLED_EXCEPTION = 47;
+    /// Authorization failed.
+    static constexpr int AUTHORIZATION_EXCEPTION = 48;
+    /// Exceed the maximum number of buckets.
+    static constexpr int BUCKET_MAX_NUM_EXCEPTION = 49;
+    /// The tiering epoch is invalid.
+    static constexpr int FENCED_TIERING_EPOCH_EXCEPTION = 50;
+    /// Authentication failed with retriable exception.
+    static constexpr int RETRIABLE_AUTHENTICATE_EXCEPTION = 51;
+    /// The server rack info is invalid.
+    static constexpr int INVALID_SERVER_RACK_INFO_EXCEPTION = 52;
+    /// The lake snapshot does not exist.
+    static constexpr int LAKE_SNAPSHOT_NOT_EXIST = 53;
+    /// The lake table already exists.
+    static constexpr int LAKE_TABLE_ALREADY_EXIST = 54;
+    /// The new ISR contains at least one ineligible replica.
+    static constexpr int INELIGIBLE_REPLICA_EXCEPTION = 55;
+    /// The alter table is invalid.
+    static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
+    /// Deletion operations are disabled on this table.
+    static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+};
+
 struct Date {
     int32_t days_since_epoch{0};
 
@@ -812,9 +942,9 @@ class TableScan;
 
 struct Configuration {
     // Coordinator server address
-    std::string bootstrap_server{"127.0.0.1:9123"};
+    std::string bootstrap_servers{"127.0.0.1:9123"};
     // Max request size in bytes (10 MB)
-    int32_t request_max_size{10 * 1024 * 1024};
+    int32_t writer_request_max_size{10 * 1024 * 1024};
     // Writer acknowledgment mode: "all", "0", "1", or "-1"
     std::string writer_acks{"all"};
     // Max number of writer retries
@@ -824,7 +954,7 @@ struct Configuration {
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
-    size_t scanner_remote_log_download_threads{3};
+    size_t remote_file_download_thread_num{3};
 };
 
 class Connection {
@@ -866,7 +996,7 @@ class Admin {
 
     Result DropTable(const TablePath& table_path, bool ignore_if_not_exists = false);
 
-    Result GetTable(const TablePath& table_path, TableInfo& out);
+    Result GetTableInfo(const TablePath& table_path, TableInfo& out);
 
     Result GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
 
@@ -1020,13 +1150,14 @@ class TableScan {
     TableScan& ProjectByName(std::vector<std::string> column_names);
 
     Result CreateLogScanner(LogScanner& out);
-    Result CreateRecordBatchScanner(LogScanner& out);
+    Result CreateRecordBatchLogScanner(LogScanner& out);
 
    private:
     friend class Table;
     explicit TableScan(ffi::Table* table) noexcept;
 
     std::vector<size_t> ResolveNameProjection() const;
+    Result DoCreateScanner(LogScanner& out, bool is_record_batch);
 
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;

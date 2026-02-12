@@ -476,15 +476,17 @@ impl JsonSerde for Schema {
         let mut schema_builder = Schema::builder().with_columns(columns);
 
         if let Some(pk_node) = node.get(Self::PRIMARY_KEY_NAME) {
-            let pk_array = pk_node.as_array().ok_or_else(|| Error::InvalidTableError {
-                message: "Primary key must be an array".to_string(),
-            })?;
+            let pk_array = pk_node
+                .as_array()
+                .ok_or_else(|| Error::invalid_table("Primary key must be an array"))?;
 
             let mut primary_keys = Vec::with_capacity(pk_array.len());
             for name_node in pk_array {
-                primary_keys.push(name_node.as_str().ok_or_else(|| Error::InvalidTableError {
-                    message: "Primary key element must be a string".to_string(),
-                })?);
+                primary_keys.push(
+                    name_node.as_str().ok_or_else(|| {
+                        Error::invalid_table("Primary key element must be a string")
+                    })?,
+                );
             }
 
             schema_builder = schema_builder.primary_key(primary_keys);
