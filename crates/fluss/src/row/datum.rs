@@ -504,6 +504,10 @@ impl Datum<'_> {
                         message: format!("Failed to append FixedSizeBinary: {e}"),
                     });
                 }
+
+                return Err(RowConvertError {
+                    message: "Builder type mismatch for Blob".to_string(),
+                });
             }
             Datum::Decimal(decimal) => {
                 // Extract target precision and scale from Arrow schema
