@@ -38,7 +38,7 @@ mod table_test {
         create_partitions, create_table, get_cluster, start_cluster, stop_cluster,
     };
     use arrow::array::record_batch;
-    use fluss::client::{FlussTable, TableScan, EARLIEST_OFFSET};
+    use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::record::ScanRecord;
     use fluss::row::InternalRow;
