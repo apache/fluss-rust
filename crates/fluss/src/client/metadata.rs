@@ -46,13 +46,15 @@ impl Metadata {
 
     fn parse_bootstrap(boot_strap: &str) -> Result<SocketAddr> {
         // Resolve all socket addresses and deterministically choose one.
-        let mut addrs = boot_strap.to_socket_addrs().map_err(|e| Error::IllegalArgument {
-            message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
-        })?;
+        let addrs = boot_strap
+            .to_socket_addrs()
+            .map_err(|e| Error::IllegalArgument {
+                message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
+            })?;
 
         // Prefer IPv4 addresses; if none are available, fall back to the first IPv6.
         let mut ipv6_candidate: Option<SocketAddr> = None;
-        while let Some(addr) = addrs.next() {
+        for addr in addrs {
             if addr.is_ipv4() {
                 return Ok(addr);
             }
