@@ -302,7 +302,20 @@ mod tests {
         let addr = Metadata::parse_bootstrap("localhost:9090").unwrap();
         assert_eq!(addr.port(), 9090);
 
-        // invalid input
+        // valid IPv6 address
+        let addr = Metadata::parse_bootstrap("[::1]:8080").unwrap();
+        assert_eq!(addr.port(), 8080);
+
+        // invalid input: missing port
+        assert!(Metadata::parse_bootstrap("localhost").is_err());
+
+        // invalid input: out-of-range port
+        assert!(Metadata::parse_bootstrap("localhost:99999").is_err());
+
+        // invalid input: empty string
+        assert!(Metadata::parse_bootstrap("").is_err());
+
+        // invalid input: nonsensical address
         assert!(Metadata::parse_bootstrap("invalid_address").is_err());
     }
 }
