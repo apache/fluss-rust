@@ -26,7 +26,6 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-use url::quirks::password;
 
 #[derive(Default)]
 pub struct Metadata {
