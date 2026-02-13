@@ -99,7 +99,6 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register constants
     m.add("EARLIEST_OFFSET", fcore::client::EARLIEST_OFFSET)?;
-    m.add("LATEST_OFFSET", fcore::client::LATEST_OFFSET)?;
 
     // Register exception types and error codes
     m.add_class::<FlussError>()?;

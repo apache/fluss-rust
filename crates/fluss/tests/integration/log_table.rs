@@ -38,7 +38,7 @@ mod table_test {
         create_partitions, create_table, get_cluster, start_cluster, stop_cluster,
     };
     use arrow::array::record_batch;
-    use fluss::client::{FlussTable, TableScan};
+    use fluss::client::{FlussTable, TableScan, EARLIEST_OFFSET};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::record::ScanRecord;
     use fluss::row::InternalRow;
@@ -122,9 +122,9 @@ mod table_test {
             .expect("Failed to create log scanner");
         for bucket_id in 0..num_buckets {
             log_scanner
-                .subscribe(bucket_id, 0)
+                .subscribe(bucket_id, EARLIEST_OFFSET)
                 .await
-                .expect("Failed to subscribe");
+                .expect("Failed to subscribe with EARLIEST_OFFSET");
         }
 
         // Poll for records

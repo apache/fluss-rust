@@ -22,7 +22,6 @@ use crate::metadata::{TableInfo, TablePath};
 use std::sync::Arc;
 
 pub const EARLIEST_OFFSET: i64 = -2;
-pub const LATEST_OFFSET: i64 = -1;
 
 mod append;
 mod lookup;

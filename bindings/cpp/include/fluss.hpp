@@ -304,7 +304,6 @@ enum class DatumType {
 };
 
 constexpr int64_t EARLIEST_OFFSET = -2;
-constexpr int64_t LATEST_OFFSET = -1;
 
 enum class OffsetSpec {
     Earliest = 0,
