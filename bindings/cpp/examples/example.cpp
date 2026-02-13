@@ -286,7 +286,7 @@ int main() {
 
     std::unordered_map<int32_t, int64_t> earliest_offsets;
     check("list_earliest_offsets",
-          admin.ListOffsets(table_path, all_bucket_ids, fluss::OffsetQuery::Earliest(),
+          admin.ListOffsets(table_path, all_bucket_ids, fluss::OffsetSpec::Earliest(),
                             earliest_offsets));
     std::cout << "Earliest offsets:" << std::endl;
     for (const auto& [bucket_id, offset] : earliest_offsets) {
@@ -295,7 +295,7 @@ int main() {
 
     std::unordered_map<int32_t, int64_t> latest_offsets;
     check("list_latest_offsets", admin.ListOffsets(table_path, all_bucket_ids,
-                                                   fluss::OffsetQuery::Latest(), latest_offsets));
+                                                   fluss::OffsetSpec::Latest(), latest_offsets));
     std::cout << "Latest offsets:" << std::endl;
     for (const auto& [bucket_id, offset] : latest_offsets) {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
@@ -310,7 +310,7 @@ int main() {
     std::unordered_map<int32_t, int64_t> timestamp_offsets;
     check("list_timestamp_offsets",
           admin.ListOffsets(table_path, all_bucket_ids,
-                            fluss::OffsetQuery::FromTimestamp(timestamp_ms), timestamp_offsets));
+                            fluss::OffsetSpec::Timestamp(timestamp_ms), timestamp_offsets));
     std::cout << "Offsets for timestamp " << timestamp_ms << " (1 hour ago):" << std::endl;
     for (const auto& [bucket_id, offset] : timestamp_offsets) {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
@@ -507,7 +507,7 @@ int main() {
           admin.CreatePartition(partitioned_table_path, {{"region", "EU"}}, true));
     std::cout << "Created partitions: US, EU" << std::endl;
 
-    // List partitions
+    // List all partitions
     std::vector<fluss::PartitionInfo> partition_infos;
     check("list_partition_infos",
           admin.ListPartitionInfos(partitioned_table_path, partition_infos));
@@ -515,6 +515,13 @@ int main() {
         std::cout << "  Partition: " << pi.partition_name << " (id=" << pi.partition_id << ")"
                   << std::endl;
     }
+
+    // List partitions with partial spec filter
+    std::vector<fluss::PartitionInfo> us_partition_infos;
+    check("list_partition_infos_with_spec",
+          admin.ListPartitionInfos(partitioned_table_path, {{"region", "US"}}, us_partition_infos));
+    std::cout << "  Filtered (region=US): " << us_partition_infos.size() << " partition(s)"
+              << std::endl;
 
     // Write data to partitioned table
     fluss::Table partitioned_table;

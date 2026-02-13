@@ -53,7 +53,7 @@ import fluss
 
 async def main():
     # Connect
-    config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
+    config = fluss.Config({"bootstrap_servers": "127.0.0.1:9123"})
     conn = await fluss.FlussConnection.create(config)
     admin = await conn.get_admin()
 
@@ -89,7 +89,7 @@ asyncio.run(main())
 ## Connection Setup
 
 ```python
-config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
+config = fluss.Config({"bootstrap_servers": "127.0.0.1:9123"})
 conn = await fluss.FlussConnection.create(config)
 ```
 
@@ -104,11 +104,11 @@ with await fluss.FlussConnection.create(config) as conn:
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `bootstrap.servers` | Coordinator server address | `127.0.0.1:9123` |
-| `request.max.size` | Maximum request size in bytes | `10485760` (10 MB) |
-| `writer.acks` | Acknowledgment setting (`all` waits for all replicas) | `all` |
-| `writer.retries` | Number of retries on failure | `2147483647` |
-| `writer.batch.size` | Batch size for writes in bytes | `2097152` (2 MB) |
+| `bootstrap_servers` | Coordinator server address | `127.0.0.1:9123` |
+| `writer_request_max_size` | Maximum request size in bytes | `10485760` (10 MB) |
+| `writer_acks` | Acknowledgment setting (`all` waits for all replicas) | `all` |
+| `writer_retries` | Number of retries on failure | `2147483647` |
+| `writer_batch_size` | Batch size for writes in bytes | `2097152` (2 MB) |
 
 ## Admin Operations
 
@@ -163,13 +163,13 @@ await admin.drop_table(table_path, ignore_if_not_exists=True)
 
 ```python
 # Latest offsets for buckets
-offsets = await admin.list_offsets(table_path, bucket_ids=[0, 1], offset_type="latest")
+offsets = await admin.list_offsets(table_path, bucket_ids=[0, 1], offset_spec=fluss.OffsetSpec.latest())
 
 # By timestamp
-offsets = await admin.list_offsets(table_path, bucket_ids=[0], offset_type="timestamp", timestamp=1704067200000)
+offsets = await admin.list_offsets(table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.timestamp(1704067200000))
 
 # Per-partition offsets
-offsets = await admin.list_partition_offsets(table_path, partition_name="US", bucket_ids=[0], offset_type="latest")
+offsets = await admin.list_partition_offsets(table_path, partition_name="US", bucket_ids=[0], offset_spec=fluss.OffsetSpec.latest())
 ```
 
 ## Log Tables
@@ -426,7 +426,7 @@ except fluss.FlussError as e:
 ```
 
 Common error scenarios:
-- **Connection refused** — Fluss cluster is not running or wrong address in `bootstrap.servers`
+- **Connection refused** — Fluss cluster is not running or wrong address in `bootstrap_servers`
 - **Table not found** — table doesn't exist or wrong database/table name
 - **Partition not found** — writing to a partitioned table before creating partitions
 - **Schema mismatch** — row data doesn't match the table schema

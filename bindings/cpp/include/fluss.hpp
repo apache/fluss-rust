@@ -306,19 +306,19 @@ enum class DatumType {
 constexpr int64_t EARLIEST_OFFSET = -2;
 constexpr int64_t LATEST_OFFSET = -1;
 
-enum class OffsetSpec {
+enum class OffsetType {
     Earliest = 0,
     Latest = 1,
     Timestamp = 2,
 };
 
-struct OffsetQuery {
-    OffsetSpec spec;
+struct OffsetSpec {
+    OffsetType type;
     int64_t timestamp{0};
 
-    static OffsetQuery Earliest() { return {OffsetSpec::Earliest, 0}; }
-    static OffsetQuery Latest() { return {OffsetSpec::Latest, 0}; }
-    static OffsetQuery FromTimestamp(int64_t ts) { return {OffsetSpec::Timestamp, ts}; }
+    static OffsetSpec Earliest() { return {OffsetType::Earliest, 0}; }
+    static OffsetSpec Latest() { return {OffsetType::Latest, 0}; }
+    static OffsetSpec Timestamp(int64_t ts) { return {OffsetType::Timestamp, ts}; }
 };
 
 struct Result {
@@ -1001,14 +1001,18 @@ class Admin {
     Result GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
 
     Result ListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,
-                       const OffsetQuery& offset_query, std::unordered_map<int32_t, int64_t>& out);
+                       const OffsetSpec& offset_spec, std::unordered_map<int32_t, int64_t>& out);
 
     Result ListPartitionOffsets(const TablePath& table_path, const std::string& partition_name,
                                 const std::vector<int32_t>& bucket_ids,
-                                const OffsetQuery& offset_query,
+                                const OffsetSpec& offset_spec,
                                 std::unordered_map<int32_t, int64_t>& out);
 
     Result ListPartitionInfos(const TablePath& table_path, std::vector<PartitionInfo>& out);
+
+    Result ListPartitionInfos(const TablePath& table_path,
+                              const std::unordered_map<std::string, std::string>& partition_spec,
+                              std::vector<PartitionInfo>& out);
 
     Result CreatePartition(const TablePath& table_path,
                            const std::unordered_map<std::string, std::string>& partition_spec,
@@ -1036,7 +1040,7 @@ class Admin {
 
    private:
     Result DoListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,
-                         const OffsetQuery& offset_query, std::unordered_map<int32_t, int64_t>& out,
+                         const OffsetSpec& offset_spec, std::unordered_map<int32_t, int64_t>& out,
                          const std::string* partition_name = nullptr);
 
     friend class Connection;

@@ -39,33 +39,33 @@ impl Config {
                 let value: String = item.1.extract()?;
 
                 match key.as_str() {
-                    "bootstrap.servers" => {
+                    "bootstrap_servers" => {
                         config.bootstrap_servers = value;
                     }
-                    "writer.request-max-size" => {
+                    "writer_request_max_size" => {
                         if let Ok(size) = value.parse::<i32>() {
                             config.writer_request_max_size = size;
                         }
                     }
-                    "writer.acks" => {
+                    "writer_acks" => {
                         config.writer_acks = value;
                     }
-                    "writer.retries" => {
+                    "writer_retries" => {
                         if let Ok(retries) = value.parse::<i32>() {
                             config.writer_retries = retries;
                         }
                     }
-                    "writer.batch-size" => {
+                    "writer_batch_size" => {
                         if let Ok(size) = value.parse::<i32>() {
                             config.writer_batch_size = size;
                         }
                     }
-                    "scanner.remote-log.prefetch-num" => {
+                    "scanner_remote_log_prefetch_num" => {
                         if let Ok(num) = value.parse::<usize>() {
                             config.scanner_remote_log_prefetch_num = num;
                         }
                     }
-                    "remote-file.download-thread-num" => {
+                    "remote_file_download_thread_num" => {
                         if let Ok(num) = value.parse::<usize>() {
                             config.remote_file_download_thread_num = num;
                         }
