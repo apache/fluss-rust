@@ -384,6 +384,13 @@ bucket_offsets.insert(1, 100i64);  // bucket 1 from offset 100
 log_scanner.subscribe_buckets(&bucket_offsets).await?;
 ```
 
+### Unsubscribe from a Bucket
+
+```rust
+// Unsubscribe from a specific bucket (non-partitioned tables)
+log_scanner.unsubscribe(bucket_id).await?;
+```
+
 ### Unsubscribe from a Partition
 
 ```rust

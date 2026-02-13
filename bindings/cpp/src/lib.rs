@@ -384,6 +384,7 @@ mod ffi {
             self: &LogScanner,
             subscriptions: Vec<FfiPartitionBucketSubscription>,
         ) -> FfiResult;
+        fn unsubscribe(self: &LogScanner, bucket_id: i32) -> FfiResult;
         fn unsubscribe_partition(self: &LogScanner, partition_id: i64, bucket_id: i32)
         -> FfiResult;
         fn poll(self: &LogScanner, timeout_ms: i64) -> FfiScanRecordsResult;
@@ -419,9 +420,13 @@ pub struct WriteResult {
     inner: Option<fcore::client::WriteResultFuture>,
 }
 
+enum ScannerKind {
+    Record(fcore::client::LogScanner),
+    Batch(fcore::client::RecordBatchLogScanner),
+}
+
 pub struct LogScanner {
-    inner: Option<fcore::client::LogScanner>,
-    inner_batch: Option<fcore::client::RecordBatchLogScanner>,
+    scanner: ScannerKind,
     /// Fluss columns matching the projected Arrow fields (1:1 by index).
     /// For non-projected scanners this is the full table schema columns.
     projected_columns: Vec<fcore::metadata::Column>,
@@ -1009,21 +1014,20 @@ impl Table {
                 (cols, scan)
             };
 
-            let (inner, inner_batch) = if batch {
-                let batch_scanner = scan
+            let scanner = if batch {
+                let s = scan
                     .create_record_batch_log_scanner()
                     .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
-                (None, Some(batch_scanner))
+                ScannerKind::Batch(s)
             } else {
-                let log_scanner = scan
+                let s = scan
                     .create_log_scanner()
                     .map_err(|e| format!("Failed to create log scanner: {e}"))?;
-                (Some(log_scanner), None)
+                ScannerKind::Record(s)
             };
 
             Ok(Box::into_raw(Box::new(LogScanner {
-                inner,
-                inner_batch,
+                scanner,
                 projected_columns,
             })))
         })
@@ -1291,75 +1295,34 @@ pub extern "C" fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize)
     }
 }
 
+/// Dispatch a method call to whichever scanner variant is active.
+/// Both LogScanner and RecordBatchLogScanner share the same subscribe/unsubscribe interface.
+macro_rules! dispatch_scanner {
+    ($self:expr, $method:ident($($arg:expr),*)) => {
+        match RUNTIME.block_on(async {
+            match &$self.scanner {
+                ScannerKind::Record(s) => s.$method($($arg),*).await,
+                ScannerKind::Batch(s) => s.$method($($arg),*).await,
+            }
+        }) {
+            Ok(_) => ok_result(),
+            Err(e) => err_from_core_error(&e),
+        }
+    };
+}
+
 impl LogScanner {
     fn subscribe(&self, bucket_id: i32, start_offset: i64) -> ffi::FfiResult {
-        self.do_subscribe(None, bucket_id, start_offset)
-    }
-
-    fn do_subscribe(
-        &self,
-        partition_id: Option<PartitionId>,
-        bucket_id: i32,
-        start_offset: i64,
-    ) -> ffi::FfiResult {
-        if let Some(ref inner) = self.inner {
-            let result = RUNTIME.block_on(async {
-                if let Some(partition_id) = partition_id {
-                    inner
-                        .subscribe_partition(partition_id, bucket_id, start_offset)
-                        .await
-                } else {
-                    inner.subscribe(bucket_id, start_offset).await
-                }
-            });
-            match result {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else if let Some(ref inner_batch) = self.inner_batch {
-            let result = RUNTIME.block_on(async {
-                if let Some(partition_id) = partition_id {
-                    inner_batch
-                        .subscribe_partition(partition_id, bucket_id, start_offset)
-                        .await
-                } else {
-                    inner_batch.subscribe(bucket_id, start_offset).await
-                }
-            });
-            match result {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else {
-            client_err("LogScanner not initialized".to_string())
-        }
+        dispatch_scanner!(self, subscribe(bucket_id, start_offset))
     }
 
     fn subscribe_buckets(&self, subscriptions: Vec<ffi::FfiBucketSubscription>) -> ffi::FfiResult {
         use std::collections::HashMap;
-        let mut bucket_offsets = HashMap::new();
-        for sub in subscriptions {
-            bucket_offsets.insert(sub.bucket_id, sub.offset);
-        }
-
-        if let Some(ref inner) = self.inner {
-            let result = RUNTIME.block_on(async { inner.subscribe_buckets(&bucket_offsets).await });
-
-            match result {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else if let Some(ref inner_batch) = self.inner_batch {
-            let result =
-                RUNTIME.block_on(async { inner_batch.subscribe_buckets(&bucket_offsets).await });
-
-            match result {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else {
-            client_err("LogScanner not initialized".to_string())
-        }
+        let bucket_offsets: HashMap<i32, i64> = subscriptions
+            .into_iter()
+            .map(|s| (s.bucket_id, s.offset))
+            .collect();
+        dispatch_scanner!(self, subscribe_buckets(&bucket_offsets))
     }
 
     fn subscribe_partition(
@@ -1368,7 +1331,10 @@ impl LogScanner {
         bucket_id: i32,
         start_offset: i64,
     ) -> ffi::FfiResult {
-        self.do_subscribe(Some(partition_id), bucket_id, start_offset)
+        dispatch_scanner!(
+            self,
+            subscribe_partition(partition_id, bucket_id, start_offset)
+        )
     }
 
     fn subscribe_partition_buckets(
@@ -1376,115 +1342,78 @@ impl LogScanner {
         subscriptions: Vec<ffi::FfiPartitionBucketSubscription>,
     ) -> ffi::FfiResult {
         use std::collections::HashMap;
-        let mut partition_bucket_offsets: HashMap<(PartitionId, i32), i64> = HashMap::new();
-        for sub in subscriptions {
-            partition_bucket_offsets.insert((sub.partition_id, sub.bucket_id), sub.offset);
-        }
+        let offsets: HashMap<(PartitionId, i32), i64> = subscriptions
+            .into_iter()
+            .map(|s| ((s.partition_id, s.bucket_id), s.offset))
+            .collect();
+        dispatch_scanner!(self, subscribe_partition_buckets(&offsets))
+    }
 
-        if let Some(ref inner) = self.inner {
-            let result = RUNTIME.block_on(async {
-                inner
-                    .subscribe_partition_buckets(&partition_bucket_offsets)
-                    .await
-            });
-            match result {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else if let Some(ref inner_batch) = self.inner_batch {
-            let result = RUNTIME.block_on(async {
-                inner_batch
-                    .subscribe_partition_buckets(&partition_bucket_offsets)
-                    .await
-            });
-            match result {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else {
-            client_err("LogScanner not initialized".to_string())
-        }
+    fn unsubscribe(&self, bucket_id: i32) -> ffi::FfiResult {
+        dispatch_scanner!(self, unsubscribe(bucket_id))
     }
 
     fn unsubscribe_partition(&self, partition_id: PartitionId, bucket_id: i32) -> ffi::FfiResult {
-        if let Some(ref inner) = self.inner {
-            match RUNTIME
-                .block_on(async { inner.unsubscribe_partition(partition_id, bucket_id).await })
-            {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else if let Some(ref inner_batch) = self.inner_batch {
-            match RUNTIME.block_on(async {
-                inner_batch
-                    .unsubscribe_partition(partition_id, bucket_id)
-                    .await
-            }) {
-                Ok(_) => ok_result(),
-                Err(e) => err_from_core_error(&e),
-            }
-        } else {
-            client_err("LogScanner not initialized".to_string())
-        }
+        dispatch_scanner!(self, unsubscribe_partition(partition_id, bucket_id))
     }
 
     fn poll(&self, timeout_ms: i64) -> ffi::FfiScanRecordsResult {
-        if let Some(ref inner) = self.inner {
-            let timeout = Duration::from_millis(timeout_ms as u64);
-            let result = RUNTIME.block_on(async { inner.poll(timeout).await });
-
-            match result {
-                Ok(records) => {
-                    match types::core_scan_records_to_ffi(&records, &self.projected_columns) {
-                        Ok(scan_records) => ffi::FfiScanRecordsResult {
-                            result: ok_result(),
-                            scan_records,
-                        },
-                        Err(e) => ffi::FfiScanRecordsResult {
-                            result: client_err(e.to_string()),
-                            scan_records: ffi::FfiScanRecords { records: vec![] },
-                        },
-                    }
-                }
-                Err(e) => ffi::FfiScanRecordsResult {
-                    result: err_from_core_error(&e),
-                    scan_records: ffi::FfiScanRecords { records: vec![] },
-                },
-            }
-        } else {
-            ffi::FfiScanRecordsResult {
+        let ScannerKind::Record(ref inner) = self.scanner else {
+            return ffi::FfiScanRecordsResult {
                 result: client_err("Record-based scanner not available".to_string()),
                 scan_records: ffi::FfiScanRecords { records: vec![] },
+            };
+        };
+
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        let result = RUNTIME.block_on(async { inner.poll(timeout).await });
+
+        match result {
+            Ok(records) => {
+                match types::core_scan_records_to_ffi(&records, &self.projected_columns) {
+                    Ok(scan_records) => ffi::FfiScanRecordsResult {
+                        result: ok_result(),
+                        scan_records,
+                    },
+                    Err(e) => ffi::FfiScanRecordsResult {
+                        result: client_err(e.to_string()),
+                        scan_records: ffi::FfiScanRecords { records: vec![] },
+                    },
+                }
             }
+            Err(e) => ffi::FfiScanRecordsResult {
+                result: err_from_core_error(&e),
+                scan_records: ffi::FfiScanRecords { records: vec![] },
+            },
         }
     }
 
     fn poll_record_batch(&self, timeout_ms: i64) -> ffi::FfiArrowRecordBatchesResult {
-        if let Some(ref inner_batch) = self.inner_batch {
-            let timeout = Duration::from_millis(timeout_ms as u64);
-            let result = RUNTIME.block_on(async { inner_batch.poll(timeout).await });
-
-            match result {
-                Ok(batches) => match types::core_scan_batches_to_ffi(&batches) {
-                    Ok(arrow_batches) => ffi::FfiArrowRecordBatchesResult {
-                        result: ok_result(),
-                        arrow_batches,
-                    },
-                    Err(e) => ffi::FfiArrowRecordBatchesResult {
-                        result: client_err(e),
-                        arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
-                    },
-                },
-                Err(e) => ffi::FfiArrowRecordBatchesResult {
-                    result: err_from_core_error(&e),
-                    arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
-                },
-            }
-        } else {
-            ffi::FfiArrowRecordBatchesResult {
+        let ScannerKind::Batch(ref inner_batch) = self.scanner else {
+            return ffi::FfiArrowRecordBatchesResult {
                 result: client_err("Batch-based scanner not available".to_string()),
                 arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
-            }
+            };
+        };
+
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        let result = RUNTIME.block_on(async { inner_batch.poll(timeout).await });
+
+        match result {
+            Ok(batches) => match types::core_scan_batches_to_ffi(&batches) {
+                Ok(arrow_batches) => ffi::FfiArrowRecordBatchesResult {
+                    result: ok_result(),
+                    arrow_batches,
+                },
+                Err(e) => ffi::FfiArrowRecordBatchesResult {
+                    result: client_err(e),
+                    arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+                },
+            },
+            Err(e) => ffi::FfiArrowRecordBatchesResult {
+                result: err_from_core_error(&e),
+                arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+            },
         }
     }
 }

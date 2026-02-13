@@ -146,6 +146,7 @@ Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
 | `.subscribe_buckets(bucket_offsets)` | Subscribe to multiple buckets (`{bucket_id: offset}`) |
 | `.subscribe_partition(partition_id, bucket_id, start_offset)` | Subscribe to a partition bucket |
 | `.subscribe_partition_buckets(partition_bucket_offsets)` | Subscribe to multiple partition+bucket combos (`{(part_id, bucket_id): offset}`) |
+| `.unsubscribe(bucket_id)` | Unsubscribe from a bucket (non-partitioned tables) |
 | `.unsubscribe_partition(partition_id, bucket_id)` | Unsubscribe from a partition bucket |
 | `.poll(timeout_ms) -> list[ScanRecord]` | Poll individual records (record scanner only) |
 | `.poll_arrow(timeout_ms) -> pa.Table` | Poll as Arrow Table (batch scanner only) |

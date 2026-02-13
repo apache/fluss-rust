@@ -1278,6 +1278,7 @@ class LogScanner {
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
     Result SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id, int64_t start_offset);
     Result SubscribePartitionBuckets(const std::vector<PartitionBucketSubscription>& subscriptions);
+    Result Unsubscribe(int32_t bucket_id);
     Result UnsubscribePartition(int64_t partition_id, int32_t bucket_id);
     Result Poll(int64_t timeout_ms, ScanRecords& out);
     Result PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out);

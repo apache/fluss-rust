@@ -573,6 +573,13 @@ class LogScanner:
                 Example: {(partition_id_1, 0): EARLIEST_OFFSET, (partition_id_2, 1): 100}
         """
         ...
+    def unsubscribe(self, bucket_id: int) -> None:
+        """Unsubscribe from a specific bucket (non-partitioned tables only).
+
+        Args:
+            bucket_id: The bucket ID to unsubscribe from
+        """
+        ...
     def unsubscribe_partition(self, partition_id: int, bucket_id: int) -> None:
         """Unsubscribe from a specific partition bucket (partitioned tables only).
 

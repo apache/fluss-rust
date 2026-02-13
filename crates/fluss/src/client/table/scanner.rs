@@ -434,6 +434,21 @@ impl LogScannerInner {
         Ok(())
     }
 
+    async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+        if self.is_partitioned_table {
+            return Err(Error::UnsupportedOperation {
+                message:
+                    "The table is a partitioned table, please use \"unsubscribe_partition\" to \
+                    unsubscribe a partitioned bucket instead."
+                        .to_string(),
+            });
+        }
+        let table_bucket = TableBucket::new(self.table_id, bucket);
+        self.log_scanner_status
+            .unassign_scan_buckets(from_ref(&table_bucket));
+        Ok(())
+    }
+
     async fn unsubscribe_partition(&self, partition_id: PartitionId, bucket: i32) -> Result<()> {
         if !self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
@@ -535,6 +550,10 @@ impl LogScanner {
             .await
     }
 
+    pub async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+        self.inner.unsubscribe(bucket).await
+    }
+
     pub async fn unsubscribe_partition(
         &self,
         partition_id: PartitionId,
@@ -587,6 +606,10 @@ impl RecordBatchLogScanner {
         self.inner
             .subscribe_partition_buckets(partition_bucket_offsets)
             .await
+    }
+
+    pub async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+        self.inner.unsubscribe(bucket).await
     }
 
     pub async fn unsubscribe_partition(
