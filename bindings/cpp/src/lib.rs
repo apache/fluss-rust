@@ -302,6 +302,11 @@ mod ffi {
             self: &Admin,
             table_path: &FfiTablePath,
         ) -> FfiListPartitionInfosResult;
+        fn list_partition_infos_with_spec(
+            self: &Admin,
+            table_path: &FfiTablePath,
+            partition_spec: Vec<FfiPartitionKeyValue>,
+        ) -> FfiListPartitionInfosResult;
         fn create_partition(
             self: &Admin,
             table_path: &FfiTablePath,
@@ -735,30 +740,20 @@ impl Admin {
         &self,
         table_path: &ffi::FfiTablePath,
     ) -> ffi::FfiListPartitionInfosResult {
-        let path = fcore::metadata::TablePath::new(
-            table_path.database_name.clone(),
-            table_path.table_name.clone(),
-        );
-        let result = RUNTIME.block_on(async { self.inner.list_partition_infos(&path).await });
-        match result {
-            Ok(infos) => {
-                let partition_infos: Vec<ffi::FfiPartitionInfo> = infos
-                    .into_iter()
-                    .map(|info| ffi::FfiPartitionInfo {
-                        partition_id: info.get_partition_id(),
-                        partition_name: info.get_partition_name(),
-                    })
-                    .collect();
-                ffi::FfiListPartitionInfosResult {
-                    result: ok_result(),
-                    partition_infos,
-                }
-            }
-            Err(e) => ffi::FfiListPartitionInfosResult {
-                result: err_from_core_error(&e),
-                partition_infos: vec![],
-            },
-        }
+        self.do_list_partition_infos(table_path, None)
+    }
+
+    fn list_partition_infos_with_spec(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        partition_spec: Vec<ffi::FfiPartitionKeyValue>,
+    ) -> ffi::FfiListPartitionInfosResult {
+        let spec_map: std::collections::HashMap<String, String> = partition_spec
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect();
+        let spec = fcore::metadata::PartitionSpec::new(spec_map);
+        self.do_list_partition_infos(table_path, Some(&spec))
     }
     fn create_partition(
         &self,
@@ -936,6 +931,41 @@ impl Admin {
             Err(e) => ffi::FfiBoolResult {
                 result: err_from_core_error(&e),
                 value: false,
+            },
+        }
+    }
+
+    fn do_list_partition_infos(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        partial_partition_spec: Option<&fcore::metadata::PartitionSpec>,
+    ) -> ffi::FfiListPartitionInfosResult {
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+        let result = RUNTIME.block_on(async {
+            self.inner
+                .list_partition_infos_with_spec(&path, partial_partition_spec)
+                .await
+        });
+        match result {
+            Ok(infos) => {
+                let partition_infos: Vec<ffi::FfiPartitionInfo> = infos
+                    .into_iter()
+                    .map(|info| ffi::FfiPartitionInfo {
+                        partition_id: info.get_partition_id(),
+                        partition_name: info.get_partition_name(),
+                    })
+                    .collect();
+                ffi::FfiListPartitionInfosResult {
+                    result: ok_result(),
+                    partition_infos,
+                }
+            }
+            Err(e) => ffi::FfiListPartitionInfosResult {
+                result: err_from_core_error(&e),
+                partition_infos: vec![],
             },
         }
     }

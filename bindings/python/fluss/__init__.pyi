@@ -193,16 +193,15 @@ class FlussAdmin:
         self,
         table_path: TablePath,
         bucket_ids: List[int],
-        offset_type: str,
-        timestamp: Optional[int] = None,
+        offset_spec: "OffsetSpec",
     ) -> Dict[int, int]:
         """List offsets for the specified buckets.
 
         Args:
             table_path: Path to the table
             bucket_ids: List of bucket IDs to query
-            offset_type: "earliest", "latest", or "timestamp"
-            timestamp: Required when offset_type is "timestamp"
+            offset_spec: Offset specification (OffsetSpec.earliest(), OffsetSpec.latest(),
+                or OffsetSpec.timestamp(ts))
 
         Returns:
             Dict mapping bucket_id -> offset
@@ -213,8 +212,7 @@ class FlussAdmin:
         table_path: TablePath,
         partition_name: str,
         bucket_ids: List[int],
-        offset_type: str,
-        timestamp: Optional[int] = None,
+        offset_spec: "OffsetSpec",
     ) -> Dict[int, int]:
         """List offsets for buckets in a specific partition.
 
@@ -222,8 +220,8 @@ class FlussAdmin:
             table_path: Path to the table
             partition_name: Partition value (e.g., "US" not "region=US")
             bucket_ids: List of bucket IDs to query
-            offset_type: "earliest", "latest", or "timestamp"
-            timestamp: Required when offset_type is "timestamp"
+            offset_spec: Offset specification (OffsetSpec.earliest(), OffsetSpec.latest(),
+                or OffsetSpec.timestamp(ts))
 
         Returns:
             Dict mapping bucket_id -> offset
@@ -246,11 +244,15 @@ class FlussAdmin:
     async def list_partition_infos(
         self,
         table_path: TablePath,
+        partition_spec: Optional[Dict[str, str]] = None,
     ) -> List["PartitionInfo"]:
-        """List all partitions for a partitioned table.
+        """List partitions for a partitioned table.
 
         Args:
             table_path: Path to the table
+            partition_spec: Optional partial partition spec to filter results.
+                Dict mapping partition column name to value (e.g., {"region": "US"}).
+                If None, returns all partitions.
 
         Returns:
             List of PartitionInfo objects
@@ -839,12 +841,28 @@ class ErrorCode:
     INVALID_ALTER_TABLE_EXCEPTION: int
     DELETION_DISABLED_EXCEPTION: int
 
-class OffsetType:
-    """Offset type constants for list_offsets()."""
+class OffsetSpec:
+    """Offset specification for list_offsets(), matching Java's OffsetSpec.
 
-    EARLIEST: str
-    LATEST: str
-    TIMESTAMP: str
+    Use factory methods to create instances:
+        OffsetSpec.earliest()
+        OffsetSpec.latest()
+        OffsetSpec.timestamp(ts)
+    """
+
+    @staticmethod
+    def earliest() -> "OffsetSpec":
+        """Create an OffsetSpec for the earliest available offset."""
+        ...
+    @staticmethod
+    def latest() -> "OffsetSpec":
+        """Create an OffsetSpec for the latest available offset."""
+        ...
+    @staticmethod
+    def timestamp(ts: int) -> "OffsetSpec":
+        """Create an OffsetSpec for the offset at or after the given timestamp."""
+        ...
+    def __repr__(self) -> str: ...
 
 # Constant for earliest offset (-2)
 EARLIEST_OFFSET: int
