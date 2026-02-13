@@ -1,21 +1,3 @@
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # How to Verify a Release Candidate
 
 This document describes how to verify a release candidate (RC) of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss-rust) repository. It is intended for anyone participating in the release vote (binding or non-binding) and is based on [Verifying a Fluss Release](https://fluss.apache.org/community/how-to-release/verifying-a-fluss-release/) of the Apache Fluss project, adapted for the fluss-rust source distribution and tooling (Rust, Python, C++).

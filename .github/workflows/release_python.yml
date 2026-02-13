@@ -49,6 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Generate Python README
+        run: python bindings/python/generate_readme.py
+
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
@@ -77,6 +80,9 @@ jobs:
           - { os: ubuntu-latest, target: "aarch64", manylinux: "manylinux_2_28" }
     steps:
       - uses: actions/checkout@v4
+
+      - name: Generate Python README
+        run: python3 bindings/python/generate_readme.py
 
       - name: Install protoc (Linux)
         if: runner.os == 'Linux'

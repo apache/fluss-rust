@@ -20,6 +20,7 @@ Cargo.lock
 .vscode/
 
 # Python
+bindings/python/GENERATED_README.md
 __pycache__/
 *.py[cod]
 *$py.class
@@ -30,3 +31,21 @@ build/
 
 # CPP
 *CMakeFiles/
+
+# Website (Docusaurus)
+website/node_modules
+website/build
+website/.docusaurus
+website/.cache-loader
+website/.env.local
+website/.env.development.local
+website/.env.test.local
+website/.env.production.local
+website/npm-debug.log*
+website/yarn-debug.log*
+website/yarn-error.log*
+website/package-lock.json
+website/versioned_docs
+website/versioned_sidebars
+website/versions.json
+website/pnpm-lock.yaml

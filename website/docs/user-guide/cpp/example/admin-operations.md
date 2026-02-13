@@ -1,0 +1,111 @@
+---
+sidebar_position: 3
+---
+# Admin Operations
+
+## Get Admin Interface
+
+```cpp
+fluss::Admin admin;
+check("get_admin", conn.GetAdmin(admin));
+```
+
+## Table Operations
+
+```cpp
+fluss::TablePath table_path("fluss", "my_table");
+
+auto schema = fluss::Schema::NewBuilder()
+    .AddColumn("id", fluss::DataType::Int())
+    .AddColumn("name", fluss::DataType::String())
+    .AddColumn("score", fluss::DataType::Float())
+    .AddColumn("age", fluss::DataType::Int())
+    .Build();
+
+auto descriptor = fluss::TableDescriptor::NewBuilder()
+    .SetSchema(schema)
+    .SetBucketCount(3)
+    .SetComment("Example table")
+    .Build();
+
+// Create table
+check("create_table", admin.CreateTable(table_path, descriptor, true));
+
+// Get table information
+fluss::TableInfo table_info;
+check("get_table", admin.GetTable(table_path, table_info));
+std::cout << "Table ID: " << table_info.table_id << std::endl;
+std::cout << "Number of buckets: " << table_info.num_buckets << std::endl;
+std::cout << "Has primary key: " << table_info.has_primary_key << std::endl;
+std::cout << "Is partitioned: " << table_info.is_partitioned << std::endl;
+
+// Drop table
+check("drop_table", admin.DropTable(table_path, true));
+```
+
+## Schema Builder Options
+
+```cpp
+// Schema with primary key
+auto pk_schema = fluss::Schema::NewBuilder()
+    .AddColumn("id", fluss::DataType::Int())
+    .AddColumn("name", fluss::DataType::String())
+    .AddColumn("value", fluss::DataType::Double())
+    .SetPrimaryKeys({"id"})
+    .Build();
+
+// Table descriptor with partitioning
+auto descriptor = fluss::TableDescriptor::NewBuilder()
+    .SetSchema(schema)
+    .SetPartitionKeys({"date"})
+    .SetBucketCount(3)
+    .SetBucketKeys({"user_id"})
+    .SetProperty("retention_days", "7")
+    .SetComment("Sample table")
+    .Build();
+```
+
+## Offset Operations
+
+```cpp
+std::vector<int32_t> bucket_ids = {0, 1, 2};
+
+// Query earliest offsets
+std::unordered_map<int32_t, int64_t> earliest_offsets;
+check("list_offsets",
+      admin.ListOffsets(table_path, bucket_ids,
+                        fluss::OffsetQuery::Earliest(), earliest_offsets));
+
+// Query latest offsets
+std::unordered_map<int32_t, int64_t> latest_offsets;
+check("list_offsets",
+      admin.ListOffsets(table_path, bucket_ids,
+                        fluss::OffsetQuery::Latest(), latest_offsets));
+
+// Query offsets for a specific timestamp
+std::unordered_map<int32_t, int64_t> timestamp_offsets;
+check("list_offsets",
+      admin.ListOffsets(table_path, bucket_ids,
+                        fluss::OffsetQuery::FromTimestamp(timestamp_ms),
+                        timestamp_offsets));
+
+// Query partition offsets
+std::unordered_map<int32_t, int64_t> partition_offsets;
+check("list_partition_offsets",
+      admin.ListPartitionOffsets(table_path, "partition_name",
+                                 bucket_ids, fluss::OffsetQuery::Latest(),
+                                 partition_offsets));
+```
+
+## Lake Snapshot
+
+```cpp
+fluss::LakeSnapshot snapshot;
+check("get_snapshot", admin.GetLatestLakeSnapshot(table_path, snapshot));
+std::cout << "Snapshot ID: " << snapshot.snapshot_id << std::endl;
+for (const auto& bucket_offset : snapshot.bucket_offsets) {
+    std::cout << "  Table " << bucket_offset.table_id
+              << ", Bucket " << bucket_offset.bucket_id
+              << ": offset=" << bucket_offset.offset << std::endl;
+}
+```
