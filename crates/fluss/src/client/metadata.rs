@@ -45,15 +45,25 @@ impl Metadata {
     }
 
     fn parse_bootstrap(boot_strap: &str) -> Result<SocketAddr> {
-        let addr = boot_strap
-            .to_socket_addrs()
-            .map_err(|e| Error::IllegalArgument {
-                message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
-            })?
-            .next()
-            .ok_or_else(|| Error::IllegalArgument {
-                message: format!("Unable to resolve bootstrap address '{boot_strap}'"),
-            })?;
+        // Resolve all socket addresses and deterministically choose one.
+        let mut addrs = boot_strap.to_socket_addrs().map_err(|e| Error::IllegalArgument {
+            message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
+        })?;
+
+        // Prefer IPv4 addresses; if none are available, fall back to the first IPv6.
+        let mut ipv6_candidate: Option<SocketAddr> = None;
+        while let Some(addr) = addrs.next() {
+            if addr.is_ipv4() {
+                return Ok(addr);
+            }
+            if ipv6_candidate.is_none() {
+                ipv6_candidate = Some(addr);
+            }
+        }
+
+        let addr = ipv6_candidate.ok_or_else(|| Error::IllegalArgument {
+            message: format!("Unable to resolve bootstrap address '{boot_strap}'"),
+        })?;
         Ok(addr)
     }
 
