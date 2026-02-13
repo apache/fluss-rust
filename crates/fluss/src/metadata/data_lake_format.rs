@@ -23,11 +23,42 @@ use strum_macros::{Display, EnumString};
 /// between different table formats so that the appropriate integration and
 /// semantics can be applied.
 #[derive(Debug, EnumString, Display, PartialEq)]
+#[strum(ascii_case_insensitive)]
 pub enum DataLakeFormat {
-    /// Apache Paimon data lake table format.
+    #[strum(serialize = "paimon")]
     Paimon,
-    /// Lance columnar data format / lakehouse table format.
+
+    #[strum(serialize = "lance")]
     Lance,
-    /// Apache Iceberg data lake table format.
+
+    #[strum(serialize = "iceberg")]
     Iceberg,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::metadata::DataLakeFormat;
+    use crate::metadata::DataLakeFormat::{Iceberg, Lance, Paimon};
+
+    #[test]
+    fn test_parse() {
+        let cases = vec![
+            ("paimon", Paimon),
+            ("Paimon", Paimon),
+            ("PAIMON", Paimon),
+            ("lance", Lance),
+            ("LANCE", Lance),
+            ("iceberg", Iceberg),
+            ("ICEBERG", Iceberg),
+        ];
+
+        for (raw, expected) in cases {
+            let parsed = raw.parse::<DataLakeFormat>().unwrap();
+            assert_eq!(parsed, expected, "failed to parse: {}", raw);
+        }
+
+        // negative cases
+        assert!("unknown".parse::<DataLakeFormat>().is_err());
+        assert!("".parse::<DataLakeFormat>().is_err());
+    }
 }
