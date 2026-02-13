@@ -62,6 +62,14 @@ scanner.subscribe_partition_buckets({
 print(scanner.to_pandas())
 ```
 
+### Unsubscribing
+
+To stop consuming from a specific partition bucket, use `unsubscribe_partition()`:
+
+```python
+scanner.unsubscribe_partition(partition_id=partition_infos[0].partition_id, bucket_id=0)
+```
+
 ## Partitioned Primary Key Tables
 
 Partition columns must be part of the primary key. Partitions must exist before upserting data, otherwise the client will by default retry indefinitely.

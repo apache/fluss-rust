@@ -3,24 +3,24 @@ sidebar_position: 3
 ---
 # Data Types
 
-| Fluss Type | Rust Type | Getter | Setter |
-|---|---|---|---|
-| `BOOLEAN` | `bool` | `get_boolean()` | `set_field(idx, bool)` |
-| `TINYINT` | `i8` | `get_byte()` | `set_field(idx, i8)` |
-| `SMALLINT` | `i16` | `get_short()` | `set_field(idx, i16)` |
-| `INT` | `i32` | `get_int()` | `set_field(idx, i32)` |
-| `BIGINT` | `i64` | `get_long()` | `set_field(idx, i64)` |
-| `FLOAT` | `f32` | `get_float()` | `set_field(idx, f32)` |
-| `DOUBLE` | `f64` | `get_double()` | `set_field(idx, f64)` |
-| `CHAR` | `&str` | `get_char(idx, length)` | `set_field(idx, &str)` |
-| `STRING` | `&str` | `get_string()` | `set_field(idx, &str)` |
-| `DECIMAL` | `Decimal` | `get_decimal(idx, precision, scale)` | `set_field(idx, Decimal)` |
-| `DATE` | `Date` | `get_date()` | `set_field(idx, Date)` |
-| `TIME` | `Time` | `get_time()` | `set_field(idx, Time)` |
-| `TIMESTAMP` | `TimestampNtz` | `get_timestamp_ntz(idx, precision)` | `set_field(idx, TimestampNtz)` |
-| `TIMESTAMP_LTZ` | `TimestampLtz` | `get_timestamp_ltz(idx, precision)` | `set_field(idx, TimestampLtz)` |
-| `BYTES` | `&[u8]` | `get_bytes()` | `set_field(idx, &[u8])` |
-| `BINARY(n)` | `&[u8]` | `get_binary(idx, length)` | `set_field(idx, &[u8])` |
+| Fluss Type      | Rust Type      | Getter                               | Setter                         |
+|-----------------|----------------|--------------------------------------|--------------------------------|
+| `BOOLEAN`       | `bool`         | `get_boolean()`                      | `set_field(idx, bool)`         |
+| `TINYINT`       | `i8`           | `get_byte()`                         | `set_field(idx, i8)`           |
+| `SMALLINT`      | `i16`          | `get_short()`                        | `set_field(idx, i16)`          |
+| `INT`           | `i32`          | `get_int()`                          | `set_field(idx, i32)`          |
+| `BIGINT`        | `i64`          | `get_long()`                         | `set_field(idx, i64)`          |
+| `FLOAT`         | `f32`          | `get_float()`                        | `set_field(idx, f32)`          |
+| `DOUBLE`        | `f64`          | `get_double()`                       | `set_field(idx, f64)`          |
+| `CHAR`          | `&str`         | `get_char(idx, length)`              | `set_field(idx, &str)`         |
+| `STRING`        | `&str`         | `get_string()`                       | `set_field(idx, &str)`         |
+| `DECIMAL`       | `Decimal`      | `get_decimal(idx, precision, scale)` | `set_field(idx, Decimal)`      |
+| `DATE`          | `Date`         | `get_date()`                         | `set_field(idx, Date)`         |
+| `TIME`          | `Time`         | `get_time()`                         | `set_field(idx, Time)`         |
+| `TIMESTAMP`     | `TimestampNtz` | `get_timestamp_ntz(idx, precision)`  | `set_field(idx, TimestampNtz)` |
+| `TIMESTAMP_LTZ` | `TimestampLtz` | `get_timestamp_ltz(idx, precision)`  | `set_field(idx, TimestampLtz)` |
+| `BYTES`         | `&[u8]`        | `get_bytes()`                        | `set_field(idx, &[u8])`        |
+| `BINARY(n)`     | `&[u8]`        | `get_binary(idx, length)`            | `set_field(idx, &[u8])`        |
 
 ## Constructing Special Types
 

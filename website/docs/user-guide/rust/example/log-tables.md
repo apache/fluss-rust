@@ -78,11 +78,23 @@ for record in records {
 **Subscribe from special offsets:**
 
 ```rust
-use fluss::client::{EARLIEST_OFFSET, LATEST_OFFSET};
+use fluss::client::EARLIEST_OFFSET;
 
 log_scanner.subscribe(0, EARLIEST_OFFSET).await?;  // from earliest
-log_scanner.subscribe(0, LATEST_OFFSET).await?;    // only new records
 log_scanner.subscribe(0, 42).await?;                // from specific offset
+```
+
+**Subscribe from latest offset (only new records):**
+
+To start reading only new records, first resolve the current latest offset via `list_offsets`, then subscribe at that offset:
+
+```rust
+use fluss::rpc::message::OffsetSpec;
+
+let admin = conn.get_admin().await?;
+let offsets = admin.list_offsets(&table_path, &[0], OffsetSpec::Latest).await?;
+let latest = offsets[&0];
+log_scanner.subscribe(0, latest).await?;
 ```
 
 **Subscribe to all buckets:**
@@ -105,9 +117,13 @@ bucket_offsets.insert(1, 100i64);
 log_scanner.subscribe_buckets(&bucket_offsets).await?;
 ```
 
-**Unsubscribe from a partition bucket:**
+**Unsubscribe from a bucket:**
 
 ```rust
+// Non-partitioned tables
+log_scanner.unsubscribe(bucket_id).await?;
+
+// Partitioned tables
 log_scanner.unsubscribe_partition(partition_id, bucket_id).await?;
 ```
 

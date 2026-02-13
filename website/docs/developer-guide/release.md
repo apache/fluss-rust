@@ -155,7 +155,7 @@ svn mv -m "Release fluss-rust ${RELEASE_VERSION}" \
 ### Verify Published Packages
 
 - **Rust:** [crates.io/crates/fluss-rs](https://crates.io/crates/fluss-rs)
-- **Python:** [PyPI — pyfluss](https://pypi.org/project/pyfluss/)
+- **Python:** [PyPI pyfluss](https://pypi.org/project/pyfluss/)
 - **C++:** Distributed via the source archive
 
 ### Create GitHub Release

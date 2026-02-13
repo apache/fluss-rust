@@ -18,30 +18,25 @@ if (!result.Ok()) {
 }
 ```
 
-| Field / Method | Type | Description |
-|---|---|---|
-| `error_code` | `int32_t` | 0 for success, non-zero for errors |
-| `error_message` | `std::string` | Human-readable error description |
-| `Ok()` | `bool` | Returns `true` if the operation succeeded |
+| Field / Method   | Type          | Description                               |
+|------------------|---------------|-------------------------------------------|
+| `error_code`     | `int32_t`     | 0 for success, non-zero for errors        |
+| `error_message`  | `std::string` | Human-readable error description          |
+| `Ok()`           | `bool`        | Returns `true` if the operation succeeded |
 
-## Common Pattern: Helper Function
+## Handling Errors
 
-A common pattern is to define a `check` helper that exits on failure:
+Check the `Result` after each operation and decide how to respond, e.g. log and continue, retry, or abort:
 
 ```cpp
-static void check(const char* step, const fluss::Result& r) {
-    if (!r.Ok()) {
-        std::cerr << step << " failed: " << r.error_message << std::endl;
-        std::exit(1);
-    }
+fluss::Connection conn;
+fluss::Result result = fluss::Connection::Create(config, conn);
+if (!result.Ok()) {
+    // Log, retry, or propagate the error as appropriate
+    std::cerr << "Connection failed (code " << result.error_code
+              << "): " << result.error_message << std::endl;
+    return 1;
 }
-
-// Usage
-fluss::Configuration config;
-config.bootstrap_servers = "127.0.0.1:9123";
-check("create", fluss::Connection::Create(config, conn));
-check("create_table", admin.CreateTable(table_path, descriptor, true));
-check("flush", writer.Flush());
 ```
 
 ## Connection State Checking
@@ -105,7 +100,7 @@ row.Set("score", static_cast<int64_t>(100));
 fluss::WriteResult wr;
 fluss::Result result = writer.Upsert(row, wr);
 if (!result.Ok()) {
-    // Partition not found — create partitions before writing
+    // Partition not found, create partitions before writing
     std::cerr << "Write error: " << result.error_message << std::endl;
 }
 ```
@@ -127,8 +122,7 @@ if (!result.Ok()) {
 
 ## Best Practices
 
-1. **Always check `Result`** -- Never ignore the return value of operations that return `Result`.
-2. **Use a helper function** -- Define a `check()` helper to reduce boilerplate for fatal errors.
-3. **Handle errors gracefully** -- For production code, log errors and retry or fail gracefully instead of calling `std::exit()`.
-4. **Verify connection state** -- Use `Available()` to check connection validity before operations.
-5. **Create partitions before writing** -- For partitioned primary key tables, always create partitions before attempting upserts.
+1. **Always check `Result`**: Never ignore the return value of operations that return `Result`.
+2. **Handle errors gracefully**: Log errors and retry or fail gracefully rather than crashing.
+3. **Verify connection state**: Use `Available()` to check connection validity before operations.
+4. **Create partitions before writing**: For partitioned primary key tables, always create partitions before attempting upserts.

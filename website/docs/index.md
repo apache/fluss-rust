@@ -17,14 +17,14 @@ This documentation covers the **Fluss client libraries** for Rust, Python, and C
 
 ## Client Overview
 
-| | Rust | Python | C++ |
-|---|---|---|---|
-| **Package** | [fluss-rs](https://crates.io/crates/fluss-rs) on crates.io | Build from source (PyO3) | Build from source (CMake) |
-| **Async runtime** | Tokio | asyncio | Synchronous (Tokio runtime managed internally) |
-| **Data format** | Arrow RecordBatch / GenericRow | PyArrow / Pandas / dict | Arrow RecordBatch / GenericRow |
-| **Log tables** | Read + Write | Read + Write | Read + Write |
-| **Primary key tables** | Upsert + Delete + Lookup | Upsert + Delete + Lookup | Upsert + Delete + Lookup |
-| **Partitioned tables** | Full support | Write support | Full support |
+|                        | Rust                                                       | Python                   | C++                                            |
+|------------------------|------------------------------------------------------------|--------------------------|------------------------------------------------|
+| **Package**            | [fluss-rs](https://crates.io/crates/fluss-rs) on crates.io | Build from source (PyO3) | Build from source (CMake)                      |
+| **Async runtime**      | Tokio                                                      | asyncio                  | Synchronous (Tokio runtime managed internally) |
+| **Data format**        | Arrow RecordBatch / GenericRow                             | PyArrow / Pandas / dict  | Arrow RecordBatch / GenericRow                 |
+| **Log tables**         | Read + Write                                               | Read + Write             | Read + Write                                   |
+| **Primary key tables** | Upsert + Delete + Lookup                                   | Upsert + Delete + Lookup | Upsert + Delete + Lookup                       |
+| **Partitioned tables** | Full support                                               | Write support            | Full support                                   |
 
 ## How This Guide Is Organised
 

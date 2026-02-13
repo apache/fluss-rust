@@ -13,7 +13,7 @@ except fluss.FlussError as e:
 ```
 
 Common error scenarios:
-- **Connection refused** — Fluss cluster is not running or wrong address in `bootstrap.servers`
-- **Table not found** — table doesn't exist or wrong database/table name
-- **Partition not found** — writing to a partitioned table before creating partitions
-- **Schema mismatch** — row data doesn't match the table schema
+- **Connection refused**: Fluss cluster is not running or wrong address in `bootstrap.servers`
+- **Table not found**: table doesn't exist or wrong database/table name
+- **Partition not found**: writing to a partitioned table before creating partitions
+- **Schema mismatch**: row data doesn't match the table schema

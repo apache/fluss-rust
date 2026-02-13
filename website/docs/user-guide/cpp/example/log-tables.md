@@ -19,40 +19,40 @@ auto descriptor = fluss::TableDescriptor::NewBuilder()
     .Build();
 
 fluss::TablePath table_path("fluss", "events");
-check("create_table", admin.CreateTable(table_path, descriptor, true));
+admin.CreateTable(table_path, descriptor, true);
 ```
 
 ## Writing to Log Tables
 
 ```cpp
 fluss::Table table;
-check("get_table", conn.GetTable(table_path, table));
+conn.GetTable(table_path, table);
 
 fluss::AppendWriter writer;
-check("new_writer", table.NewAppend().CreateWriter(writer));
+table.NewAppend().CreateWriter(writer);
 
 fluss::GenericRow row;
 row.SetInt32(0, 1);           // event_id
 row.SetString(1, "user_login");  // event_type
 row.SetInt64(2, 1704067200000L); // timestamp
-check("append", writer.Append(row));
+writer.Append(row);
 
-check("flush", writer.Flush());
+writer.Flush();
 ```
 
 ## Reading from Log Tables
 
 ```cpp
 fluss::LogScanner scanner;
-check("new_scanner", table.NewScan().CreateLogScanner(scanner));
+table.NewScan().CreateLogScanner(scanner);
 
 auto info = table.GetTableInfo();
 for (int b = 0; b < info.num_buckets; ++b) {
-    check("subscribe", scanner.Subscribe(b, 0));
+    scanner.Subscribe(b, 0);
 }
 
 fluss::ScanRecords records;
-check("poll", scanner.Poll(5000, records));  // timeout in ms
+scanner.Poll(5000, records);  // timeout in ms
 
 for (const auto& rec : records) {
     std::cout << "event_id=" << rec.row.GetInt32(0)
@@ -68,7 +68,14 @@ for (const auto& rec : records) {
 std::vector<fluss::BucketSubscription> subscriptions;
 subscriptions.push_back({0, 0});    // bucket 0, offset 0
 subscriptions.push_back({1, 100});  // bucket 1, offset 100
-check("subscribe_batch", scanner.Subscribe(subscriptions));
+scanner.Subscribe(subscriptions);
+```
+
+**Unsubscribe from a bucket:**
+
+```cpp
+// Stop receiving records from bucket 1
+scanner.Unsubscribe(1);
 ```
 
 **Arrow RecordBatch polling (high performance):**
@@ -77,14 +84,14 @@ check("subscribe_batch", scanner.Subscribe(subscriptions));
 #include <arrow/record_batch.h>
 
 fluss::LogScanner arrow_scanner;
-check("new_scanner", table.NewScan().CreateRecordBatchLogScanner(arrow_scanner));
+table.NewScan().CreateRecordBatchLogScanner(arrow_scanner);
 
 for (int b = 0; b < info.num_buckets; ++b) {
-    check("subscribe", arrow_scanner.Subscribe(b, 0));
+    arrow_scanner.Subscribe(b, 0);
 }
 
 fluss::ArrowRecordBatches batches;
-check("poll", arrow_scanner.PollRecordBatch(5000, batches));
+arrow_scanner.PollRecordBatch(5000, batches);
 
 for (size_t i = 0; i < batches.Size(); ++i) {
     const auto& batch = batches[i];
@@ -102,16 +109,13 @@ for (size_t i = 0; i < batches.Size(); ++i) {
 ```cpp
 // Project by column index
 fluss::LogScanner projected_scanner;
-check("new_scanner",
-      table.NewScan().ProjectByIndex({0, 2}).CreateLogScanner(projected_scanner));
+table.NewScan().ProjectByIndex({0, 2}).CreateLogScanner(projected_scanner);
 
 // Project by column name
 fluss::LogScanner name_projected_scanner;
-check("new_scanner",
-      table.NewScan().ProjectByName({"event_id", "timestamp"}).CreateLogScanner(name_projected_scanner));
+table.NewScan().ProjectByName({"event_id", "timestamp"}).CreateLogScanner(name_projected_scanner);
 
 // Arrow RecordBatch with projection
 fluss::LogScanner projected_arrow_scanner;
-check("new_scanner",
-      table.NewScan().ProjectByIndex({0, 2}).CreateRecordBatchLogScanner(projected_arrow_scanner));
+table.NewScan().ProjectByIndex({0, 2}).CreateRecordBatchLogScanner(projected_arrow_scanner);
 ```

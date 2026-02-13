@@ -44,17 +44,17 @@ match result {
 
 ## Error Variants
 
-| Variant | Description |
-|---|---|
-| `UnexpectedError` | General unexpected errors with a message and optional source |
-| `IoUnexpectedError` | I/O errors (network, file system) |
-| `RemoteStorageUnexpectedError` | Remote storage errors (OpenDAL backend failures) |
-| `RpcError` | RPC communication failures (connection refused, timeout) |
-| `RowConvertError` | Row conversion failures (type mismatch, invalid data) |
-| `ArrowError` | Arrow data handling errors (schema mismatch, encoding) |
-| `IllegalArgument` | Invalid arguments passed to an API method |
-| `UnsupportedOperation` | Operation not supported on the table type |
-| `FlussAPIError` | Server-side API errors returned by the Fluss cluster |
+| Variant                        | Description                                                  |
+|--------------------------------|--------------------------------------------------------------|
+| `UnexpectedError`              | General unexpected errors with a message and optional source |
+| `IoUnexpectedError`            | I/O errors (network, file system)                            |
+| `RemoteStorageUnexpectedError` | Remote storage errors (OpenDAL backend failures)             |
+| `RpcError`                     | RPC communication failures (connection refused, timeout)     |
+| `RowConvertError`              | Row conversion failures (type mismatch, invalid data)        |
+| `ArrowError`                   | Arrow data handling errors (schema mismatch, encoding)       |
+| `IllegalArgument`              | Invalid arguments passed to an API method                    |
+| `UnsupportedOperation`         | Operation not supported on the table type                    |
+| `FlussAPIError`                | Server-side API errors returned by the Fluss cluster         |
 
 Server side errors are represented as `FlussAPIError` with a specific error code. Use the `api_error()` helper to match them ergonomically:
 
@@ -107,7 +107,7 @@ match result {
     _ => {}
 }
 
-// conn.get_table() wraps the error differently — match on FlussAPIError directly
+// conn.get_table() wraps the error differently, match on FlussAPIError directly
 let result = conn.get_table(&table_path).await;
 match result {
     Err(Error::FlussAPIError { ref api_error }) => {

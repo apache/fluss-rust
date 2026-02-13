@@ -49,8 +49,8 @@ cmake --build .
 ```
 
 This produces:
-- `libfluss_cpp.a` — Static library
-- `fluss_cpp_example` — Example executable
+- `libfluss_cpp.a` (Static library)
+- `fluss_cpp_example` (Example executable)
 - Header files in `include/`
 
 ## Integrating into Your Project

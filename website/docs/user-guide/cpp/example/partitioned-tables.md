@@ -24,27 +24,27 @@ auto descriptor = fluss::TableDescriptor::NewBuilder()
     .Build();
 
 fluss::TablePath table_path("fluss", "partitioned_events");
-check("create_table", admin.CreateTable(table_path, descriptor, true));
+admin.CreateTable(table_path, descriptor, true);
 ```
 
 ### Writing to Partitioned Log Tables
 
-**Partitions must exist before writing data, otherwise the client will by default retry indefinitely.** Include partition column values in each row — the client routes records to the correct partition automatically.
+**Partitions must exist before writing data, otherwise the client will by default retry indefinitely.** Include partition column values in each row, the client routes records to the correct partition automatically.
 
 ```cpp
 fluss::Table table;
-check("get_table", conn.GetTable(table_path, table));
+conn.GetTable(table_path, table);
 
 fluss::AppendWriter writer;
-check("new_writer", table.NewAppend().CreateWriter(writer));
+table.NewAppend().CreateWriter(writer);
 
 fluss::GenericRow row;
 row.SetInt32(0, 1);
 row.SetString(1, "user_login");
 row.SetString(2, "2024-01-15");
 row.SetString(3, "US");
-check("append", writer.Append(row));
-check("flush", writer.Flush());
+writer.Append(row);
+writer.Flush();
 ```
 
 ### Reading from Partitioned Log Tables
@@ -53,18 +53,18 @@ For partitioned tables, use partition-aware subscribe methods.
 
 ```cpp
 fluss::Table table;
-check("get_table", conn.GetTable(table_path, table));
+conn.GetTable(table_path, table);
 
 fluss::LogScanner scanner;
-check("new_scanner", table.NewScan().CreateLogScanner(scanner));
+table.NewScan().CreateLogScanner(scanner);
 
 // Subscribe to individual partitions
 for (const auto& pi : partition_infos) {
-    check("subscribe", scanner.SubscribePartitionBuckets(pi.partition_id, 0, 0));
+    scanner.SubscribePartitionBuckets(pi.partition_id, 0, 0);
 }
 
 fluss::ScanRecords records;
-check("poll", scanner.Poll(5000, records));
+scanner.Poll(5000, records);
 
 for (const auto& rec : records) {
     std::cout << "bucket_id=" << rec.bucket_id
@@ -73,32 +73,37 @@ for (const auto& rec : records) {
 
 // Or batch-subscribe to all partitions at once
 fluss::LogScanner batch_scanner;
-check("new_scanner", table.NewScan().CreateLogScanner(batch_scanner));
+table.NewScan().CreateLogScanner(batch_scanner);
 
 std::vector<fluss::PartitionBucketSubscription> subs;
 for (const auto& pi : partition_infos) {
     subs.push_back({pi.partition_id, 0, 0});
 }
-check("subscribe", batch_scanner.SubscribePartitionBuckets(subs));
+batch_scanner.SubscribePartitionBuckets(subs);
+```
+
+**Unsubscribe from a partition bucket:**
+
+```cpp
+// Stop receiving records from a specific partition bucket
+scanner.UnsubscribePartition(partition_infos[0].partition_id, 0);
 ```
 
 ### Managing Partitions
 
 ```cpp
 // Create a partition
-check("create_partition",
-      admin.CreatePartition(table_path, {{"dt", "2024-01-15"}, {"region", "EMEA"}}, true));
+admin.CreatePartition(table_path, {{"dt", "2024-01-15"}, {"region", "EMEA"}}, true);
 
 // List partitions
 std::vector<fluss::PartitionInfo> partition_infos;
-check("list_partitions", admin.ListPartitionInfos(table_path, partition_infos));
+admin.ListPartitionInfos(table_path, partition_infos);
 
 // Query partition offsets
 std::vector<int32_t> bucket_ids = {0, 1, 2};
 std::unordered_map<int32_t, int64_t> offsets;
-check("list_partition_offsets",
-      admin.ListPartitionOffsets(table_path, "2024-01-15$US",
-                                 bucket_ids, fluss::OffsetQuery::Latest(), offsets));
+admin.ListPartitionOffsets(table_path, "2024-01-15$US",
+                           bucket_ids, fluss::OffsetQuery::Latest(), offsets);
 ```
 
 ## Partitioned Primary Key Tables
@@ -123,7 +128,7 @@ auto descriptor = fluss::TableDescriptor::NewBuilder()
     .Build();
 
 fluss::TablePath table_path("fluss", "partitioned_users");
-check("create_table", admin.CreateTable(table_path, descriptor, true));
+admin.CreateTable(table_path, descriptor, true);
 ```
 
 ### Writing to Partitioned Primary Key Tables
@@ -132,23 +137,23 @@ check("create_table", admin.CreateTable(table_path, descriptor, true));
 
 ```cpp
 fluss::Table table;
-check("get_table", conn.GetTable(table_path, table));
+conn.GetTable(table_path, table);
 
 // Create partitions first
-check("create_APAC", admin.CreatePartition(table_path, {{"region", "APAC"}, {"zone", "1"}}, true));
-check("create_EMEA", admin.CreatePartition(table_path, {{"region", "EMEA"}, {"zone", "2"}}, true));
-check("create_US", admin.CreatePartition(table_path, {{"region", "US"}, {"zone", "3"}}, true));
+admin.CreatePartition(table_path, {{"region", "APAC"}, {"zone", "1"}}, true);
+admin.CreatePartition(table_path, {{"region", "EMEA"}, {"zone", "2"}}, true);
+admin.CreatePartition(table_path, {{"region", "US"}, {"zone", "3"}}, true);
 
 fluss::UpsertWriter writer;
-check("new_writer", table.NewUpsert().CreateWriter(writer));
+table.NewUpsert().CreateWriter(writer);
 
 auto row = table.NewRow();
 row.Set("user_id", 1001);
 row.Set("region", "APAC");
 row.Set("zone", static_cast<int64_t>(1));
 row.Set("score", static_cast<int64_t>(1234));
-check("upsert", writer.Upsert(row));
-check("flush", writer.Flush());
+writer.Upsert(row);
+writer.Flush();
 ```
 
 ### Looking Up Records in Partitioned Tables
@@ -159,7 +164,7 @@ Lookup requires all primary key columns including partition columns.
 
 ```cpp
 fluss::Lookuper lookuper;
-check("new_lookuper", table.NewLookup().CreateLookuper(lookuper));
+table.NewLookup().CreateLookuper(lookuper);
 
 auto pk = table.NewRow();
 pk.Set("user_id", 1001);
@@ -168,7 +173,7 @@ pk.Set("zone", static_cast<int64_t>(1));
 
 bool found = false;
 fluss::GenericRow result;
-check("lookup", lookuper.Lookup(pk, found, result));
+lookuper.Lookup(pk, found, result);
 if (found) {
     std::cout << "score=" << result.GetInt64(3) << std::endl;
 }

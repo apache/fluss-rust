@@ -5,22 +5,22 @@ sidebar_position: 3
 
 ## Schema DataTypes
 
-| DataType | Description |
-|---|---|
-| `DataType::Boolean()` | Boolean value |
-| `DataType::TinyInt()` | 8-bit signed integer |
-| `DataType::SmallInt()` | 16-bit signed integer |
-| `DataType::Int()` | 32-bit signed integer |
-| `DataType::BigInt()` | 64-bit signed integer |
-| `DataType::Float()` | 32-bit floating point |
-| `DataType::Double()` | 64-bit floating point |
-| `DataType::String()` | UTF-8 string |
-| `DataType::Bytes()` | Binary data |
-| `DataType::Date()` | Date (days since epoch) |
-| `DataType::Time()` | Time (milliseconds since midnight) |
-| `DataType::Timestamp()` | Timestamp without timezone |
-| `DataType::TimestampLtz()` | Timestamp with timezone |
-| `DataType::Decimal(p, s)` | Decimal with precision and scale |
+| DataType                   | Description                        |
+|----------------------------|------------------------------------|
+| `DataType::Boolean()`      | Boolean value                      |
+| `DataType::TinyInt()`      | 8-bit signed integer               |
+| `DataType::SmallInt()`     | 16-bit signed integer              |
+| `DataType::Int()`          | 32-bit signed integer              |
+| `DataType::BigInt()`       | 64-bit signed integer              |
+| `DataType::Float()`        | 32-bit floating point              |
+| `DataType::Double()`       | 64-bit floating point              |
+| `DataType::String()`       | UTF-8 string                       |
+| `DataType::Bytes()`        | Binary data                        |
+| `DataType::Date()`         | Date (days since epoch)            |
+| `DataType::Time()`         | Time (milliseconds since midnight) |
+| `DataType::Timestamp()`    | Timestamp without timezone         |
+| `DataType::TimestampLtz()` | Timestamp with timezone            |
+| `DataType::Decimal(p, s)`  | Decimal with precision and scale   |
 
 ## GenericRow Setters
 
@@ -64,21 +64,21 @@ fluss::Timestamp ts = result_row.GetTimestamp(7);
 
 ## DatumType Enum
 
-| DatumType | C++ Type | Getter |
-|---|---|---|
-| `Null` | — | `IsNull(idx)` |
-| `Bool` | `bool` | `GetBool(idx)` |
-| `Int32` | `int32_t` | `GetInt32(idx)` |
-| `Int64` | `int64_t` | `GetInt64(idx)` |
-| `Float32` | `float` | `GetFloat32(idx)` |
-| `Float64` | `double` | `GetFloat64(idx)` |
-| `String` | `std::string` | `GetString(idx)` |
-| `Bytes` | `std::vector<uint8_t>` | `GetBytes(idx)` |
-| `Date` | `Date` | `GetDate(idx)` |
-| `Time` | `Time` | `GetTime(idx)` |
-| `TimestampNtz` | `Timestamp` | `GetTimestamp(idx)` |
-| `TimestampLtz` | `Timestamp` | `GetTimestamp(idx)` |
-| `DecimalString` | `std::string` | `DecimalToString(idx)` |
+| DatumType       | C++ Type               | Getter                 |
+|-----------------|------------------------|------------------------|
+| `Null`          | --                     | `IsNull(idx)`          |
+| `Bool`          | `bool`                 | `GetBool(idx)`         |
+| `Int32`         | `int32_t`              | `GetInt32(idx)`        |
+| `Int64`         | `int64_t`              | `GetInt64(idx)`        |
+| `Float32`       | `float`                | `GetFloat32(idx)`      |
+| `Float64`       | `double`               | `GetFloat64(idx)`      |
+| `String`        | `std::string`          | `GetString(idx)`       |
+| `Bytes`         | `std::vector<uint8_t>` | `GetBytes(idx)`        |
+| `Date`          | `Date`                 | `GetDate(idx)`         |
+| `Time`          | `Time`                 | `GetTime(idx)`         |
+| `TimestampNtz`  | `Timestamp`            | `GetTimestamp(idx)`    |
+| `TimestampLtz`  | `Timestamp`            | `GetTimestamp(idx)`    |
+| `DecimalString` | `std::string`          | `DecimalToString(idx)` |
 
 ## Type Checking
 
@@ -98,5 +98,12 @@ if (rec.row.IsDecimal(2)) {
 
 ```cpp
 constexpr int64_t fluss::EARLIEST_OFFSET = -2;  // Start from earliest
-constexpr int64_t fluss::LATEST_OFFSET = -1;    // Start from latest
+```
+
+To start reading from the latest offset, resolve the current offset via `ListOffsets` before subscribing:
+
+```cpp
+std::unordered_map<int32_t, int64_t> offsets;
+admin.ListOffsets(table_path, {0}, fluss::OffsetQuery::Latest(), offsets);
+scanner.Subscribe(0, offsets[0]);
 ```

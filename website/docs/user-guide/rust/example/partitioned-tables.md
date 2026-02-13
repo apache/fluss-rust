@@ -31,7 +31,7 @@ admin.create_table(&table_path, &table_descriptor, true).await?;
 
 ### Writing to Partitioned Log Tables
 
-**Partitions must exist before writing data, otherwise the client will by default retry indefinitely.** Include partition column values in each row — the client routes records to the correct partition automatically.
+**Partitions must exist before writing data, otherwise the client will by default retry indefinitely.** Include partition column values in each row, the client routes records to the correct partition automatically.
 
 ```rust
 use fluss::metadata::PartitionSpec;

@@ -33,17 +33,3 @@ config.writer_batch_size = 2 * 1024 * 1024;     // Batch size (2 MB)
 config.scanner_remote_log_prefetch_num = 4;      // Remote log prefetch count
 config.remote_file_download_thread_num = 3;  // Download threads
 ```
-
-## Error Handling
-
-All C++ operations return a `fluss::Result`. Check with `Ok()` before continuing:
-
-```cpp
-static void check(const char* step, const fluss::Result& r) {
-    if (!r.Ok()) {
-        std::cerr << step << " failed: code=" << r.error_code
-                  << " msg=" << r.error_message << std::endl;
-        std::exit(1);
-    }
-}
-```

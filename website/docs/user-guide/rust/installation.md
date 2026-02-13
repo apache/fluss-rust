@@ -29,11 +29,11 @@ fluss-rs = { version = "0.1", features = ["storage-all"] }
 ```
 
 Available features:
-- `storage-memory` (default) — In-memory storage
-- `storage-fs` (default) — Local filesystem storage
-- `storage-s3` — Amazon S3 storage
-- `storage-oss` — Alibaba OSS storage
-- `storage-all` — All storage backends
+- `storage-memory` (default: In-memory storage)
+- `storage-fs` (default: Local filesystem storage)
+- `storage-s3` (Amazon S3 storage)
+- `storage-oss` (Alibaba OSS storage)
+- `storage-all` (All storage backends)
 
 ## Git or Path Dependency
 

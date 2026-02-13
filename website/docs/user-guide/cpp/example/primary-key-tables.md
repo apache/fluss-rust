@@ -21,17 +21,17 @@ auto descriptor = fluss::TableDescriptor::NewBuilder()
     .Build();
 
 fluss::TablePath table_path("fluss", "users");
-check("create_table", admin.CreateTable(table_path, descriptor, true));
+admin.CreateTable(table_path, descriptor, true);
 ```
 
 ## Upserting Records
 
 ```cpp
 fluss::Table table;
-check("get_table", conn.GetTable(table_path, table));
+conn.GetTable(table_path, table);
 
 fluss::UpsertWriter upsert_writer;
-check("new_upsert_writer", table.NewUpsert().CreateWriter(upsert_writer));
+table.NewUpsert().CreateWriter(upsert_writer);
 
 // Fire-and-forget upserts
 {
@@ -39,16 +39,16 @@ check("new_upsert_writer", table.NewUpsert().CreateWriter(upsert_writer));
     row.Set("id", 1);
     row.Set("name", "Alice");
     row.Set("age", static_cast<int64_t>(25));
-    check("upsert", upsert_writer.Upsert(row));
+    upsert_writer.Upsert(row);
 }
 {
     auto row = table.NewRow();
     row.Set("id", 2);
     row.Set("name", "Bob");
     row.Set("age", static_cast<int64_t>(30));
-    check("upsert", upsert_writer.Upsert(row));
+    upsert_writer.Upsert(row);
 }
-check("flush", upsert_writer.Flush());
+upsert_writer.Flush();
 
 // Per-record acknowledgment
 {
@@ -57,8 +57,8 @@ check("flush", upsert_writer.Flush());
     row.Set("name", "Charlie");
     row.Set("age", static_cast<int64_t>(35));
     fluss::WriteResult wr;
-    check("upsert", upsert_writer.Upsert(row, wr));
-    check("wait", wr.Wait());
+    upsert_writer.Upsert(row, wr);
+    wr.Wait();
 }
 ```
 
@@ -72,8 +72,8 @@ row.Set("id", 1);
 row.Set("name", "Alice Updated");
 row.Set("age", static_cast<int64_t>(26));
 fluss::WriteResult wr;
-check("upsert", upsert_writer.Upsert(row, wr));
-check("wait", wr.Wait());
+upsert_writer.Upsert(row, wr);
+wr.Wait();
 ```
 
 ## Deleting Records
@@ -82,8 +82,8 @@ check("wait", wr.Wait());
 auto pk_row = table.NewRow();
 pk_row.Set("id", 2);
 fluss::WriteResult wr;
-check("delete", upsert_writer.Delete(pk_row, wr));
-check("wait", wr.Wait());
+upsert_writer.Delete(pk_row, wr);
+wr.Wait();
 ```
 
 ## Partial Updates
@@ -93,38 +93,36 @@ Update only specific columns while preserving others.
 ```cpp
 // By column names
 fluss::UpsertWriter partial_writer;
-check("new_partial_writer",
-      table.NewUpsert()
-          .PartialUpdateByName({"id", "age"})
-          .CreateWriter(partial_writer));
+table.NewUpsert()
+    .PartialUpdateByName({"id", "age"})
+    .CreateWriter(partial_writer);
 
 auto row = table.NewRow();
 row.Set("id", 1);
 row.Set("age", static_cast<int64_t>(27));
 fluss::WriteResult wr;
-check("partial_upsert", partial_writer.Upsert(row, wr));
-check("wait", wr.Wait());
+partial_writer.Upsert(row, wr);
+wr.Wait();
 
 // By column indices
 fluss::UpsertWriter partial_writer_idx;
-check("new_partial_writer",
-      table.NewUpsert()
-          .PartialUpdateByIndex({0, 2})
-          .CreateWriter(partial_writer_idx));
+table.NewUpsert()
+    .PartialUpdateByIndex({0, 2})
+    .CreateWriter(partial_writer_idx);
 ```
 
 ## Looking Up Records
 
 ```cpp
 fluss::Lookuper lookuper;
-check("new_lookuper", table.NewLookup().CreateLookuper(lookuper));
+table.NewLookup().CreateLookuper(lookuper);
 
 auto pk_row = table.NewRow();
 pk_row.Set("id", 1);
 
 bool found = false;
 fluss::GenericRow result_row;
-check("lookup", lookuper.Lookup(pk_row, found, result_row));
+lookuper.Lookup(pk_row, found, result_row);
 
 if (found) {
     std::cout << "Found: name=" << result_row.GetString(1)

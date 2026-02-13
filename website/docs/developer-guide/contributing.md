@@ -36,7 +36,7 @@ We recommend [RustRover](https://www.jetbrains.com/rust/) IDE.
 
 ### Copyright Profile
 
-Fluss is an Apache project — every file needs an Apache licence header. To automate this in RustRover:
+Fluss is an Apache project, every file needs an Apache licence header. To automate this in RustRover:
 
 1. Go to `Settings` > `Editor` > `Copyright` > `Copyright Profiles`.
 2. Add a new profile named `Apache` with this text:
@@ -65,10 +65,10 @@ Fluss is an Apache project — every file needs an Apache licence header. To aut
 ## Project Structure
 
 ```
-crates/fluss        — Fluss Rust client crate
-crates/examples     — Rust client examples
-bindings/cpp        — C++ bindings
-bindings/python     — Python bindings (PyO3)
+crates/fluss        (Fluss Rust client crate)
+crates/examples     (Rust client examples)
+bindings/cpp        (C++ bindings)
+bindings/python     (Python bindings - PyO3)
 ```
 
 ## Building and Testing

@@ -49,12 +49,12 @@ await writer.flush()
 ## Reading
 
 There are two scanner types:
-- **Batch scanner** (`create_record_batch_log_scanner()`) — returns Arrow Tables or DataFrames, best for analytics
-- **Record scanner** (`create_log_scanner()`) — returns individual records with metadata (offset, timestamp, change type), best for streaming
+- **Batch scanner** (`create_record_batch_log_scanner()`): returns Arrow Tables or DataFrames, best for analytics
+- **Record scanner** (`create_log_scanner()`): returns individual records with metadata (offset, timestamp, change type), best for streaming
 
 And two reading modes:
-- **`to_arrow()` / `to_pandas()`** — reads all data from subscribed buckets up to the current latest offset, then returns. Best for one-shot batch reads.
-- **`poll_arrow()` / `poll()` / `poll_record_batch()`** — returns whatever data is available within the timeout, then returns. Call in a loop for continuous streaming.
+- **`to_arrow()` / `to_pandas()`**: reads all data from subscribed buckets up to the current latest offset, then returns. Best for one-shot batch reads.
+- **`poll_arrow()` / `poll()` / `poll_record_batch()`**: returns whatever data is available within the timeout, then returns. Call in a loop for continuous streaming.
 
 ### Batch Read (One-Shot)
 
@@ -92,13 +92,25 @@ while True:
         print(f"offset={record.offset}, change={record.change_type.short_string()}, row={record.row}")
 ```
 
-### Subscribe from Latest Offset
+### Unsubscribing
 
-To only consume new records (skip existing data), use `LATEST_OFFSET`:
+To stop consuming from a bucket, use `unsubscribe()`:
 
 ```python
+scanner.unsubscribe(bucket_id=0)
+```
+
+### Subscribe from Latest Offset
+
+To only consume new records (skip existing data), first resolve the current latest offset via `list_offsets`, then subscribe at that offset:
+
+```python
+admin = await conn.get_admin()
+offsets = await admin.list_offsets(table_path, [0], fluss.OffsetType.LATEST)
+latest = offsets[0]
+
 scanner = await table.new_scan().create_record_batch_log_scanner()
-scanner.subscribe(bucket_id=0, start_offset=fluss.LATEST_OFFSET)
+scanner.subscribe(bucket_id=0, start_offset=latest)
 ```
 
 ## Column Projection

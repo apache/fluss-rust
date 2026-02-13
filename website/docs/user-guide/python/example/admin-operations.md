@@ -41,16 +41,16 @@ await admin.drop_table(table_path, ignore_if_not_exists=True)
 
 `TableDescriptor` accepts these optional parameters:
 
-| Parameter | Description |
-|---|---|
-| `partition_keys` | Column names to partition by (e.g. `["region"]`) |
-| `bucket_count` | Number of buckets (parallelism units) for the table |
-| `bucket_keys` | Columns used to determine bucket assignment |
-| `comment` | Table comment / description |
-| `log_format` | Log storage format: `"ARROW"` or `"INDEXED"` |
-| `kv_format` | KV storage format for primary key tables: `"INDEXED"` or `"COMPACTED"` |
-| `properties` | Table configuration properties as a dict (e.g. `{"table.replication.factor": "1"}`) |
-| `custom_properties` | User-defined properties as a dict |
+| Parameter           | Description                                                                         |
+|---------------------|-------------------------------------------------------------------------------------|
+| `partition_keys`    | Column names to partition by (e.g. `["region"]`)                                    |
+| `bucket_count`      | Number of buckets (parallelism units) for the table                                 |
+| `bucket_keys`       | Columns used to determine bucket assignment                                         |
+| `comment`           | Table comment / description                                                         |
+| `log_format`        | Log storage format: `"ARROW"` or `"INDEXED"`                                        |
+| `kv_format`         | KV storage format for primary key tables: `"INDEXED"` or `"COMPACTED"`              |
+| `properties`        | Table configuration properties as a dict (e.g. `{"table.replication.factor": "1"}`) |
+| `custom_properties` | User-defined properties as a dict                                                   |
 
 ## Offsets
 
