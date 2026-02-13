@@ -24,11 +24,11 @@ use crate::row::field_getter::FieldGetter;
 use crate::row::{ColumnarRow, InternalRow};
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    Float32Builder, Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
-    StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder, Time64MicrosecondBuilder,
-    Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
-    TimestampNanosecondBuilder, TimestampSecondBuilder, UInt8Builder, UInt16Builder, UInt32Builder,
-    UInt64Builder,
+    FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
+    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder, UInt8Builder,
+    UInt16Builder, UInt32Builder, UInt64Builder,
 };
 use arrow::{
     array::RecordBatch,
@@ -266,6 +266,9 @@ impl RowAppendRecordBatchBuilder {
             arrow_schema::DataType::Boolean => Ok(Box::new(BooleanBuilder::new())),
             arrow_schema::DataType::Utf8 => Ok(Box::new(StringBuilder::new())),
             arrow_schema::DataType::Binary => Ok(Box::new(BinaryBuilder::new())),
+            arrow_schema::DataType::FixedSizeBinary(size) => {
+                Ok(Box::new(FixedSizeBinaryBuilder::new(*size)))
+            }
             arrow_schema::DataType::Decimal128(precision, scale) => {
                 let builder = Decimal128Builder::new()
                     .with_precision_and_scale(*precision, *scale)

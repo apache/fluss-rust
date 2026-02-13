@@ -19,13 +19,14 @@ use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use crate::row::Decimal;
 use arrow::array::{
-    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder,
-    Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringBuilder,
-    Time32MillisecondBuilder, Time32SecondBuilder, Time64MicrosecondBuilder,
-    Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
-    TimestampNanosecondBuilder, TimestampSecondBuilder,
+    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
+    FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
+    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
 };
 use arrow::datatypes as arrow_schema;
+use arrow::error::ArrowError;
 use jiff::ToSpan;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
@@ -439,6 +440,24 @@ fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
         })
 }
 
+trait AppendResult {
+    fn into_append_result(self) -> Result<()>;
+}
+
+impl AppendResult for () {
+    fn into_append_result(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl AppendResult for std::result::Result<(), ArrowError> {
+    fn into_append_result(self) -> Result<()> {
+        self.map_err(|e| RowConvertError {
+            message: format!("Failed to append value: {e}"),
+        })
+    }
+}
+
 impl Datum<'_> {
     pub fn append_to(
         &self,
@@ -457,7 +476,7 @@ impl Datum<'_> {
         macro_rules! append_value_to_arrow {
             ($builder_type:ty, $value:expr) => {
                 if let Some(b) = builder.as_any_mut().downcast_mut::<$builder_type>() {
-                    b.append_value($value);
+                    b.append_value($value).into_append_result()?;
                     return Ok(());
                 }
             };
@@ -474,6 +493,7 @@ impl Datum<'_> {
                 append_null_to_arrow!(Float64Builder);
                 append_null_to_arrow!(StringBuilder);
                 append_null_to_arrow!(BinaryBuilder);
+                append_null_to_arrow!(FixedSizeBinaryBuilder);
                 append_null_to_arrow!(Decimal128Builder);
                 append_null_to_arrow!(Date32Builder);
                 append_null_to_arrow!(Time32SecondBuilder);
@@ -493,7 +513,21 @@ impl Datum<'_> {
             Datum::Float32(v) => append_value_to_arrow!(Float32Builder, v.into_inner()),
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, v.as_ref()),
-            Datum::Blob(v) => append_value_to_arrow!(BinaryBuilder, v.as_ref()),
+            Datum::Blob(v) => match data_type {
+                arrow_schema::DataType::Binary => {
+                    append_value_to_arrow!(BinaryBuilder, v.as_ref());
+                }
+                arrow_schema::DataType::FixedSizeBinary(_) => {
+                    append_value_to_arrow!(FixedSizeBinaryBuilder, v.as_ref());
+                }
+                _ => {
+                    return Err(RowConvertError {
+                        message: format!(
+                            "Expected Binary or FixedSizeBinary Arrow type, got: {data_type:?}"
+                        ),
+                    });
+                }
+            },
             Datum::Decimal(decimal) => {
                 // Extract target precision and scale from Arrow schema
                 let (p, s) = match data_type {
