@@ -24,8 +24,9 @@ use crate::rpc::{RpcClient, ServerConnection};
 use log::info;
 use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use url::quirks::password;
 
 #[derive(Default)]
 pub struct Metadata {
@@ -44,13 +45,21 @@ impl Metadata {
         })
     }
 
+    fn parse_bootstrap(boot_strap: &str) -> Result<SocketAddr> {
+        let addr = boot_strap
+            .to_socket_addrs()
+            .map_err(|e| Error::IllegalArgument {
+                message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
+            })?
+            .next()
+            .ok_or_else(|| Error::IllegalArgument {
+                message: format!("Unable to resolve bootstrap address '{boot_strap}'"),
+            })?;
+        Ok(addr)
+    }
+
     async fn init_cluster(boot_strap: &str, connections: Arc<RpcClient>) -> Result<Cluster> {
-        let socket_address =
-            boot_strap
-                .parse::<SocketAddr>()
-                .map_err(|e| Error::IllegalArgument {
-                    message: format!("Invalid bootstrap address '{boot_strap}': {e}"),
-                })?;
+        let socket_address = Self::parse_bootstrap(boot_strap)?;
         let server_node = ServerNode::new(
             -1,
             socket_address.ip().to_string(),
@@ -272,5 +281,19 @@ mod tests {
         metadata.invalidate_server(&1, vec![1]);
         let cluster = metadata.get_cluster();
         assert!(cluster.get_tablet_server(1).is_none());
+    }
+
+    #[test]
+    fn parse_bootstrap_variants() {
+        // valid IP
+        let addr = Metadata::parse_bootstrap("127.0.0.1:8080").unwrap();
+        assert_eq!(addr.port(), 8080);
+
+        // valid hostname
+        let addr = Metadata::parse_bootstrap("localhost:9090").unwrap();
+        assert_eq!(addr.port(), 9090);
+
+        // invalid input
+        assert!(Metadata::parse_bootstrap("invalid_address").is_err());
     }
 }
