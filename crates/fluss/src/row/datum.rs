@@ -26,6 +26,7 @@ use arrow::array::{
     TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
 };
 use arrow::datatypes as arrow_schema;
+use arrow::error::ArrowError;
 use jiff::ToSpan;
 use ordered_float::OrderedFloat;
 use parse_display::Display;
@@ -439,6 +440,24 @@ fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
         })
 }
 
+trait AppendResult {
+    fn into_append_result(self) -> Result<()>;
+}
+
+impl AppendResult for () {
+    fn into_append_result(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl AppendResult for std::result::Result<(), ArrowError> {
+    fn into_append_result(self) -> Result<()> {
+        self.map_err(|e| RowConvertError {
+            message: format!("Failed to append value: {e}"),
+        })
+    }
+}
+
 impl Datum<'_> {
     pub fn append_to(
         &self,
@@ -457,7 +476,7 @@ impl Datum<'_> {
         macro_rules! append_value_to_arrow {
             ($builder_type:ty, $value:expr) => {
                 if let Some(b) = builder.as_any_mut().downcast_mut::<$builder_type>() {
-                    b.append_value($value);
+                    b.append_value($value).into_append_result()?;
                     return Ok(());
                 }
             };
@@ -494,21 +513,21 @@ impl Datum<'_> {
             Datum::Float32(v) => append_value_to_arrow!(Float32Builder, v.into_inner()),
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, v.as_ref()),
-            Datum::Blob(v) => {
-                append_value_to_arrow!(BinaryBuilder, v.as_ref());
-                if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<FixedSizeBinaryBuilder>()
-                {
-                    return b.append_value(v.as_ref()).map_err(|e| RowConvertError {
-                        message: format!("Failed to append FixedSizeBinary: {e}"),
+            Datum::Blob(v) => match data_type {
+                arrow_schema::DataType::Binary => {
+                    append_value_to_arrow!(BinaryBuilder, v.as_ref());
+                }
+                arrow_schema::DataType::FixedSizeBinary(_) => {
+                    append_value_to_arrow!(FixedSizeBinaryBuilder, v.as_ref());
+                }
+                _ => {
+                    return Err(RowConvertError {
+                        message: format!(
+                            "Expected Binary or FixedSizeBinary Arrow type, got: {data_type:?}"
+                        ),
                     });
                 }
-
-                return Err(RowConvertError {
-                    message: "Builder type mismatch for Blob".to_string(),
-                });
-            }
+            },
             Datum::Decimal(decimal) => {
                 // Extract target precision and scale from Arrow schema
                 let (p, s) = match data_type {
