@@ -39,33 +39,35 @@ impl Config {
                 let value: String = item.1.extract()?;
 
                 match key.as_str() {
-                    "bootstrap_servers" => {
+                    "bootstrap_servers" | "bootstrap.servers" => {
                         config.bootstrap_servers = value;
                     }
-                    "writer_request_max_size" => {
+                    "writer_request_max_size" | "client.writer.request-max-size" => {
                         if let Ok(size) = value.parse::<i32>() {
                             config.writer_request_max_size = size;
                         }
                     }
-                    "writer_acks" => {
+                    "writer_acks" | "client.writer.acks" => {
                         config.writer_acks = value;
                     }
-                    "writer_retries" => {
+                    "writer_retries" | "client.writer.retries" => {
                         if let Ok(retries) = value.parse::<i32>() {
                             config.writer_retries = retries;
                         }
                     }
-                    "writer_batch_size" => {
+                    "writer_batch_size" | "client.writer.batch-size" => {
                         if let Ok(size) = value.parse::<i32>() {
                             config.writer_batch_size = size;
                         }
                     }
-                    "scanner_remote_log_prefetch_num" => {
+                    "scanner_remote_log_prefetch_num"
+                    | "client.scanner.remote-log.prefetch-num" => {
                         if let Ok(num) = value.parse::<usize>() {
                             config.scanner_remote_log_prefetch_num = num;
                         }
                     }
-                    "remote_file_download_thread_num" => {
+                    "remote_file_download_thread_num"
+                    | "client.remote-file.download-thread-num" => {
                         if let Ok(num) = value.parse::<usize>() {
                             config.remote_file_download_thread_num = num;
                         }
