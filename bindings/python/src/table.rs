@@ -1703,6 +1703,19 @@ impl LogScanner {
         })
     }
 
+    /// Unsubscribe from a specific bucket (non-partitioned tables only).
+    ///
+    /// Args:
+    ///     bucket_id: The bucket ID to unsubscribe from
+    fn unsubscribe(&self, py: Python, bucket_id: i32) -> PyResult<()> {
+        py.detach(|| {
+            TOKIO_RUNTIME.block_on(async {
+                with_scanner!(&self.scanner, unsubscribe(bucket_id))
+                    .map_err(|e| FlussError::from_core_error(&e))
+            })
+        })
+    }
+
     /// Unsubscribe from a specific partition bucket (partitioned tables only).
     ///
     /// Args:

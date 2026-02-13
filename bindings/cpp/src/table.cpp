@@ -640,6 +640,15 @@ Result LogScanner::SubscribePartitionBuckets(
     return utils::from_ffi_result(ffi_result);
 }
 
+Result LogScanner::Unsubscribe(int32_t bucket_id) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+
+    auto ffi_result = scanner_->unsubscribe(bucket_id);
+    return utils::from_ffi_result(ffi_result);
+}
+
 Result LogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id) {
     if (!Available()) {
         return utils::make_client_error("LogScanner not available");

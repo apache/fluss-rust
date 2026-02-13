@@ -345,6 +345,11 @@ int main() {
         std::cout << "  ... and " << (batch_records.Size() - 5) << " more records" << std::endl;
     }
 
+    // 9.1) Unsubscribe from a bucket
+    std::cout << "\n=== Unsubscribe Example ===" << std::endl;
+    check("unsubscribe", batch_scanner.Unsubscribe(subscriptions[0].bucket_id));
+    std::cout << "Unsubscribed from bucket " << subscriptions[0].bucket_id << std::endl;
+
     // 10) Arrow record batch polling
     std::cout << "\n=== Testing Arrow Record Batch Polling ===" << std::endl;
 
@@ -584,6 +589,31 @@ int main() {
               << " records from batch partition subscription" << std::endl;
     for (size_t i = 0; i < partition_batch_records.Size(); ++i) {
         const auto& rec = partition_batch_records[i];
+        std::cout << "  Record " << i << ": id=" << rec.row.GetInt32(0)
+                  << ", region=" << rec.row.GetString(1) << ", value=" << rec.row.GetInt64(2)
+                  << std::endl;
+    }
+
+    // 13.3) UnsubscribePartition: unsubscribe from one partition, verify remaining
+    std::cout << "\n--- Testing UnsubscribePartition ---" << std::endl;
+    fluss::LogScanner unsub_partition_scanner;
+    check("new_unsub_partition_scanner",
+          partitioned_table.NewScan().CreateLogScanner(unsub_partition_scanner));
+
+    for (const auto& pi : partition_infos) {
+        check("subscribe_for_unsub",
+              unsub_partition_scanner.SubscribePartitionBuckets(pi.partition_id, 0, 0));
+    }
+    // Unsubscribe from the first partition
+    check("unsubscribe_partition",
+          unsub_partition_scanner.UnsubscribePartition(partition_infos[0].partition_id, 0));
+    std::cout << "Unsubscribed from partition " << partition_infos[0].partition_name << std::endl;
+
+    fluss::ScanRecords unsub_records;
+    check("poll_after_unsub", unsub_partition_scanner.Poll(5000, unsub_records));
+    std::cout << "After unsubscribe, scanned " << unsub_records.Size() << " records" << std::endl;
+    for (size_t i = 0; i < unsub_records.Size(); ++i) {
+        const auto& rec = unsub_records[i];
         std::cout << "  Record " << i << ": id=" << rec.row.GetInt32(0)
                   << ", region=" << rec.row.GetString(1) << ", value=" << rec.row.GetInt64(2)
                   << std::endl;

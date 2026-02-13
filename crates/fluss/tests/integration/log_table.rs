@@ -158,6 +158,18 @@ mod table_test {
                 i
             );
         }
+
+        // Test unsubscribe: unsubscribe from bucket 0, verify no error
+        log_scanner
+            .unsubscribe(0)
+            .await
+            .expect("Failed to unsubscribe from bucket 0");
+
+        // Verify unsubscribe_partition fails on a non-partitioned table
+        assert!(
+            log_scanner.unsubscribe_partition(0, 0).await.is_err(),
+            "unsubscribe_partition should fail on a non-partitioned table"
+        );
     }
 
     #[tokio::test]

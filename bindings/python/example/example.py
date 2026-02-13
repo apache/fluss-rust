@@ -374,6 +374,20 @@ async def main():
     except Exception as e:
         print(f"Error during record scanning: {e}")
 
+    # Demo: unsubscribe — unsubscribe from a bucket (non-partitioned tables)
+    print("\n--- Testing unsubscribe ---")
+    try:
+        unsub_scanner = await table.new_scan().create_record_batch_log_scanner()
+        unsub_scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+        print(f"Subscribed to {num_buckets} buckets")
+        # Unsubscribe from bucket 0 — future polls will skip this bucket
+        unsub_scanner.unsubscribe(bucket_id=0)
+        print("Unsubscribed from bucket 0")
+        remaining = unsub_scanner.poll_arrow(5000)
+        print(f"After unsubscribe, got {remaining.num_rows} records (from remaining buckets)")
+    except Exception as e:
+        print(f"Error during unsubscribe test: {e}")
+
     # =====================================================
     # Demo: Primary Key Table with Lookup and Upsert
     # =====================================================
