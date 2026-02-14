@@ -50,21 +50,53 @@ static TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
         .expect("Failed to create Tokio runtime")
 });
 
-/// Offset type constants for list_offsets()
+/// Offset specification for list_offsets(), matching Java's OffsetSpec.
+///
+/// Use factory methods to create instances:
+///   OffsetSpec.earliest()
+///   OffsetSpec.latest()
+///   OffsetSpec.timestamp(ts)
 #[pyclass]
 #[derive(Clone)]
-pub struct OffsetType;
+pub struct OffsetSpec {
+    pub(crate) inner: fcore::rpc::message::OffsetSpec,
+}
 
 #[pymethods]
-impl OffsetType {
-    #[classattr]
-    const EARLIEST: &'static str = "earliest";
+impl OffsetSpec {
+    /// Create an OffsetSpec for the earliest available offset.
+    #[staticmethod]
+    fn earliest() -> Self {
+        Self {
+            inner: fcore::rpc::message::OffsetSpec::Earliest,
+        }
+    }
 
-    #[classattr]
-    const LATEST: &'static str = "latest";
+    /// Create an OffsetSpec for the latest available offset.
+    #[staticmethod]
+    fn latest() -> Self {
+        Self {
+            inner: fcore::rpc::message::OffsetSpec::Latest,
+        }
+    }
 
-    #[classattr]
-    const TIMESTAMP: &'static str = "timestamp";
+    /// Create an OffsetSpec for the offset at or after the given timestamp.
+    #[staticmethod]
+    fn timestamp(ts: i64) -> Self {
+        Self {
+            inner: fcore::rpc::message::OffsetSpec::Timestamp(ts),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.inner {
+            fcore::rpc::message::OffsetSpec::Earliest => "OffsetSpec.earliest()".to_string(),
+            fcore::rpc::message::OffsetSpec::Latest => "OffsetSpec.latest()".to_string(),
+            fcore::rpc::message::OffsetSpec::Timestamp(ts) => {
+                format!("OffsetSpec.timestamp({ts})")
+            }
+        }
+    }
 }
 
 #[pymodule]
@@ -92,7 +124,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ScanRecord>()?;
     m.add_class::<RecordBatch>()?;
     m.add_class::<PartitionInfo>()?;
-    m.add_class::<OffsetType>()?;
+    m.add_class::<OffsetSpec>()?;
     m.add_class::<WriteResultHandle>()?;
     m.add_class::<DatabaseDescriptor>()?;
     m.add_class::<DatabaseInfo>()?;

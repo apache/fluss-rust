@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::*;
-use fcore::rpc::message::OffsetSpec;
 use pyo3::conversion::IntoPyObject;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
@@ -25,23 +24,6 @@ use std::sync::Arc;
 #[pyclass]
 pub struct FlussAdmin {
     __admin: Arc<fcore::client::FlussAdmin>,
-}
-
-/// Parse offset_type string into OffsetSpec
-fn parse_offset_spec(offset_type: &str, timestamp: Option<i64>) -> PyResult<OffsetSpec> {
-    match offset_type {
-        s if s.eq_ignore_ascii_case("earliest") => Ok(OffsetSpec::Earliest),
-        s if s.eq_ignore_ascii_case("latest") => Ok(OffsetSpec::Latest),
-        s if s.eq_ignore_ascii_case("timestamp") => {
-            let ts = timestamp.ok_or_else(|| {
-                FlussError::new_err("timestamp must be provided when offset_type='timestamp'")
-            })?;
-            Ok(OffsetSpec::Timestamp(ts))
-        }
-        _ => Err(FlussError::new_err(format!(
-            "Invalid offset_type: '{offset_type}'. Must be 'earliest', 'latest', or 'timestamp'"
-        ))),
-    }
 }
 
 /// Validate bucket IDs are non-negative
@@ -374,25 +356,20 @@ impl FlussAdmin {
     /// Args:
     ///     table_path: Path to the table
     ///     bucket_ids: List of bucket IDs to query
-    ///     offset_type: Type of offset to retrieve:
-    ///         - "earliest" or OffsetType.EARLIEST: Start of the log
-    ///         - "latest" or OffsetType.LATEST: End of the log
-    ///         - "timestamp" or OffsetType.TIMESTAMP: Offset at given timestamp (requires timestamp arg)
-    ///     timestamp: Required when offset_type is "timestamp", ignored otherwise
+    ///     offset_spec: Offset specification (OffsetSpec.earliest(), OffsetSpec.latest(),
+    ///         or OffsetSpec.timestamp(ts))
     ///
     /// Returns:
     ///     dict[int, int]: Mapping of bucket_id -> offset
-    #[pyo3(signature = (table_path, bucket_ids, offset_type, timestamp=None))]
     pub fn list_offsets<'py>(
         &self,
         py: Python<'py>,
         table_path: &TablePath,
         bucket_ids: Vec<i32>,
-        offset_type: &str,
-        timestamp: Option<i64>,
+        offset_spec: &OffsetSpec,
     ) -> PyResult<Bound<'py, PyAny>> {
         validate_bucket_ids(&bucket_ids)?;
-        let offset_spec = parse_offset_spec(offset_type, timestamp)?;
+        let offset_spec = offset_spec.inner.clone();
 
         let core_table_path = table_path.to_core();
         let admin = self.__admin.clone();
@@ -419,26 +396,21 @@ impl FlussAdmin {
     ///     table_path: Path to the table
     ///     partition_name: Partition value (e.g., "US" not "region=US")
     ///     bucket_ids: List of bucket IDs to query
-    ///     offset_type: Type of offset to retrieve:
-    ///         - "earliest" or OffsetType.EARLIEST: Start of the log
-    ///         - "latest" or OffsetType.LATEST: End of the log
-    ///         - "timestamp" or OffsetType.TIMESTAMP: Offset at given timestamp (requires timestamp arg)
-    ///     timestamp: Required when offset_type is "timestamp", ignored otherwise
+    ///     offset_spec: Offset specification (OffsetSpec.earliest(), OffsetSpec.latest(),
+    ///         or OffsetSpec.timestamp(ts))
     ///
     /// Returns:
     ///     dict[int, int]: Mapping of bucket_id -> offset
-    #[pyo3(signature = (table_path, partition_name, bucket_ids, offset_type, timestamp=None))]
     pub fn list_partition_offsets<'py>(
         &self,
         py: Python<'py>,
         table_path: &TablePath,
         partition_name: &str,
         bucket_ids: Vec<i32>,
-        offset_type: &str,
-        timestamp: Option<i64>,
+        offset_spec: &OffsetSpec,
     ) -> PyResult<Bound<'py, PyAny>> {
         validate_bucket_ids(&bucket_ids)?;
-        let offset_spec = parse_offset_spec(offset_type, timestamp)?;
+        let offset_spec = offset_spec.inner.clone();
 
         let core_table_path = table_path.to_core();
         let admin = self.__admin.clone();
@@ -493,24 +465,30 @@ impl FlussAdmin {
         })
     }
 
-    /// List all partitions for a partitioned table.
+    /// List partitions for a partitioned table.
     ///
     /// Args:
     ///     table_path: Path to the table
+    ///     partition_spec: Optional partial partition spec to filter results.
+    ///         Dict mapping partition column name to value (e.g., {"region": "US"}).
+    ///         If None, returns all partitions.
     ///
     /// Returns:
     ///     List[PartitionInfo]: List of partition info objects
+    #[pyo3(signature = (table_path, partition_spec=None))]
     pub fn list_partition_infos<'py>(
         &self,
         py: Python<'py>,
         table_path: &TablePath,
+        partition_spec: Option<std::collections::HashMap<String, String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let core_table_path = table_path.to_core();
         let admin = self.__admin.clone();
+        let core_partition_spec = partition_spec.map(fcore::metadata::PartitionSpec::new);
 
         future_into_py(py, async move {
             let partition_infos = admin
-                .list_partition_infos(&core_table_path)
+                .list_partition_infos_with_spec(&core_table_path, core_partition_spec.as_ref())
                 .await
                 .map_err(|e| FlussError::new_err(format!("Failed to list partitions: {e}")))?;
 
