@@ -3,6 +3,8 @@ sidebar_position: 2
 ---
 # Configuration
 
+## Connection Setup
+
 ```rust
 use fluss::client::FlussConnection;
 use fluss::config::Config;
@@ -13,7 +15,7 @@ config.bootstrap_servers = "127.0.0.1:9123".to_string();
 let conn = FlussConnection::new(config).await?;
 ```
 
-## Configuration Options
+## Connection Configurations
 
 | Option                    | Description                                           | Default          |
 |---------------------------|-------------------------------------------------------|------------------|

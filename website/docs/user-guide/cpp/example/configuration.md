@@ -19,7 +19,7 @@ if (!result.Ok()) {
 }
 ```
 
-## Configuration Options
+## Connection Configurations
 
 All fields have sensible defaults. Only `bootstrap_servers` typically needs to be set.
 

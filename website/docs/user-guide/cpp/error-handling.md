@@ -57,6 +57,46 @@ if (result.Ok() && conn.Available()) {
 }
 ```
 
+## Error Codes
+
+Server-side errors carry a specific error code (>0 or -1). Client-side errors (connection failures, type mismatches, etc.) use `ErrorCode::CLIENT_ERROR` (-2). Use `fluss::ErrorCode` to match on specific codes:
+
+```cpp
+fluss::Result result = admin.DropTable(table_path);
+if (!result.Ok()) {
+    if (result.error_code == fluss::ErrorCode::TABLE_NOT_EXIST) {
+        std::cerr << "Table does not exist" << std::endl;
+    } else if (result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
+        std::cerr << "Partition does not exist" << std::endl;
+    } else if (result.error_code == fluss::ErrorCode::CLIENT_ERROR) {
+        std::cerr << "Client-side error: " << result.error_message << std::endl;
+    } else {
+        std::cerr << "Server error (code " << result.error_code
+                  << "): " << result.error_message << std::endl;
+    }
+}
+```
+
+### Common Error Codes
+
+| Constant                                      | Code | Description                         |
+|-----------------------------------------------|------|-------------------------------------|
+| `ErrorCode::CLIENT_ERROR`                     | -2   | Client-side error (not from server) |
+| `ErrorCode::UNKNOWN_SERVER_ERROR`             | -1   | Unexpected server error             |
+| `ErrorCode::NETWORK_EXCEPTION`                | 1    | Server disconnected before response |
+| `ErrorCode::DATABASE_NOT_EXIST`               | 4    | Database does not exist             |
+| `ErrorCode::DATABASE_ALREADY_EXIST`           | 6    | Database already exists             |
+| `ErrorCode::TABLE_NOT_EXIST`                  | 7    | Table does not exist                |
+| `ErrorCode::TABLE_ALREADY_EXIST`              | 8    | Table already exists                |
+| `ErrorCode::INVALID_TABLE_EXCEPTION`          | 15   | Invalid table operation             |
+| `ErrorCode::REQUEST_TIME_OUT`                 | 25   | Request timed out                   |
+| `ErrorCode::PARTITION_NOT_EXISTS`             | 36   | Partition does not exist            |
+| `ErrorCode::PARTITION_ALREADY_EXISTS`         | 42   | Partition already exists            |
+| `ErrorCode::PARTITION_SPEC_INVALID_EXCEPTION` | 43   | Invalid partition spec              |
+| `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for partition   |
+
+See `fluss::ErrorCode` in `fluss.hpp` for the full list of named constants.
+
 ## Common Error Scenarios
 
 ### Connection Refused
@@ -82,8 +122,9 @@ Attempting to access a table that does not exist:
 fluss::Table table;
 fluss::Result result = conn.GetTable(fluss::TablePath("fluss", "nonexistent"), table);
 if (!result.Ok()) {
-    // Table not found error
-    std::cerr << "Table error: " << result.error_message << std::endl;
+    if (result.error_code == fluss::ErrorCode::TABLE_NOT_EXIST) {
+        std::cerr << "Table not found" << std::endl;
+    }
 }
 ```
 
@@ -100,8 +141,9 @@ row.Set("score", static_cast<int64_t>(100));
 fluss::WriteResult wr;
 fluss::Result result = writer.Upsert(row, wr);
 if (!result.Ok()) {
-    // Partition not found, create partitions before writing
-    std::cerr << "Write error: " << result.error_message << std::endl;
+    if (result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
+        std::cerr << "Partition not found, create partitions before writing" << std::endl;
+    }
 }
 ```
 

@@ -3,6 +3,8 @@ sidebar_position: 2
 ---
 # Configuration
 
+## Connection Setup
+
 ```python
 import fluss
 
@@ -17,7 +19,7 @@ with await fluss.FlussConnection.create(config) as conn:
     ...
 ```
 
-## Configuration Options
+## Connection Configurations
 
 | Key                 | Description                                           | Default            |
 |---------------------|-------------------------------------------------------|--------------------|

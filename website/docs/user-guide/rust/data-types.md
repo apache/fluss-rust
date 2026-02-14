@@ -36,9 +36,12 @@ let date = Date::new(19738);
 let time = Time::new(43200000);
 
 // Timestamp without timezone: milliseconds since epoch
+// DataTypes::timestamp() defaults to precision 6 (microseconds).
+// Use DataTypes::timestamp_with_precision(p) for a different precision (0–9).
 let ts = TimestampNtz::new(1704067200000);
 
 // Timestamp with local timezone: milliseconds since epoch
+// DataTypes::timestamp_ltz() also defaults to precision 6.
 let ts_ltz = TimestampLtz::new(1704067200000);
 
 // Decimal: from an unscaled long value with precision and scale
@@ -52,6 +55,26 @@ let decimal = Decimal::from_unscaled_long(12345, 10, 2)?; // represents 123.45
 ```rust
 use fluss::row::{Datum, GenericRow};
 
-let data: Vec<Datum> = vec![1i32.into(), "hello".into()];
+let data: Vec<Datum> = vec![1i32.into(), "hello".into(), Datum::Null];
 let row = GenericRow::from_data(data);
+```
+
+## Reading Row Data
+
+```rust
+use fluss::row::InternalRow;
+
+for record in scan_records {
+    let row = record.row();
+
+    if row.is_null_at(0) {
+        // field is null
+    }
+    let id: i32 = row.get_int(0);
+    let name: &str = row.get_string(1);
+    let score: f32 = row.get_float(2);
+    let date: Date = row.get_date(3);
+    let ts: TimestampNtz = row.get_timestamp_ntz(4, 6);
+    let decimal: Decimal = row.get_decimal(5, 10, 2);
+}
 ```

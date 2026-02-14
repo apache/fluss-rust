@@ -243,9 +243,10 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `ArrowRecordBatch`
 
-| Method                                                         |  Description                         |
+| Method                                                         | Description                          |
 |----------------------------------------------------------------|--------------------------------------|
 | `GetArrowRecordBatch() -> std::shared_ptr<arrow::RecordBatch>` | Get the underlying Arrow RecordBatch |
+| `Available() -> bool`                                          | Check if the batch is valid          |
 | `NumRows() -> int64_t`                                         | Number of rows in the batch          |
 | `GetTableId() -> int64_t`                                      | Table ID                             |
 | `GetPartitionId() -> int64_t`                                  | Partition ID                         |

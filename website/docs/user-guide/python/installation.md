@@ -7,7 +7,7 @@ sidebar_position: 1
 pip install pyfluss
 ```
 
-To build from source instead:
+## Building From Source (Optional)
 
 **Prerequisites:** Python 3.9+, Rust 1.85+
 

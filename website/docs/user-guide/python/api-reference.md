@@ -7,12 +7,16 @@ Complete API reference for the Fluss Python client.
 
 ## `Config`
 
-| Method / Property                 | Description                                  |
-|-----------------------------------|----------------------------------------------|
-| `Config(properties: dict = None)` | Create config from a dict of key-value pairs |
-| `.bootstrap_servers`              | Get/set coordinator server address           |
-| `.writer_request_max_size`        | Get/set max request size in bytes            |
-| `.writer_batch_size`              | Get/set write batch size in bytes            |
+| Method / Property                  | Description                                               |
+|------------------------------------|-----------------------------------------------------------|
+| `Config(properties: dict = None)`  | Create config from a dict of key-value pairs              |
+| `.bootstrap_servers`               | Get/set coordinator server address                        |
+| `.writer_request_max_size`         | Get/set max request size in bytes                         |
+| `.writer_acks`                     | Get/set acknowledgment setting (`"all"` for all replicas) |
+| `.writer_retries`                  | Get/set number of retries on failure                      |
+| `.writer_batch_size`               | Get/set write batch size in bytes                         |
+| `.scanner_remote_log_prefetch_num` | Get/set number of remote log segments to prefetch         |
+| `.remote_file_download_thread_num` | Get/set number of threads for remote log downloads        |
 
 ## `FlussConnection`
 
@@ -248,11 +252,12 @@ Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
 
 ## `FlussError`
 
-| Property          | Description   |
-|-------------------|---------------|
-| `.message -> str` | Error message |
+| Property             | Description                                                                         |
+|----------------------|-------------------------------------------------------------------------------------|
+| `.message -> str`    | Error message                                                                       |
+| `.error_code -> int` | Error code (`ErrorCode.CLIENT_ERROR` for client-side errors, server code otherwise) |
 
-Raised for all Fluss-specific errors (connection failures, table not found, schema mismatches, etc.). Inherits from `Exception`.
+Raised for all Fluss-specific errors (connection failures, table not found, schema mismatches, etc.). Inherits from `Exception`. See [Error Handling](./error-handling.md) for details on matching specific error codes.
 
 ## Constants
 

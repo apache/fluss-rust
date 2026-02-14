@@ -10,6 +10,34 @@ fluss::Admin admin;
 conn.GetAdmin(admin);
 ```
 
+## Database Operations
+
+```cpp
+// Create database
+fluss::DatabaseDescriptor db_descriptor;
+db_descriptor.comment = "My database";
+admin.CreateDatabase("my_database", db_descriptor, true);
+
+// List all databases
+std::vector<std::string> databases;
+admin.ListDatabases(databases);
+for (const auto& db : databases) {
+    std::cout << "Database: " << db << std::endl;
+}
+
+// Check if database exists
+bool exists = false;
+admin.DatabaseExists("my_database", exists);
+
+// Get database information
+fluss::DatabaseInfo db_info;
+admin.GetDatabaseInfo("my_database", db_info);
+std::cout << "Database: " << db_info.database_name << std::endl;
+
+// Drop database
+admin.DropDatabase("my_database", true, false);
+```
+
 ## Table Operations
 
 ```cpp
@@ -63,6 +91,25 @@ auto descriptor = fluss::TableDescriptor::NewBuilder()
     .SetProperty("retention_days", "7")
     .SetComment("Sample table")
     .Build();
+```
+
+## Partition Operations
+
+```cpp
+// Create a partition
+std::unordered_map<std::string, std::string> partition_spec = {{"region", "US"}};
+admin.CreatePartition(table_path, partition_spec, true);
+
+// List all partitions
+std::vector<fluss::PartitionInfo> partitions;
+admin.ListPartitionInfos(table_path, partitions);
+for (const auto& p : partitions) {
+    std::cout << "Partition: id=" << p.partition_id
+              << ", name=" << p.partition_name << std::endl;
+}
+
+// Drop a partition
+admin.DropPartition(table_path, partition_spec, true);
 ```
 
 ## Offset Operations

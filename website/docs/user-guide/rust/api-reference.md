@@ -127,6 +127,8 @@ Complete API reference for the Fluss Rust client.
 | `async fn unsubscribe(&self, bucket_id: i32) -> Result<()>`                                               | Unsubscribe from a bucket (non-partitioned tables)       |
 | `async fn unsubscribe_partition(&self, partition_id: i64, bucket_id: i32) -> Result<()>`                  | Unsubscribe from a partition bucket (partitioned tables) |
 | `async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>>`                                       | Poll for Arrow record batches                            |
+| `fn is_partitioned(&self) -> bool`                                                                        | Check if the table is partitioned                        |
+| `fn get_subscribed_buckets(&self) -> Vec<(TableBucket, i64)>`                                             | Get all current subscriptions as (bucket, offset) pairs  |
 
 ## `ScanRecord`
 

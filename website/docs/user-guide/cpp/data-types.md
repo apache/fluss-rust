@@ -5,22 +5,22 @@ sidebar_position: 3
 
 ## Schema DataTypes
 
-| DataType                   | Description                        |
-|----------------------------|------------------------------------|
-| `DataType::Boolean()`      | Boolean value                      |
-| `DataType::TinyInt()`      | 8-bit signed integer               |
-| `DataType::SmallInt()`     | 16-bit signed integer              |
-| `DataType::Int()`          | 32-bit signed integer              |
-| `DataType::BigInt()`       | 64-bit signed integer              |
-| `DataType::Float()`        | 32-bit floating point              |
-| `DataType::Double()`       | 64-bit floating point              |
-| `DataType::String()`       | UTF-8 string                       |
-| `DataType::Bytes()`        | Binary data                        |
-| `DataType::Date()`         | Date (days since epoch)            |
-| `DataType::Time()`         | Time (milliseconds since midnight) |
-| `DataType::Timestamp()`    | Timestamp without timezone         |
-| `DataType::TimestampLtz()` | Timestamp with timezone            |
-| `DataType::Decimal(p, s)`  | Decimal with precision and scale   |
+| DataType                   | Description                                                    |
+|----------------------------|----------------------------------------------------------------|
+| `DataType::Boolean()`      | Boolean value                                                  |
+| `DataType::TinyInt()`      | 8-bit signed integer                                           |
+| `DataType::SmallInt()`     | 16-bit signed integer                                          |
+| `DataType::Int()`          | 32-bit signed integer                                          |
+| `DataType::BigInt()`       | 64-bit signed integer                                          |
+| `DataType::Float()`        | 32-bit floating point                                          |
+| `DataType::Double()`       | 64-bit floating point                                          |
+| `DataType::String()`       | UTF-8 string                                                   |
+| `DataType::Bytes()`        | Binary data                                                    |
+| `DataType::Date()`         | Date (days since epoch)                                        |
+| `DataType::Time()`         | Time (milliseconds since midnight)                             |
+| `DataType::Timestamp()`    | Timestamp without timezone (default precision 6, microseconds) |
+| `DataType::TimestampLtz()` | Timestamp with timezone (default precision 6, microseconds)    |
+| `DataType::Decimal(p, s)`  | Decimal with precision and scale                               |
 
 ## GenericRow Setters
 
@@ -49,6 +49,7 @@ row.Set("balance", "1234.56");   // decimal as string
 row.Set("birth_date", fluss::Date::FromYMD(1990, 3, 15));
 row.Set("login_time", fluss::Time::FromHMS(9, 30, 0));
 row.Set("created_at", fluss::Timestamp::FromMillis(1700000000000));
+row.Set("nickname", nullptr);    // set to null
 ```
 
 ## GenericRow Getters
