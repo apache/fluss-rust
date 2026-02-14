@@ -848,7 +848,5 @@ class OffsetType:
 
 # Constant for earliest offset (-2)
 EARLIEST_OFFSET: int
-# Constant for latest offset (-1)
-LATEST_OFFSET: int
 
 __version__: str
