@@ -15,9 +15,9 @@ const sidebars: SidebarsConfig = {
       label: 'Developer Guide',
       items: [
         'developer-guide/contributing',
-        'developer-guide/release',
       ],
     },
+    'release',
   ],
 };
 
