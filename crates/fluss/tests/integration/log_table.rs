@@ -40,7 +40,7 @@ mod table_test {
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
-    use fluss::record::ScanRecord;
+    use fluss::record::{ChangeType, ScanRecord};
     use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
     use jiff::Timestamp;
@@ -144,6 +144,12 @@ mod table_test {
         let expected_c2_values = vec!["a1", "a2", "a3", "a4", "a5", "a6"];
 
         for (i, record) in records.iter().enumerate() {
+            assert_eq!(
+                record.change_type(),
+                &ChangeType::AppendOnly,
+                "change_type mismatch at row {}",
+                i
+            );
             let row = record.row();
             assert_eq!(
                 row.get_int(0),
@@ -362,6 +368,12 @@ mod table_test {
         let expected_col_c = [10, 20, 30];
 
         for (i, record) in records.iter().enumerate() {
+            assert_eq!(
+                record.change_type(),
+                &ChangeType::AppendOnly,
+                "change_type mismatch at index {}",
+                i
+            );
             let row = record.row();
             // col_b is now at index 0, col_c is at index 1
             assert_eq!(
@@ -394,6 +406,12 @@ mod table_test {
         let expected_col_a = [1, 2, 3];
 
         for (i, record) in records.iter().enumerate() {
+            assert_eq!(
+                record.change_type(),
+                &ChangeType::AppendOnly,
+                "change_type mismatch at index {}",
+                i
+            );
             let row = record.row();
             // col_b is now at index 0, col_c is at index 1
             assert_eq!(
@@ -779,6 +797,14 @@ mod table_test {
 
         assert_eq!(records.len(), 2, "Expected 2 records");
 
+        for record in &records {
+            assert_eq!(
+                record.change_type(),
+                &ChangeType::AppendOnly,
+                "log table records should have AppendOnly change type"
+            );
+        }
+
         let found_row = records[0].row();
         assert_eq!(found_row.get_byte(0), col_tinyint, "col_tinyint mismatch");
         assert_eq!(
@@ -1141,6 +1167,11 @@ mod table_test {
                 .await
                 .expect("Failed to poll log scanner");
             for rec in records {
+                assert_eq!(
+                    rec.change_type(),
+                    &ChangeType::AppendOnly,
+                    "partitioned log table records should have AppendOnly change type"
+                );
                 let row = rec.row();
                 collected_records.push((
                     row.get_int(0),

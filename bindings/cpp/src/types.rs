@@ -406,6 +406,7 @@ pub fn core_scan_records_to_ffi(
                 bucket_id,
                 offset: record.offset(),
                 timestamp: record.timestamp(),
+                change_type: record.change_type().to_byte_value() as i32,
                 row: ffi::FfiGenericRow { fields },
             });
         }
