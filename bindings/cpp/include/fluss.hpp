@@ -305,6 +305,25 @@ enum class DatumType {
 
 constexpr int64_t EARLIEST_OFFSET = -2;
 
+enum class ChangeType {
+    AppendOnly = 0,
+    Insert = 1,
+    UpdateBefore = 2,
+    UpdateAfter = 3,
+    Delete = 4,
+};
+
+inline const char* ChangeTypeShortString(ChangeType ct) {
+    switch (ct) {
+        case ChangeType::AppendOnly: return "+A";
+        case ChangeType::Insert: return "+I";
+        case ChangeType::UpdateBefore: return "-U";
+        case ChangeType::UpdateAfter: return "+U";
+        case ChangeType::Delete: return "-D";
+    }
+    return "??";
+}
+
 enum class OffsetSpec {
     Earliest = 0,
     Latest = 1,
@@ -829,6 +848,7 @@ struct ScanRecord {
     int32_t bucket_id;
     int64_t offset;
     int64_t timestamp;
+    ChangeType change_type;
     GenericRow row;
 };
 

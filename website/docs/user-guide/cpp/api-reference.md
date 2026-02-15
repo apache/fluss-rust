@@ -225,12 +225,13 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `ScanRecord`
 
-| Field       | Type         |  Description                  |
-|-------------|--------------|-------------------------------|
-| `bucket_id` | `int32_t`    | Bucket this record belongs to |
-| `offset`    | `int64_t`    | Record offset in the log      |
-| `timestamp` | `int64_t`    | Record timestamp              |
-| `row`       | `GenericRow` | Row data                      |
+| Field         | Type         | Description                                   |
+|---------------|--------------|-----------------------------------------------|
+| `bucket_id`   | `int32_t`    | Bucket this record belongs to                 |
+| `offset`      | `int64_t`    | Record offset in the log                      |
+| `timestamp`   | `int64_t`    | Record timestamp                              |
+| `change_type` | `ChangeType` | Type of change (insert, update, delete, etc.) |
+| `row`         | `GenericRow` | Row data                                      |
 
 ## `ScanRecords`
 
@@ -485,6 +486,22 @@ scanner.Subscribe(0, offsets[0]);
 | `Time`          | `Time`                 | Time                            |
 | `TimestampNtz`  | `Timestamp`            | Timestamp without timezone      |
 | `TimestampLtz`  | `Timestamp`            | Timestamp with timezone         |
+
+### `ChangeType`
+
+| Value          | Short String | Description                      |
+|----------------|--------------|----------------------------------|
+| `AppendOnly`   | `+A`         | Append-only record               |
+| `Insert`       | `+I`         | Inserted row                     |
+| `UpdateBefore` | `-U`         | Previous value of an updated row |
+| `UpdateAfter`  | `+U`         | New value of an updated row      |
+| `Delete`       | `-D`         | Deleted row                      |
+
+Helper function to display change type from ChangeType enum:
+
+```cpp
+const char* fluss::ChangeTypeShortString(ChangeType ct);
+```
 
 ### `OffsetSpec`
 

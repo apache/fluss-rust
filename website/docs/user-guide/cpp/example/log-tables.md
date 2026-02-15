@@ -58,7 +58,9 @@ for (const auto& rec : records) {
     std::cout << "event_id=" << rec.row.GetInt32(0)
               << " event_type=" << rec.row.GetString(1)
               << " timestamp=" << rec.row.GetInt64(2)
-              << " @ offset=" << rec.offset << std::endl;
+              << " @ offset=" << rec.offset
+              << " change=" << fluss::ChangeTypeShortString(rec.change_type)
+              << std::endl;
 }
 ```
 

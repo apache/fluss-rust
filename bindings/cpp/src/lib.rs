@@ -124,6 +124,7 @@ mod ffi {
         bucket_id: i32,
         offset: i64,
         timestamp: i64,
+        change_type: i32,
         row: FfiGenericRow,
     }
 
