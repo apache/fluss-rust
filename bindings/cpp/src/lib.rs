@@ -366,22 +366,22 @@ mod ffi {
         fn lv_error_message(self: &LookupResultInner) -> &str;
         fn lv_found(self: &LookupResultInner) -> bool;
         fn lv_field_count(self: &LookupResultInner) -> usize;
-        fn lv_column_name(self: &LookupResultInner, field: usize) -> &str;
-        fn lv_column_type(self: &LookupResultInner, field: usize) -> i32;
-        fn lv_is_null(self: &LookupResultInner, field: usize) -> bool;
-        fn lv_get_bool(self: &LookupResultInner, field: usize) -> bool;
-        fn lv_get_i32(self: &LookupResultInner, field: usize) -> i32;
-        fn lv_get_i64(self: &LookupResultInner, field: usize) -> i64;
-        fn lv_get_f32(self: &LookupResultInner, field: usize) -> f32;
-        fn lv_get_f64(self: &LookupResultInner, field: usize) -> f64;
-        fn lv_get_str(self: &LookupResultInner, field: usize) -> &str;
-        fn lv_get_bytes(self: &LookupResultInner, field: usize) -> &[u8];
-        fn lv_get_date_days(self: &LookupResultInner, field: usize) -> i32;
-        fn lv_get_time_millis(self: &LookupResultInner, field: usize) -> i32;
-        fn lv_get_ts_millis(self: &LookupResultInner, field: usize) -> i64;
-        fn lv_get_ts_nanos(self: &LookupResultInner, field: usize) -> i32;
-        fn lv_is_ts_ltz(self: &LookupResultInner, field: usize) -> bool;
-        fn lv_get_decimal_str(self: &LookupResultInner, field: usize) -> String;
+        fn lv_column_name(self: &LookupResultInner, field: usize) -> Result<&str>;
+        fn lv_column_type(self: &LookupResultInner, field: usize) -> Result<i32>;
+        fn lv_is_null(self: &LookupResultInner, field: usize) -> Result<bool>;
+        fn lv_get_bool(self: &LookupResultInner, field: usize) -> Result<bool>;
+        fn lv_get_i32(self: &LookupResultInner, field: usize) -> Result<i32>;
+        fn lv_get_i64(self: &LookupResultInner, field: usize) -> Result<i64>;
+        fn lv_get_f32(self: &LookupResultInner, field: usize) -> Result<f32>;
+        fn lv_get_f64(self: &LookupResultInner, field: usize) -> Result<f64>;
+        fn lv_get_str(self: &LookupResultInner, field: usize) -> Result<&str>;
+        fn lv_get_bytes(self: &LookupResultInner, field: usize) -> Result<&[u8]>;
+        fn lv_get_date_days(self: &LookupResultInner, field: usize) -> Result<i32>;
+        fn lv_get_time_millis(self: &LookupResultInner, field: usize) -> Result<i32>;
+        fn lv_get_ts_millis(self: &LookupResultInner, field: usize) -> Result<i64>;
+        fn lv_get_ts_nanos(self: &LookupResultInner, field: usize) -> Result<i32>;
+        fn lv_is_ts_ltz(self: &LookupResultInner, field: usize) -> Result<bool>;
+        fn lv_get_decimal_str(self: &LookupResultInner, field: usize) -> Result<String>;
 
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
@@ -413,29 +413,29 @@ mod ffi {
         fn sv_error_message(self: &ScanResultInner) -> &str;
         fn sv_record_count(self: &ScanResultInner) -> usize;
         fn sv_column_count(self: &ScanResultInner) -> usize;
-        fn sv_column_name(self: &ScanResultInner, field: usize) -> &str;
-        fn sv_column_type(self: &ScanResultInner, field: usize) -> i32;
+        fn sv_column_name(self: &ScanResultInner, field: usize) -> Result<&str>;
+        fn sv_column_type(self: &ScanResultInner, field: usize) -> Result<i32>;
         fn sv_bucket_id(self: &ScanResultInner, rec: usize) -> i32;
         fn sv_has_partition_id(self: &ScanResultInner, rec: usize) -> bool;
         fn sv_partition_id(self: &ScanResultInner, rec: usize) -> i64;
         fn sv_offset(self: &ScanResultInner, rec: usize) -> i64;
         fn sv_timestamp(self: &ScanResultInner, rec: usize) -> i64;
         fn sv_change_type(self: &ScanResultInner, rec: usize) -> i32;
-        fn sv_field_count(self: &ScanResultInner, rec: usize) -> usize;
-        fn sv_is_null(self: &ScanResultInner, rec: usize, field: usize) -> bool;
-        fn sv_get_bool(self: &ScanResultInner, rec: usize, field: usize) -> bool;
-        fn sv_get_i32(self: &ScanResultInner, rec: usize, field: usize) -> i32;
-        fn sv_get_i64(self: &ScanResultInner, rec: usize, field: usize) -> i64;
-        fn sv_get_f32(self: &ScanResultInner, rec: usize, field: usize) -> f32;
-        fn sv_get_f64(self: &ScanResultInner, rec: usize, field: usize) -> f64;
-        fn sv_get_str(self: &ScanResultInner, rec: usize, field: usize) -> &str;
-        fn sv_get_bytes(self: &ScanResultInner, rec: usize, field: usize) -> &[u8];
-        fn sv_get_date_days(self: &ScanResultInner, rec: usize, field: usize) -> i32;
-        fn sv_get_time_millis(self: &ScanResultInner, rec: usize, field: usize) -> i32;
-        fn sv_get_ts_millis(self: &ScanResultInner, rec: usize, field: usize) -> i64;
-        fn sv_get_ts_nanos(self: &ScanResultInner, rec: usize, field: usize) -> i32;
-        fn sv_is_ts_ltz(self: &ScanResultInner, rec: usize, field: usize) -> bool;
-        fn sv_get_decimal_str(self: &ScanResultInner, rec: usize, field: usize) -> String;
+        fn sv_field_count(self: &ScanResultInner) -> usize;
+        fn sv_is_null(self: &ScanResultInner, rec: usize, field: usize) -> Result<bool>;
+        fn sv_get_bool(self: &ScanResultInner, rec: usize, field: usize) -> Result<bool>;
+        fn sv_get_i32(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
+        fn sv_get_i64(self: &ScanResultInner, rec: usize, field: usize) -> Result<i64>;
+        fn sv_get_f32(self: &ScanResultInner, rec: usize, field: usize) -> Result<f32>;
+        fn sv_get_f64(self: &ScanResultInner, rec: usize, field: usize) -> Result<f64>;
+        fn sv_get_str(self: &ScanResultInner, rec: usize, field: usize) -> Result<&str>;
+        fn sv_get_bytes(self: &ScanResultInner, rec: usize, field: usize) -> Result<&[u8]>;
+        fn sv_get_date_days(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
+        fn sv_get_time_millis(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
+        fn sv_get_ts_millis(self: &ScanResultInner, rec: usize, field: usize) -> Result<i64>;
+        fn sv_get_ts_nanos(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
+        fn sv_is_ts_ltz(self: &ScanResultInner, rec: usize, field: usize) -> Result<bool>;
+        fn sv_get_decimal_str(self: &ScanResultInner, rec: usize, field: usize) -> Result<String>;
     }
 }
 
@@ -1632,91 +1632,200 @@ mod row_reader {
 
     use crate::types;
 
-    pub fn column_type(columns: &[fcore::metadata::Column], field: usize) -> i32 {
-        columns
-            .get(field)
-            .map_or(0, |c| types::core_data_type_to_ffi(c.data_type()))
+    /// Get column at `field`, or error if out of bounds.
+    fn get_column(
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> Result<&fcore::metadata::Column, String> {
+        columns.get(field).ok_or_else(|| {
+            format!(
+                "field index {field} out of range ({} columns)",
+                columns.len()
+            )
+        })
     }
 
-    pub fn column_name(columns: &[fcore::metadata::Column], field: usize) -> &str {
-        columns.get(field).map_or("", |c| c.name())
+    /// Validate bounds, null, and type compatibility in a single pass.
+    /// Returns the data type on success for callers that need to dispatch on it.
+    fn validate<'a>(
+        row: &dyn InternalRow,
+        columns: &'a [fcore::metadata::Column],
+        field: usize,
+        getter: &str,
+        allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
+    ) -> Result<&'a fcore::metadata::DataType, String> {
+        let col = get_column(columns, field)?;
+        if row.is_null_at(field) {
+            return Err(format!("field {field} is null"));
+        }
+        let dt = col.data_type();
+        if !allowed(dt) {
+            return Err(format!(
+                "{getter}: column {field} has incompatible type {dt}"
+            ));
+        }
+        Ok(dt)
     }
 
-    pub fn is_null(row: &dyn InternalRow, _field: usize) -> bool {
-        row.is_null_at(_field)
+    pub fn column_type(columns: &[fcore::metadata::Column], field: usize) -> Result<i32, String> {
+        Ok(types::core_data_type_to_ffi(
+            get_column(columns, field)?.data_type(),
+        ))
     }
 
-    pub fn get_bool(row: &dyn InternalRow, field: usize) -> bool {
-        row.get_boolean(field)
+    pub fn column_name(columns: &[fcore::metadata::Column], field: usize) -> Result<&str, String> {
+        Ok(get_column(columns, field)?.name())
+    }
+
+    pub fn is_null(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> Result<bool, String> {
+        get_column(columns, field)?;
+        Ok(row.is_null_at(field))
+    }
+
+    pub fn get_bool(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> Result<bool, String> {
+        validate(row, columns, field, "get_bool", |dt| {
+            matches!(dt, fcore::metadata::DataType::Boolean(_))
+        })?;
+        Ok(row.get_boolean(field))
     }
 
     pub fn get_i32(
         row: &dyn InternalRow,
         columns: &[fcore::metadata::Column],
         field: usize,
-    ) -> i32 {
-        match columns.get(field).map(|c| c.data_type()) {
-            Some(fcore::metadata::DataType::TinyInt(_)) => row.get_byte(field) as i32,
-            Some(fcore::metadata::DataType::SmallInt(_)) => row.get_short(field) as i32,
+    ) -> Result<i32, String> {
+        let dt = validate(row, columns, field, "get_i32", |dt| {
+            matches!(
+                dt,
+                fcore::metadata::DataType::TinyInt(_)
+                    | fcore::metadata::DataType::SmallInt(_)
+                    | fcore::metadata::DataType::Int(_)
+            )
+        })?;
+        Ok(match dt {
+            fcore::metadata::DataType::TinyInt(_) => row.get_byte(field) as i32,
+            fcore::metadata::DataType::SmallInt(_) => row.get_short(field) as i32,
             _ => row.get_int(field),
-        }
+        })
     }
 
-    pub fn get_i64(row: &dyn InternalRow, field: usize) -> i64 {
-        row.get_long(field)
+    pub fn get_i64(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> Result<i64, String> {
+        validate(row, columns, field, "get_i64", |dt| {
+            matches!(dt, fcore::metadata::DataType::BigInt(_))
+        })?;
+        Ok(row.get_long(field))
     }
 
-    pub fn get_f32(row: &dyn InternalRow, field: usize) -> f32 {
-        row.get_float(field)
+    pub fn get_f32(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> Result<f32, String> {
+        validate(row, columns, field, "get_f32", |dt| {
+            matches!(dt, fcore::metadata::DataType::Float(_))
+        })?;
+        Ok(row.get_float(field))
     }
 
-    pub fn get_f64(row: &dyn InternalRow, field: usize) -> f64 {
-        row.get_double(field)
+    pub fn get_f64(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> Result<f64, String> {
+        validate(row, columns, field, "get_f64", |dt| {
+            matches!(dt, fcore::metadata::DataType::Double(_))
+        })?;
+        Ok(row.get_double(field))
     }
 
     pub fn get_str<'a>(
         row: &'a dyn InternalRow,
-        columns: &[fcore::metadata::Column],
+        columns: &'a [fcore::metadata::Column],
         field: usize,
-    ) -> &'a str {
-        match columns.get(field).map(|c| c.data_type()) {
-            Some(fcore::metadata::DataType::Char(dt)) => row.get_char(field, dt.length() as usize),
+    ) -> Result<&'a str, String> {
+        let dt = validate(row, columns, field, "get_str", |dt| {
+            matches!(
+                dt,
+                fcore::metadata::DataType::Char(_) | fcore::metadata::DataType::String(_)
+            )
+        })?;
+        Ok(match dt {
+            fcore::metadata::DataType::Char(ct) => row.get_char(field, ct.length() as usize),
             _ => row.get_string(field),
-        }
+        })
     }
 
     pub fn get_bytes<'a>(
         row: &'a dyn InternalRow,
+        columns: &'a [fcore::metadata::Column],
+        field: usize,
+    ) -> Result<&'a [u8], String> {
+        let dt = validate(row, columns, field, "get_bytes", |dt| {
+            matches!(
+                dt,
+                fcore::metadata::DataType::Binary(_) | fcore::metadata::DataType::Bytes(_)
+            )
+        })?;
+        Ok(match dt {
+            fcore::metadata::DataType::Binary(bt) => row.get_binary(field, bt.length()),
+            _ => row.get_bytes(field),
+        })
+    }
+
+    pub fn get_date_days(
+        row: &dyn InternalRow,
         columns: &[fcore::metadata::Column],
         field: usize,
-    ) -> &'a [u8] {
-        match columns.get(field).map(|c| c.data_type()) {
-            Some(fcore::metadata::DataType::Binary(dt)) => row.get_binary(field, dt.length()),
-            _ => row.get_bytes(field),
-        }
+    ) -> Result<i32, String> {
+        validate(row, columns, field, "get_date_days", |dt| {
+            matches!(dt, fcore::metadata::DataType::Date(_))
+        })?;
+        Ok(row.get_date(field).get_inner())
     }
 
-    pub fn get_date_days(row: &dyn InternalRow, field: usize) -> i32 {
-        row.get_date(field).get_inner()
-    }
-
-    pub fn get_time_millis(row: &dyn InternalRow, field: usize) -> i32 {
-        row.get_time(field).get_inner()
+    pub fn get_time_millis(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> Result<i32, String> {
+        validate(row, columns, field, "get_time_millis", |dt| {
+            matches!(dt, fcore::metadata::DataType::Time(_))
+        })?;
+        Ok(row.get_time(field).get_inner())
     }
 
     pub fn get_ts_millis(
         row: &dyn InternalRow,
         columns: &[fcore::metadata::Column],
         field: usize,
-    ) -> i64 {
-        match columns.get(field).map(|c| c.data_type()) {
-            Some(fcore::metadata::DataType::TimestampLTz(dt)) => row
-                .get_timestamp_ltz(field, dt.precision())
-                .get_epoch_millisecond(),
-            Some(fcore::metadata::DataType::Timestamp(dt)) => row
-                .get_timestamp_ntz(field, dt.precision())
-                .get_millisecond(),
-            _ => row.get_timestamp_ntz(field, 3).get_millisecond(),
+    ) -> Result<i64, String> {
+        let dt = validate(row, columns, field, "get_ts_millis", |dt| {
+            matches!(
+                dt,
+                fcore::metadata::DataType::Timestamp(_)
+                    | fcore::metadata::DataType::TimestampLTz(_)
+            )
+        })?;
+        match dt {
+            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+                .get_timestamp_ltz(field, ts.precision())
+                .get_epoch_millisecond()),
+            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .get_timestamp_ntz(field, ts.precision())
+                .get_millisecond()),
+            dt => Err(format!("get_ts_millis: unexpected type {dt}")),
         }
     }
 
@@ -1724,36 +1833,46 @@ mod row_reader {
         row: &dyn InternalRow,
         columns: &[fcore::metadata::Column],
         field: usize,
-    ) -> i32 {
-        match columns.get(field).map(|c| c.data_type()) {
-            Some(fcore::metadata::DataType::TimestampLTz(dt)) => row
-                .get_timestamp_ltz(field, dt.precision())
-                .get_nano_of_millisecond(),
-            Some(fcore::metadata::DataType::Timestamp(dt)) => row
-                .get_timestamp_ntz(field, dt.precision())
-                .get_nano_of_millisecond(),
-            _ => row.get_timestamp_ntz(field, 3).get_nano_of_millisecond(),
+    ) -> Result<i32, String> {
+        let dt = validate(row, columns, field, "get_ts_nanos", |dt| {
+            matches!(
+                dt,
+                fcore::metadata::DataType::Timestamp(_)
+                    | fcore::metadata::DataType::TimestampLTz(_)
+            )
+        })?;
+        match dt {
+            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+                .get_timestamp_ltz(field, ts.precision())
+                .get_nano_of_millisecond()),
+            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .get_timestamp_ntz(field, ts.precision())
+                .get_nano_of_millisecond()),
+            dt => Err(format!("get_ts_nanos: unexpected type {dt}")),
         }
     }
 
-    pub fn is_ts_ltz(columns: &[fcore::metadata::Column], field: usize) -> bool {
-        matches!(
-            columns.get(field).map(|c| c.data_type()),
-            Some(fcore::metadata::DataType::TimestampLTz(_))
-        )
+    pub fn is_ts_ltz(columns: &[fcore::metadata::Column], field: usize) -> Result<bool, String> {
+        Ok(matches!(
+            get_column(columns, field)?.data_type(),
+            fcore::metadata::DataType::TimestampLTz(_)
+        ))
     }
 
     pub fn get_decimal_str(
         row: &dyn InternalRow,
         columns: &[fcore::metadata::Column],
         field: usize,
-    ) -> String {
-        match columns.get(field).map(|c| c.data_type()) {
-            Some(fcore::metadata::DataType::Decimal(dt)) => {
-                let decimal = row.get_decimal(field, dt.precision() as usize, dt.scale() as usize);
-                decimal.to_big_decimal().to_string()
+    ) -> Result<String, String> {
+        let dt = validate(row, columns, field, "get_decimal_str", |dt| {
+            matches!(dt, fcore::metadata::DataType::Decimal(_))
+        })?;
+        match dt {
+            fcore::metadata::DataType::Decimal(dd) => {
+                let decimal = row.get_decimal(field, dd.precision() as usize, dd.scale() as usize);
+                Ok(decimal.to_big_decimal().to_string())
             }
-            _ => String::new(),
+            dt => Err(format!("get_decimal_str: unexpected type {dt}")),
         }
     }
 }
@@ -1803,13 +1922,14 @@ impl ScanResultInner {
     fn sv_column_count(&self) -> usize {
         self.columns.len()
     }
-    fn sv_column_name(&self, field: usize) -> &str {
+    fn sv_column_name(&self, field: usize) -> Result<&str, String> {
         row_reader::column_name(&self.columns, field)
     }
-    fn sv_column_type(&self, field: usize) -> i32 {
+    fn sv_column_type(&self, field: usize) -> Result<i32, String> {
         row_reader::column_type(&self.columns, field)
     }
 
+    // Metadata accessors — C++ validates rec in operator[] before calling these.
     fn sv_bucket_id(&self, rec: usize) -> i32 {
         self.records[rec].bucket_id
     }
@@ -1828,52 +1948,51 @@ impl ScanResultInner {
     fn sv_change_type(&self, rec: usize) -> i32 {
         self.records[rec].record.change_type().to_byte_value() as i32
     }
-    fn sv_field_count(&self, _rec: usize) -> usize {
+    fn sv_field_count(&self) -> usize {
         self.columns.len()
     }
 
-    // Field accessors — delegate to shared row_reader helpers.
-    // C++ side validates bounds before calling; a panic here indicates an internal bug.
-    fn sv_is_null(&self, rec: usize, field: usize) -> bool {
-        row_reader::is_null(self.records[rec].record.row(), field)
+    // Field accessors — C++ validates rec in operator[], validate() checks field.
+    fn sv_is_null(&self, rec: usize, field: usize) -> Result<bool, String> {
+        row_reader::is_null(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_bool(&self, rec: usize, field: usize) -> bool {
-        row_reader::get_bool(self.records[rec].record.row(), field)
+    fn sv_get_bool(&self, rec: usize, field: usize) -> Result<bool, String> {
+        row_reader::get_bool(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_i32(&self, rec: usize, field: usize) -> i32 {
+    fn sv_get_i32(&self, rec: usize, field: usize) -> Result<i32, String> {
         row_reader::get_i32(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_i64(&self, rec: usize, field: usize) -> i64 {
-        row_reader::get_i64(self.records[rec].record.row(), field)
+    fn sv_get_i64(&self, rec: usize, field: usize) -> Result<i64, String> {
+        row_reader::get_i64(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_f32(&self, rec: usize, field: usize) -> f32 {
-        row_reader::get_f32(self.records[rec].record.row(), field)
+    fn sv_get_f32(&self, rec: usize, field: usize) -> Result<f32, String> {
+        row_reader::get_f32(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_f64(&self, rec: usize, field: usize) -> f64 {
-        row_reader::get_f64(self.records[rec].record.row(), field)
+    fn sv_get_f64(&self, rec: usize, field: usize) -> Result<f64, String> {
+        row_reader::get_f64(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_str(&self, rec: usize, field: usize) -> &str {
+    fn sv_get_str(&self, rec: usize, field: usize) -> Result<&str, String> {
         row_reader::get_str(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_bytes(&self, rec: usize, field: usize) -> &[u8] {
+    fn sv_get_bytes(&self, rec: usize, field: usize) -> Result<&[u8], String> {
         row_reader::get_bytes(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_date_days(&self, rec: usize, field: usize) -> i32 {
-        row_reader::get_date_days(self.records[rec].record.row(), field)
+    fn sv_get_date_days(&self, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_date_days(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_time_millis(&self, rec: usize, field: usize) -> i32 {
-        row_reader::get_time_millis(self.records[rec].record.row(), field)
+    fn sv_get_time_millis(&self, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_time_millis(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_ts_millis(&self, rec: usize, field: usize) -> i64 {
+    fn sv_get_ts_millis(&self, rec: usize, field: usize) -> Result<i64, String> {
         row_reader::get_ts_millis(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_get_ts_nanos(&self, rec: usize, field: usize) -> i32 {
+    fn sv_get_ts_nanos(&self, rec: usize, field: usize) -> Result<i32, String> {
         row_reader::get_ts_nanos(self.records[rec].record.row(), &self.columns, field)
     }
-    fn sv_is_ts_ltz(&self, _rec: usize, field: usize) -> bool {
+    fn sv_is_ts_ltz(&self, _rec: usize, field: usize) -> Result<bool, String> {
         row_reader::is_ts_ltz(&self.columns, field)
     }
-    fn sv_get_decimal_str(&self, rec: usize, field: usize) -> String {
+    fn sv_get_decimal_str(&self, rec: usize, field: usize) -> Result<String, String> {
         row_reader::get_decimal_str(self.records[rec].record.row(), &self.columns, field)
     }
 }
@@ -1919,87 +2038,74 @@ impl LookupResultInner {
         self.columns.len()
     }
 
-    fn lv_column_type(&self, field: usize) -> i32 {
-        self.columns
-            .get(field)
-            .map_or(0, |c| types::core_data_type_to_ffi(c.data_type()))
+    fn lv_column_type(&self, field: usize) -> Result<i32, String> {
+        row_reader::column_type(&self.columns, field)
     }
 
-    fn lv_column_name(&self, field: usize) -> &str {
+    fn lv_column_name(&self, field: usize) -> Result<&str, String> {
         row_reader::column_name(&self.columns, field)
     }
 
-    // Field accessors — delegate to shared row_reader helpers (with None → default).
-    // C++ side validates bounds before calling; a panic here indicates an internal bug.
-    fn lv_is_null(&self, field: usize) -> bool {
+    fn lv_row(&self) -> Result<&fcore::row::GenericRow<'static>, String> {
         self.row
             .as_ref()
-            .is_none_or(|r| row_reader::is_null(r, field))
+            .ok_or_else(|| "no row available (not found or error)".to_string())
     }
-    fn lv_get_bool(&self, field: usize) -> bool {
-        self.row
-            .as_ref()
-            .is_some_and(|r| row_reader::get_bool(r, field))
+
+    // Field accessors — delegate to shared row_reader helpers.
+    fn lv_is_null(&self, field: usize) -> Result<bool, String> {
+        let r = self.lv_row()?;
+        row_reader::is_null(r, &self.columns, field)
     }
-    fn lv_get_i32(&self, field: usize) -> i32 {
-        self.row
-            .as_ref()
-            .map_or(0, |r| row_reader::get_i32(r, &self.columns, field))
+    fn lv_get_bool(&self, field: usize) -> Result<bool, String> {
+        let r = self.lv_row()?;
+        row_reader::get_bool(r, &self.columns, field)
     }
-    fn lv_get_i64(&self, field: usize) -> i64 {
-        self.row
-            .as_ref()
-            .map_or(0, |r| row_reader::get_i64(r, field))
+    fn lv_get_i32(&self, field: usize) -> Result<i32, String> {
+        let r = self.lv_row()?;
+        row_reader::get_i32(r, &self.columns, field)
     }
-    fn lv_get_f32(&self, field: usize) -> f32 {
-        self.row
-            .as_ref()
-            .map_or(0.0, |r| row_reader::get_f32(r, field))
+    fn lv_get_i64(&self, field: usize) -> Result<i64, String> {
+        let r = self.lv_row()?;
+        row_reader::get_i64(r, &self.columns, field)
     }
-    fn lv_get_f64(&self, field: usize) -> f64 {
-        self.row
-            .as_ref()
-            .map_or(0.0, |r| row_reader::get_f64(r, field))
+    fn lv_get_f32(&self, field: usize) -> Result<f32, String> {
+        let r = self.lv_row()?;
+        row_reader::get_f32(r, &self.columns, field)
     }
-    fn lv_get_str(&self, field: usize) -> &str {
-        match self.row.as_ref() {
-            Some(r) => row_reader::get_str(r, &self.columns, field),
-            None => "",
-        }
+    fn lv_get_f64(&self, field: usize) -> Result<f64, String> {
+        let r = self.lv_row()?;
+        row_reader::get_f64(r, &self.columns, field)
     }
-    fn lv_get_bytes(&self, field: usize) -> &[u8] {
-        match self.row.as_ref() {
-            Some(r) => row_reader::get_bytes(r, &self.columns, field),
-            None => &[],
-        }
+    fn lv_get_str(&self, field: usize) -> Result<&str, String> {
+        let r = self.lv_row()?;
+        row_reader::get_str(r, &self.columns, field)
     }
-    fn lv_get_date_days(&self, field: usize) -> i32 {
-        self.row
-            .as_ref()
-            .map_or(0, |r| row_reader::get_date_days(r, field))
+    fn lv_get_bytes(&self, field: usize) -> Result<&[u8], String> {
+        let r = self.lv_row()?;
+        row_reader::get_bytes(r, &self.columns, field)
     }
-    fn lv_get_time_millis(&self, field: usize) -> i32 {
-        self.row
-            .as_ref()
-            .map_or(0, |r| row_reader::get_time_millis(r, field))
+    fn lv_get_date_days(&self, field: usize) -> Result<i32, String> {
+        let r = self.lv_row()?;
+        row_reader::get_date_days(r, &self.columns, field)
     }
-    fn lv_get_ts_millis(&self, field: usize) -> i64 {
-        self.row
-            .as_ref()
-            .map_or(0, |r| row_reader::get_ts_millis(r, &self.columns, field))
+    fn lv_get_time_millis(&self, field: usize) -> Result<i32, String> {
+        let r = self.lv_row()?;
+        row_reader::get_time_millis(r, &self.columns, field)
     }
-    fn lv_get_ts_nanos(&self, field: usize) -> i32 {
-        self.row
-            .as_ref()
-            .map_or(0, |r| row_reader::get_ts_nanos(r, &self.columns, field))
+    fn lv_get_ts_millis(&self, field: usize) -> Result<i64, String> {
+        let r = self.lv_row()?;
+        row_reader::get_ts_millis(r, &self.columns, field)
     }
-    fn lv_is_ts_ltz(&self, field: usize) -> bool {
+    fn lv_get_ts_nanos(&self, field: usize) -> Result<i32, String> {
+        let r = self.lv_row()?;
+        row_reader::get_ts_nanos(r, &self.columns, field)
+    }
+    fn lv_is_ts_ltz(&self, field: usize) -> Result<bool, String> {
         row_reader::is_ts_ltz(&self.columns, field)
     }
-    fn lv_get_decimal_str(&self, field: usize) -> String {
-        match self.row.as_ref() {
-            Some(r) => row_reader::get_decimal_str(r, &self.columns, field),
-            None => String::new(),
-        }
+    fn lv_get_decimal_str(&self, field: usize) -> Result<String, String> {
+        let r = self.lv_row()?;
+        row_reader::get_decimal_str(r, &self.columns, field)
     }
 }

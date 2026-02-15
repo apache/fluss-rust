@@ -174,73 +174,68 @@ void GenericRow::SetDecimal(size_t idx, const std::string& value) {
 // RowView — zero-copy read-only row view for scan results
 // ============================================================================
 
-static void check_row_view_bounds(const ffi::ScanResultInner* inner,
-                                  const detail::ColumnMap* column_map, size_t idx) {
+static void check_row_view_available(const ffi::ScanResultInner* inner) {
     if (!inner) {
         throw std::logic_error("RowView: not available (moved-from or null)");
     }
-    if (idx >= column_map->size()) {
-        throw std::out_of_range("RowView: field index " + std::to_string(idx) + " out of range (" +
-                                std::to_string(column_map->size()) + " fields)");
-    }
 }
 
-size_t RowView::FieldCount() const { return inner_ ? inner_->sv_field_count(record_idx_) : 0; }
+size_t RowView::FieldCount() const { return inner_ ? inner_->sv_field_count() : 0; }
 
 TypeId RowView::GetType(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return static_cast<TypeId>(inner_->sv_column_type(idx));
 }
 
 bool RowView::IsNull(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return inner_->sv_is_null(record_idx_, idx);
 }
 bool RowView::GetBool(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return inner_->sv_get_bool(record_idx_, idx);
 }
 int32_t RowView::GetInt32(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return inner_->sv_get_i32(record_idx_, idx);
 }
 int64_t RowView::GetInt64(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return inner_->sv_get_i64(record_idx_, idx);
 }
 float RowView::GetFloat32(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return inner_->sv_get_f32(record_idx_, idx);
 }
 double RowView::GetFloat64(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return inner_->sv_get_f64(record_idx_, idx);
 }
 
 std::string_view RowView::GetString(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     auto s = inner_->sv_get_str(record_idx_, idx);
     return std::string_view(s.data(), s.size());
 }
 
 std::pair<const uint8_t*, size_t> RowView::GetBytes(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     auto bytes = inner_->sv_get_bytes(record_idx_, idx);
     return {bytes.data(), bytes.size()};
 }
 
 Date RowView::GetDate(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return Date{inner_->sv_get_date_days(record_idx_, idx)};
 }
 
 Time RowView::GetTime(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return Time{inner_->sv_get_time_millis(record_idx_, idx)};
 }
 
 Timestamp RowView::GetTimestamp(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return Timestamp{inner_->sv_get_ts_millis(record_idx_, idx),
                      inner_->sv_get_ts_nanos(record_idx_, idx)};
 }
@@ -248,7 +243,7 @@ Timestamp RowView::GetTimestamp(size_t idx) const {
 bool RowView::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
 
 std::string RowView::GetDecimalString(size_t idx) const {
-    check_row_view_bounds(inner_, column_map_, idx);
+    check_row_view_available(inner_);
     return std::string(inner_->sv_get_decimal_str(record_idx_, idx));
 }
 
@@ -264,6 +259,7 @@ void ScanRecords::Destroy() noexcept {
     if (inner_) {
         rust::Box<ffi::ScanResultInner>::from_raw(inner_);
         inner_ = nullptr;
+        column_map_.reset();
     }
 }
 
@@ -306,9 +302,13 @@ const std::shared_ptr<detail::ColumnMap>& ScanRecords::GetColumnMap() const {
 }
 
 ScanRecord ScanRecords::operator[](size_t idx) const {
-    if (!inner_ || idx >= inner_->sv_record_count())
-        return ScanRecord{0, std::nullopt,           0,
-                          0, ChangeType::AppendOnly, RowView(nullptr, 0, nullptr)};
+    if (!inner_) {
+        throw std::logic_error("ScanRecords: not available (moved-from or null)");
+    }
+    if (idx >= inner_->sv_record_count()) {
+        throw std::out_of_range("ScanRecords: index " + std::to_string(idx) + " out of range (" +
+                                std::to_string(inner_->sv_record_count()) + " records)");
+    }
     return ScanRecord{inner_->sv_bucket_id(idx),
                       inner_->sv_has_partition_id(idx)
                           ? std::optional<int64_t>(inner_->sv_partition_id(idx))
@@ -333,25 +333,21 @@ void LookupResult::Destroy() noexcept {
     if (inner_) {
         rust::Box<ffi::LookupResultInner>::from_raw(inner_);
         inner_ = nullptr;
+        column_map_.reset();
     }
 }
 
 LookupResult::LookupResult(LookupResult&& other) noexcept
-    : inner_(other.inner_),
-      field_count_(other.field_count_),
-      column_map_(std::move(other.column_map_)) {
+    : inner_(other.inner_), column_map_(std::move(other.column_map_)) {
     other.inner_ = nullptr;
-    other.field_count_ = 0;
 }
 
 LookupResult& LookupResult::operator=(LookupResult&& other) noexcept {
     if (this != &other) {
         Destroy();
         inner_ = other.inner_;
-        field_count_ = other.field_count_;
         column_map_ = std::move(other.column_map_);
         other.inner_ = nullptr;
-        other.field_count_ = 0;
     }
     return *this;
 }
@@ -370,79 +366,75 @@ void LookupResult::BuildColumnMap() const {
 
 bool LookupResult::Found() const { return inner_ && inner_->lv_found(); }
 
-size_t LookupResult::FieldCount() const { return field_count_; }
+size_t LookupResult::FieldCount() const { return inner_ ? inner_->lv_field_count() : 0; }
 
-void LookupResult::CheckFieldBounds(size_t idx) const {
-    if (!inner_) {
+static void check_lookup_available(const ffi::LookupResultInner* inner) {
+    if (!inner) {
         throw std::logic_error("LookupResult: not available (moved-from or null)");
-    }
-    if (idx >= field_count_) {
-        throw std::out_of_range("LookupResult: field index " + std::to_string(idx) +
-                                " out of range (" + std::to_string(field_count_) + " fields)");
     }
 }
 
 TypeId LookupResult::GetType(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return static_cast<TypeId>(inner_->lv_column_type(idx));
 }
 
 bool LookupResult::IsNull(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return inner_->lv_is_null(idx);
 }
 bool LookupResult::GetBool(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return inner_->lv_get_bool(idx);
 }
 int32_t LookupResult::GetInt32(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return inner_->lv_get_i32(idx);
 }
 int64_t LookupResult::GetInt64(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return inner_->lv_get_i64(idx);
 }
 float LookupResult::GetFloat32(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return inner_->lv_get_f32(idx);
 }
 double LookupResult::GetFloat64(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return inner_->lv_get_f64(idx);
 }
 
 std::string_view LookupResult::GetString(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     auto s = inner_->lv_get_str(idx);
     return std::string_view(s.data(), s.size());
 }
 
 std::pair<const uint8_t*, size_t> LookupResult::GetBytes(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     auto bytes = inner_->lv_get_bytes(idx);
     return {bytes.data(), bytes.size()};
 }
 
 Date LookupResult::GetDate(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return Date{inner_->lv_get_date_days(idx)};
 }
 
 Time LookupResult::GetTime(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return Time{inner_->lv_get_time_millis(idx)};
 }
 
 Timestamp LookupResult::GetTimestamp(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return Timestamp{inner_->lv_get_ts_millis(idx), inner_->lv_get_ts_nanos(idx)};
 }
 
 bool LookupResult::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
 
 std::string LookupResult::GetDecimalString(size_t idx) const {
-    CheckFieldBounds(idx);
+    check_lookup_available(inner_);
     return std::string(inner_->lv_get_decimal_str(idx));
 }
 
@@ -987,7 +979,6 @@ Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) {
 
     out.Destroy();
     out.inner_ = result_box.into_raw();
-    out.field_count_ = out.inner_->lv_field_count();
     return utils::make_ok();
 }
 

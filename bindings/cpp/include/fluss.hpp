@@ -867,9 +867,7 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
     }
     void Destroy() noexcept;
     void BuildColumnMap() const;
-    void CheckFieldBounds(size_t idx) const;
     ffi::LookupResultInner* inner_{nullptr};
-    size_t field_count_{0};
     mutable std::shared_ptr<detail::ColumnMap> column_map_;
 };
 
