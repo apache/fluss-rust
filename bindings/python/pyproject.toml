@@ -24,7 +24,7 @@ name = "pyfluss"
 description = "Apache Fluss (incubating) Python Binding"
 authors = [{name = "Apache Fluss", email = "dev@fluss.apache.org"}]
 license = {text = "Apache-2.0"}
-readme = "README.md"
+readme = "GENERATED_README.md"
 requires-python = ">=3.9"
 classifiers = [
     "License :: OSI Approved :: Apache Software License",

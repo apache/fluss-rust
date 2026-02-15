@@ -26,3 +26,7 @@ release [version]:
 # Usage: just bump-version <current> <next>   e.g. just bump-version 0.1.0 0.1.1
 bump-version from to:
     ./scripts/bump-version.sh {{from}} {{to}}
+
+# Regenerate bindings/python/GENERATED_README.md from website docs.
+generate-python-readme:
+    python bindings/python/generate_readme.py

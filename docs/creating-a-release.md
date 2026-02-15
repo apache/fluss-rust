@@ -1,21 +1,3 @@
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Creating a Fluss Rust Client Release
 
 This document describes in detail how to create a release of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss-rust) repository. It is based on the [Creating a Fluss Release](https://fluss.apache.org/community/how-to-release/creating-a-fluss-release/) guide of the Apache Fluss project and the [release guide of Apache OpenDAL](https://nightlies.apache.org/opendal/opendal-docs-stable/community/release/); releases are source archives plus CI-published crates.io and PyPI.
