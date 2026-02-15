@@ -195,6 +195,15 @@ inline ffi::FfiTableDescriptor to_ffi_table_descriptor(const TableDescriptor& de
     }
     ffi_desc.properties = std::move(props);
 
+    rust::Vec<ffi::HashMapValue> custom_props;
+    for (const auto& [k, v] : desc.custom_properties) {
+        ffi::HashMapValue prop;
+        prop.key = rust::String(k);
+        prop.value = rust::String(v);
+        custom_props.push_back(prop);
+    }
+    ffi_desc.custom_properties = std::move(custom_props);
+
     ffi_desc.comment = rust::String(desc.comment);
 
     return ffi_desc;
