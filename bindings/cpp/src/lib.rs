@@ -76,6 +76,7 @@ mod ffi {
         bucket_count: i32,
         bucket_keys: Vec<String>,
         properties: Vec<HashMapValue>,
+        custom_properties: Vec<HashMapValue>,
         comment: String,
     }
 
@@ -92,6 +93,7 @@ mod ffi {
         has_primary_key: bool,
         is_partitioned: bool,
         properties: Vec<HashMapValue>,
+        custom_properties: Vec<HashMapValue>,
         comment: String,
         schema: FfiSchema,
     }
@@ -101,40 +103,8 @@ mod ffi {
         table_info: FfiTableInfo,
     }
 
-    struct FfiDatum {
-        datum_type: i32,
-        bool_val: bool,
-        i32_val: i32,
-        i64_val: i64,
-        f32_val: f32,
-        f64_val: f64,
-        string_val: String,
-        bytes_val: Vec<u8>,
-        decimal_precision: i32,
-        decimal_scale: i32,
-        i128_hi: i64,
-        i128_lo: i64,
-    }
-
-    struct FfiGenericRow {
-        fields: Vec<FfiDatum>,
-    }
-
-    struct FfiScanRecord {
-        bucket_id: i32,
-        offset: i64,
-        timestamp: i64,
-        row: FfiGenericRow,
-    }
-
-    struct FfiScanRecords {
-        records: Vec<FfiScanRecord>,
-    }
-
-    struct FfiScanRecordsResult {
-        result: FfiResult,
-        scan_records: FfiScanRecords,
-    }
+    // NOTE: FfiDatum, FfiGenericRow, FfiScanRecord, FfiScanRecords, FfiScanRecordsResult
+    // have been replaced by opaque types below (ScanResultInner, GenericRowInner, LookupResultInner).
 
     struct FfiArrowRecordBatch {
         array_ptr: usize,
@@ -192,11 +162,7 @@ mod ffi {
         bucket_offsets: Vec<FfiBucketOffsetPair>,
     }
 
-    struct FfiLookupResult {
-        result: FfiResult,
-        found: bool,
-        row: FfiGenericRow,
-    }
+    // NOTE: FfiLookupResult replaced by opaque LookupResultInner below.
 
     struct FfiLakeSnapshotResult {
         result: FfiResult,
@@ -260,6 +226,11 @@ mod ffi {
         type LogScanner;
         type UpsertWriter;
         type Lookuper;
+
+        // Opaque types for optimized FFI
+        type ScanResultInner;
+        type GenericRowInner;
+        type LookupResultInner;
 
         // Connection
         fn new_connection(config: &FfiConfig) -> Result<*mut Connection>;
@@ -349,9 +320,31 @@ mod ffi {
         ) -> Result<*mut UpsertWriter>;
         fn new_lookuper(self: &Table) -> Result<*mut Lookuper>;
 
+        // GenericRowInner — opaque row for writes
+        fn new_generic_row(field_count: usize) -> Box<GenericRowInner>;
+        fn gr_reset(self: &mut GenericRowInner);
+        fn gr_set_null(self: &mut GenericRowInner, idx: usize);
+        fn gr_set_bool(self: &mut GenericRowInner, idx: usize, val: bool);
+        fn gr_set_i32(self: &mut GenericRowInner, idx: usize, val: i32);
+        fn gr_set_i64(self: &mut GenericRowInner, idx: usize, val: i64);
+        fn gr_set_f32(self: &mut GenericRowInner, idx: usize, val: f32);
+        fn gr_set_f64(self: &mut GenericRowInner, idx: usize, val: f64);
+        fn gr_set_str(self: &mut GenericRowInner, idx: usize, val: &str);
+        fn gr_set_bytes(self: &mut GenericRowInner, idx: usize, val: &[u8]);
+        fn gr_set_date(self: &mut GenericRowInner, idx: usize, days: i32);
+        fn gr_set_time(self: &mut GenericRowInner, idx: usize, millis: i32);
+        fn gr_set_ts_ntz(self: &mut GenericRowInner, idx: usize, millis: i64, nanos: i32);
+        fn gr_set_ts_ltz(self: &mut GenericRowInner, idx: usize, millis: i64, nanos: i32);
+        fn gr_set_decimal_str(self: &mut GenericRowInner, idx: usize, val: &str);
+
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
-        fn append(self: &mut AppendWriter, row: &FfiGenericRow) -> Result<Box<WriteResult>>;
+        fn append(self: &mut AppendWriter, row: &GenericRowInner) -> Result<Box<WriteResult>>;
+        fn append_arrow_batch(
+            self: &mut AppendWriter,
+            array_ptr: usize,
+            schema_ptr: usize,
+        ) -> Result<Box<WriteResult>>;
         fn flush(self: &mut AppendWriter) -> FfiResult;
 
         // WriteResult — dropped automatically via rust::Box, or call wait() for ack
@@ -359,13 +352,36 @@ mod ffi {
 
         // UpsertWriter
         unsafe fn delete_upsert_writer(writer: *mut UpsertWriter);
-        fn upsert(self: &mut UpsertWriter, row: &FfiGenericRow) -> Result<Box<WriteResult>>;
-        fn delete_row(self: &mut UpsertWriter, row: &FfiGenericRow) -> Result<Box<WriteResult>>;
+        fn upsert(self: &mut UpsertWriter, row: &GenericRowInner) -> Result<Box<WriteResult>>;
+        fn delete_row(self: &mut UpsertWriter, row: &GenericRowInner) -> Result<Box<WriteResult>>;
         fn upsert_flush(self: &mut UpsertWriter) -> FfiResult;
 
         // Lookuper
         unsafe fn delete_lookuper(lookuper: *mut Lookuper);
-        fn lookup(self: &mut Lookuper, pk_row: &FfiGenericRow) -> FfiLookupResult;
+        fn lookup(self: &mut Lookuper, pk_row: &GenericRowInner) -> Box<LookupResultInner>;
+
+        // LookupResultInner accessors
+        fn lv_has_error(self: &LookupResultInner) -> bool;
+        fn lv_error_code(self: &LookupResultInner) -> i32;
+        fn lv_error_message(self: &LookupResultInner) -> &str;
+        fn lv_found(self: &LookupResultInner) -> bool;
+        fn lv_field_count(self: &LookupResultInner) -> usize;
+        fn lv_column_name(self: &LookupResultInner, field: usize) -> &str;
+        fn lv_column_type(self: &LookupResultInner, field: usize) -> i32;
+        fn lv_is_null(self: &LookupResultInner, field: usize) -> bool;
+        fn lv_get_bool(self: &LookupResultInner, field: usize) -> bool;
+        fn lv_get_i32(self: &LookupResultInner, field: usize) -> i32;
+        fn lv_get_i64(self: &LookupResultInner, field: usize) -> i64;
+        fn lv_get_f32(self: &LookupResultInner, field: usize) -> f32;
+        fn lv_get_f64(self: &LookupResultInner, field: usize) -> f64;
+        fn lv_get_str(self: &LookupResultInner, field: usize) -> &str;
+        fn lv_get_bytes(self: &LookupResultInner, field: usize) -> &[u8];
+        fn lv_get_date_days(self: &LookupResultInner, field: usize) -> i32;
+        fn lv_get_time_millis(self: &LookupResultInner, field: usize) -> i32;
+        fn lv_get_ts_millis(self: &LookupResultInner, field: usize) -> i64;
+        fn lv_get_ts_nanos(self: &LookupResultInner, field: usize) -> i32;
+        fn lv_is_ts_ltz(self: &LookupResultInner, field: usize) -> bool;
+        fn lv_get_decimal_str(self: &LookupResultInner, field: usize) -> String;
 
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
@@ -387,16 +403,44 @@ mod ffi {
         fn unsubscribe(self: &LogScanner, bucket_id: i32) -> FfiResult;
         fn unsubscribe_partition(self: &LogScanner, partition_id: i64, bucket_id: i32)
         -> FfiResult;
-        fn poll(self: &LogScanner, timeout_ms: i64) -> FfiScanRecordsResult;
+        fn poll(self: &LogScanner, timeout_ms: i64) -> Box<ScanResultInner>;
         fn poll_record_batch(self: &LogScanner, timeout_ms: i64) -> FfiArrowRecordBatchesResult;
         fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize);
+
+        // ScanResultInner accessors
+        fn sv_has_error(self: &ScanResultInner) -> bool;
+        fn sv_error_code(self: &ScanResultInner) -> i32;
+        fn sv_error_message(self: &ScanResultInner) -> &str;
+        fn sv_record_count(self: &ScanResultInner) -> usize;
+        fn sv_column_count(self: &ScanResultInner) -> usize;
+        fn sv_column_name(self: &ScanResultInner, field: usize) -> &str;
+        fn sv_column_type(self: &ScanResultInner, field: usize) -> i32;
+        fn sv_bucket_id(self: &ScanResultInner, rec: usize) -> i32;
+        fn sv_has_partition_id(self: &ScanResultInner, rec: usize) -> bool;
+        fn sv_partition_id(self: &ScanResultInner, rec: usize) -> i64;
+        fn sv_offset(self: &ScanResultInner, rec: usize) -> i64;
+        fn sv_timestamp(self: &ScanResultInner, rec: usize) -> i64;
+        fn sv_change_type(self: &ScanResultInner, rec: usize) -> i32;
+        fn sv_field_count(self: &ScanResultInner, rec: usize) -> usize;
+        fn sv_is_null(self: &ScanResultInner, rec: usize, field: usize) -> bool;
+        fn sv_get_bool(self: &ScanResultInner, rec: usize, field: usize) -> bool;
+        fn sv_get_i32(self: &ScanResultInner, rec: usize, field: usize) -> i32;
+        fn sv_get_i64(self: &ScanResultInner, rec: usize, field: usize) -> i64;
+        fn sv_get_f32(self: &ScanResultInner, rec: usize, field: usize) -> f32;
+        fn sv_get_f64(self: &ScanResultInner, rec: usize, field: usize) -> f64;
+        fn sv_get_str(self: &ScanResultInner, rec: usize, field: usize) -> &str;
+        fn sv_get_bytes(self: &ScanResultInner, rec: usize, field: usize) -> &[u8];
+        fn sv_get_date_days(self: &ScanResultInner, rec: usize, field: usize) -> i32;
+        fn sv_get_time_millis(self: &ScanResultInner, rec: usize, field: usize) -> i32;
+        fn sv_get_ts_millis(self: &ScanResultInner, rec: usize, field: usize) -> i64;
+        fn sv_get_ts_nanos(self: &ScanResultInner, rec: usize, field: usize) -> i32;
+        fn sv_is_ts_ltz(self: &ScanResultInner, rec: usize, field: usize) -> bool;
+        fn sv_get_decimal_str(self: &ScanResultInner, rec: usize, field: usize) -> String;
     }
 }
 
 pub struct Connection {
     inner: Arc<fcore::client::FlussConnection>,
-    #[allow(dead_code)]
-    metadata: Option<Arc<fcore::client::Metadata>>,
 }
 
 pub struct Admin {
@@ -494,10 +538,7 @@ fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
 
     match conn {
         Ok(c) => {
-            let conn = Box::into_raw(Box::new(Connection {
-                inner: Arc::new(c),
-                metadata: None,
-            }));
+            let conn = Box::into_raw(Box::new(Connection { inner: Arc::new(c) }));
             Ok(conn)
         }
         Err(e) => Err(format!("Failed to connect: {e}")),
@@ -1106,14 +1147,48 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
 }
 
 impl AppendWriter {
-    fn append(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
+    fn append(&mut self, row: &GenericRowInner) -> Result<Box<WriteResult>, String> {
         let schema = self.table_info.get_schema();
-        let generic_row = types::ffi_row_to_core(row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row =
+            types::resolve_row_types(&row.row, Some(schema)).map_err(|e| e.to_string())?;
 
         let result_future = self
             .inner
             .append(&generic_row)
             .map_err(|e| format!("Failed to append: {e}"))?;
+
+        Ok(Box::new(WriteResult {
+            inner: Some(result_future),
+        }))
+    }
+
+    fn append_arrow_batch(
+        &mut self,
+        array_ptr: usize,
+        schema_ptr: usize,
+    ) -> Result<Box<WriteResult>, String> {
+        use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+
+        // Safety: C++ allocates these via `new ArrowArray/ArrowSchema` after a
+        // successful `ExportRecordBatch`, so both pointers are valid heap
+        // allocations that we take ownership of here.
+        let ffi_array = unsafe { *Box::from_raw(array_ptr as *mut FFI_ArrowArray) };
+        let ffi_schema = unsafe { Box::from_raw(schema_ptr as *mut FFI_ArrowSchema) };
+
+        // Safety: `from_ffi` requires that the array and schema conform to the
+        // Arrow C Data Interface, which is guaranteed by C++'s ExportRecordBatch.
+        let array_data = unsafe { arrow::ffi::from_ffi(ffi_array, &ffi_schema) }
+            .map_err(|e| format!("Failed to import Arrow batch: {e}"))?;
+        // ffi_array is consumed by from_ffi; ffi_schema is dropped here (Box goes out of scope)
+
+        // Reconstruct RecordBatch from the imported StructArray data
+        let struct_array = arrow::array::StructArray::from(array_data);
+        let batch = arrow::record_batch::RecordBatch::from(struct_array);
+
+        let result_future = self
+            .inner
+            .append_arrow_batch(batch)
+            .map_err(|e| format!("Failed to append Arrow batch: {e}"))?;
 
         Ok(Box::new(WriteResult {
             inner: Some(result_future),
@@ -1164,9 +1239,10 @@ impl UpsertWriter {
         row
     }
 
-    fn upsert(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
+    fn upsert(&mut self, row: &GenericRowInner) -> Result<Box<WriteResult>, String> {
         let schema = self.table_info.get_schema();
-        let generic_row = types::ffi_row_to_core(row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row =
+            types::resolve_row_types(&row.row, Some(schema)).map_err(|e| e.to_string())?;
         let generic_row = self.pad_row(generic_row);
 
         let result_future = self
@@ -1179,9 +1255,10 @@ impl UpsertWriter {
         }))
     }
 
-    fn delete_row(&mut self, row: &ffi::FfiGenericRow) -> Result<Box<WriteResult>, String> {
+    fn delete_row(&mut self, row: &GenericRowInner) -> Result<Box<WriteResult>, String> {
         let schema = self.table_info.get_schema();
-        let generic_row = types::ffi_row_to_core(row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row =
+            types::resolve_row_types(&row.row, Some(schema)).map_err(|e| e.to_string())?;
         let generic_row = self.pad_row(generic_row);
 
         let result_future = self
@@ -1224,53 +1301,56 @@ impl Lookuper {
         row
     }
 
-    fn lookup(&mut self, pk_row: &ffi::FfiGenericRow) -> ffi::FfiLookupResult {
+    fn lookup(&mut self, pk_row: &GenericRowInner) -> Box<LookupResultInner> {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::ffi_row_to_core(pk_row, Some(schema)) {
+        let generic_row = match types::resolve_row_types(&pk_row.row, Some(schema)) {
             Ok(r) => self.pad_row(r),
             Err(e) => {
-                return ffi::FfiLookupResult {
-                    result: client_err(e.to_string()),
-                    found: false,
-                    row: ffi::FfiGenericRow { fields: vec![] },
-                };
+                return Box::new(LookupResultInner::from_error(
+                    CLIENT_ERROR_CODE,
+                    e.to_string(),
+                ));
             }
         };
 
         let lookup_result = match RUNTIME.block_on(self.inner.lookup(&generic_row)) {
             Ok(r) => r,
             Err(e) => {
-                return ffi::FfiLookupResult {
-                    result: err_from_core_error(&e),
-                    found: false,
-                    row: ffi::FfiGenericRow { fields: vec![] },
-                };
+                let ffi_err = err_from_core_error(&e);
+                return Box::new(LookupResultInner::from_error(
+                    ffi_err.error_code,
+                    ffi_err.error_message,
+                ));
             }
         };
 
+        let columns = self.table_info.get_schema().columns().to_vec();
         match lookup_result.get_single_row() {
-            Ok(Some(row)) => match types::internal_row_to_ffi_row(&row, &self.table_info) {
-                Ok(ffi_row) => ffi::FfiLookupResult {
-                    result: ok_result(),
+            Ok(Some(row)) => match types::compacted_row_to_owned(&row, &self.table_info) {
+                Ok(owned_row) => Box::new(LookupResultInner {
+                    error: None,
                     found: true,
-                    row: ffi_row,
-                },
-                Err(e) => ffi::FfiLookupResult {
-                    result: client_err(e.to_string()),
-                    found: false,
-                    row: ffi::FfiGenericRow { fields: vec![] },
-                },
+                    row: Some(owned_row),
+                    columns,
+                }),
+                Err(e) => Box::new(LookupResultInner::from_error(
+                    CLIENT_ERROR_CODE,
+                    e.to_string(),
+                )),
             },
-            Ok(None) => ffi::FfiLookupResult {
-                result: ok_result(),
+            Ok(None) => Box::new(LookupResultInner {
+                error: None,
                 found: false,
-                row: ffi::FfiGenericRow { fields: vec![] },
-            },
-            Err(e) => ffi::FfiLookupResult {
-                result: err_from_core_error(&e),
-                found: false,
-                row: ffi::FfiGenericRow { fields: vec![] },
-            },
+                row: None,
+                columns,
+            }),
+            Err(e) => {
+                let ffi_err = err_from_core_error(&e);
+                Box::new(LookupResultInner::from_error(
+                    ffi_err.error_code,
+                    ffi_err.error_message,
+                ))
+            }
         }
     }
 }
@@ -1357,34 +1437,47 @@ impl LogScanner {
         dispatch_scanner!(self, unsubscribe_partition(partition_id, bucket_id))
     }
 
-    fn poll(&self, timeout_ms: i64) -> ffi::FfiScanRecordsResult {
+    fn poll(&self, timeout_ms: i64) -> Box<ScanResultInner> {
         let ScannerKind::Record(ref inner) = self.scanner else {
-            return ffi::FfiScanRecordsResult {
-                result: client_err("Record-based scanner not available".to_string()),
-                scan_records: ffi::FfiScanRecords { records: vec![] },
-            };
+            return Box::new(ScanResultInner::from_error(
+                CLIENT_ERROR_CODE,
+                "Record-based scanner not available".to_string(),
+            ));
         };
 
-        let timeout = Duration::from_millis(timeout_ms as u64);
+        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
         let result = RUNTIME.block_on(async { inner.poll(timeout).await });
 
         match result {
             Ok(records) => {
-                match types::core_scan_records_to_ffi(&records, &self.projected_columns) {
-                    Ok(scan_records) => ffi::FfiScanRecordsResult {
-                        result: ok_result(),
-                        scan_records,
-                    },
-                    Err(e) => ffi::FfiScanRecordsResult {
-                        result: client_err(e.to_string()),
-                        scan_records: ffi::FfiScanRecords { records: vec![] },
-                    },
+                let columns = self.projected_columns.clone();
+                // Flatten ScanRecords into a Vec<FlatScanRecord> — moves Arc<RecordBatch>, zero copy
+                let mut flat = Vec::with_capacity(records.count());
+                for (table_bucket, bucket_records) in records.into_records_by_buckets() {
+                    let bucket_id = table_bucket.bucket_id();
+                    let partition = table_bucket.partition_id();
+                    for record in bucket_records {
+                        flat.push(FlatScanRecord {
+                            bucket_id,
+                            has_partition_id: partition.is_some(),
+                            partition_id: partition.unwrap_or(0),
+                            record,
+                        });
+                    }
                 }
+                Box::new(ScanResultInner {
+                    error: None,
+                    records: flat,
+                    columns,
+                })
             }
-            Err(e) => ffi::FfiScanRecordsResult {
-                result: err_from_core_error(&e),
-                scan_records: ffi::FfiScanRecords { records: vec![] },
-            },
+            Err(e) => {
+                let ffi_err = err_from_core_error(&e);
+                Box::new(ScanResultInner::from_error(
+                    ffi_err.error_code,
+                    ffi_err.error_message,
+                ))
+            }
         }
     }
 
@@ -1396,7 +1489,7 @@ impl LogScanner {
             };
         };
 
-        let timeout = Duration::from_millis(timeout_ms as u64);
+        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
         let result = RUNTIME.block_on(async { inner_batch.poll(timeout).await });
 
         match result {
@@ -1414,6 +1507,497 @@ impl LogScanner {
                 result: err_from_core_error(&e),
                 arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
             },
+        }
+    }
+}
+
+// ============================================================================
+// Opaque types: GenericRowInner (write path)
+// ============================================================================
+
+pub struct GenericRowInner {
+    row: fcore::row::GenericRow<'static>,
+}
+
+fn new_generic_row(field_count: usize) -> Box<GenericRowInner> {
+    Box::new(GenericRowInner {
+        row: fcore::row::GenericRow::new(field_count),
+    })
+}
+
+impl GenericRowInner {
+    fn gr_reset(&mut self) {
+        let len = self.row.values.len();
+        self.row = fcore::row::GenericRow::new(len);
+    }
+
+    fn gr_set_null(&mut self, idx: usize) {
+        self.ensure_size(idx);
+        self.row.set_field(idx, fcore::row::Datum::Null);
+    }
+
+    fn gr_set_bool(&mut self, idx: usize, val: bool) {
+        self.ensure_size(idx);
+        self.row.set_field(idx, fcore::row::Datum::Bool(val));
+    }
+
+    fn gr_set_i32(&mut self, idx: usize, val: i32) {
+        self.ensure_size(idx);
+        self.row.set_field(idx, fcore::row::Datum::Int32(val));
+    }
+
+    fn gr_set_i64(&mut self, idx: usize, val: i64) {
+        self.ensure_size(idx);
+        self.row.set_field(idx, fcore::row::Datum::Int64(val));
+    }
+
+    fn gr_set_f32(&mut self, idx: usize, val: f32) {
+        self.ensure_size(idx);
+        self.row
+            .set_field(idx, fcore::row::Datum::Float32(val.into()));
+    }
+
+    fn gr_set_f64(&mut self, idx: usize, val: f64) {
+        self.ensure_size(idx);
+        self.row
+            .set_field(idx, fcore::row::Datum::Float64(val.into()));
+    }
+
+    fn gr_set_str(&mut self, idx: usize, val: &str) {
+        self.ensure_size(idx);
+        self.row.set_field(
+            idx,
+            fcore::row::Datum::String(std::borrow::Cow::Owned(val.to_string())),
+        );
+    }
+
+    fn gr_set_bytes(&mut self, idx: usize, val: &[u8]) {
+        self.ensure_size(idx);
+        self.row.set_field(
+            idx,
+            fcore::row::Datum::Blob(std::borrow::Cow::Owned(val.to_vec())),
+        );
+    }
+
+    fn gr_set_date(&mut self, idx: usize, days: i32) {
+        self.ensure_size(idx);
+        self.row
+            .set_field(idx, fcore::row::Datum::Date(fcore::row::Date::new(days)));
+    }
+
+    fn gr_set_time(&mut self, idx: usize, millis: i32) {
+        self.ensure_size(idx);
+        self.row
+            .set_field(idx, fcore::row::Datum::Time(fcore::row::Time::new(millis)));
+    }
+
+    fn gr_set_ts_ntz(&mut self, idx: usize, millis: i64, nanos: i32) {
+        self.ensure_size(idx);
+        // Use from_millis_nanos, falling back to millis-only on error
+        let ts = fcore::row::TimestampNtz::from_millis_nanos(millis, nanos)
+            .unwrap_or_else(|_| fcore::row::TimestampNtz::new(millis));
+        self.row.set_field(idx, fcore::row::Datum::TimestampNtz(ts));
+    }
+
+    fn gr_set_ts_ltz(&mut self, idx: usize, millis: i64, nanos: i32) {
+        self.ensure_size(idx);
+        let ts = fcore::row::TimestampLtz::from_millis_nanos(millis, nanos)
+            .unwrap_or_else(|_| fcore::row::TimestampLtz::new(millis));
+        self.row.set_field(idx, fcore::row::Datum::TimestampLtz(ts));
+    }
+
+    fn gr_set_decimal_str(&mut self, idx: usize, val: &str) {
+        self.ensure_size(idx);
+        // Store as string; resolve_row_types() will parse and validate against schema
+        self.row.set_field(
+            idx,
+            fcore::row::Datum::String(std::borrow::Cow::Owned(val.to_string())),
+        );
+    }
+
+    fn ensure_size(&mut self, idx: usize) {
+        if self.row.values.len() <= idx {
+            self.row.values.resize(idx + 1, fcore::row::Datum::Null);
+        }
+    }
+}
+
+// ============================================================================
+// Shared row-reading helpers (used by both ScanResultInner and LookupResultInner)
+// ============================================================================
+
+mod row_reader {
+    use fcore::row::InternalRow;
+    use fluss as fcore;
+
+    use crate::types;
+
+    pub fn column_type(columns: &[fcore::metadata::Column], field: usize) -> i32 {
+        columns
+            .get(field)
+            .map_or(0, |c| types::core_data_type_to_ffi(c.data_type()))
+    }
+
+    pub fn column_name(columns: &[fcore::metadata::Column], field: usize) -> &str {
+        columns.get(field).map_or("", |c| c.name())
+    }
+
+    pub fn is_null(row: &dyn InternalRow, _field: usize) -> bool {
+        row.is_null_at(_field)
+    }
+
+    pub fn get_bool(row: &dyn InternalRow, field: usize) -> bool {
+        row.get_boolean(field)
+    }
+
+    pub fn get_i32(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> i32 {
+        match columns.get(field).map(|c| c.data_type()) {
+            Some(fcore::metadata::DataType::TinyInt(_)) => row.get_byte(field) as i32,
+            Some(fcore::metadata::DataType::SmallInt(_)) => row.get_short(field) as i32,
+            _ => row.get_int(field),
+        }
+    }
+
+    pub fn get_i64(row: &dyn InternalRow, field: usize) -> i64 {
+        row.get_long(field)
+    }
+
+    pub fn get_f32(row: &dyn InternalRow, field: usize) -> f32 {
+        row.get_float(field)
+    }
+
+    pub fn get_f64(row: &dyn InternalRow, field: usize) -> f64 {
+        row.get_double(field)
+    }
+
+    pub fn get_str<'a>(
+        row: &'a dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> &'a str {
+        match columns.get(field).map(|c| c.data_type()) {
+            Some(fcore::metadata::DataType::Char(dt)) => row.get_char(field, dt.length() as usize),
+            _ => row.get_string(field),
+        }
+    }
+
+    pub fn get_bytes<'a>(
+        row: &'a dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> &'a [u8] {
+        match columns.get(field).map(|c| c.data_type()) {
+            Some(fcore::metadata::DataType::Binary(dt)) => row.get_binary(field, dt.length()),
+            _ => row.get_bytes(field),
+        }
+    }
+
+    pub fn get_date_days(row: &dyn InternalRow, field: usize) -> i32 {
+        row.get_date(field).get_inner()
+    }
+
+    pub fn get_time_millis(row: &dyn InternalRow, field: usize) -> i32 {
+        row.get_time(field).get_inner()
+    }
+
+    pub fn get_ts_millis(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> i64 {
+        match columns.get(field).map(|c| c.data_type()) {
+            Some(fcore::metadata::DataType::TimestampLTz(dt)) => row
+                .get_timestamp_ltz(field, dt.precision())
+                .get_epoch_millisecond(),
+            Some(fcore::metadata::DataType::Timestamp(dt)) => row
+                .get_timestamp_ntz(field, dt.precision())
+                .get_millisecond(),
+            _ => row.get_timestamp_ntz(field, 3).get_millisecond(),
+        }
+    }
+
+    pub fn get_ts_nanos(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> i32 {
+        match columns.get(field).map(|c| c.data_type()) {
+            Some(fcore::metadata::DataType::TimestampLTz(dt)) => row
+                .get_timestamp_ltz(field, dt.precision())
+                .get_nano_of_millisecond(),
+            Some(fcore::metadata::DataType::Timestamp(dt)) => row
+                .get_timestamp_ntz(field, dt.precision())
+                .get_nano_of_millisecond(),
+            _ => row.get_timestamp_ntz(field, 3).get_nano_of_millisecond(),
+        }
+    }
+
+    pub fn is_ts_ltz(columns: &[fcore::metadata::Column], field: usize) -> bool {
+        matches!(
+            columns.get(field).map(|c| c.data_type()),
+            Some(fcore::metadata::DataType::TimestampLTz(_))
+        )
+    }
+
+    pub fn get_decimal_str(
+        row: &dyn InternalRow,
+        columns: &[fcore::metadata::Column],
+        field: usize,
+    ) -> String {
+        match columns.get(field).map(|c| c.data_type()) {
+            Some(fcore::metadata::DataType::Decimal(dt)) => {
+                let decimal = row.get_decimal(field, dt.precision() as usize, dt.scale() as usize);
+                decimal.to_big_decimal().to_string()
+            }
+            _ => String::new(),
+        }
+    }
+}
+
+// ============================================================================
+// Opaque types: ScanResultInner (scan read path)
+// ============================================================================
+
+struct FlatScanRecord {
+    bucket_id: i32,
+    has_partition_id: bool,
+    partition_id: i64,
+    record: fcore::record::ScanRecord,
+}
+
+pub struct ScanResultInner {
+    error: Option<(i32, String)>,
+    records: Vec<FlatScanRecord>,
+    columns: Vec<fcore::metadata::Column>,
+}
+
+impl ScanResultInner {
+    fn from_error(code: i32, msg: String) -> Self {
+        Self {
+            error: Some((code, msg)),
+            records: Vec::new(),
+            columns: Vec::new(),
+        }
+    }
+
+    fn sv_has_error(&self) -> bool {
+        self.error.is_some()
+    }
+
+    fn sv_error_code(&self) -> i32 {
+        self.error.as_ref().map_or(0, |e| e.0)
+    }
+
+    fn sv_error_message(&self) -> &str {
+        self.error.as_ref().map_or("", |e| e.1.as_str())
+    }
+
+    fn sv_record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    fn sv_column_count(&self) -> usize {
+        self.columns.len()
+    }
+    fn sv_column_name(&self, field: usize) -> &str {
+        row_reader::column_name(&self.columns, field)
+    }
+    fn sv_column_type(&self, field: usize) -> i32 {
+        row_reader::column_type(&self.columns, field)
+    }
+
+    fn sv_bucket_id(&self, rec: usize) -> i32 {
+        self.records[rec].bucket_id
+    }
+    fn sv_has_partition_id(&self, rec: usize) -> bool {
+        self.records[rec].has_partition_id
+    }
+    fn sv_partition_id(&self, rec: usize) -> i64 {
+        self.records[rec].partition_id
+    }
+    fn sv_offset(&self, rec: usize) -> i64 {
+        self.records[rec].record.offset()
+    }
+    fn sv_timestamp(&self, rec: usize) -> i64 {
+        self.records[rec].record.timestamp()
+    }
+    fn sv_change_type(&self, rec: usize) -> i32 {
+        self.records[rec].record.change_type().to_byte_value() as i32
+    }
+    fn sv_field_count(&self, _rec: usize) -> usize {
+        self.columns.len()
+    }
+
+    // Field accessors — delegate to shared row_reader helpers
+    fn sv_is_null(&self, rec: usize, field: usize) -> bool {
+        row_reader::is_null(self.records[rec].record.row(), field)
+    }
+    fn sv_get_bool(&self, rec: usize, field: usize) -> bool {
+        row_reader::get_bool(self.records[rec].record.row(), field)
+    }
+    fn sv_get_i32(&self, rec: usize, field: usize) -> i32 {
+        row_reader::get_i32(self.records[rec].record.row(), &self.columns, field)
+    }
+    fn sv_get_i64(&self, rec: usize, field: usize) -> i64 {
+        row_reader::get_i64(self.records[rec].record.row(), field)
+    }
+    fn sv_get_f32(&self, rec: usize, field: usize) -> f32 {
+        row_reader::get_f32(self.records[rec].record.row(), field)
+    }
+    fn sv_get_f64(&self, rec: usize, field: usize) -> f64 {
+        row_reader::get_f64(self.records[rec].record.row(), field)
+    }
+    fn sv_get_str(&self, rec: usize, field: usize) -> &str {
+        row_reader::get_str(self.records[rec].record.row(), &self.columns, field)
+    }
+    fn sv_get_bytes(&self, rec: usize, field: usize) -> &[u8] {
+        row_reader::get_bytes(self.records[rec].record.row(), &self.columns, field)
+    }
+    fn sv_get_date_days(&self, rec: usize, field: usize) -> i32 {
+        row_reader::get_date_days(self.records[rec].record.row(), field)
+    }
+    fn sv_get_time_millis(&self, rec: usize, field: usize) -> i32 {
+        row_reader::get_time_millis(self.records[rec].record.row(), field)
+    }
+    fn sv_get_ts_millis(&self, rec: usize, field: usize) -> i64 {
+        row_reader::get_ts_millis(self.records[rec].record.row(), &self.columns, field)
+    }
+    fn sv_get_ts_nanos(&self, rec: usize, field: usize) -> i32 {
+        row_reader::get_ts_nanos(self.records[rec].record.row(), &self.columns, field)
+    }
+    fn sv_is_ts_ltz(&self, _rec: usize, field: usize) -> bool {
+        row_reader::is_ts_ltz(&self.columns, field)
+    }
+    fn sv_get_decimal_str(&self, rec: usize, field: usize) -> String {
+        row_reader::get_decimal_str(self.records[rec].record.row(), &self.columns, field)
+    }
+}
+
+// ============================================================================
+// Opaque types: LookupResultInner (lookup read path)
+// ============================================================================
+
+pub struct LookupResultInner {
+    error: Option<(i32, String)>,
+    found: bool,
+    row: Option<fcore::row::GenericRow<'static>>,
+    columns: Vec<fcore::metadata::Column>,
+}
+
+impl LookupResultInner {
+    fn from_error(code: i32, msg: String) -> Self {
+        Self {
+            error: Some((code, msg)),
+            found: false,
+            row: None,
+            columns: Vec::new(),
+        }
+    }
+
+    fn lv_has_error(&self) -> bool {
+        self.error.is_some()
+    }
+
+    fn lv_error_code(&self) -> i32 {
+        self.error.as_ref().map_or(0, |e| e.0)
+    }
+
+    fn lv_error_message(&self) -> &str {
+        self.error.as_ref().map_or("", |e| e.1.as_str())
+    }
+
+    fn lv_found(&self) -> bool {
+        self.found
+    }
+
+    fn lv_field_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    fn lv_column_type(&self, field: usize) -> i32 {
+        self.columns
+            .get(field)
+            .map_or(0, |c| types::core_data_type_to_ffi(c.data_type()))
+    }
+
+    fn lv_column_name(&self, field: usize) -> &str {
+        row_reader::column_name(&self.columns, field)
+    }
+
+    // Field accessors — delegate to shared row_reader helpers (with None → default)
+    fn lv_is_null(&self, field: usize) -> bool {
+        self.row
+            .as_ref()
+            .is_none_or(|r| row_reader::is_null(r, field))
+    }
+    fn lv_get_bool(&self, field: usize) -> bool {
+        self.row
+            .as_ref()
+            .is_some_and(|r| row_reader::get_bool(r, field))
+    }
+    fn lv_get_i32(&self, field: usize) -> i32 {
+        self.row
+            .as_ref()
+            .map_or(0, |r| row_reader::get_i32(r, &self.columns, field))
+    }
+    fn lv_get_i64(&self, field: usize) -> i64 {
+        self.row
+            .as_ref()
+            .map_or(0, |r| row_reader::get_i64(r, field))
+    }
+    fn lv_get_f32(&self, field: usize) -> f32 {
+        self.row
+            .as_ref()
+            .map_or(0.0, |r| row_reader::get_f32(r, field))
+    }
+    fn lv_get_f64(&self, field: usize) -> f64 {
+        self.row
+            .as_ref()
+            .map_or(0.0, |r| row_reader::get_f64(r, field))
+    }
+    fn lv_get_str(&self, field: usize) -> &str {
+        match self.row.as_ref() {
+            Some(r) => row_reader::get_str(r, &self.columns, field),
+            None => "",
+        }
+    }
+    fn lv_get_bytes(&self, field: usize) -> &[u8] {
+        match self.row.as_ref() {
+            Some(r) => row_reader::get_bytes(r, &self.columns, field),
+            None => &[],
+        }
+    }
+    fn lv_get_date_days(&self, field: usize) -> i32 {
+        self.row
+            .as_ref()
+            .map_or(0, |r| row_reader::get_date_days(r, field))
+    }
+    fn lv_get_time_millis(&self, field: usize) -> i32 {
+        self.row
+            .as_ref()
+            .map_or(0, |r| row_reader::get_time_millis(r, field))
+    }
+    fn lv_get_ts_millis(&self, field: usize) -> i64 {
+        self.row
+            .as_ref()
+            .map_or(0, |r| row_reader::get_ts_millis(r, &self.columns, field))
+    }
+    fn lv_get_ts_nanos(&self, field: usize) -> i32 {
+        self.row
+            .as_ref()
+            .map_or(0, |r| row_reader::get_ts_nanos(r, &self.columns, field))
+    }
+    fn lv_is_ts_ltz(&self, field: usize) -> bool {
+        row_reader::is_ts_ltz(&self.columns, field)
+    }
+    fn lv_get_decimal_str(&self, field: usize) -> String {
+        match self.row.as_ref() {
+            Some(r) => row_reader::get_decimal_str(r, &self.columns, field),
+            None => String::new(),
         }
     }
 }
