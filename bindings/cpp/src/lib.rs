@@ -1832,7 +1832,8 @@ impl ScanResultInner {
         self.columns.len()
     }
 
-    // Field accessors — delegate to shared row_reader helpers
+    // Field accessors — delegate to shared row_reader helpers.
+    // C++ side validates bounds before calling; a panic here indicates an internal bug.
     fn sv_is_null(&self, rec: usize, field: usize) -> bool {
         row_reader::is_null(self.records[rec].record.row(), field)
     }
@@ -1928,7 +1929,8 @@ impl LookupResultInner {
         row_reader::column_name(&self.columns, field)
     }
 
-    // Field accessors — delegate to shared row_reader helpers (with None → default)
+    // Field accessors — delegate to shared row_reader helpers (with None → default).
+    // C++ side validates bounds before calling; a panic here indicates an internal bug.
     fn lv_is_null(&self, field: usize) -> bool {
         self.row
             .as_ref()
