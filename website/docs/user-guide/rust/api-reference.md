@@ -249,12 +249,13 @@ writer.append(&row)?.await?;
 
 ## `TableDescriptorBuilder`
 
-| Method                                                                           |  Description                                |
+| Method                                                                           | Description                                 |
 |----------------------------------------------------------------------------------|---------------------------------------------|
 | `fn schema(schema: Schema) -> Self`                                              | Set the schema                              |
 | `fn log_format(format: LogFormat) -> Self`                                       | Set log format (e.g., `LogFormat::ARROW`)   |
 | `fn kv_format(format: KvFormat) -> Self`                                         | Set KV format (e.g., `KvFormat::COMPACTED`) |
 | `fn property(key: &str, value: &str) -> Self`                                    | Set a table property                        |
+| `fn custom_property(key: &str, value: &str) -> Self`                             | Set a user-defined custom property          |
 | `fn partitioned_by(keys: Vec<&str>) -> Self`                                     | Set partition columns                       |
 | `fn distributed_by(bucket_count: Option<i32>, bucket_keys: Vec<String>) -> Self` | Set bucket distribution                     |
 | `fn comment(comment: &str) -> Self`                                              | Set table comment                           |

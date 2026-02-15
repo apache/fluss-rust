@@ -376,6 +376,7 @@ struct TableDescriptor {
     int32_t bucket_count{0};
     std::vector<std::string> bucket_keys;
     std::unordered_map<std::string, std::string> properties;
+    std::unordered_map<std::string, std::string> custom_properties;
     std::string comment;
 
     class Builder {
@@ -405,6 +406,21 @@ struct TableDescriptor {
             return *this;
         }
 
+        Builder& SetCustomProperty(std::string key, std::string value) {
+            custom_properties_[std::move(key)] = std::move(value);
+            return *this;
+        }
+
+        Builder& SetLogFormat(std::string format) {
+            properties_["table.log.format"] = std::move(format);
+            return *this;
+        }
+
+        Builder& SetKvFormat(std::string format) {
+            properties_["table.kv.format"] = std::move(format);
+            return *this;
+        }
+
         Builder& SetComment(std::string comment) {
             comment_ = std::move(comment);
             return *this;
@@ -413,7 +429,8 @@ struct TableDescriptor {
         TableDescriptor Build() {
             return TableDescriptor{std::move(schema_),     std::move(partition_keys_),
                                    bucket_count_,          std::move(bucket_keys_),
-                                   std::move(properties_), std::move(comment_)};
+                                   std::move(properties_), std::move(custom_properties_),
+                                   std::move(comment_)};
         }
 
        private:
@@ -422,6 +439,7 @@ struct TableDescriptor {
         int32_t bucket_count_{0};
         std::vector<std::string> bucket_keys_;
         std::unordered_map<std::string, std::string> properties_;
+        std::unordered_map<std::string, std::string> custom_properties_;
         std::string comment_;
     };
 

@@ -285,15 +285,18 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `TableDescriptor::Builder`
 
-| Method                                                                      |  Description               |
-|-----------------------------------------------------------------------------|----------------------------|
-| `SetSchema(const Schema& schema) -> Builder&`                               | Set the table schema       |
-| `SetPartitionKeys(const std::vector<std::string>& keys) -> Builder&`        | Set partition key columns  |
-| `SetBucketCount(int32_t count) -> Builder&`                                 | Set the number of buckets  |
-| `SetBucketKeys(const std::vector<std::string>& keys) -> Builder&`           | Set bucket key columns     |
-| `SetProperty(const std::string& key, const std::string& value) -> Builder&` | Set a table property       |
-| `SetComment(const std::string& comment) -> Builder&`                        | Set a table comment        |
-| `Build() -> TableDescriptor`                                                | Build the table descriptor |
+| Method                                                                            | Description                         |
+|-----------------------------------------------------------------------------------|-------------------------------------|
+| `SetSchema(const Schema& schema) -> Builder&`                                     | Set the table schema                |
+| `SetPartitionKeys(const std::vector<std::string>& keys) -> Builder&`              | Set partition key columns           |
+| `SetBucketCount(int32_t count) -> Builder&`                                       | Set the number of buckets           |
+| `SetBucketKeys(const std::vector<std::string>& keys) -> Builder&`                 | Set bucket key columns              |
+| `SetProperty(const std::string& key, const std::string& value) -> Builder&`       | Set a table property                |
+| `SetCustomProperty(const std::string& key, const std::string& value) -> Builder&` | Set a user-defined custom property  |
+| `SetLogFormat(const std::string& format) -> Builder&`                             | Set log format (e.g., `"ARROW"`)    |
+| `SetKvFormat(const std::string& format) -> Builder&`                              | Set KV format (e.g., `"COMPACTED"`) |
+| `SetComment(const std::string& comment) -> Builder&`                              | Set a table comment                 |
+| `Build() -> TableDescriptor`                                                      | Build the table descriptor          |
 
 ## `DataType`
 

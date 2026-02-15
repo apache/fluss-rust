@@ -143,6 +143,8 @@ mod admin_test {
             .property("table.replication.factor", "1")
             .log_format(LogFormat::ARROW)
             .kv_format(KvFormat::INDEXED)
+            .custom_property("owner", "test-suite")
+            .custom_property("env", "integration")
             .build()
             .expect("Failed to build table descriptor");
 
@@ -204,6 +206,18 @@ mod admin_test {
             table_info.get_properties(),
             table_descriptor.properties(),
             "Properties mismatch"
+        );
+
+        // verify custom properties round-trip
+        let expected_custom: HashMap<String, String> = [
+            ("owner".to_string(), "test-suite".to_string()),
+            ("env".to_string(), "integration".to_string()),
+        ]
+        .into();
+        assert_eq!(
+            table_info.get_custom_properties(),
+            &expected_custom,
+            "Custom properties mismatch"
         );
 
         // drop table

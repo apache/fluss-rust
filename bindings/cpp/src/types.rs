@@ -156,6 +156,10 @@ pub fn ffi_descriptor_to_core(
         builder = builder.property(&prop.key, &prop.value);
     }
 
+    for prop in &descriptor.custom_properties {
+        builder = builder.custom_property(&prop.key, &prop.value);
+    }
+
     if !descriptor.comment.is_empty() {
         builder = builder.comment(&descriptor.comment);
     }

@@ -76,6 +76,7 @@ mod ffi {
         bucket_count: i32,
         bucket_keys: Vec<String>,
         properties: Vec<HashMapValue>,
+        custom_properties: Vec<HashMapValue>,
         comment: String,
     }
 
