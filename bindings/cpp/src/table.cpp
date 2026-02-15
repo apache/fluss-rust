@@ -79,6 +79,12 @@ int Date::Day() const {
     return tm.tm_mday;
 }
 
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define CHECK_INNER(name)                                                                 \
+    do {                                                                                  \
+        if (!inner_) throw std::logic_error(name ": not available (moved-from or null)"); \
+    } while (0)
+
 // ============================================================================
 // GenericRow — write-only row backed by opaque Rust GenericRowInner
 // ============================================================================
@@ -100,6 +106,7 @@ void GenericRow::Destroy() noexcept {
         rust::Box<ffi::GenericRowInner>::from_raw(inner_);
         inner_ = nullptr;
     }
+    column_map_.reset();
 }
 
 GenericRow::GenericRow(GenericRow&& other) noexcept
@@ -120,122 +127,130 @@ GenericRow& GenericRow::operator=(GenericRow&& other) noexcept {
 bool GenericRow::Available() const { return inner_ != nullptr; }
 
 void GenericRow::Reset() {
-    if (inner_) inner_->gr_reset();
+    CHECK_INNER("GenericRow");
+    inner_->gr_reset();
 }
 
 void GenericRow::SetNull(size_t idx) {
-    if (inner_) inner_->gr_set_null(idx);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_null(idx);
 }
 void GenericRow::SetBool(size_t idx, bool v) {
-    if (inner_) inner_->gr_set_bool(idx, v);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_bool(idx, v);
 }
 void GenericRow::SetInt32(size_t idx, int32_t v) {
-    if (inner_) inner_->gr_set_i32(idx, v);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_i32(idx, v);
 }
 void GenericRow::SetInt64(size_t idx, int64_t v) {
-    if (inner_) inner_->gr_set_i64(idx, v);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_i64(idx, v);
 }
 void GenericRow::SetFloat32(size_t idx, float v) {
-    if (inner_) inner_->gr_set_f32(idx, v);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_f32(idx, v);
 }
 void GenericRow::SetFloat64(size_t idx, double v) {
-    if (inner_) inner_->gr_set_f64(idx, v);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_f64(idx, v);
 }
 
 void GenericRow::SetString(size_t idx, std::string v) {
-    if (inner_) inner_->gr_set_str(idx, v);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_str(idx, v);
 }
 
 void GenericRow::SetBytes(size_t idx, std::vector<uint8_t> v) {
-    if (inner_) inner_->gr_set_bytes(idx, rust::Slice<const uint8_t>(v.data(), v.size()));
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_bytes(idx, rust::Slice<const uint8_t>(v.data(), v.size()));
 }
 
 void GenericRow::SetDate(size_t idx, fluss::Date d) {
-    if (inner_) inner_->gr_set_date(idx, d.days_since_epoch);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_date(idx, d.days_since_epoch);
 }
 
 void GenericRow::SetTime(size_t idx, fluss::Time t) {
-    if (inner_) inner_->gr_set_time(idx, t.millis_since_midnight);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_time(idx, t.millis_since_midnight);
 }
 
 void GenericRow::SetTimestampNtz(size_t idx, fluss::Timestamp ts) {
-    if (inner_) inner_->gr_set_ts_ntz(idx, ts.epoch_millis, ts.nano_of_millisecond);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_ts_ntz(idx, ts.epoch_millis, ts.nano_of_millisecond);
 }
 
 void GenericRow::SetTimestampLtz(size_t idx, fluss::Timestamp ts) {
-    if (inner_) inner_->gr_set_ts_ltz(idx, ts.epoch_millis, ts.nano_of_millisecond);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_ts_ltz(idx, ts.epoch_millis, ts.nano_of_millisecond);
 }
 
 void GenericRow::SetDecimal(size_t idx, const std::string& value) {
-    if (inner_) inner_->gr_set_decimal_str(idx, value);
+    CHECK_INNER("GenericRow");
+    inner_->gr_set_decimal_str(idx, value);
 }
 
 // ============================================================================
 // RowView — zero-copy read-only row view for scan results
 // ============================================================================
 
-static void check_row_view_available(const ffi::ScanResultInner* inner) {
-    if (!inner) {
-        throw std::logic_error("RowView: not available (moved-from or null)");
-    }
-}
-
 size_t RowView::FieldCount() const { return inner_ ? inner_->sv_field_count() : 0; }
 
 TypeId RowView::GetType(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return static_cast<TypeId>(inner_->sv_column_type(idx));
 }
 
 bool RowView::IsNull(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return inner_->sv_is_null(record_idx_, idx);
 }
 bool RowView::GetBool(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return inner_->sv_get_bool(record_idx_, idx);
 }
 int32_t RowView::GetInt32(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return inner_->sv_get_i32(record_idx_, idx);
 }
 int64_t RowView::GetInt64(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return inner_->sv_get_i64(record_idx_, idx);
 }
 float RowView::GetFloat32(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return inner_->sv_get_f32(record_idx_, idx);
 }
 double RowView::GetFloat64(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return inner_->sv_get_f64(record_idx_, idx);
 }
 
 std::string_view RowView::GetString(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     auto s = inner_->sv_get_str(record_idx_, idx);
     return std::string_view(s.data(), s.size());
 }
 
 std::pair<const uint8_t*, size_t> RowView::GetBytes(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     auto bytes = inner_->sv_get_bytes(record_idx_, idx);
     return {bytes.data(), bytes.size()};
 }
 
 Date RowView::GetDate(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return Date{inner_->sv_get_date_days(record_idx_, idx)};
 }
 
 Time RowView::GetTime(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return Time{inner_->sv_get_time_millis(record_idx_, idx)};
 }
 
 Timestamp RowView::GetTimestamp(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return Timestamp{inner_->sv_get_ts_millis(record_idx_, idx),
                      inner_->sv_get_ts_nanos(record_idx_, idx)};
 }
@@ -243,7 +258,7 @@ Timestamp RowView::GetTimestamp(size_t idx) const {
 bool RowView::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
 
 std::string RowView::GetDecimalString(size_t idx) const {
-    check_row_view_available(inner_);
+    CHECK_INNER("RowView");
     return std::string(inner_->sv_get_decimal_str(record_idx_, idx));
 }
 
@@ -368,73 +383,67 @@ bool LookupResult::Found() const { return inner_ && inner_->lv_found(); }
 
 size_t LookupResult::FieldCount() const { return inner_ ? inner_->lv_field_count() : 0; }
 
-static void check_lookup_available(const ffi::LookupResultInner* inner) {
-    if (!inner) {
-        throw std::logic_error("LookupResult: not available (moved-from or null)");
-    }
-}
-
 TypeId LookupResult::GetType(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return static_cast<TypeId>(inner_->lv_column_type(idx));
 }
 
 bool LookupResult::IsNull(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return inner_->lv_is_null(idx);
 }
 bool LookupResult::GetBool(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return inner_->lv_get_bool(idx);
 }
 int32_t LookupResult::GetInt32(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return inner_->lv_get_i32(idx);
 }
 int64_t LookupResult::GetInt64(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return inner_->lv_get_i64(idx);
 }
 float LookupResult::GetFloat32(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return inner_->lv_get_f32(idx);
 }
 double LookupResult::GetFloat64(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return inner_->lv_get_f64(idx);
 }
 
 std::string_view LookupResult::GetString(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     auto s = inner_->lv_get_str(idx);
     return std::string_view(s.data(), s.size());
 }
 
 std::pair<const uint8_t*, size_t> LookupResult::GetBytes(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     auto bytes = inner_->lv_get_bytes(idx);
     return {bytes.data(), bytes.size()};
 }
 
 Date LookupResult::GetDate(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return Date{inner_->lv_get_date_days(idx)};
 }
 
 Time LookupResult::GetTime(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return Time{inner_->lv_get_time_millis(idx)};
 }
 
 Timestamp LookupResult::GetTimestamp(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return Timestamp{inner_->lv_get_ts_millis(idx), inner_->lv_get_ts_nanos(idx)};
 }
 
 bool LookupResult::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
 
 std::string LookupResult::GetDecimalString(size_t idx) const {
-    check_lookup_available(inner_);
+    CHECK_INNER("LookupResult");
     return std::string(inner_->lv_get_decimal_str(idx));
 }
 

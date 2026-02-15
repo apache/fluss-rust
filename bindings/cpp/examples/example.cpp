@@ -143,6 +143,18 @@ int main() {
         std::cout << "Row acknowledged by server" << std::endl;
     }
 
+    // Append a row with all fields null (matches Rust log_table.rs all_supported_datatypes)
+    {
+        fluss::GenericRow row;
+        size_t field_count = 8;
+        for (size_t i = 0; i < field_count; ++i) {
+            row.SetNull(i);
+        }
+        check("append_null_row", writer.Append(row));
+    }
+    check("flush_null", writer.Flush());
+    std::cout << "Wrote row with all fields null" << std::endl;
+
     // 6) Full scan — verify all column types including temporal
     fluss::LogScanner scanner;
     check("new_log_scanner", table.NewScan().CreateLogScanner(scanner));
@@ -158,7 +170,23 @@ int main() {
 
     std::cout << "Scanned records: " << records.Size() << std::endl;
     bool scan_ok = true;
+    bool found_null_row = false;
     for (const auto& rec : records) {
+        // Check if this is the all-null row (matches Rust: is_null_at for every column)
+        if (rec.row.IsNull(0)) {
+            found_null_row = true;
+            for (size_t i = 0; i < rec.row.FieldCount(); ++i) {
+                if (!rec.row.IsNull(i)) {
+                    std::cerr << "ERROR: column " << i << " should be null" << std::endl;
+                    scan_ok = false;
+                }
+            }
+            std::cout << "  [null row] all " << rec.row.FieldCount() << " fields are null"
+                      << std::endl;
+            continue;
+        }
+
+        // Non-null rows: verify types
         if (rec.row.GetType(4) != fluss::TypeId::Date) {
             std::cerr << "ERROR: field 4 expected Date, got "
                       << static_cast<int>(rec.row.GetType(4)) << std::endl;
@@ -194,6 +222,11 @@ int main() {
                   << ts_ltz.nano_of_millisecond << "ns" << std::endl;
     }
 
+    if (!found_null_row) {
+        std::cerr << "ERROR: did not find the all-null row" << std::endl;
+        scan_ok = false;
+    }
+
     if (!scan_ok) {
         std::cerr << "Full scan type verification FAILED!" << std::endl;
         std::exit(1);
@@ -218,6 +251,11 @@ int main() {
         if (rec.row.FieldCount() != 2) {
             std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
             scan_ok = false;
+            continue;
+        }
+        // Skip the all-null row
+        if (rec.row.IsNull(0)) {
+            std::cout << "  [null row] skipped" << std::endl;
             continue;
         }
         if (rec.row.GetType(0) != fluss::TypeId::Int) {
@@ -254,6 +292,11 @@ int main() {
         if (rec.row.FieldCount() != 2) {
             std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
             scan_ok = false;
+            continue;
+        }
+        // Skip the all-null row
+        if (rec.row.IsNull(0)) {
+            std::cout << "  [null row] skipped" << std::endl;
             continue;
         }
         if (rec.row.GetType(0) != fluss::TypeId::Int) {

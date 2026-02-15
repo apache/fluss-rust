@@ -176,6 +176,57 @@ int main() {
         }
     }
 
+    // 4b) Null row round-trip (matches Rust kv_table.rs all_supported_datatypes)
+    //     Upsert a row with all non-PK fields null, lookup, verify IsNull
+    std::cout << "\n--- Null Row Round-Trip ---" << std::endl;
+    {
+        auto row = kv_table.NewRow();
+        row.Set("user_id", 100);
+        row.SetNull(1);  // name
+        row.SetNull(2);  // email
+        row.SetNull(3);  // score
+        row.SetNull(4);  // balance
+        row.SetNull(5);  // birth_date
+        row.SetNull(6);  // login_time
+        row.SetNull(7);  // created_at
+        row.SetNull(8);  // last_seen
+        fluss::WriteResult wr;
+        check("upsert_null_row", upsert_writer.Upsert(row, wr));
+        check("upsert_null_row_wait", wr.Wait());
+    }
+    {
+        auto pk_row = kv_table.NewRow();
+        pk_row.Set("user_id", 100);
+
+        fluss::LookupResult result;
+        check("lookup_null_row", lookuper.Lookup(pk_row, result));
+        if (!result.Found()) {
+            std::cerr << "ERROR: Expected to find user_id=100 (null row)" << std::endl;
+            std::exit(1);
+        }
+
+        // Verify PK is not null
+        if (result.IsNull(0)) {
+            std::cerr << "ERROR: PK (user_id) should not be null" << std::endl;
+            std::exit(1);
+        }
+
+        // Verify all nullable columns are null (matches Rust is_null_at assertions)
+        bool null_ok = true;
+        for (size_t i = 1; i < result.FieldCount(); ++i) {
+            if (!result.IsNull(i)) {
+                std::cerr << "ERROR: column " << i << " should be null" << std::endl;
+                null_ok = false;
+            }
+        }
+        if (null_ok) {
+            std::cout << "Null row verified: all " << (result.FieldCount() - 1)
+                      << " nullable fields are null" << std::endl;
+        } else {
+            std::exit(1);
+        }
+    }
+
     // 5) Update via upsert (overwrite existing key)
     std::cout << "\n--- Update via Upsert ---" << std::endl;
     {
