@@ -25,7 +25,7 @@
 #include "fluss.hpp"
 #include "lib.rs.h"
 #include "rust/cxx.h"
-// todo:  bindings/cpp/BUILD.bazel still doesn’t declare Arrow include/link dependencies.
+// todo:  bindings/cpp/BUILD.bazel still doesn't declare Arrow include/link dependencies.
 // In environments where Bazel does not already have Arrow available, this will fail at compile/link
 // time.
 #include <arrow/record_batch.h>
@@ -79,6 +79,321 @@ int Date::Day() const {
     return tm.tm_mday;
 }
 
+// ============================================================================
+// GenericRow — write-only row backed by opaque Rust GenericRowInner
+// ============================================================================
+
+GenericRow::GenericRow() {
+    auto box = ffi::new_generic_row(0);
+    inner_ = box.into_raw();
+}
+
+GenericRow::GenericRow(size_t field_count) {
+    auto box = ffi::new_generic_row(field_count);
+    inner_ = box.into_raw();
+}
+
+GenericRow::~GenericRow() noexcept { Destroy(); }
+
+void GenericRow::Destroy() noexcept {
+    if (inner_) {
+        rust::Box<ffi::GenericRowInner>::from_raw(inner_);
+        inner_ = nullptr;
+    }
+}
+
+GenericRow::GenericRow(GenericRow&& other) noexcept
+    : inner_(other.inner_), column_map_(std::move(other.column_map_)) {
+    other.inner_ = nullptr;
+}
+
+GenericRow& GenericRow::operator=(GenericRow&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        inner_ = other.inner_;
+        column_map_ = std::move(other.column_map_);
+        other.inner_ = nullptr;
+    }
+    return *this;
+}
+
+bool GenericRow::Available() const { return inner_ != nullptr; }
+
+void GenericRow::Reset() {
+    if (inner_) inner_->gr_reset();
+}
+
+void GenericRow::SetNull(size_t idx) {
+    if (inner_) inner_->gr_set_null(idx);
+}
+void GenericRow::SetBool(size_t idx, bool v) {
+    if (inner_) inner_->gr_set_bool(idx, v);
+}
+void GenericRow::SetInt32(size_t idx, int32_t v) {
+    if (inner_) inner_->gr_set_i32(idx, v);
+}
+void GenericRow::SetInt64(size_t idx, int64_t v) {
+    if (inner_) inner_->gr_set_i64(idx, v);
+}
+void GenericRow::SetFloat32(size_t idx, float v) {
+    if (inner_) inner_->gr_set_f32(idx, v);
+}
+void GenericRow::SetFloat64(size_t idx, double v) {
+    if (inner_) inner_->gr_set_f64(idx, v);
+}
+
+void GenericRow::SetString(size_t idx, std::string v) {
+    if (inner_) inner_->gr_set_str(idx, v);
+}
+
+void GenericRow::SetBytes(size_t idx, std::vector<uint8_t> v) {
+    if (inner_) inner_->gr_set_bytes(idx, rust::Slice<const uint8_t>(v.data(), v.size()));
+}
+
+void GenericRow::SetDate(size_t idx, fluss::Date d) {
+    if (inner_) inner_->gr_set_date(idx, d.days_since_epoch);
+}
+
+void GenericRow::SetTime(size_t idx, fluss::Time t) {
+    if (inner_) inner_->gr_set_time(idx, t.millis_since_midnight);
+}
+
+void GenericRow::SetTimestampNtz(size_t idx, fluss::Timestamp ts) {
+    if (inner_) inner_->gr_set_ts_ntz(idx, ts.epoch_millis, ts.nano_of_millisecond);
+}
+
+void GenericRow::SetTimestampLtz(size_t idx, fluss::Timestamp ts) {
+    if (inner_) inner_->gr_set_ts_ltz(idx, ts.epoch_millis, ts.nano_of_millisecond);
+}
+
+void GenericRow::SetDecimal(size_t idx, const std::string& value) {
+    if (inner_) inner_->gr_set_decimal_str(idx, value);
+}
+
+// ============================================================================
+// RowView — zero-copy read-only row view for scan results
+// ============================================================================
+
+size_t RowView::FieldCount() const { return inner_ ? inner_->sv_field_count(record_idx_) : 0; }
+
+TypeId RowView::GetType(size_t idx) const {
+    return inner_ ? static_cast<TypeId>(inner_->sv_column_type(idx)) : TypeId::Int;
+}
+
+bool RowView::IsNull(size_t idx) const {
+    return inner_ ? inner_->sv_is_null(record_idx_, idx) : true;
+}
+bool RowView::GetBool(size_t idx) const {
+    return inner_ ? inner_->sv_get_bool(record_idx_, idx) : false;
+}
+int32_t RowView::GetInt32(size_t idx) const {
+    return inner_ ? inner_->sv_get_i32(record_idx_, idx) : 0;
+}
+int64_t RowView::GetInt64(size_t idx) const {
+    return inner_ ? inner_->sv_get_i64(record_idx_, idx) : 0;
+}
+float RowView::GetFloat32(size_t idx) const {
+    return inner_ ? inner_->sv_get_f32(record_idx_, idx) : 0.0f;
+}
+double RowView::GetFloat64(size_t idx) const {
+    return inner_ ? inner_->sv_get_f64(record_idx_, idx) : 0.0;
+}
+
+std::string_view RowView::GetString(size_t idx) const {
+    if (!inner_) return {};
+    auto s = inner_->sv_get_str(record_idx_, idx);
+    return std::string_view(s.data(), s.size());
+}
+
+std::pair<const uint8_t*, size_t> RowView::GetBytes(size_t idx) const {
+    if (!inner_) return {nullptr, 0};
+    auto bytes = inner_->sv_get_bytes(record_idx_, idx);
+    return {bytes.data(), bytes.size()};
+}
+
+Date RowView::GetDate(size_t idx) const {
+    return inner_ ? Date{inner_->sv_get_date_days(record_idx_, idx)} : Date{};
+}
+
+Time RowView::GetTime(size_t idx) const {
+    return inner_ ? Time{inner_->sv_get_time_millis(record_idx_, idx)} : Time{};
+}
+
+Timestamp RowView::GetTimestamp(size_t idx) const {
+    if (!inner_) return {};
+    return Timestamp{inner_->sv_get_ts_millis(record_idx_, idx),
+                     inner_->sv_get_ts_nanos(record_idx_, idx)};
+}
+
+bool RowView::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
+
+std::string RowView::GetDecimalString(size_t idx) const {
+    if (!inner_) return {};
+    return std::string(inner_->sv_get_decimal_str(record_idx_, idx));
+}
+
+// ============================================================================
+// ScanRecords — backed by opaque Rust ScanResultInner
+// ============================================================================
+
+ScanRecords::ScanRecords() noexcept = default;
+
+ScanRecords::~ScanRecords() noexcept { Destroy(); }
+
+void ScanRecords::Destroy() noexcept {
+    if (inner_) {
+        rust::Box<ffi::ScanResultInner>::from_raw(inner_);
+        inner_ = nullptr;
+    }
+}
+
+ScanRecords::ScanRecords(ScanRecords&& other) noexcept
+    : inner_(other.inner_), column_map_(std::move(other.column_map_)) {
+    other.inner_ = nullptr;
+}
+
+ScanRecords& ScanRecords::operator=(ScanRecords&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        inner_ = other.inner_;
+        column_map_ = std::move(other.column_map_);
+        other.inner_ = nullptr;
+    }
+    return *this;
+}
+
+size_t ScanRecords::Size() const { return inner_ ? inner_->sv_record_count() : 0; }
+
+bool ScanRecords::Empty() const { return Size() == 0; }
+
+void ScanRecords::BuildColumnMap() const {
+    if (!inner_) return;
+    auto map = std::make_shared<detail::ColumnMap>();
+    auto count = inner_->sv_column_count();
+    for (size_t i = 0; i < count; ++i) {
+        auto name = inner_->sv_column_name(i);
+        (*map)[std::string(name.data(), name.size())] = {
+            i, static_cast<TypeId>(inner_->sv_column_type(i))};
+    }
+    column_map_ = std::move(map);
+}
+
+const std::shared_ptr<detail::ColumnMap>& ScanRecords::GetColumnMap() const {
+    if (!column_map_) {
+        BuildColumnMap();
+    }
+    return column_map_;
+}
+
+ScanRecord ScanRecords::operator[](size_t idx) const {
+    if (!inner_ || idx >= inner_->sv_record_count())
+        return ScanRecord{0, std::nullopt,           0,
+                          0, ChangeType::AppendOnly, RowView(nullptr, 0, nullptr)};
+    return ScanRecord{inner_->sv_bucket_id(idx),
+                      inner_->sv_has_partition_id(idx)
+                          ? std::optional<int64_t>(inner_->sv_partition_id(idx))
+                          : std::nullopt,
+                      inner_->sv_offset(idx),
+                      inner_->sv_timestamp(idx),
+                      static_cast<ChangeType>(inner_->sv_change_type(idx)),
+                      RowView(inner_, idx, GetColumnMap().get())};
+}
+
+ScanRecord ScanRecords::Iterator::operator*() const { return owner_->operator[](idx_); }
+
+// ============================================================================
+// LookupResult — backed by opaque Rust LookupResultInner
+// ============================================================================
+
+LookupResult::LookupResult() noexcept = default;
+
+LookupResult::~LookupResult() noexcept { Destroy(); }
+
+void LookupResult::Destroy() noexcept {
+    if (inner_) {
+        rust::Box<ffi::LookupResultInner>::from_raw(inner_);
+        inner_ = nullptr;
+    }
+}
+
+LookupResult::LookupResult(LookupResult&& other) noexcept
+    : inner_(other.inner_), column_map_(std::move(other.column_map_)) {
+    other.inner_ = nullptr;
+}
+
+LookupResult& LookupResult::operator=(LookupResult&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        inner_ = other.inner_;
+        column_map_ = std::move(other.column_map_);
+        other.inner_ = nullptr;
+    }
+    return *this;
+}
+
+void LookupResult::BuildColumnMap() const {
+    if (!inner_) return;
+    auto map = std::make_shared<detail::ColumnMap>();
+    auto count = inner_->lv_field_count();
+    for (size_t i = 0; i < count; ++i) {
+        auto name = inner_->lv_column_name(i);
+        (*map)[std::string(name.data(), name.size())] = {
+            i, static_cast<TypeId>(inner_->lv_column_type(i))};
+    }
+    column_map_ = std::move(map);
+}
+
+bool LookupResult::Found() const { return inner_ && inner_->lv_found(); }
+
+size_t LookupResult::FieldCount() const { return inner_ ? inner_->lv_field_count() : 0; }
+
+TypeId LookupResult::GetType(size_t idx) const {
+    return inner_ ? static_cast<TypeId>(inner_->lv_column_type(idx)) : TypeId::Int;
+}
+
+bool LookupResult::IsNull(size_t idx) const { return inner_ ? inner_->lv_is_null(idx) : true; }
+bool LookupResult::GetBool(size_t idx) const { return inner_ ? inner_->lv_get_bool(idx) : false; }
+int32_t LookupResult::GetInt32(size_t idx) const { return inner_ ? inner_->lv_get_i32(idx) : 0; }
+int64_t LookupResult::GetInt64(size_t idx) const { return inner_ ? inner_->lv_get_i64(idx) : 0; }
+float LookupResult::GetFloat32(size_t idx) const { return inner_ ? inner_->lv_get_f32(idx) : 0.0f; }
+double LookupResult::GetFloat64(size_t idx) const { return inner_ ? inner_->lv_get_f64(idx) : 0.0; }
+
+std::string_view LookupResult::GetString(size_t idx) const {
+    if (!inner_) return {};
+    auto s = inner_->lv_get_str(idx);
+    return std::string_view(s.data(), s.size());
+}
+
+std::pair<const uint8_t*, size_t> LookupResult::GetBytes(size_t idx) const {
+    if (!inner_) return {nullptr, 0};
+    auto bytes = inner_->lv_get_bytes(idx);
+    return {bytes.data(), bytes.size()};
+}
+
+Date LookupResult::GetDate(size_t idx) const {
+    return inner_ ? Date{inner_->lv_get_date_days(idx)} : Date{};
+}
+
+Time LookupResult::GetTime(size_t idx) const {
+    return inner_ ? Time{inner_->lv_get_time_millis(idx)} : Time{};
+}
+
+Timestamp LookupResult::GetTimestamp(size_t idx) const {
+    if (!inner_) return {};
+    return Timestamp{inner_->lv_get_ts_millis(idx), inner_->lv_get_ts_nanos(idx)};
+}
+
+bool LookupResult::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
+
+std::string LookupResult::GetDecimalString(size_t idx) const {
+    if (!inner_) return {};
+    return std::string(inner_->lv_get_decimal_str(idx));
+}
+
+// ============================================================================
+// Table
+// ============================================================================
+
 Table::Table() noexcept = default;
 
 Table::Table(ffi::Table* table) noexcept : table_(table) {}
@@ -117,7 +432,51 @@ TableLookup Table::NewLookup() { return TableLookup(table_); }
 
 TableScan Table::NewScan() { return TableScan(table_); }
 
-// TableAppend implementation
+const std::shared_ptr<GenericRow::ColumnMap>& Table::GetColumnMap() const {
+    if (!column_map_ && Available()) {
+        auto info = GetTableInfo();
+        column_map_ = std::make_shared<GenericRow::ColumnMap>();
+        for (size_t i = 0; i < info.schema.columns.size(); ++i) {
+            (*column_map_)[info.schema.columns[i].name] = {i,
+                                                           info.schema.columns[i].data_type.id()};
+        }
+    }
+    return column_map_;
+}
+
+GenericRow Table::NewRow() const {
+    GenericRow row;
+    row.column_map_ = GetColumnMap();
+    return row;
+}
+
+TableInfo Table::GetTableInfo() const {
+    if (!Available()) {
+        return TableInfo{};
+    }
+    auto ffi_info = table_->get_table_info_from_table();
+    return utils::from_ffi_table_info(ffi_info);
+}
+
+TablePath Table::GetTablePath() const {
+    if (!Available()) {
+        return TablePath{};
+    }
+    auto ffi_path = table_->get_table_path();
+    return TablePath{std::string(ffi_path.database_name), std::string(ffi_path.table_name)};
+}
+
+bool Table::HasPrimaryKey() const {
+    if (!Available()) {
+        return false;
+    }
+    return table_->has_primary_key();
+}
+
+// ============================================================================
+// TableAppend
+// ============================================================================
+
 TableAppend::TableAppend(ffi::Table* table) noexcept : table_(table) {}
 
 Result TableAppend::CreateWriter(AppendWriter& out) {
@@ -135,7 +494,10 @@ Result TableAppend::CreateWriter(AppendWriter& out) {
     }
 }
 
-// TableUpsert implementation
+// ============================================================================
+// TableUpsert
+// ============================================================================
+
 TableUpsert::TableUpsert(ffi::Table* table) noexcept : table_(table) {}
 
 TableUpsert& TableUpsert::PartialUpdateByIndex(std::vector<size_t> column_indices) {
@@ -198,7 +560,10 @@ Result TableUpsert::CreateWriter(UpsertWriter& out) {
     }
 }
 
-// TableLookup implementation
+// ============================================================================
+// TableLookup
+// ============================================================================
+
 TableLookup::TableLookup(ffi::Table* table) noexcept : table_(table) {}
 
 Result TableLookup::CreateLookuper(Lookuper& out) {
@@ -216,7 +581,10 @@ Result TableLookup::CreateLookuper(Lookuper& out) {
     }
 }
 
-// TableScan implementation
+// ============================================================================
+// TableScan
+// ============================================================================
+
 TableScan::TableScan(ffi::Table* table) noexcept : table_(table) {}
 
 TableScan& TableScan::ProjectByIndex(std::vector<size_t> column_indices) {
@@ -278,48 +646,10 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
     }
 }
 
-const std::shared_ptr<GenericRow::ColumnMap>& Table::GetColumnMap() const {
-    if (!column_map_ && Available()) {
-        auto info = GetTableInfo();
-        column_map_ = std::make_shared<GenericRow::ColumnMap>();
-        for (size_t i = 0; i < info.schema.columns.size(); ++i) {
-            (*column_map_)[info.schema.columns[i].name] = {i,
-                                                           info.schema.columns[i].data_type.id()};
-        }
-    }
-    return column_map_;
-}
+// ============================================================================
+// WriteResult
+// ============================================================================
 
-GenericRow Table::NewRow() const {
-    GenericRow row;
-    row.column_map_ = GetColumnMap();
-    return row;
-}
-
-TableInfo Table::GetTableInfo() const {
-    if (!Available()) {
-        return TableInfo{};
-    }
-    auto ffi_info = table_->get_table_info_from_table();
-    return utils::from_ffi_table_info(ffi_info);
-}
-
-TablePath Table::GetTablePath() const {
-    if (!Available()) {
-        return TablePath{};
-    }
-    auto ffi_path = table_->get_table_path();
-    return TablePath{std::string(ffi_path.database_name), std::string(ffi_path.table_name)};
-}
-
-bool Table::HasPrimaryKey() const {
-    if (!Available()) {
-        return false;
-    }
-    return table_->has_primary_key();
-}
-
-// WriteResult implementation
 WriteResult::WriteResult() noexcept = default;
 
 WriteResult::WriteResult(ffi::WriteResult* inner) noexcept : inner_(inner) {}
@@ -358,7 +688,10 @@ Result WriteResult::Wait() {
     return utils::from_ffi_result(ffi_result);
 }
 
-// AppendWriter implementation
+// ============================================================================
+// AppendWriter
+// ============================================================================
+
 AppendWriter::AppendWriter() noexcept = default;
 
 AppendWriter::AppendWriter(ffi::AppendWriter* writer) noexcept : writer_(writer) {}
@@ -398,14 +731,54 @@ Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
     }
 
     try {
-        auto ffi_row = utils::to_ffi_generic_row(row);
-        auto rust_box = writer_->append(ffi_row);
+        auto rust_box = writer_->append(*row.inner_);
         out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
         return utils::make_client_error(e.what());
     } catch (const std::exception& e) {
         return utils::make_client_error(e.what());
+    }
+}
+
+Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch) {
+    WriteResult wr;
+    return AppendArrowBatch(batch, wr);
+}
+
+Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
+                                      WriteResult& out) {
+    if (!Available()) {
+        return utils::make_client_error("AppendWriter not available");
+    }
+    if (!batch) {
+        return utils::make_client_error("Arrow RecordBatch is null");
+    }
+
+    // Export via Arrow C Data Interface
+    struct ArrowArray c_array;
+    struct ArrowSchema c_schema;
+    auto status = arrow::ExportRecordBatch(*batch, &c_array, &c_schema);
+    if (!status.ok()) {
+        return utils::make_client_error("Failed to export Arrow batch: " + status.ToString());
+    }
+
+    // Heap-allocate for Rust ownership transfer
+    auto* array_heap = new ArrowArray(std::move(c_array));
+    auto* schema_heap = new ArrowSchema(std::move(c_schema));
+
+    try {
+        // Rust takes ownership of both pointers immediately via Box::from_raw(),
+        // so after this call (success or exception) C++ must NOT free them.
+        auto result_box = writer_->append_arrow_batch(reinterpret_cast<size_t>(array_heap),
+                                                      reinterpret_cast<size_t>(schema_heap));
+        out.Destroy();
+        out.inner_ = result_box.into_raw();
+        return utils::make_ok();
+    } catch (const rust::Error& e) {
+        return utils::make_client_error(std::string(e.what()));
+    } catch (const std::exception& e) {
+        return utils::make_client_error(std::string(e.what()));
     }
 }
 
@@ -418,7 +791,10 @@ Result AppendWriter::Flush() {
     return utils::from_ffi_result(ffi_result);
 }
 
-// UpsertWriter implementation
+// ============================================================================
+// UpsertWriter
+// ============================================================================
+
 UpsertWriter::UpsertWriter() noexcept = default;
 
 UpsertWriter::UpsertWriter(ffi::UpsertWriter* writer) noexcept : writer_(writer) {}
@@ -458,8 +834,7 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
     }
 
     try {
-        auto ffi_row = utils::to_ffi_generic_row(row);
-        auto rust_box = writer_->upsert(ffi_row);
+        auto rust_box = writer_->upsert(*row.inner_);
         out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
@@ -480,8 +855,7 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
     }
 
     try {
-        auto ffi_row = utils::to_ffi_generic_row(row);
-        auto rust_box = writer_->delete_row(ffi_row);
+        auto rust_box = writer_->delete_row(*row.inner_);
         out = WriteResult(rust_box.into_raw());
         return utils::make_ok();
     } catch (const rust::Error& e) {
@@ -500,7 +874,10 @@ Result UpsertWriter::Flush() {
     return utils::from_ffi_result(ffi_result);
 }
 
-// Lookuper implementation
+// ============================================================================
+// Lookuper
+// ============================================================================
+
 Lookuper::Lookuper() noexcept = default;
 
 Lookuper::Lookuper(ffi::Lookuper* lookuper) noexcept : lookuper_(lookuper) {}
@@ -529,34 +906,26 @@ Lookuper& Lookuper::operator=(Lookuper&& other) noexcept {
 
 bool Lookuper::Available() const { return lookuper_ != nullptr; }
 
-Result Lookuper::Lookup(const GenericRow& pk_row, bool& found, GenericRow& out) {
+Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) {
     if (!Available()) {
         return utils::make_client_error("Lookuper not available");
     }
 
-    try {
-        auto ffi_row = utils::to_ffi_generic_row(pk_row);
-        auto ffi_result = lookuper_->lookup(ffi_row);
-        auto result = utils::from_ffi_result(ffi_result.result);
-        if (!result.Ok()) {
-            found = false;
-            return result;
-        }
-        found = ffi_result.found;
-        if (found) {
-            out = utils::from_ffi_generic_row(ffi_result.row);
-        }
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        found = false;
-        return utils::make_client_error(e.what());
-    } catch (const std::exception& e) {
-        found = false;
-        return utils::make_client_error(e.what());
+    auto result_box = lookuper_->lookup(*pk_row.inner_);
+    if (result_box->lv_has_error()) {
+        return utils::make_error(result_box->lv_error_code(),
+                                 std::string(result_box->lv_error_message()));
     }
+
+    out.Destroy();
+    out.inner_ = result_box.into_raw();
+    return utils::make_ok();
 }
 
-// LogScanner implementation
+// ============================================================================
+// LogScanner
+// ============================================================================
+
 LogScanner::LogScanner() noexcept = default;
 
 LogScanner::LogScanner(ffi::LogScanner* scanner) noexcept : scanner_(scanner) {}
@@ -663,13 +1032,14 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
         return utils::make_client_error("LogScanner not available");
     }
 
-    auto ffi_result = scanner_->poll(timeout_ms);
-    auto result = utils::from_ffi_result(ffi_result.result);
-    if (!result.Ok()) {
-        return result;
+    auto result_box = scanner_->poll(timeout_ms);
+    if (result_box->sv_has_error()) {
+        return utils::make_error(result_box->sv_error_code(),
+                                 std::string(result_box->sv_error_message()));
     }
 
-    out = utils::from_ffi_scan_records(ffi_result.scan_records);
+    out.Destroy();
+    out.inner_ = result_box.into_raw();
     return utils::make_ok();
 }
 
