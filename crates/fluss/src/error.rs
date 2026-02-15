@@ -112,6 +112,15 @@ pub enum Error {
 /// These create `FlussAPIError` with the correct protocol error code,
 /// consistent with Java where e.g. `InvalidTableException` always carries code 15.
 impl Error {
+    pub fn table_not_exist(message: impl Into<String>) -> Self {
+        Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::TableNotExist.code(),
+                message: message.into(),
+            },
+        }
+    }
+
     pub fn invalid_table(message: impl Into<String>) -> Self {
         Error::FlussAPIError {
             api_error: ApiError {

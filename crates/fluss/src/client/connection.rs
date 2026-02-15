@@ -24,7 +24,7 @@ use crate::rpc::RpcClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{Error, FlussError, Result};
 use crate::metadata::TablePath;
 
 pub struct FlussConnection {
@@ -88,7 +88,18 @@ impl FlussConnection {
 
     pub async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>> {
         self.metadata.update_table_metadata(table_path).await?;
-        let table_info = self.metadata.get_cluster().get_table(table_path)?.clone();
+        let table_info = self
+            .metadata
+            .get_cluster()
+            .get_table(table_path)
+            .map_err(|e| {
+                if e.api_error() == Some(FlussError::InvalidTableException) {
+                    Error::table_not_exist(format!("Table not found: {table_path}"))
+                } else {
+                    e
+                }
+            })?
+            .clone();
         Ok(FlussTable::new(self, self.metadata.clone(), table_info))
     }
 }
