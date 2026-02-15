@@ -105,6 +105,6 @@ To start reading from the latest offset, resolve the current offset via `ListOff
 
 ```cpp
 std::unordered_map<int32_t, int64_t> offsets;
-admin.ListOffsets(table_path, {0}, fluss::OffsetQuery::Latest(), offsets);
+admin.ListOffsets(table_path, {0}, fluss::OffsetSpec::Latest(), offsets);
 scanner.Subscribe(0, offsets[0]);
 ```

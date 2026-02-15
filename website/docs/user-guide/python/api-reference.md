@@ -43,8 +43,8 @@ Supports `with` statement (context manager).
 | `await get_table_info(table_path) -> TableInfo`                                                                       | Get table metadata                    |
 | `await list_tables(database_name) -> list[str]`                                                                       | List tables in a database             |
 | `await table_exists(table_path) -> bool`                                                                              | Check if a table exists               |
-| `await list_offsets(table_path, bucket_ids, offset_type, timestamp=None) -> dict[int, int]`                           | Get offsets for buckets               |
-| `await list_partition_offsets(table_path, partition_name, bucket_ids, offset_type, timestamp=None) -> dict[int, int]` | Get offsets for a partition's buckets |
+| `await list_offsets(table_path, bucket_ids, offset_spec) -> dict[int, int]`                           | Get offsets for buckets               |
+| `await list_partition_offsets(table_path, partition_name, bucket_ids, offset_spec) -> dict[int, int]` | Get offsets for a partition's buckets |
 | `await create_partition(table_path, partition_spec, ignore_if_exists=False)`                                          | Create a partition                    |
 | `await drop_partition(table_path, partition_spec, ignore_if_not_exists=False)`                                        | Drop a partition                      |
 | `await list_partition_infos(table_path) -> list[PartitionInfo]`                                                       | List partitions                       |
@@ -264,14 +264,19 @@ Raised for all Fluss-specific errors (connection failures, table not found, sche
 | Constant                     | Value         | Description                                         |
 |------------------------------|---------------|-----------------------------------------------------|
 | `fluss.EARLIEST_OFFSET`      | `-2`          | Start reading from earliest available offset        |
-| `fluss.OffsetType.EARLIEST`  | `"earliest"`  | For `list_offsets()`                                |
-| `fluss.OffsetType.LATEST`    | `"latest"`    | For `list_offsets()`                                |
-| `fluss.OffsetType.TIMESTAMP` | `"timestamp"` | For `list_offsets()` with timestamp                 |
+
+## `OffsetSpec`
+
+| Method                      | Description                                      |
+|-----------------------------|--------------------------------------------------|
+| `OffsetSpec.earliest()`     | Earliest available offset                        |
+| `OffsetSpec.latest()`       | Latest offset                                    |
+| `OffsetSpec.timestamp(ts)`  | Offset at or after the given timestamp (millis)  |
 
 To start reading from the latest offset (only new records), resolve the current offset via `list_offsets` before subscribing:
 
 ```python
-offsets = await admin.list_offsets(table_path, [0], fluss.OffsetType.LATEST)
+offsets = await admin.list_offsets(table_path, [0], fluss.OffsetSpec.latest())
 scanner.subscribe(bucket_id=0, start_offset=offsets[0])
 ```
 

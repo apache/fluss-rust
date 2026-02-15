@@ -30,12 +30,12 @@ import fluss
 async def main():
     # Create connection configuration
     config_spec = {
-        "bootstrap_servers": "127.0.0.1:9123",
+        "bootstrap.servers": "127.0.0.1:9123",
         # Add other configuration options as needed
-        "writer_request_max_size": "10485760",  # 10 MB
-        "writer_acks": "all",  # Wait for all replicas to acknowledge
-        "writer_retries": "3",  # Retry up to 3 times on failure
-        "writer_batch_size": "1000",  # Batch size for writes
+        "writer.request-max-size": "10485760",  # 10 MB
+        "writer.acks": "all",  # Wait for all replicas to acknowledge
+        "writer.retries": "3",  # Retry up to 3 times on failure
+        "writer.batch-size": "1000",  # Batch size for writes
     }
     config = fluss.Config(config_spec)
 
