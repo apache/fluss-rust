@@ -21,7 +21,7 @@ Mirrors the Rust integration tests in crates/fluss/tests/integration/kv_table.rs
 """
 
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from datetime import time as dt_time
 from decimal import Decimal
 
@@ -404,6 +404,10 @@ async def test_all_supported_datatypes(connection, admin):
     assert result["col_decimal"] == Decimal("123.45")
     assert result["col_date"] == date(2026, 1, 23)
     assert result["col_time"] == dt_time(10, 13, 47, 123000)
+    assert result["col_timestamp_ntz"] == datetime(2026, 1, 23, 10, 13, 47, 123000)
+    assert result["col_timestamp_ltz"] == datetime(
+        2026, 1, 23, 10, 13, 47, 123000, tzinfo=timezone.utc
+    )
     assert result["col_bytes"] == b"binary data"
 
     # Test with null values for all nullable columns

@@ -130,13 +130,13 @@ async def test_list_offsets(connection, admin):
 
     # Earliest offset should be 0 for empty table
     earliest = await admin.list_offsets(
-        table_path, bucket_ids=[0], offset_type=fluss.OffsetType.EARLIEST
+        table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.earliest()
     )
     assert earliest[0] == 0
 
     # Latest offset should be 0 for empty table
     latest = await admin.list_offsets(
-        table_path, bucket_ids=[0], offset_type=fluss.OffsetType.LATEST
+        table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.latest()
     )
     assert latest[0] == 0
 
@@ -161,13 +161,13 @@ async def test_list_offsets(connection, admin):
 
     # Latest offset should be 3 after appending 3 records
     latest_after = await admin.list_offsets(
-        table_path, bucket_ids=[0], offset_type=fluss.OffsetType.LATEST
+        table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.latest()
     )
     assert latest_after[0] == 3
 
     # Earliest offset should still be 0
     earliest_after = await admin.list_offsets(
-        table_path, bucket_ids=[0], offset_type=fluss.OffsetType.EARLIEST
+        table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.earliest()
     )
     assert earliest_after[0] == 0
 
@@ -175,8 +175,7 @@ async def test_list_offsets(connection, admin):
     ts_before = await admin.list_offsets(
         table_path,
         bucket_ids=[0],
-        offset_type=fluss.OffsetType.TIMESTAMP,
-        timestamp=before_append_ms,
+        offset_spec=fluss.OffsetSpec.timestamp(before_append_ms),
     )
     assert ts_before[0] == 0
 
@@ -184,8 +183,7 @@ async def test_list_offsets(connection, admin):
     ts_after = await admin.list_offsets(
         table_path,
         bucket_ids=[0],
-        offset_type=fluss.OffsetType.TIMESTAMP,
-        timestamp=after_append_ms,
+        offset_spec=fluss.OffsetSpec.timestamp(after_append_ms),
     )
     assert ts_after[0] == 3
 
@@ -460,7 +458,7 @@ async def test_partitioned_table_append_scan(connection, admin):
         table_path,
         partition_name="US",
         bucket_ids=[0],
-        offset_type=fluss.OffsetType.LATEST,
+        offset_spec=fluss.OffsetSpec.latest(),
     )
     assert us_offsets[0] == 4, "US partition should have 4 records"
 
@@ -468,7 +466,7 @@ async def test_partitioned_table_append_scan(connection, admin):
         table_path,
         partition_name="EU",
         bucket_ids=[0],
-        offset_type=fluss.OffsetType.LATEST,
+        offset_spec=fluss.OffsetSpec.latest(),
     )
     assert eu_offsets[0] == 4, "EU partition should have 4 records"
 
@@ -527,6 +525,85 @@ async def test_partitioned_table_append_scan(connection, admin):
         key=lambda x: x[0],
     )
     assert batch_collected == expected
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_write_arrow(connection, admin):
+    """Test writing a full PyArrow Table via write_arrow()."""
+    table_path = fluss.TablePath("fluss", "py_test_write_arrow")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("name", pa.string())])
+    )
+    table_descriptor = fluss.TableDescriptor(schema)
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+
+    pa_schema = pa.schema([pa.field("id", pa.int32()), pa.field("name", pa.string())])
+    arrow_table = pa.table(
+        {
+            "id": pa.array([1, 2, 3, 4, 5], type=pa.int32()),
+            "name": pa.array(["alice", "bob", "charlie", "dave", "eve"]),
+        },
+        schema=pa_schema,
+    )
+    writer.write_arrow(arrow_table)
+    await writer.flush()
+
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner = await table.new_scan().create_record_batch_log_scanner()
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+    result = scanner.to_arrow()
+    assert result.num_rows == 5
+
+    ids = sorted(result.column("id").to_pylist())
+    names = [
+        n
+        for _, n in sorted(
+            zip(result.column("id").to_pylist(), result.column("name").to_pylist())
+        )
+    ]
+    assert ids == [1, 2, 3, 4, 5]
+    assert names == ["alice", "bob", "charlie", "dave", "eve"]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_write_pandas(connection, admin):
+    """Test writing a Pandas DataFrame via write_pandas()."""
+    import pandas as pd
+
+    table_path = fluss.TablePath("fluss", "py_test_write_pandas")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("name", pa.string())])
+    )
+    table_descriptor = fluss.TableDescriptor(schema)
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+
+    df = pd.DataFrame({"id": [10, 20, 30], "name": ["x", "y", "z"]})
+    writer.write_pandas(df)
+    await writer.flush()
+
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner = await table.new_scan().create_record_batch_log_scanner()
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+    result = scanner.to_pandas()
+    assert len(result) == 3
+
+    result_sorted = result.sort_values("id").reset_index(drop=True)
+    assert result_sorted["id"].tolist() == [10, 20, 30]
+    assert result_sorted["name"].tolist() == ["x", "y", "z"]
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 

@@ -139,10 +139,11 @@ jobs:
           RUST_BACKTRACE: full
 
   python-integration-test:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.09", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
