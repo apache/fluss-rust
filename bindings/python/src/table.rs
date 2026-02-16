@@ -783,6 +783,7 @@ fn process_sequence(
     target_indices: &[usize],
     fields: &[fcore::metadata::DataField],
     datums: &mut [fcore::row::Datum<'static>],
+    sparse: bool,
 ) -> PyResult<()> {
     if seq.len()? != target_indices.len() {
         return Err(FlussError::new_err(format!(
@@ -794,7 +795,8 @@ fn process_sequence(
     for (i, &col_idx) in target_indices.iter().enumerate() {
         let field = &fields[col_idx];
         let value = seq.get_item(i)?;
-        datums[col_idx] = python_value_to_datum(&value, field.data_type())
+        let dest = if sparse { col_idx } else { i };
+        datums[dest] = python_value_to_datum(&value, field.data_type())
             .map_err(|e| FlussError::new_err(format!("Field '{}': {}", field.name(), e)))?;
     }
     Ok(())
@@ -807,11 +809,36 @@ pub fn python_to_sparse_generic_row(
     table_info: &fcore::metadata::TableInfo,
     target_indices: &[usize],
 ) -> PyResult<fcore::row::GenericRow<'static>> {
+    python_to_generic_row_inner(row, table_info, target_indices, true)
+}
+
+/// Build a dense GenericRow with exactly `target_indices.len()` fields,
+/// containing only the target column values in order.
+pub fn python_to_dense_generic_row(
+    row: &Bound<PyAny>,
+    table_info: &fcore::metadata::TableInfo,
+    target_indices: &[usize],
+) -> PyResult<fcore::row::GenericRow<'static>> {
+    python_to_generic_row_inner(row, table_info, target_indices, false)
+}
+
+/// Build a GenericRow from user input. When `sparse` is true, the row is full width and padded with nulls
+fn python_to_generic_row_inner(
+    row: &Bound<PyAny>,
+    table_info: &fcore::metadata::TableInfo,
+    target_indices: &[usize],
+    sparse: bool,
+) -> PyResult<fcore::row::GenericRow<'static>> {
     let row_type = table_info.row_type();
     let fields = row_type.fields();
     let target_names: Vec<&str> = target_indices.iter().map(|&i| fields[i].name()).collect();
 
-    let mut datums: Vec<fcore::row::Datum<'static>> = vec![fcore::row::Datum::Null; fields.len()];
+    let num_fields = if sparse {
+        fields.len()
+    } else {
+        target_indices.len()
+    };
+    let mut datums: Vec<fcore::row::Datum<'static>> = vec![fcore::row::Datum::Null; num_fields];
 
     let row_input: RowInput = row.extract().map_err(|_| {
         let type_name = row
@@ -849,19 +876,30 @@ pub fn python_to_sparse_generic_row(
                 let value = dict
                     .get_item(name)?
                     .ok_or_else(|| FlussError::new_err(format!("Missing field: {name}")))?;
-                datums[col_idx] = python_value_to_datum(&value, field.data_type())
+                let dest = if sparse { col_idx } else { i };
+                datums[dest] = python_value_to_datum(&value, field.data_type())
                     .map_err(|e| FlussError::new_err(format!("Field '{name}': {e}")))?;
             }
         }
 
         RowInput::List(list) => {
-            let seq = list.as_sequence();
-            process_sequence(seq, target_indices, fields, &mut datums)?;
+            process_sequence(
+                list.as_sequence(),
+                target_indices,
+                fields,
+                &mut datums,
+                sparse,
+            )?;
         }
 
         RowInput::Tuple(tuple) => {
-            let seq = tuple.as_sequence();
-            process_sequence(seq, target_indices, fields, &mut datums)?;
+            process_sequence(
+                tuple.as_sequence(),
+                target_indices,
+                fields,
+                &mut datums,
+                sparse,
+            )?;
         }
     }
 
