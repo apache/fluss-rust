@@ -22,12 +22,15 @@ cmake ..
 cmake --build .
 ```
 
+By default, CMake now uses `Release` when `CMAKE_BUILD_TYPE` is not specified.
+
 **With Bazel:**
 
 ```bash
 cd bindings/cpp
 bazel build //...
 ```
+`ci.sh` defaults to optimized builds via `-c opt` (override with `BAZEL_BUILD_FLAGS` if needed).
 See [ci.sh](ci.sh) for the CI build sequence.
 
 
