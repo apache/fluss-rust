@@ -345,7 +345,7 @@ impl FlussAdmin {
             admin
                 .drop_table(&core_table_path, ignore_if_not_exists)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to drop table: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(py.None()))
         })
@@ -378,7 +378,7 @@ impl FlussAdmin {
             let offsets = admin
                 .list_offsets(&core_table_path, &bucket_ids, offset_spec)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to list offsets: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| {
                 let dict = pyo3::types::PyDict::new(py);
@@ -420,9 +420,7 @@ impl FlussAdmin {
             let offsets = admin
                 .list_partition_offsets(&core_table_path, &partition_name, &bucket_ids, offset_spec)
                 .await
-                .map_err(|e| {
-                    FlussError::new_err(format!("Failed to list partition offsets: {e}"))
-                })?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| {
                 let dict = pyo3::types::PyDict::new(py);
@@ -459,7 +457,7 @@ impl FlussAdmin {
             admin
                 .create_partition(&core_table_path, &core_partition_spec, ignore_if_exists)
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to create partition: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| Ok(py.None()))
         })
@@ -490,7 +488,7 @@ impl FlussAdmin {
             let partition_infos = admin
                 .list_partition_infos_with_spec(&core_table_path, core_partition_spec.as_ref())
                 .await
-                .map_err(|e| FlussError::new_err(format!("Failed to list partitions: {e}")))?;
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             Python::attach(|py| {
                 let py_list = pyo3::types::PyList::empty(py);
