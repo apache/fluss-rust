@@ -24,8 +24,18 @@ const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
+const DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ: bool = true;
+const DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY: usize = 4;
 
 const DEFAULT_ACKS: &str = "all";
+
+fn default_scanner_remote_log_streaming_read() -> bool {
+    DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ
+}
+
+fn default_scanner_remote_log_streaming_read_concurrency() -> usize {
+    DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY
+}
 
 #[derive(Parser, Debug, Clone, Deserialize, Serialize)]
 #[command(author, version, about, long_about = None)]
@@ -54,6 +64,19 @@ pub struct Config {
     /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
     #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
     pub remote_file_download_thread_num: usize,
+
+    /// Whether to use opendal streaming reader path for remote log downloads.
+    #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ)]
+    #[serde(default = "default_scanner_remote_log_streaming_read")]
+    pub scanner_remote_log_streaming_read: bool,
+
+    /// Intra-file streaming read concurrency for each remote segment download.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY
+    )]
+    #[serde(default = "default_scanner_remote_log_streaming_read_concurrency")]
+    pub scanner_remote_log_streaming_read_concurrency: usize,
 }
 
 impl Default for Config {
@@ -66,6 +89,9 @@ impl Default for Config {
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
+            scanner_remote_log_streaming_read: DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ,
+            scanner_remote_log_streaming_read_concurrency:
+                DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY,
         }
     }
 }

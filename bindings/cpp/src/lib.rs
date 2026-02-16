@@ -485,17 +485,16 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
 
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
-    let config = fluss::config::Config {
-        bootstrap_servers: config.bootstrap_servers.to_string(),
-        writer_request_max_size: config.writer_request_max_size,
-        writer_acks: config.writer_acks.to_string(),
-        writer_retries: config.writer_retries,
-        writer_batch_size: config.writer_batch_size,
-        scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
-        remote_file_download_thread_num: config.remote_file_download_thread_num,
-    };
+    let mut config_core = fluss::config::Config::default();
+    config_core.bootstrap_servers = config.bootstrap_servers.to_string();
+    config_core.writer_request_max_size = config.writer_request_max_size;
+    config_core.writer_acks = config.writer_acks.to_string();
+    config_core.writer_retries = config.writer_retries;
+    config_core.writer_batch_size = config.writer_batch_size;
+    config_core.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
+    config_core.remote_file_download_thread_num = config.remote_file_download_thread_num;
 
-    let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config).await });
+    let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });
 
     match conn {
         Ok(c) => {
