@@ -68,8 +68,8 @@ Complete API reference for the Fluss C++ client.
 
 | Method                                                                                                                                                                                                  | Description                             |
 |---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------|
-| `ListOffsets(const TablePath& path, const std::vector<int32_t>& bucket_ids, const OffsetQuery& query, std::unordered_map<int32_t, int64_t>& out) -> Result`                                             | Get offsets for buckets                 |
-| `ListPartitionOffsets(const TablePath& path, const std::string& partition_name, const std::vector<int32_t>& bucket_ids, const OffsetQuery& query, std::unordered_map<int32_t, int64_t>& out) -> Result` | Get offsets for a partition's buckets   |
+| `ListOffsets(const TablePath& path, const std::vector<int32_t>& bucket_ids, const OffsetSpec& query, std::unordered_map<int32_t, int64_t>& out) -> Result`                                             | Get offsets for buckets                 |
+| `ListPartitionOffsets(const TablePath& path, const std::string& partition_name, const std::vector<int32_t>& bucket_ids, const OffsetSpec& query, std::unordered_map<int32_t, int64_t>& out) -> Result` | Get offsets for a partition's buckets   |
 
 ### Lake Operations
 
@@ -423,13 +423,13 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 | `bucket_id`    | `int32_t` | Bucket ID    |
 | `offset`       | `int64_t` | Offset value |
 
-## `OffsetQuery`
+## `OffsetSpec`
 
 | Method                                             | Description                             |
 |----------------------------------------------------|-----------------------------------------|
-| `OffsetQuery::Earliest()`                          | Query for the earliest available offset |
-| `OffsetQuery::Latest()`                            | Query for the latest offset             |
-| `OffsetQuery::FromTimestamp(int64_t timestamp_ms)` | Query offset at a specific timestamp    |
+| `OffsetSpec::Earliest()`                          | Query for the earliest available offset |
+| `OffsetSpec::Latest()`                            | Query for the latest offset             |
+| `OffsetSpec::Timestamp(int64_t timestamp_ms)`     | Query offset at a specific timestamp    |
 
 ## Constants
 
@@ -441,7 +441,7 @@ To start reading from the latest offset (only new records), resolve the current 
 
 ```cpp
 std::unordered_map<int32_t, int64_t> offsets;
-admin.ListOffsets(table_path, {0}, fluss::OffsetQuery::Latest(), offsets);
+admin.ListOffsets(table_path, {0}, fluss::OffsetSpec::Latest(), offsets);
 scanner.Subscribe(0, offsets[0]);
 ```
 

@@ -106,7 +106,7 @@ To only consume new records (skip existing data), first resolve the current late
 
 ```python
 admin = await conn.get_admin()
-offsets = await admin.list_offsets(table_path, [0], fluss.OffsetType.LATEST)
+offsets = await admin.list_offsets(table_path, [0], fluss.OffsetSpec.latest())
 latest = offsets[0]
 
 scanner = await table.new_scan().create_record_batch_log_scanner()

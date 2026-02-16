@@ -90,11 +90,11 @@ async def main():
     # Demo: List offsets
     print("\n--- Testing list_offsets() ---")
     try:
-        # Query latest offsets using OffsetType constant (recommended for type safety)
+        # Query latest offsets using OffsetSpec factory method
         offsets = await admin.list_offsets(
             table_path,
             bucket_ids=[0],
-            offset_type=fluss.OffsetType.LATEST
+            offset_spec=fluss.OffsetSpec.latest()
         )
         print(f"Latest offsets for table (before writes): {offsets}")
     except Exception as e:
@@ -248,11 +248,10 @@ async def main():
         # Demo: Check offsets after writes
         print("\n--- Checking offsets after writes ---")
         try:
-            # Query with string constant (alternative API - both strings and constants are supported)
             offsets = await admin.list_offsets(
                 table_path,
                 bucket_ids=[0],
-                offset_type="latest"  # Can also use "earliest" or "timestamp"
+                offset_spec=fluss.OffsetSpec.latest()
             )
             print(f"Latest offsets after writing 7 records: {offsets}")
         except Exception as e:
@@ -734,6 +733,13 @@ async def main():
         await partitioned_writer.flush()
         print("\nWrote 4 records (2 to US, 2 to EU)")
 
+        # Demo: list_partition_infos with partial spec filter
+        print("\n--- Testing list_partition_infos with spec ---")
+        us_partitions = await admin.list_partition_infos(
+            partitioned_table_path, partition_spec={"region": "US"}
+        )
+        print(f"Filtered partitions (region=US): {us_partitions}")
+
         # Demo: list_partition_offsets
         print("\n--- Testing list_partition_offsets ---")
 
@@ -743,7 +749,7 @@ async def main():
             partitioned_table_path,
             partition_name="US",
             bucket_ids=[0],
-            offset_type="latest"
+            offset_spec=fluss.OffsetSpec.latest()
         )
         print(f"US partition latest offsets: {us_offsets}")
 
@@ -752,7 +758,7 @@ async def main():
             partitioned_table_path,
             partition_name="EU",
             bucket_ids=[0],
-            offset_type="latest"
+            offset_spec=fluss.OffsetSpec.latest()
         )
         print(f"EU partition latest offsets: {eu_offsets}")
 

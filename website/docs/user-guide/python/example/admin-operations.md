@@ -56,13 +56,13 @@ await admin.drop_table(table_path, ignore_if_not_exists=True)
 
 ```python
 # Latest offsets for buckets
-offsets = await admin.list_offsets(table_path, bucket_ids=[0, 1], offset_type="latest")
+offsets = await admin.list_offsets(table_path, bucket_ids=[0, 1], offset_spec=fluss.OffsetSpec.latest())
 
 # By timestamp
-offsets = await admin.list_offsets(table_path, bucket_ids=[0], offset_type="timestamp", timestamp=1704067200000)
+offsets = await admin.list_offsets(table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.timestamp(1704067200000))
 
 # Per-partition offsets
-offsets = await admin.list_partition_offsets(table_path, partition_name="US", bucket_ids=[0], offset_type="latest")
+offsets = await admin.list_partition_offsets(table_path, partition_name="US", bucket_ids=[0], offset_spec=fluss.OffsetSpec.latest())
 ```
 
 ## Lake Snapshot

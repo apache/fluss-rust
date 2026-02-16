@@ -103,7 +103,7 @@ admin.ListPartitionInfos(table_path, partition_infos);
 std::vector<int32_t> bucket_ids = {0, 1, 2};
 std::unordered_map<int32_t, int64_t> offsets;
 admin.ListPartitionOffsets(table_path, "2024-01-15$US",
-                           bucket_ids, fluss::OffsetQuery::Latest(), offsets);
+                           bucket_ids, fluss::OffsetSpec::Latest(), offsets);
 ```
 
 ## Partitioned Primary Key Tables

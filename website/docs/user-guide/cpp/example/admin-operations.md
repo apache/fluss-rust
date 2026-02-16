@@ -120,23 +120,23 @@ std::vector<int32_t> bucket_ids = {0, 1, 2};
 // Query earliest offsets
 std::unordered_map<int32_t, int64_t> earliest_offsets;
 admin.ListOffsets(table_path, bucket_ids,
-                  fluss::OffsetQuery::Earliest(), earliest_offsets);
+                  fluss::OffsetSpec::Earliest(), earliest_offsets);
 
 // Query latest offsets
 std::unordered_map<int32_t, int64_t> latest_offsets;
 admin.ListOffsets(table_path, bucket_ids,
-                  fluss::OffsetQuery::Latest(), latest_offsets);
+                  fluss::OffsetSpec::Latest(), latest_offsets);
 
 // Query offsets for a specific timestamp
 std::unordered_map<int32_t, int64_t> timestamp_offsets;
 admin.ListOffsets(table_path, bucket_ids,
-                  fluss::OffsetQuery::FromTimestamp(timestamp_ms),
+                  fluss::OffsetSpec::Timestamp(timestamp_ms),
                   timestamp_offsets);
 
 // Query partition offsets
 std::unordered_map<int32_t, int64_t> partition_offsets;
 admin.ListPartitionOffsets(table_path, "partition_name",
-                           bucket_ids, fluss::OffsetQuery::Latest(),
+                           bucket_ids, fluss::OffsetSpec::Latest(),
                            partition_offsets);
 ```
 
