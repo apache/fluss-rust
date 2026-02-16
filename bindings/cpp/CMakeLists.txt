@@ -32,7 +32,7 @@ find_package(Threads REQUIRED)
 find_package(Arrow REQUIRED)
 
 if (NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Debug)
+    set(CMAKE_BUILD_TYPE Release)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)

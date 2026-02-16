@@ -19,6 +19,7 @@
 set -xe 
 
 DIR="$(cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd)"
+BAZEL_BUILD_FLAGS="${BAZEL_BUILD_FLAGS:--c opt}"
 
 # Set Bazel output base to bazel-build directory
 # This ensures all Bazel outputs are in bazel-build/.bazel-output-base
@@ -33,16 +34,16 @@ bazel() {
 }
 
 compile() {
-    bazel build //:fluss_cpp
+    bazel build ${BAZEL_BUILD_FLAGS} //:fluss_cpp
 }
 
 build_example() {
-    bazel build //:fluss_cpp_example
+    bazel build ${BAZEL_BUILD_FLAGS} //:fluss_cpp_example
 }
 
 run_example() {
     build_example
-    bazel run //:fluss_cpp_example
+    bazel run ${BAZEL_BUILD_FLAGS} //:fluss_cpp_example
 }
 
 clean() {
