@@ -390,6 +390,12 @@ impl CharType {
     }
 }
 
+impl Default for CharType {
+    fn default() -> Self {
+        Self::new(1)
+    }
+}
+
 impl Display for CharType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "CHAR({})", self.length)?;
@@ -503,6 +509,13 @@ impl DecimalType {
     }
 }
 
+impl Default for DecimalType {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_PRECISION, Self::DEFAULT_SCALE)
+            .expect("Invalid default decimal precision or scale")
+    }
+}
+
 impl Display for DecimalType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DECIMAL({}, {})", self.precision, self.scale)?;
@@ -548,13 +561,13 @@ impl Display for DateType {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TimeType {
     nullable: bool,
     precision: u32,
 }
 
-impl TimeType {
+impl Default for TimeType {
     fn default() -> Self {
         Self::new(Self::DEFAULT_PRECISION).expect("Invalid default time precision")
     }
@@ -795,6 +808,12 @@ impl BinaryType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.length)
+    }
+}
+
+impl Default for BinaryType {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_LENGTH)
     }
 }
 
