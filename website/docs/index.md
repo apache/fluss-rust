@@ -8,7 +8,7 @@ title: Introduction
 
 [Apache Fluss](https://fluss.apache.org/) (incubating) is a streaming storage system built for real-time analytics, serving as the real-time data layer for Lakehouse architectures.
 
-This documentation covers the **Fluss client libraries** for Rust, Python, and C++, which are developed in the [fluss-rust](https://github.com/apache/fluss-rust) repository. These clients allow you to:
+This documentation covers the **Fluss client libraries** for Rust, Python, C++, and [Java](https://fluss.apache.org/docs/0.9/apis/java-client/), which are developed in the [fluss-rust](https://github.com/apache/fluss-rust) repository (Java client is part of the [main Fluss project](https://github.com/apache/fluss)). These clients allow you to:
 
 - **Create and manage** databases, tables, and partitions
 - **Write** data to log tables (append-only) and primary key tables (upsert/delete)
@@ -40,6 +40,6 @@ You need a running Fluss cluster to use any of the client libraries. See the [De
 
 ## How This Guide Is Organised
 
-The **User Guide** walks through installation, configuration, and working with each table type across all three languages. Code examples are shown side by side under **Rust**, **Python**, and **C++** headings.
+The **Clients** section walks through installation, configuration, and working with each table type across all three languages. Code examples are shown side by side under **Rust**, **Python**, and **C++** headings.
 
-The **Developer Guide** covers building from source, running tests, and the release process for contributors.
+The **Contributing** guide covers building from source, running tests, and the release process for contributors.

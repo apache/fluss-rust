@@ -86,7 +86,7 @@ Unzip the source release archive and verify that:
 3. All dependencies have been checked for their license and the license is ASL 2.0 compatible ([ASF third-party license policy](http://www.apache.org/legal/resolved.html#category-x)).
 4. Compatible non-ASL 2.0 licenses are documented (e.g. in NOTICE or in dependency audit files such as `DEPENDENCIES*.tsv`).
 
-The project uses [cargo-deny](https://embarkstudios.github.io/cargo-deny/) for license checks; see [Creating a Fluss Rust Client Release](creating-a-release.md) for how the dependency list is generated before a release.
+The project uses [cargo-deny](https://embarkstudios.github.io/cargo-deny/) for license checks; see [Creating a Fluss Rust Client Release](create-release.md) for how the dependency list is generated before a release.
 
 ## Testing features
 
@@ -94,9 +94,9 @@ For any user-facing feature included in a release, we aim to ensure it is functi
 
 **Per-language verification:** For **Rust** and **C++**, build from the source release and write your own test cases to verify. For **Python**, the RC is published to **TestPyPI**; install the client from TestPyPI and write your own test cases (e.g. connect, create table, read/write) to verify. Use the README in each component as the entry point:
 
-- **Rust client:** You can depend on the RC via its git tag (e.g. in your `Cargo.toml`: `fluss-rs = { git = "https://github.com/apache/fluss-rust", tag = "v${RELEASE_VERSION}-rc${RC_NUM}" }`) and build your own test project to verify. Alternatively, build from the source release; see [crates/fluss/README.md](../crates/fluss/README.md).
-- **Python bindings:** See [bindings/python/README.md](../bindings/python/README.md) for how to add the Python client (for an RC, install from **TestPyPI**: `pip install -i https://test.pypi.org/simple/ pyfluss==${RELEASE_VERSION}`); then write test cases to verify.
-- **C++ bindings:** See [bindings/cpp/README.md](../bindings/cpp/README.md) for how to build and link the C++ client; then write test cases to verify.
+- **Rust client:** You can depend on the RC via its git tag (e.g. in your `Cargo.toml`: `fluss-rs = { git = "https://github.com/apache/fluss-rust", tag = "v${RELEASE_VERSION}-rc${RC_NUM}" }`) and build your own test project to verify. Alternatively, build from the source release; see [Rust Installation Guide](../user-guide/rust/installation.md).
+- **Python bindings:** See [Python Installation Guide](../user-guide/python/installation.md) for how to add the Python client (for an RC, install from **TestPyPI**: `pip install -i https://test.pypi.org/simple/ pyfluss==${RELEASE_VERSION}`); then write test cases to verify.
+- **C++ bindings:** See [C++ Installation Guide](../user-guide/cpp/installation.md) for how to build and link the C++ client; then write test cases to verify.
 
 ## Incubator release checklist
 
