@@ -286,15 +286,16 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `TableDescriptor::Builder`
 
-| Method                                                                      |  Description               |
-|-----------------------------------------------------------------------------|----------------------------|
-| `SetSchema(const Schema& schema) -> Builder&`                               | Set the table schema       |
-| `SetPartitionKeys(const std::vector<std::string>& keys) -> Builder&`        | Set partition key columns  |
-| `SetBucketCount(int32_t count) -> Builder&`                                 | Set the number of buckets  |
-| `SetBucketKeys(const std::vector<std::string>& keys) -> Builder&`           | Set bucket key columns     |
-| `SetProperty(const std::string& key, const std::string& value) -> Builder&` | Set a table property       |
-| `SetComment(const std::string& comment) -> Builder&`                        | Set a table comment        |
-| `Build() -> TableDescriptor`                                                | Build the table descriptor |
+| Method                                                                            | Description                |
+|-----------------------------------------------------------------------------------|----------------------------|
+| `SetSchema(const Schema& schema) -> Builder&`                                     | Set the table schema       |
+| `SetPartitionKeys(const std::vector<std::string>& keys) -> Builder&`              | Set partition key columns  |
+| `SetBucketCount(int32_t count) -> Builder&`                                       | Set the number of buckets  |
+| `SetBucketKeys(const std::vector<std::string>& keys) -> Builder&`                 | Set bucket key columns     |
+| `SetProperty(const std::string& key, const std::string& value) -> Builder&`       | Set a table property       |
+| `SetCustomProperty(const std::string& key, const std::string& value) -> Builder&` | Set a custom property      |
+| `SetComment(const std::string& comment) -> Builder&`                              | Set a table comment        |
+| `Build() -> TableDescriptor`                                                      | Build the table descriptor |
 
 ## `DataType`
 
@@ -336,22 +337,23 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `TableInfo`
 
-| Field             | Type                                           |  Description                        |
-|-------------------|------------------------------------------------|-------------------------------------|
-| `table_id`        | `int64_t`                                      | Table ID                            |
-| `schema_id`       | `int32_t`                                      | Schema ID                           |
-| `table_path`      | `TablePath`                                    | Table path                          |
-| `created_time`    | `int64_t`                                      | Creation timestamp                  |
-| `modified_time`   | `int64_t`                                      | Last modification timestamp         |
-| `primary_keys`    | `std::vector<std::string>`                     | Primary key columns                 |
-| `bucket_keys`     | `std::vector<std::string>`                     | Bucket key columns                  |
-| `partition_keys`  | `std::vector<std::string>`                     | Partition key columns               |
-| `num_buckets`     | `int32_t`                                      | Number of buckets                   |
-| `has_primary_key` | `bool`                                         | Whether the table has a primary key |
-| `is_partitioned`  | `bool`                                         | Whether the table is partitioned    |
-| `properties`      | `std::unordered_map<std::string, std::string>` | Table properties                    |
-| `comment`         | `std::string`                                  | Table comment                       |
-| `schema`          | `Schema`                                       | Table schema                        |
+| Field               | Type                                           | Description                         |
+|---------------------|------------------------------------------------|-------------------------------------|
+| `table_id`          | `int64_t`                                      | Table ID                            |
+| `schema_id`         | `int32_t`                                      | Schema ID                           |
+| `table_path`        | `TablePath`                                    | Table path                          |
+| `created_time`      | `int64_t`                                      | Creation timestamp                  |
+| `modified_time`     | `int64_t`                                      | Last modification timestamp         |
+| `primary_keys`      | `std::vector<std::string>`                     | Primary key columns                 |
+| `bucket_keys`       | `std::vector<std::string>`                     | Bucket key columns                  |
+| `partition_keys`    | `std::vector<std::string>`                     | Partition key columns               |
+| `num_buckets`       | `int32_t`                                      | Number of buckets                   |
+| `has_primary_key`   | `bool`                                         | Whether the table has a primary key |
+| `is_partitioned`    | `bool`                                         | Whether the table is partitioned    |
+| `properties`        | `std::unordered_map<std::string, std::string>` | Table properties                    |
+| `custom_properties` | `std::unordered_map<std::string, std::string>` | Custom properties                   |
+| `comment`           | `std::string`                                  | Table comment                       |
+| `schema`            | `Schema`                                       | Table schema                        |
 
 ## Temporal Types
 

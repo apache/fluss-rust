@@ -239,27 +239,30 @@ writer.append(&row)?.await?;
 
 ## `TableDescriptor`
 
-| Method                                             |  Description                         |
-|----------------------------------------------------|--------------------------------------|
-| `fn builder() -> TableDescriptorBuilder`           | Create a table descriptor builder    |
-| `fn schema(&self) -> &Schema`                      | Get the table schema                 |
-| `fn partition_keys(&self) -> &[String]`            | Get partition key column names       |
-| `fn has_primary_key(&self) -> bool`                | Check if the table has a primary key |
-| `fn properties(&self) -> &HashMap<String, String>` | Get all table properties             |
-| `fn comment(&self) -> Option<&str>`                | Get table comment                    |
+| Method                                                    | Description                          |
+|-----------------------------------------------------------|--------------------------------------|
+| `fn builder() -> TableDescriptorBuilder`                  | Create a table descriptor builder    |
+| `fn schema(&self) -> &Schema`                             | Get the table schema                 |
+| `fn partition_keys(&self) -> &[String]`                   | Get partition key column names       |
+| `fn has_primary_key(&self) -> bool`                       | Check if the table has a primary key |
+| `fn properties(&self) -> &HashMap<String, String>`        | Get all table properties             |
+| `fn custom_properties(&self) -> &HashMap<String, String>` | Get custom properties                |
+| `fn comment(&self) -> Option<&str>`                       | Get table comment                    |
 
 ## `TableDescriptorBuilder`
 
-| Method                                                                           |  Description                                |
-|----------------------------------------------------------------------------------|---------------------------------------------|
-| `fn schema(schema: Schema) -> Self`                                              | Set the schema                              |
-| `fn log_format(format: LogFormat) -> Self`                                       | Set log format (e.g., `LogFormat::ARROW`)   |
-| `fn kv_format(format: KvFormat) -> Self`                                         | Set KV format (e.g., `KvFormat::COMPACTED`) |
-| `fn property(key: &str, value: &str) -> Self`                                    | Set a table property                        |
-| `fn partitioned_by(keys: Vec<&str>) -> Self`                                     | Set partition columns                       |
-| `fn distributed_by(bucket_count: Option<i32>, bucket_keys: Vec<String>) -> Self` | Set bucket distribution                     |
-| `fn comment(comment: &str) -> Self`                                              | Set table comment                           |
-| `fn build() -> Result<TableDescriptor>`                                          | Build the table descriptor                  |
+| Method                                                                                    | Description                                 |
+|-------------------------------------------------------------------------------------------|---------------------------------------------|
+| `fn schema(schema: Schema) -> Self`                                                       | Set the schema                              |
+| `fn log_format(format: LogFormat) -> Self`                                                | Set log format (e.g., `LogFormat::ARROW`)   |
+| `fn kv_format(format: KvFormat) -> Self`                                                  | Set KV format (e.g., `KvFormat::COMPACTED`) |
+| `fn property(key: &str, value: &str) -> Self`                                             | Set a table property                        |
+| `fn custom_property(key: impl Into<String>, value: impl Into<String>) -> Self`            | Set a single custom property                |
+| `fn custom_properties(properties: HashMap<impl Into<String>, impl Into<String>>) -> Self` | Set custom properties                       |
+| `fn partitioned_by(keys: Vec<&str>) -> Self`                                              | Set partition columns                       |
+| `fn distributed_by(bucket_count: Option<i32>, bucket_keys: Vec<String>) -> Self`          | Set bucket distribution                     |
+| `fn comment(comment: &str) -> Self`                                                       | Set table comment                           |
+| `fn build() -> Result<TableDescriptor>`                                                   | Build the table descriptor                  |
 
 ## `TablePath`
 
