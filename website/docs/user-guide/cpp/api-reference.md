@@ -462,7 +462,7 @@ scanner.Subscribe(0, offsets[0]);
 | `UpdateAfter`  | `+U`         | New value of an updated row      |
 | `Delete`       | `-D`         | Deleted row                      |
 
-You refer to the following example to convert ChangeType enum to its short string representation.
+You may refer to the following example to convert ChangeType enum to its short string representation.
 
 ```cpp
 inline const char* ChangeTypeShortString(ChangeType ct) {
