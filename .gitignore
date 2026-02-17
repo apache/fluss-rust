@@ -28,9 +28,12 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.venv/
+uv.lock
 
 # CPP
 *CMakeFiles/
+.cache/
 
 # Website (Docusaurus)
 website/node_modules
