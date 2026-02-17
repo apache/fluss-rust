@@ -202,8 +202,9 @@ Complete API reference for the Fluss C++ client.
 
 When using `table.NewRow()`, the `Set()` method auto-routes to the correct type based on the schema:
 
-| Method                                                   |  Description                      |
+| Method                                                   | Description                       |
 |----------------------------------------------------------|-----------------------------------|
+| `Set(const std::string& name, std::nullptr_t)`           | Set field to null by column name  |
 | `Set(const std::string& name, bool value)`               | Set boolean by column name        |
 | `Set(const std::string& name, int32_t value)`            | Set integer by column name        |
 | `Set(const std::string& name, int64_t value)`            | Set big integer by column name    |

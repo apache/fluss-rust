@@ -50,11 +50,12 @@ Complete API reference for the Fluss Rust client.
 
 ### Partition Operations
 
-| Method                                                                                                                   | Description         |
-|--------------------------------------------------------------------------------------------------------------------------|---------------------|
-| `async fn list_partition_infos(&self, table_path: &TablePath) -> Result<Vec<PartitionInfo>>`                             | List all partitions |
-| `async fn create_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_exists: bool) -> Result<()>`   | Create a partition  |
-| `async fn drop_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_not_exists: bool) -> Result<()>` | Drop a partition    |
+| Method                                                                                                                               | Description                     |
+|--------------------------------------------------------------------------------------------------------------------------------------|---------------------------------|
+| `async fn list_partition_infos(&self, table_path: &TablePath) -> Result<Vec<PartitionInfo>>`                                         | List all partitions             |
+| `async fn list_partition_infos_with_spec(&self, table_path: &TablePath, spec: Option<&PartitionSpec>) -> Result<Vec<PartitionInfo>>` | List partitions matching a spec |
+| `async fn create_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_exists: bool) -> Result<()>`               | Create a partition              |
+| `async fn drop_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_not_exists: bool) -> Result<()>`             | Drop a partition                |
 
 ### Offset Operations
 
