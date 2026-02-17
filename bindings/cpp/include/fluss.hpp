@@ -23,9 +23,12 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // Forward declare Arrow classes to avoid including heavy Arrow headers in header
@@ -44,6 +47,9 @@ struct WriteResult;
 struct LogScanner;
 struct UpsertWriter;
 struct Lookuper;
+struct ScanResultInner;
+struct GenericRowInner;
+struct LookupResultInner;
 }  // namespace ffi
 
 /// Named constants for Fluss API error codes.
@@ -232,7 +238,16 @@ struct Timestamp {
     }
 };
 
+enum class ChangeType {
+    AppendOnly = 0,
+    Insert = 1,
+    UpdateBefore = 2,
+    UpdateAfter = 3,
+    Delete = 4,
+};
+
 enum class TypeId {
+    Unknown = 0,
     Boolean = 1,
     TinyInt = 2,
     SmallInt = 3,
@@ -247,6 +262,8 @@ enum class TypeId {
     Timestamp = 12,
     TimestampLtz = 13,
     Decimal = 14,
+    Char = 15,
+    Binary = 16,
 };
 
 class DataType {
@@ -274,6 +291,8 @@ class DataType {
     static DataType Decimal(int32_t precision, int32_t scale) {
         return DataType(TypeId::Decimal, precision, scale);
     }
+    static DataType Char(int32_t length) { return DataType(TypeId::Char, length, 0); }
+    static DataType Binary(int32_t length) { return DataType(TypeId::Binary, length, 0); }
 
     TypeId id() const { return id_; }
     int32_t precision() const { return precision_; }
@@ -283,24 +302,6 @@ class DataType {
     TypeId id_;
     int32_t precision_{0};
     int32_t scale_{0};
-};
-
-enum class DatumType {
-    Null = 0,
-    Bool = 1,
-    Int32 = 2,
-    Int64 = 3,
-    Float32 = 4,
-    Float64 = 5,
-    String = 6,
-    Bytes = 7,
-    DecimalI64 = 8,
-    DecimalI128 = 9,
-    DecimalString = 10,
-    Date = 11,
-    Time = 12,
-    TimestampNtz = 13,
-    TimestampLtz = 14,
 };
 
 constexpr int64_t EARLIEST_OFFSET = -2;
@@ -376,6 +377,7 @@ struct TableDescriptor {
     int32_t bucket_count{0};
     std::vector<std::string> bucket_keys;
     std::unordered_map<std::string, std::string> properties;
+    std::unordered_map<std::string, std::string> custom_properties;
     std::string comment;
 
     class Builder {
@@ -405,6 +407,19 @@ struct TableDescriptor {
             return *this;
         }
 
+        Builder& SetCustomProperty(std::string key, std::string value) {
+            custom_properties_[std::move(key)] = std::move(value);
+            return *this;
+        }
+
+        Builder& SetLogFormat(std::string format) {
+            return SetProperty("table.log.format", std::move(format));
+        }
+
+        Builder& SetKvFormat(std::string format) {
+            return SetProperty("table.kv.format", std::move(format));
+        }
+
         Builder& SetComment(std::string comment) {
             comment_ = std::move(comment);
             return *this;
@@ -413,7 +428,8 @@ struct TableDescriptor {
         TableDescriptor Build() {
             return TableDescriptor{std::move(schema_),     std::move(partition_keys_),
                                    bucket_count_,          std::move(bucket_keys_),
-                                   std::move(properties_), std::move(comment_)};
+                                   std::move(properties_), std::move(custom_properties_),
+                                   std::move(comment_)};
         }
 
        private:
@@ -422,6 +438,7 @@ struct TableDescriptor {
         int32_t bucket_count_{0};
         std::vector<std::string> bucket_keys_;
         std::unordered_map<std::string, std::string> properties_;
+        std::unordered_map<std::string, std::string> custom_properties_;
         std::string comment_;
     };
 
@@ -441,291 +458,85 @@ struct TableInfo {
     bool has_primary_key;
     bool is_partitioned;
     std::unordered_map<std::string, std::string> properties;
+    std::unordered_map<std::string, std::string> custom_properties;
     std::string comment;
     Schema schema;
 };
 
 namespace detail {
-struct FfiAccess;
+struct ColumnInfo {
+    size_t index;
+    TypeId type_id;
+};
+using ColumnMap = std::unordered_map<std::string, ColumnInfo>;
+
+inline size_t ResolveColumn(const ColumnMap& map, const std::string& name) {
+    auto it = map.find(name);
+    if (it == map.end()) {
+        throw std::runtime_error("Unknown column '" + name + "'");
+    }
+    return it->second.index;
 }
 
-struct Datum {
-    friend struct GenericRow;
-    friend struct detail::FfiAccess;
-
-    static Datum Null() { return {}; }
-    static Datum Bool(bool v) {
-        Datum d;
-        d.type = DatumType::Bool;
-        d.bool_val = v;
-        return d;
+/// CRTP mixin that adds name-based getters to any class with index-based getters.
+/// Derived must provide: `size_t Resolve(const std::string&) const`
+/// and all the index-based getters (IsNull(idx), GetBool(idx), etc.).
+template <typename Derived>
+struct NamedGetters {
+    bool IsNull(const std::string& n) const { return Self().IsNull(Self().Resolve(n)); }
+    bool GetBool(const std::string& n) const { return Self().GetBool(Self().Resolve(n)); }
+    int32_t GetInt32(const std::string& n) const { return Self().GetInt32(Self().Resolve(n)); }
+    int64_t GetInt64(const std::string& n) const { return Self().GetInt64(Self().Resolve(n)); }
+    float GetFloat32(const std::string& n) const { return Self().GetFloat32(Self().Resolve(n)); }
+    double GetFloat64(const std::string& n) const { return Self().GetFloat64(Self().Resolve(n)); }
+    std::string_view GetString(const std::string& n) const {
+        return Self().GetString(Self().Resolve(n));
     }
-    static Datum Int32(int32_t v) {
-        Datum d;
-        d.type = DatumType::Int32;
-        d.i32_val = v;
-        return d;
+    std::pair<const uint8_t*, size_t> GetBytes(const std::string& n) const {
+        return Self().GetBytes(Self().Resolve(n));
     }
-    static Datum Int64(int64_t v) {
-        Datum d;
-        d.type = DatumType::Int64;
-        d.i64_val = v;
-        return d;
+    fluss::Date GetDate(const std::string& n) const { return Self().GetDate(Self().Resolve(n)); }
+    fluss::Time GetTime(const std::string& n) const { return Self().GetTime(Self().Resolve(n)); }
+    fluss::Timestamp GetTimestamp(const std::string& n) const {
+        return Self().GetTimestamp(Self().Resolve(n));
     }
-    static Datum Float32(float v) {
-        Datum d;
-        d.type = DatumType::Float32;
-        d.f32_val = v;
-        return d;
-    }
-    static Datum Float64(double v) {
-        Datum d;
-        d.type = DatumType::Float64;
-        d.f64_val = v;
-        return d;
-    }
-    static Datum String(std::string v) {
-        Datum d;
-        d.type = DatumType::String;
-        d.string_val = std::move(v);
-        return d;
-    }
-    static Datum Bytes(std::vector<uint8_t> v) {
-        Datum d;
-        d.type = DatumType::Bytes;
-        d.bytes_val = std::move(v);
-        return d;
-    }
-    static Datum Date(fluss::Date d) {
-        Datum dat;
-        dat.type = DatumType::Date;
-        dat.i32_val = d.days_since_epoch;
-        return dat;
-    }
-    static Datum Time(fluss::Time t) {
-        Datum dat;
-        dat.type = DatumType::Time;
-        dat.i32_val = t.millis_since_midnight;
-        return dat;
-    }
-    static Datum TimestampNtz(fluss::Timestamp ts) {
-        Datum dat;
-        dat.type = DatumType::TimestampNtz;
-        dat.i64_val = ts.epoch_millis;
-        dat.i32_val = ts.nano_of_millisecond;
-        return dat;
-    }
-    static Datum TimestampLtz(fluss::Timestamp ts) {
-        Datum dat;
-        dat.type = DatumType::TimestampLtz;
-        dat.i64_val = ts.epoch_millis;
-        dat.i32_val = ts.nano_of_millisecond;
-        return dat;
-    }
-    // Stores the decimal string as-is. Rust side will parse via BigDecimal,
-    // look up (p,s) from the schema, validate, and create the Decimal.
-    static Datum DecimalString(std::string str) {
-        Datum d;
-        d.type = DatumType::DecimalString;
-        d.string_val = std::move(str);
-        return d;
+    std::string GetDecimalString(const std::string& n) const {
+        return Self().GetDecimalString(Self().Resolve(n));
     }
 
    private:
-    DatumType type{DatumType::Null};
-    bool bool_val{false};
-    int32_t i32_val{0};
-    int64_t i64_val{0};
-    float f32_val{0.0F};
-    double f64_val{0.0};
-    std::string string_val;
-    std::vector<uint8_t> bytes_val;
-    int32_t decimal_precision{0};  // Decimal: precision (total digits)
-    int32_t decimal_scale{0};      // Decimal: scale (digits after decimal point)
-    int64_t i128_hi{0};            // Decimal (i128): high 64 bits of unscaled value
-    int64_t i128_lo{0};            // Decimal (i128): low 64 bits of unscaled value
-
-    DatumType GetType() const { return type; }
-    bool IsNull() const { return type == DatumType::Null; }
-    bool GetBool() const { return bool_val; }
-    int32_t GetInt32() const { return i32_val; }
-    int64_t GetInt64() const { return i64_val; }
-    float GetFloat32() const { return f32_val; }
-    double GetFloat64() const { return f64_val; }
-    const std::string& GetString() const { return string_val; }
-    const std::vector<uint8_t>& GetBytes() const { return bytes_val; }
-    fluss::Date GetDate() const { return {i32_val}; }
-    fluss::Time GetTime() const { return {i32_val}; }
-    fluss::Timestamp GetTimestamp() const { return {i64_val, i32_val}; }
-
-    bool IsDecimal() const {
-        return type == DatumType::DecimalI64 || type == DatumType::DecimalI128 ||
-               type == DatumType::DecimalString;
-    }
-
-    std::string DecimalToString() const {
-        if (type == DatumType::DecimalI64) {
-            return FormatUnscaled64(i64_val, decimal_scale);
-        } else if (type == DatumType::DecimalI128) {
-            unsigned __int128 uval =
-                (static_cast<unsigned __int128>(static_cast<uint64_t>(i128_hi)) << 64) |
-                static_cast<unsigned __int128>(static_cast<uint64_t>(i128_lo));
-            __int128 val = static_cast<__int128>(uval);
-            return FormatUnscaled128(val, decimal_scale);
-        } else if (type == DatumType::DecimalString) {
-            return string_val;
-        }
-        return "";
-    }
-
-    static std::string FormatUnscaled64(int64_t unscaled, int32_t scale) {
-        bool negative = unscaled < 0;
-        uint64_t abs_val =
-            negative ? -static_cast<uint64_t>(unscaled) : static_cast<uint64_t>(unscaled);
-        std::string digits = std::to_string(abs_val);
-        if (scale <= 0) {
-            return (negative ? "-" : "") + digits;
-        }
-        while (static_cast<int32_t>(digits.size()) <= scale) {
-            digits = "0" + digits;
-        }
-        auto pos = digits.size() - static_cast<size_t>(scale);
-        return (negative ? "-" : "") + digits.substr(0, pos) + "." + digits.substr(pos);
-    }
-
-    static std::string FormatUnscaled128(__int128 val, int32_t scale) {
-        bool negative = val < 0;
-        unsigned __int128 abs_val =
-            negative ? -static_cast<unsigned __int128>(val) : static_cast<unsigned __int128>(val);
-        std::string digits;
-        if (abs_val == 0) {
-            digits = "0";
-        } else {
-            while (abs_val > 0) {
-                digits = static_cast<char>('0' + static_cast<int>(abs_val % 10)) + digits;
-                abs_val /= 10;
-            }
-        }
-        if (scale <= 0) {
-            return (negative ? "-" : "") + digits;
-        }
-        while (static_cast<int32_t>(digits.size()) <= scale) {
-            digits = "0" + digits;
-        }
-        auto pos = digits.size() - static_cast<size_t>(scale);
-        return (negative ? "-" : "") + digits.substr(0, pos) + "." + digits.substr(pos);
-    }
+    const Derived& Self() const { return static_cast<const Derived&>(*this); }
 };
+}  // namespace detail
 
-struct GenericRow {
-    friend struct detail::FfiAccess;
+class GenericRow {
+   public:
+    GenericRow();
+    explicit GenericRow(size_t field_count);
+    ~GenericRow() noexcept;
 
-    size_t FieldCount() const { return fields.size(); }
+    GenericRow(const GenericRow&) = delete;
+    GenericRow& operator=(const GenericRow&) = delete;
+    GenericRow(GenericRow&& other) noexcept;
+    GenericRow& operator=(GenericRow&& other) noexcept;
 
-    // ── Index-based getters ──────────────────────────────────────────
-    DatumType GetType(size_t idx) const { return GetField(idx).GetType(); }
-    bool IsNull(size_t idx) const { return GetField(idx).IsNull(); }
-    bool GetBool(size_t idx) const { return GetTypedField(idx, DatumType::Bool).GetBool(); }
-    int32_t GetInt32(size_t idx) const { return GetTypedField(idx, DatumType::Int32).GetInt32(); }
-    int64_t GetInt64(size_t idx) const { return GetTypedField(idx, DatumType::Int64).GetInt64(); }
-    float GetFloat32(size_t idx) const {
-        return GetTypedField(idx, DatumType::Float32).GetFloat32();
-    }
-    double GetFloat64(size_t idx) const {
-        return GetTypedField(idx, DatumType::Float64).GetFloat64();
-    }
-    const std::string& GetString(size_t idx) const {
-        return GetTypedField(idx, DatumType::String).GetString();
-    }
-    const std::vector<uint8_t>& GetBytes(size_t idx) const {
-        return GetTypedField(idx, DatumType::Bytes).GetBytes();
-    }
-    fluss::Date GetDate(size_t idx) const { return GetTypedField(idx, DatumType::Date).GetDate(); }
-    fluss::Time GetTime(size_t idx) const { return GetTypedField(idx, DatumType::Time).GetTime(); }
-    fluss::Timestamp GetTimestamp(size_t idx) const {
-        const auto& d = GetField(idx);
-        auto t = d.GetType();
-        if (t != DatumType::TimestampNtz && t != DatumType::TimestampLtz) {
-            throw std::runtime_error("GenericRow: field " + std::to_string(idx) +
-                                     " is not a Timestamp type");
-        }
-        return d.GetTimestamp();
-    }
-    bool IsDecimal(size_t idx) const { return GetField(idx).IsDecimal(); }
-    std::string DecimalToString(size_t idx) const {
-        const auto& d = GetField(idx);
-        if (!d.IsDecimal()) {
-            throw std::runtime_error("GenericRow: field " + std::to_string(idx) +
-                                     " is not a Decimal type");
-        }
-        return d.DecimalToString();
-    }
+    bool Available() const;
+    void Reset();
 
     // ── Index-based setters ──────────────────────────────────────────
-    void SetNull(size_t idx) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Null();
-    }
-
-    void SetBool(size_t idx, bool v) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Bool(v);
-    }
-
-    void SetInt32(size_t idx, int32_t v) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Int32(v);
-    }
-
-    void SetInt64(size_t idx, int64_t v) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Int64(v);
-    }
-
-    void SetFloat32(size_t idx, float v) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Float32(v);
-    }
-
-    void SetFloat64(size_t idx, double v) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Float64(v);
-    }
-
-    void SetString(size_t idx, std::string v) {
-        EnsureSize(idx);
-        fields[idx] = Datum::String(std::move(v));
-    }
-
-    void SetBytes(size_t idx, std::vector<uint8_t> v) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Bytes(std::move(v));
-    }
-
-    void SetDate(size_t idx, fluss::Date d) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Date(d);
-    }
-
-    void SetTime(size_t idx, fluss::Time t) {
-        EnsureSize(idx);
-        fields[idx] = Datum::Time(t);
-    }
-
-    void SetTimestampNtz(size_t idx, fluss::Timestamp ts) {
-        EnsureSize(idx);
-        fields[idx] = Datum::TimestampNtz(ts);
-    }
-
-    void SetTimestampLtz(size_t idx, fluss::Timestamp ts) {
-        EnsureSize(idx);
-        fields[idx] = Datum::TimestampLtz(ts);
-    }
-
-    void SetDecimal(size_t idx, const std::string& value) {
-        EnsureSize(idx);
-        fields[idx] = Datum::DecimalString(value);
-    }
+    void SetNull(size_t idx);
+    void SetBool(size_t idx, bool v);
+    void SetInt32(size_t idx, int32_t v);
+    void SetInt64(size_t idx, int64_t v);
+    void SetFloat32(size_t idx, float v);
+    void SetFloat64(size_t idx, double v);
+    void SetString(size_t idx, std::string v);
+    void SetBytes(size_t idx, std::vector<uint8_t> v);
+    void SetDate(size_t idx, fluss::Date d);
+    void SetTime(size_t idx, fluss::Time t);
+    void SetTimestampNtz(size_t idx, fluss::Timestamp ts);
+    void SetTimestampLtz(size_t idx, fluss::Timestamp ts);
+    void SetDecimal(size_t idx, const std::string& value);
 
     // ── Name-based setters (require schema — see Table::NewRow()) ───
     void Set(const std::string& name, std::nullptr_t) { SetNull(Resolve(name)); }
@@ -734,7 +545,7 @@ struct GenericRow {
     void Set(const std::string& name, int64_t v) { SetInt64(Resolve(name), v); }
     void Set(const std::string& name, float v) { SetFloat32(Resolve(name), v); }
     void Set(const std::string& name, double v) { SetFloat64(Resolve(name), v); }
-    // const char* overload to prevent "string literal" → bool conversion
+    // const char* overload to prevent "string literal" -> bool conversion
     void Set(const std::string& name, const char* v) {
         auto [idx, type] = ResolveColumn(name);
         if (type == TypeId::Decimal) {
@@ -776,13 +587,12 @@ struct GenericRow {
 
    private:
     friend class Table;
-    struct ColumnInfo {
-        size_t index;
-        TypeId type_id;
-    };
-    using ColumnMap = std::unordered_map<std::string, ColumnInfo>;
-    std::vector<Datum> fields;
-    std::shared_ptr<ColumnMap> column_map_;
+    friend class AppendWriter;
+    friend class UpsertWriter;
+    friend class Lookuper;
+
+    using ColumnInfo = detail::ColumnInfo;
+    using ColumnMap = detail::ColumnMap;
 
     size_t Resolve(const std::string& name) const { return ResolveColumn(name).index; }
 
@@ -799,48 +609,122 @@ struct GenericRow {
         return it->second;
     }
 
-    const Datum& GetField(size_t idx) const {
-        if (idx >= fields.size()) {
-            throw std::runtime_error("GenericRow: index " + std::to_string(idx) +
-                                     " out of bounds (size=" + std::to_string(fields.size()) + ")");
-        }
-        return fields[idx];
-    }
+    void Destroy() noexcept;
 
-    const Datum& GetTypedField(size_t idx, DatumType expected) const {
-        const auto& d = GetField(idx);
-        if (d.GetType() != expected) {
-            throw std::runtime_error("GenericRow: field " + std::to_string(idx) +
-                                     " type mismatch: expected " +
-                                     std::to_string(static_cast<int>(expected)) + ", got " +
-                                     std::to_string(static_cast<int>(d.GetType())));
-        }
-        return d;
-    }
-
-    void EnsureSize(size_t idx) {
-        if (fields.size() <= idx) {
-            fields.resize(idx + 1);
-        }
-    }
+    ffi::GenericRowInner* inner_{nullptr};
+    std::shared_ptr<ColumnMap> column_map_;
 };
 
+/// Read-only row view for scan results. Zero-copy access to string and bytes data.
+///
+/// WARNING: RowView borrows from ScanRecords. It must not outlive the ScanRecords
+/// that produced it (similar to std::string_view borrowing from std::string).
+class RowView : public detail::NamedGetters<RowView> {
+    friend struct detail::NamedGetters<RowView>;
+
+   public:
+    RowView(const ffi::ScanResultInner* inner, size_t record_idx,
+            const detail::ColumnMap* column_map)
+        : inner_(inner), record_idx_(record_idx), column_map_(column_map) {}
+
+    // ── Index-based getters ──────────────────────────────────────────
+    size_t FieldCount() const;
+    TypeId GetType(size_t idx) const;
+    bool IsNull(size_t idx) const;
+    bool GetBool(size_t idx) const;
+    int32_t GetInt32(size_t idx) const;
+    int64_t GetInt64(size_t idx) const;
+    float GetFloat32(size_t idx) const;
+    double GetFloat64(size_t idx) const;
+    std::string_view GetString(size_t idx) const;
+    std::pair<const uint8_t*, size_t> GetBytes(size_t idx) const;
+    fluss::Date GetDate(size_t idx) const;
+    fluss::Time GetTime(size_t idx) const;
+    fluss::Timestamp GetTimestamp(size_t idx) const;
+    bool IsDecimal(size_t idx) const;
+    std::string GetDecimalString(size_t idx) const;
+
+    // Name-based getters inherited from detail::NamedGetters<RowView>
+    using detail::NamedGetters<RowView>::IsNull;
+    using detail::NamedGetters<RowView>::GetBool;
+    using detail::NamedGetters<RowView>::GetInt32;
+    using detail::NamedGetters<RowView>::GetInt64;
+    using detail::NamedGetters<RowView>::GetFloat32;
+    using detail::NamedGetters<RowView>::GetFloat64;
+    using detail::NamedGetters<RowView>::GetString;
+    using detail::NamedGetters<RowView>::GetBytes;
+    using detail::NamedGetters<RowView>::GetDate;
+    using detail::NamedGetters<RowView>::GetTime;
+    using detail::NamedGetters<RowView>::GetTimestamp;
+    using detail::NamedGetters<RowView>::GetDecimalString;
+
+   private:
+    size_t Resolve(const std::string& name) const {
+        if (!column_map_) {
+            throw std::runtime_error("RowView: name-based access not available");
+        }
+        return detail::ResolveColumn(*column_map_, name);
+    }
+    const ffi::ScanResultInner* inner_;
+    size_t record_idx_;
+    const detail::ColumnMap* column_map_;  // borrowed from ScanRecords (same lifetime as inner_)
+};
+
+/// A single scan record. Contains metadata and a RowView for field access.
+///
+/// WARNING: ScanRecord contains a RowView that borrows from ScanRecords.
+/// It must not outlive the ScanRecords that produced it.
 struct ScanRecord {
     int32_t bucket_id;
+    std::optional<int64_t> partition_id;
     int64_t offset;
     int64_t timestamp;
-    GenericRow row;
+    ChangeType change_type;
+    RowView row;
 };
 
-struct ScanRecords {
-    std::vector<ScanRecord> records;
+class ScanRecords {
+   public:
+    ScanRecords() noexcept;
+    ~ScanRecords() noexcept;
 
-    size_t Size() const { return records.size(); }
-    bool Empty() const { return records.empty(); }
-    const ScanRecord& operator[](size_t idx) const { return records[idx]; }
+    ScanRecords(const ScanRecords&) = delete;
+    ScanRecords& operator=(const ScanRecords&) = delete;
+    ScanRecords(ScanRecords&& other) noexcept;
+    ScanRecords& operator=(ScanRecords&& other) noexcept;
 
-    auto begin() const { return records.begin(); }
-    auto end() const { return records.end(); }
+    size_t Size() const;
+    bool Empty() const;
+    ScanRecord operator[](size_t idx) const;
+
+    class Iterator {
+       public:
+        ScanRecord operator*() const;
+        Iterator& operator++() {
+            ++idx_;
+            return *this;
+        }
+        bool operator!=(const Iterator& other) const { return idx_ != other.idx_; }
+
+       private:
+        friend class ScanRecords;
+        Iterator(const ScanRecords* owner, size_t idx) : owner_(owner), idx_(idx) {}
+        const ScanRecords* owner_;
+        size_t idx_;
+    };
+
+    Iterator begin() const { return Iterator(this, 0); }
+    Iterator end() const { return Iterator(this, Size()); }
+
+    /// Returns the column name-to-index map (lazy-built, cached).
+    const std::shared_ptr<detail::ColumnMap>& GetColumnMap() const;
+
+   private:
+    friend class LogScanner;
+    void Destroy() noexcept;
+    void BuildColumnMap() const;
+    ffi::ScanResultInner* inner_{nullptr};
+    mutable std::shared_ptr<detail::ColumnMap> column_map_;
 };
 
 class ArrowRecordBatch {
@@ -925,6 +809,66 @@ struct DatabaseInfo {
     std::unordered_map<std::string, std::string> properties;
     int64_t created_time{0};
     int64_t modified_time{0};
+};
+
+/// Read-only result for lookup operations.
+class LookupResult : public detail::NamedGetters<LookupResult> {
+    friend struct detail::NamedGetters<LookupResult>;
+
+   public:
+    LookupResult() noexcept;
+    ~LookupResult() noexcept;
+
+    LookupResult(const LookupResult&) = delete;
+    LookupResult& operator=(const LookupResult&) = delete;
+    LookupResult(LookupResult&& other) noexcept;
+    LookupResult& operator=(LookupResult&& other) noexcept;
+
+    bool Found() const;
+    size_t FieldCount() const;
+
+    // ── Index-based getters ──────────────────────────────────────────
+    TypeId GetType(size_t idx) const;
+    bool IsNull(size_t idx) const;
+    bool GetBool(size_t idx) const;
+    int32_t GetInt32(size_t idx) const;
+    int64_t GetInt64(size_t idx) const;
+    float GetFloat32(size_t idx) const;
+    double GetFloat64(size_t idx) const;
+    std::string_view GetString(size_t idx) const;
+    std::pair<const uint8_t*, size_t> GetBytes(size_t idx) const;
+    fluss::Date GetDate(size_t idx) const;
+    fluss::Time GetTime(size_t idx) const;
+    fluss::Timestamp GetTimestamp(size_t idx) const;
+    bool IsDecimal(size_t idx) const;
+    std::string GetDecimalString(size_t idx) const;
+
+    // Name-based getters inherited from detail::NamedGetters<LookupResult>
+    using detail::NamedGetters<LookupResult>::IsNull;
+    using detail::NamedGetters<LookupResult>::GetBool;
+    using detail::NamedGetters<LookupResult>::GetInt32;
+    using detail::NamedGetters<LookupResult>::GetInt64;
+    using detail::NamedGetters<LookupResult>::GetFloat32;
+    using detail::NamedGetters<LookupResult>::GetFloat64;
+    using detail::NamedGetters<LookupResult>::GetString;
+    using detail::NamedGetters<LookupResult>::GetBytes;
+    using detail::NamedGetters<LookupResult>::GetDate;
+    using detail::NamedGetters<LookupResult>::GetTime;
+    using detail::NamedGetters<LookupResult>::GetTimestamp;
+    using detail::NamedGetters<LookupResult>::GetDecimalString;
+
+   private:
+    friend class Lookuper;
+    size_t Resolve(const std::string& name) const {
+        if (!column_map_) {
+            BuildColumnMap();
+        }
+        return detail::ResolveColumn(*column_map_, name);
+    }
+    void Destroy() noexcept;
+    void BuildColumnMap() const;
+    ffi::LookupResultInner* inner_{nullptr};
+    mutable std::shared_ptr<detail::ColumnMap> column_map_;
 };
 
 class AppendWriter;
@@ -1206,6 +1150,8 @@ class AppendWriter {
 
     Result Append(const GenericRow& row);
     Result Append(const GenericRow& row, WriteResult& out);
+    Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch);
+    Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out);
     Result Flush();
 
    private:
@@ -1255,7 +1201,7 @@ class Lookuper {
 
     bool Available() const;
 
-    Result Lookup(const GenericRow& pk_row, bool& found, GenericRow& out);
+    Result Lookup(const GenericRow& pk_row, LookupResult& out);
 
    private:
     friend class Table;
