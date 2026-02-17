@@ -462,6 +462,21 @@ scanner.Subscribe(0, offsets[0]);
 | `UpdateAfter`  | `+U`         | New value of an updated row      |
 | `Delete`       | `-D`         | Deleted row                      |
 
+You refer to the following example to convert ChangeType enum to its short string representation.
+
+```cpp
+inline const char* ChangeTypeShortString(ChangeType ct) {
+    switch (ct) {
+        case ChangeType::AppendOnly: return "+A";
+        case ChangeType::Insert: return "+I";
+        case ChangeType::UpdateBefore: return "-U";
+        case ChangeType::UpdateAfter: return "+U";
+        case ChangeType::Delete: return "-D";
+    }
+    throw std::invalid_argument("Unknown ChangeType");
+}
+```
+
 ### `TypeId`
 
 | Value          |  Description               |
