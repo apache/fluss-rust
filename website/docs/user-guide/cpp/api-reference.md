@@ -226,12 +226,14 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `ScanRecord`
 
-| Field       | Type         |  Description                  |
-|-------------|--------------|-------------------------------|
-| `bucket_id` | `int32_t`    | Bucket this record belongs to |
-| `offset`    | `int64_t`    | Record offset in the log      |
-| `timestamp` | `int64_t`    | Record timestamp              |
-| `row`       | `GenericRow` | Row data                      |
+| Field          | Type                     | Description                                                         |
+|----------------|--------------------------|---------------------------------------------------------------------|
+| `bucket_id`    | `int32_t`                | Bucket this record belongs to                                       |
+| `partition_id` | `std::optional<int64_t>` | Partition ID (present only for partitioned tables)                  |
+| `offset`       | `int64_t`                | Record offset in the log                                            |
+| `timestamp`    | `int64_t`                | Record timestamp                                                    |
+| `change_type`  | `ChangeType`             | Change type (AppendOnly, Insert, UpdateBefore, UpdateAfter, Delete) |
+| `row`          | `RowView`                | Row data                                                            |
 
 ## `ScanRecords`
 
@@ -449,6 +451,16 @@ scanner.Subscribe(0, offsets[0]);
 ```
 
 ## Enums
+
+### `ChangeType`
+
+| Value          | Short String | Description                      |
+|----------------|--------------|----------------------------------|
+| `AppendOnly`   | `+A`         | Append-only record               |
+| `Insert`       | `+I`         | Inserted row                     |
+| `UpdateBefore` | `-U`         | Previous value of an updated row |
+| `UpdateAfter`  | `+U`         | New value of an updated row      |
+| `Delete`       | `-D`         | Deleted row                      |
 
 ### `TypeId`
 
