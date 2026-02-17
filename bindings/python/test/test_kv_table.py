@@ -101,12 +101,14 @@ async def test_composite_primary_keys(connection, admin):
     table_path = fluss.TablePath("fluss", "py_test_composite_pk")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
 
+    # PK columns intentionally interleaved with non-PK column to verify
+    # that lookup correctly handles non-contiguous primary key indices.
     schema = fluss.Schema(
         pa.schema(
             [
                 pa.field("region", pa.string()),
-                pa.field("user_id", pa.int32()),
                 pa.field("score", pa.int64()),
+                pa.field("user_id", pa.int32()),
             ]
         ),
         primary_keys=["region", "user_id"],

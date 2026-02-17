@@ -179,6 +179,9 @@ async def test_list_offsets(connection, admin):
     )
     assert ts_before[0] == 0
 
+    # Intentional sleep to avoid race condition FlussError(code=38) The timestamp is invalid
+    await asyncio.sleep(1)
+
     # Timestamp after append should resolve to offset 3
     ts_after = await admin.list_offsets(
         table_path,
