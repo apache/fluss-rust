@@ -716,10 +716,9 @@ class ScanRecords {
     Iterator begin() const { return Iterator(this, 0); }
     Iterator end() const { return Iterator(this, Size()); }
 
+   private:
     /// Returns the column name-to-index map (lazy-built, cached).
     const std::shared_ptr<detail::ColumnMap>& GetColumnMap() const;
-
-   private:
     friend class LogScanner;
     void Destroy() noexcept;
     void BuildColumnMap() const;

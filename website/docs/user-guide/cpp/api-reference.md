@@ -268,7 +268,6 @@ Read-only row view for scan results. Provides zero-copy access to string and byt
 | `Size() -> size_t`                     | Number of records                          |
 | `Empty() -> bool`                      | Check if empty                             |
 | `operator[](size_t idx) -> ScanRecord` | Access record by index                     |
-| `GetColumnMap()`                       | Get column name-to-index map (lazy-built, cached) |
 | `begin() / end()`                      | Iterator support for range-based for loops |
 
 ## `LookupResult`

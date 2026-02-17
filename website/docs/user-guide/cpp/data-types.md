@@ -24,6 +24,8 @@ sidebar_position: 3
 
 ## GenericRow Setters
 
+`SetInt32` is used for `TinyInt`, `SmallInt`, and `Int` columns. For `TinyInt` and `SmallInt`, the value is validated at write time — an error is returned if it overflows the column's range (e.g., \[-128, 127\] for `TinyInt`, \[-32768, 32767\] for `SmallInt`).
+
 ```cpp
 fluss::GenericRow row;
 row.SetNull(0);
@@ -58,6 +60,7 @@ Field values are read through `RowView` (from scan results) and `LookupResult` (
 
 :::warning Lifetime
 `RowView` borrows from `ScanRecords`. It must not outlive the `ScanRecords` that produced it (similar to `std::string_view` borrowing from `std::string`).
+:::
 
 ```cpp
 // DON'T — string_view dangles after ScanRecords is destroyed:
@@ -78,7 +81,6 @@ for (const auto& rec : records) {
     process(owned);
 }
 ```
-:::
 
 ### From Scan Results (RowView)
 
@@ -105,6 +107,8 @@ if (result.Found()) {
 ```
 
 ## TypeId Enum
+
+`TinyInt` and `SmallInt` values are widened to `int32_t` on read.
 
 | TypeId          | C++ Type                                    | Getter                    |
 |-----------------|---------------------------------------------|---------------------------|
