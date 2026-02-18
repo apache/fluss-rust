@@ -22,6 +22,7 @@ use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_schema::SchemaRef;
 use fluss::record::to_arrow_schema;
 use fluss::rpc::message::OffsetSpec;
+use indexmap::IndexMap;
 use pyo3::types::IntoPyDict;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
@@ -158,7 +159,7 @@ impl RecordBatch {
 /// Returned by `LogScanner.poll()`. Records are grouped by `TableBucket`.
 #[pyclass]
 pub struct ScanRecords {
-    records_by_bucket: HashMap<TableBucket, Vec<Py<ScanRecord>>>,
+    records_by_bucket: IndexMap<TableBucket, Vec<Py<ScanRecord>>>,
     total_count: usize,
 }
 
@@ -2040,7 +2041,7 @@ impl LogScanner {
 
         // Convert core ScanRecords to Python ScanRecords grouped by bucket
         let row_type = &self.projected_row_type;
-        let mut records_by_bucket = HashMap::new();
+        let mut records_by_bucket = IndexMap::new();
         let mut total_count = 0usize;
 
         for (bucket, records) in scan_records.into_records_by_buckets() {
