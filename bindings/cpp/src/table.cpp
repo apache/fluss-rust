@@ -204,62 +204,62 @@ TypeId RowView::GetType(size_t idx) const {
 
 bool RowView::IsNull(size_t idx) const {
     CHECK_INNER("RowView");
-    return inner_->sv_is_null(record_idx_, idx);
+    return inner_->sv_is_null(bucket_idx_, rec_idx_, idx);
 }
 bool RowView::GetBool(size_t idx) const {
     CHECK_INNER("RowView");
-    return inner_->sv_get_bool(record_idx_, idx);
+    return inner_->sv_get_bool(bucket_idx_, rec_idx_, idx);
 }
 int32_t RowView::GetInt32(size_t idx) const {
     CHECK_INNER("RowView");
-    return inner_->sv_get_i32(record_idx_, idx);
+    return inner_->sv_get_i32(bucket_idx_, rec_idx_, idx);
 }
 int64_t RowView::GetInt64(size_t idx) const {
     CHECK_INNER("RowView");
-    return inner_->sv_get_i64(record_idx_, idx);
+    return inner_->sv_get_i64(bucket_idx_, rec_idx_, idx);
 }
 float RowView::GetFloat32(size_t idx) const {
     CHECK_INNER("RowView");
-    return inner_->sv_get_f32(record_idx_, idx);
+    return inner_->sv_get_f32(bucket_idx_, rec_idx_, idx);
 }
 double RowView::GetFloat64(size_t idx) const {
     CHECK_INNER("RowView");
-    return inner_->sv_get_f64(record_idx_, idx);
+    return inner_->sv_get_f64(bucket_idx_, rec_idx_, idx);
 }
 
 std::string_view RowView::GetString(size_t idx) const {
     CHECK_INNER("RowView");
-    auto s = inner_->sv_get_str(record_idx_, idx);
+    auto s = inner_->sv_get_str(bucket_idx_, rec_idx_, idx);
     return std::string_view(s.data(), s.size());
 }
 
 std::pair<const uint8_t*, size_t> RowView::GetBytes(size_t idx) const {
     CHECK_INNER("RowView");
-    auto bytes = inner_->sv_get_bytes(record_idx_, idx);
+    auto bytes = inner_->sv_get_bytes(bucket_idx_, rec_idx_, idx);
     return {bytes.data(), bytes.size()};
 }
 
 Date RowView::GetDate(size_t idx) const {
     CHECK_INNER("RowView");
-    return Date{inner_->sv_get_date_days(record_idx_, idx)};
+    return Date{inner_->sv_get_date_days(bucket_idx_, rec_idx_, idx)};
 }
 
 Time RowView::GetTime(size_t idx) const {
     CHECK_INNER("RowView");
-    return Time{inner_->sv_get_time_millis(record_idx_, idx)};
+    return Time{inner_->sv_get_time_millis(bucket_idx_, rec_idx_, idx)};
 }
 
 Timestamp RowView::GetTimestamp(size_t idx) const {
     CHECK_INNER("RowView");
-    return Timestamp{inner_->sv_get_ts_millis(record_idx_, idx),
-                     inner_->sv_get_ts_nanos(record_idx_, idx)};
+    return Timestamp{inner_->sv_get_ts_millis(bucket_idx_, rec_idx_, idx),
+                     inner_->sv_get_ts_nanos(bucket_idx_, rec_idx_, idx)};
 }
 
 bool RowView::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
 
 std::string RowView::GetDecimalString(size_t idx) const {
     CHECK_INNER("RowView");
-    return std::string(inner_->sv_get_decimal_str(record_idx_, idx));
+    return std::string(inner_->sv_get_decimal_str(bucket_idx_, rec_idx_, idx));
 }
 
 // ============================================================================
@@ -268,9 +268,9 @@ std::string RowView::GetDecimalString(size_t idx) const {
 
 // ScanRecords constructor, destructor, move operations are all defaulted in the header.
 
-size_t ScanRecords::Size() const { return inner_ ? inner_->sv_record_count() : 0; }
+size_t ScanRecords::Count() const { return inner_ ? inner_->sv_record_count() : 0; }
 
-bool ScanRecords::Empty() const { return Size() == 0; }
+bool ScanRecords::IsEmpty() const { return Count() == 0; }
 
 void ScanRecords::BuildColumnMap() const {
     if (!inner_) return;
@@ -291,25 +291,86 @@ const std::shared_ptr<detail::ColumnMap>& ScanRecords::GetColumnMap() const {
     return column_map_;
 }
 
-ScanRecord ScanRecords::operator[](size_t idx) const {
+ScanRecord ScanRecords::RecordAt(size_t bucket, size_t rec_idx) const {
     if (!inner_) {
         throw std::logic_error("ScanRecords: not available (moved-from or null)");
     }
-    if (idx >= inner_->sv_record_count()) {
-        throw std::out_of_range("ScanRecords: index " + std::to_string(idx) + " out of range (" +
-                                std::to_string(inner_->sv_record_count()) + " records)");
-    }
-    return ScanRecord{inner_->sv_bucket_id(idx),
-                      inner_->sv_has_partition_id(idx)
-                          ? std::optional<int64_t>(inner_->sv_partition_id(idx))
-                          : std::nullopt,
-                      inner_->sv_offset(idx),
-                      inner_->sv_timestamp(idx),
-                      static_cast<ChangeType>(inner_->sv_change_type(idx)),
-                      RowView(inner_, idx, GetColumnMap())};
+    return ScanRecord{inner_->sv_offset(bucket, rec_idx), inner_->sv_timestamp(bucket, rec_idx),
+                      static_cast<ChangeType>(inner_->sv_change_type(bucket, rec_idx)),
+                      RowView(inner_, bucket, rec_idx, GetColumnMap())};
 }
 
-ScanRecord ScanRecords::Iterator::operator*() const { return owner_->operator[](idx_); }
+static TableBucket to_table_bucket(const ffi::FfiBucketInfo& g) {
+    return TableBucket{g.table_id, g.bucket_id,
+                       g.has_partition_id ? std::optional<int64_t>(g.partition_id) : std::nullopt};
+}
+
+size_t ScanRecords::BucketCount() const { return inner_ ? inner_->sv_bucket_infos().size() : 0; }
+
+ScanRecord ScanRecords::Iterator::operator*() const {
+    return owner_->RecordAt(bucket_idx_, rec_idx_);
+}
+
+ScanRecords::Iterator ScanRecords::begin() const { return Iterator(this, 0, 0); }
+
+ScanRecords::Iterator& ScanRecords::Iterator::operator++() {
+    ++rec_idx_;
+    if (owner_->inner_) {
+        const auto& infos = owner_->inner_->sv_bucket_infos();
+        while (bucket_idx_ < infos.size() && rec_idx_ >= infos[bucket_idx_].record_count) {
+            rec_idx_ = 0;
+            ++bucket_idx_;
+        }
+    }
+    return *this;
+}
+
+std::vector<TableBucket> ScanRecords::Buckets() const {
+    std::vector<TableBucket> result;
+    if (!inner_) return result;
+    const auto& infos = inner_->sv_bucket_infos();
+    result.reserve(infos.size());
+    for (const auto& g : infos) {
+        result.push_back(to_table_bucket(g));
+    }
+    return result;
+}
+
+BucketView ScanRecords::Records(const TableBucket& bucket) const {
+    if (!inner_) {
+        return BucketView(this, bucket, 0, 0);
+    }
+    const auto& infos = inner_->sv_bucket_infos();
+    for (size_t i = 0; i < infos.size(); ++i) {
+        TableBucket tb = to_table_bucket(infos[i]);
+        if (tb == bucket) {
+            return BucketView(this, std::move(tb), i, infos[i].record_count);
+        }
+    }
+    return BucketView(this, bucket, 0, 0);
+}
+
+BucketView ScanRecords::BucketAt(size_t idx) const {
+    if (!inner_) {
+        throw std::logic_error("ScanRecords: not available (moved-from or null)");
+    }
+    const auto& infos = inner_->sv_bucket_infos();
+    if (idx >= infos.size()) {
+        throw std::out_of_range("ScanRecords::BucketAt: index " + std::to_string(idx) +
+                                " out of range (" + std::to_string(infos.size()) + " buckets)");
+    }
+    return BucketView(this, to_table_bucket(infos[idx]), idx, infos[idx].record_count);
+}
+
+ScanRecord BucketView::operator[](size_t idx) const {
+    if (idx >= count_) {
+        throw std::out_of_range("BucketView: index " + std::to_string(idx) + " out of range (" +
+                                std::to_string(count_) + " records)");
+    }
+    return owner_->RecordAt(bucket_idx_, idx);
+}
+
+ScanRecord BucketView::Iterator::operator*() const { return owner_->operator[](idx_); }
 
 // ============================================================================
 // LookupResult — backed by opaque Rust LookupResultInner

@@ -38,11 +38,12 @@ const MICROS_PER_DAY: i64 = 86_400_000_000;
 const NANOS_PER_MILLI: i64 = 1_000_000;
 const NANOS_PER_MICRO: i64 = 1_000;
 
-/// Represents a single scan record with metadata
+/// Represents a single scan record with metadata.
+///
+/// Matches Rust/Java: offset, timestamp, change_type, row.
+/// The bucket is the key in ScanRecords, not on the individual record.
 #[pyclass]
 pub struct ScanRecord {
-    #[pyo3(get)]
-    bucket: TableBucket,
     #[pyo3(get)]
     offset: i64,
     #[pyo3(get)]
@@ -63,8 +64,7 @@ impl ScanRecord {
 
     fn __str__(&self) -> String {
         format!(
-            "ScanRecord(bucket={}, offset={}, timestamp={}, change_type={})",
-            self.bucket.__str__(),
+            "ScanRecord(offset={}, timestamp={}, change_type={})",
             self.offset,
             self.timestamp,
             self.change_type.short_string()
@@ -80,7 +80,6 @@ impl ScanRecord {
     /// Create a ScanRecord from core types
     pub fn from_core(
         py: Python,
-        bucket: &fcore::metadata::TableBucket,
         record: &fcore::record::ScanRecord,
         row_type: &fcore::metadata::RowType,
     ) -> PyResult<Self> {
@@ -94,7 +93,6 @@ impl ScanRecord {
         }
 
         Ok(ScanRecord {
-            bucket: TableBucket::from_core(bucket.clone()),
             offset: record.offset(),
             timestamp: record.timestamp(),
             change_type: ChangeType::from_core(*record.change_type()),
@@ -151,6 +149,247 @@ impl RecordBatch {
             base_offset: scan_batch.base_offset(),
             last_offset: scan_batch.last_offset(),
             batch: Arc::new(scan_batch.into_batch()),
+        }
+    }
+}
+
+/// A collection of scan records grouped by bucket.
+///
+/// Returned by `LogScanner.poll()`. Records are grouped by `TableBucket`.
+#[pyclass]
+pub struct ScanRecords {
+    records_by_bucket: HashMap<TableBucket, Vec<Py<ScanRecord>>>,
+    total_count: usize,
+}
+
+#[pymethods]
+impl ScanRecords {
+    /// List of distinct buckets that have records in this result.
+    pub fn buckets(&self) -> Vec<TableBucket> {
+        self.records_by_bucket.keys().cloned().collect()
+    }
+
+    /// Get records for a specific bucket.
+    ///
+    /// Returns an empty list if the bucket is not present (matches Rust/Java behavior).
+    pub fn records(&self, py: Python, bucket: &TableBucket) -> Vec<Py<ScanRecord>> {
+        self.records_by_bucket
+            .get(bucket)
+            .map(|recs| recs.iter().map(|r| r.clone_ref(py)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Total number of records across all buckets.
+    pub fn count(&self) -> usize {
+        self.total_count
+    }
+
+    /// Whether the result set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.total_count == 0
+    }
+
+    fn __len__(&self) -> usize {
+        self.total_count
+    }
+
+    /// Type-dispatched indexing:
+    ///   records[0]       → ScanRecord (flat index)
+    ///   records[-1]      → ScanRecord (negative index)
+    ///   records[1:3]     → list[ScanRecord] (slice)
+    ///   records[bucket]  → list[ScanRecord] (by bucket)
+    fn __getitem__(&self, py: Python, key: &Bound<'_, pyo3::PyAny>) -> PyResult<Py<pyo3::PyAny>> {
+        // Try integer index first
+        if let Ok(mut idx) = key.extract::<isize>() {
+            let len = self.total_count as isize;
+            if idx < 0 {
+                idx += len;
+            }
+            if idx < 0 || idx >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                    "index {idx} out of range for ScanRecords of size {len}"
+                )));
+            }
+            let idx = idx as usize;
+            let mut offset = 0;
+            for recs in self.records_by_bucket.values() {
+                if idx < offset + recs.len() {
+                    return Ok(recs[idx - offset].clone_ref(py).into_any());
+                }
+                offset += recs.len();
+            }
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "internal error: total_count out of sync with records",
+            ));
+        }
+        // Try slice
+        if let Ok(slice) = key.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(self.total_count as isize)?;
+            let mut result: Vec<Py<ScanRecord>> = Vec::new();
+            let mut i = indices.start;
+            while (indices.step > 0 && i < indices.stop) || (indices.step < 0 && i > indices.stop) {
+                let idx = i as usize;
+                let mut offset = 0;
+                for recs in self.records_by_bucket.values() {
+                    if idx < offset + recs.len() {
+                        result.push(recs[idx - offset].clone_ref(py));
+                        break;
+                    }
+                    offset += recs.len();
+                }
+                i += indices.step;
+            }
+            return Ok(result.into_pyobject(py).unwrap().into_any().unbind());
+        }
+        // Try TableBucket
+        if let Ok(bucket) = key.extract::<TableBucket>() {
+            let recs = self.records(py, &bucket);
+            return Ok(recs.into_pyobject(py).unwrap().into_any().unbind());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "index must be int, slice, or TableBucket",
+        ))
+    }
+
+    /// Support `bucket in records`.
+    fn __contains__(&self, bucket: &TableBucket) -> bool {
+        self.records_by_bucket.contains_key(bucket)
+    }
+
+    /// Mapping protocol: alias for `buckets()`.
+    pub fn keys(&self) -> Vec<TableBucket> {
+        self.buckets()
+    }
+
+    /// Mapping protocol: lazy iterator over record lists, one per bucket.
+    pub fn values(slf: Bound<'_, Self>) -> ScanRecordsBucketIter {
+        let this = slf.borrow();
+        let bucket_keys: Vec<TableBucket> = this.records_by_bucket.keys().cloned().collect();
+        drop(this);
+        ScanRecordsBucketIter {
+            owner: slf.unbind(),
+            bucket_keys,
+            bucket_idx: 0,
+            with_keys: false,
+        }
+    }
+
+    /// Mapping protocol: lazy iterator over `(TableBucket, list[ScanRecord])` pairs.
+    pub fn items(slf: Bound<'_, Self>) -> ScanRecordsBucketIter {
+        let this = slf.borrow();
+        let bucket_keys: Vec<TableBucket> = this.records_by_bucket.keys().cloned().collect();
+        drop(this);
+        ScanRecordsBucketIter {
+            owner: slf.unbind(),
+            bucket_keys,
+            bucket_idx: 0,
+            with_keys: true,
+        }
+    }
+
+    fn __str__(&self) -> String {
+        format!(
+            "ScanRecords(records={}, buckets={})",
+            self.total_count,
+            self.records_by_bucket.len()
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
+
+    /// Flat iterator over all records across all buckets (matches Java/Rust).
+    fn __iter__(slf: Bound<'_, Self>) -> ScanRecordsIter {
+        let this = slf.borrow();
+        let bucket_keys: Vec<TableBucket> = this.records_by_bucket.keys().cloned().collect();
+        drop(this);
+        ScanRecordsIter {
+            owner: slf.unbind(),
+            bucket_keys,
+            bucket_idx: 0,
+            rec_idx: 0,
+        }
+    }
+}
+
+#[pyclass]
+struct ScanRecordsIter {
+    owner: Py<ScanRecords>,
+    bucket_keys: Vec<TableBucket>,
+    bucket_idx: usize,
+    rec_idx: usize,
+}
+
+#[pymethods]
+impl ScanRecordsIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python) -> Option<Py<ScanRecord>> {
+        let owner = self.owner.borrow(py);
+        loop {
+            if self.bucket_idx >= self.bucket_keys.len() {
+                return None;
+            }
+            let bucket = &self.bucket_keys[self.bucket_idx];
+            if let Some(recs) = owner.records_by_bucket.get(bucket) {
+                if self.rec_idx < recs.len() {
+                    let rec = recs[self.rec_idx].clone_ref(py);
+                    self.rec_idx += 1;
+                    return Some(rec);
+                }
+            }
+            self.bucket_idx += 1;
+            self.rec_idx = 0;
+        }
+    }
+}
+
+/// Lazy iterator for `ScanRecords.items()` and `ScanRecords.values()`.
+///
+/// Yields one bucket at a time: `(TableBucket, list[ScanRecord])` for items,
+/// or `list[ScanRecord]` for values. Only materializes records for the
+/// current bucket on each `__next__` call.
+#[pyclass]
+pub struct ScanRecordsBucketIter {
+    owner: Py<ScanRecords>,
+    bucket_keys: Vec<TableBucket>,
+    bucket_idx: usize,
+    with_keys: bool,
+}
+
+#[pymethods]
+impl ScanRecordsBucketIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python) -> Option<Py<pyo3::PyAny>> {
+        if self.bucket_idx >= self.bucket_keys.len() {
+            return None;
+        }
+        let bucket = &self.bucket_keys[self.bucket_idx];
+        let owner = self.owner.borrow(py);
+        let recs = owner
+            .records_by_bucket
+            .get(bucket)
+            .map(|recs| recs.iter().map(|r| r.clone_ref(py)).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let bucket = bucket.clone();
+        self.bucket_idx += 1;
+
+        if self.with_keys {
+            Some(
+                (bucket, recs)
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
+            )
+        } else {
+            Some(recs.into_pyobject(py).unwrap().into_any().unbind())
         }
     }
 }
@@ -1777,14 +2016,15 @@ impl LogScanner {
     ///     timeout_ms: Timeout in milliseconds to wait for records
     ///
     /// Returns:
-    ///     List of ScanRecord objects, each containing bucket, offset, timestamp,
-    ///     change_type, and row data as a dictionary.
+    ///     ScanRecords grouped by bucket. Supports flat iteration
+    ///     (`for rec in records`) and per-bucket access (`records.buckets()`,
+    ///     `records.records(bucket)`, `records[bucket]`).
     ///
     /// Note:
     ///     - Requires a record-based scanner (created with new_scan().create_log_scanner())
-    ///     - Returns an empty list if no records are available
-    ///     - When timeout expires, returns an empty list (NOT an error)
-    fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<ScanRecord>> {
+    ///     - Returns an empty ScanRecords if no records are available
+    ///     - When timeout expires, returns an empty ScanRecords (NOT an error)
+    fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<ScanRecords> {
         let scanner = self.scanner.as_record()?;
 
         if timeout_ms < 0 {
@@ -1798,19 +2038,26 @@ impl LogScanner {
             .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
             .map_err(|e| FlussError::from_core_error(&e))?;
 
-        // Convert ScanRecords to Python ScanRecord list
-        // Use projected_row_type to handle column projection correctly
+        // Convert core ScanRecords to Python ScanRecords grouped by bucket
         let row_type = &self.projected_row_type;
-        let mut result = Vec::new();
+        let mut records_by_bucket = HashMap::new();
+        let mut total_count = 0usize;
 
         for (bucket, records) in scan_records.into_records_by_buckets() {
-            for record in records {
-                let scan_record = ScanRecord::from_core(py, &bucket, &record, row_type)?;
-                result.push(scan_record);
+            let py_bucket = TableBucket::from_core(bucket);
+            let mut py_records = Vec::with_capacity(records.len());
+            for record in &records {
+                let scan_record = ScanRecord::from_core(py, record, row_type)?;
+                py_records.push(Py::new(py, scan_record)?);
+                total_count += 1;
             }
+            records_by_bucket.insert(py_bucket, py_records);
         }
 
-        Ok(result)
+        Ok(ScanRecords {
+            records_by_bucket,
+            total_count,
+        })
     }
 
     /// Poll for batches with metadata.

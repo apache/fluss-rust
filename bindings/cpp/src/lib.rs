@@ -141,6 +141,14 @@ mod ffi {
         timestamp: i64,
     }
 
+    struct FfiBucketInfo {
+        table_id: i64,
+        bucket_id: i32,
+        has_partition_id: bool,
+        partition_id: i64,
+        record_count: usize,
+    }
+
     struct FfiBucketSubscription {
         bucket_id: i32,
         offset: i64,
@@ -420,27 +428,96 @@ mod ffi {
         fn sv_column_count(self: &ScanResultInner) -> usize;
         fn sv_column_name(self: &ScanResultInner, field: usize) -> Result<&str>;
         fn sv_column_type(self: &ScanResultInner, field: usize) -> Result<i32>;
-        fn sv_bucket_id(self: &ScanResultInner, rec: usize) -> i32;
-        fn sv_has_partition_id(self: &ScanResultInner, rec: usize) -> bool;
-        fn sv_partition_id(self: &ScanResultInner, rec: usize) -> i64;
-        fn sv_offset(self: &ScanResultInner, rec: usize) -> i64;
-        fn sv_timestamp(self: &ScanResultInner, rec: usize) -> i64;
-        fn sv_change_type(self: &ScanResultInner, rec: usize) -> i32;
+        fn sv_offset(self: &ScanResultInner, bucket: usize, rec: usize) -> i64;
+        fn sv_timestamp(self: &ScanResultInner, bucket: usize, rec: usize) -> i64;
+        fn sv_change_type(self: &ScanResultInner, bucket: usize, rec: usize) -> i32;
         fn sv_field_count(self: &ScanResultInner) -> usize;
-        fn sv_is_null(self: &ScanResultInner, rec: usize, field: usize) -> Result<bool>;
-        fn sv_get_bool(self: &ScanResultInner, rec: usize, field: usize) -> Result<bool>;
-        fn sv_get_i32(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
-        fn sv_get_i64(self: &ScanResultInner, rec: usize, field: usize) -> Result<i64>;
-        fn sv_get_f32(self: &ScanResultInner, rec: usize, field: usize) -> Result<f32>;
-        fn sv_get_f64(self: &ScanResultInner, rec: usize, field: usize) -> Result<f64>;
-        fn sv_get_str(self: &ScanResultInner, rec: usize, field: usize) -> Result<&str>;
-        fn sv_get_bytes(self: &ScanResultInner, rec: usize, field: usize) -> Result<&[u8]>;
-        fn sv_get_date_days(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
-        fn sv_get_time_millis(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
-        fn sv_get_ts_millis(self: &ScanResultInner, rec: usize, field: usize) -> Result<i64>;
-        fn sv_get_ts_nanos(self: &ScanResultInner, rec: usize, field: usize) -> Result<i32>;
-        fn sv_is_ts_ltz(self: &ScanResultInner, rec: usize, field: usize) -> Result<bool>;
-        fn sv_get_decimal_str(self: &ScanResultInner, rec: usize, field: usize) -> Result<String>;
+        fn sv_is_null(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<bool>;
+        fn sv_get_bool(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<bool>;
+        fn sv_get_i32(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn sv_get_i64(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<i64>;
+        fn sv_get_f32(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<f32>;
+        fn sv_get_f64(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<f64>;
+        fn sv_get_str(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<&str>;
+        fn sv_get_bytes(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<&[u8]>;
+        fn sv_get_date_days(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn sv_get_time_millis(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn sv_get_ts_millis(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<i64>;
+        fn sv_get_ts_nanos(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn sv_is_ts_ltz(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<bool>;
+        fn sv_get_decimal_str(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
+            field: usize,
+        ) -> Result<String>;
+
+        fn sv_bucket_infos(self: &ScanResultInner) -> &Vec<FfiBucketInfo>;
     }
 }
 
@@ -1487,24 +1564,27 @@ impl LogScanner {
         match result {
             Ok(records) => {
                 let columns = self.projected_columns.clone();
-                // Flatten ScanRecords into a Vec<FlatScanRecord> — moves Arc<RecordBatch>, zero copy
-                let mut flat = Vec::with_capacity(records.count());
+                let mut total_count = 0usize;
+                let mut buckets = Vec::new();
+                let mut bucket_infos = Vec::new();
                 for (table_bucket, bucket_records) in records.into_records_by_buckets() {
-                    let bucket_id = table_bucket.bucket_id();
-                    let partition = table_bucket.partition_id();
-                    for record in bucket_records {
-                        flat.push(FlatScanRecord {
-                            bucket_id,
-                            has_partition_id: partition.is_some(),
-                            partition_id: partition.unwrap_or(0),
-                            record,
-                        });
-                    }
+                    let count = bucket_records.len();
+                    total_count += count;
+                    bucket_infos.push(ffi::FfiBucketInfo {
+                        table_id: table_bucket.table_id(),
+                        bucket_id: table_bucket.bucket_id(),
+                        has_partition_id: table_bucket.partition_id().is_some(),
+                        partition_id: table_bucket.partition_id().unwrap_or(0),
+                        record_count: count,
+                    });
+                    buckets.push((table_bucket, bucket_records));
                 }
                 Box::new(ScanResultInner {
                     error: None,
-                    records: flat,
+                    buckets,
                     columns,
+                    bucket_infos,
+                    total_count,
                 })
             }
             Err(e) => {
@@ -1917,26 +1997,27 @@ mod row_reader {
 // Opaque types: ScanResultInner (scan read path)
 // ============================================================================
 
-struct FlatScanRecord {
-    bucket_id: i32,
-    has_partition_id: bool,
-    partition_id: i64,
-    record: fcore::record::ScanRecord,
-}
-
 pub struct ScanResultInner {
     error: Option<(i32, String)>,
-    records: Vec<FlatScanRecord>,
+    buckets: Vec<(fcore::metadata::TableBucket, Vec<fcore::record::ScanRecord>)>,
     columns: Vec<fcore::metadata::Column>,
+    bucket_infos: Vec<ffi::FfiBucketInfo>,
+    total_count: usize,
 }
 
 impl ScanResultInner {
     fn from_error(code: i32, msg: String) -> Self {
         Self {
             error: Some((code, msg)),
-            records: Vec::new(),
+            buckets: Vec::new(),
             columns: Vec::new(),
+            bucket_infos: Vec::new(),
+            total_count: 0,
         }
+    }
+
+    fn resolve(&self, bucket: usize, rec: usize) -> &fcore::record::ScanRecord {
+        &self.buckets[bucket].1[rec]
     }
 
     fn sv_has_error(&self) -> bool {
@@ -1952,7 +2033,7 @@ impl ScanResultInner {
     }
 
     fn sv_record_count(&self) -> usize {
-        self.records.len()
+        self.total_count
     }
 
     fn sv_column_count(&self) -> usize {
@@ -1965,71 +2046,70 @@ impl ScanResultInner {
         row_reader::column_type(&self.columns, field)
     }
 
-    // Metadata accessors — C++ validates rec in operator[] before calling these.
-    fn sv_bucket_id(&self, rec: usize) -> i32 {
-        self.records[rec].bucket_id
+    fn sv_offset(&self, bucket: usize, rec: usize) -> i64 {
+        self.resolve(bucket, rec).offset()
     }
-    fn sv_has_partition_id(&self, rec: usize) -> bool {
-        self.records[rec].has_partition_id
+    fn sv_timestamp(&self, bucket: usize, rec: usize) -> i64 {
+        self.resolve(bucket, rec).timestamp()
     }
-    fn sv_partition_id(&self, rec: usize) -> i64 {
-        self.records[rec].partition_id
-    }
-    fn sv_offset(&self, rec: usize) -> i64 {
-        self.records[rec].record.offset()
-    }
-    fn sv_timestamp(&self, rec: usize) -> i64 {
-        self.records[rec].record.timestamp()
-    }
-    fn sv_change_type(&self, rec: usize) -> i32 {
-        self.records[rec].record.change_type().to_byte_value() as i32
+    fn sv_change_type(&self, bucket: usize, rec: usize) -> i32 {
+        self.resolve(bucket, rec).change_type().to_byte_value() as i32
     }
     fn sv_field_count(&self) -> usize {
         self.columns.len()
     }
 
-    // Field accessors — C++ validates rec in operator[], validate() checks field.
-    fn sv_is_null(&self, rec: usize, field: usize) -> Result<bool, String> {
-        row_reader::is_null(self.records[rec].record.row(), &self.columns, field)
+    // Field accessors — C++ validates bounds in BucketView/RecordAt, validate() checks field.
+    fn sv_is_null(&self, bucket: usize, rec: usize, field: usize) -> Result<bool, String> {
+        row_reader::is_null(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_bool(&self, rec: usize, field: usize) -> Result<bool, String> {
-        row_reader::get_bool(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_bool(&self, bucket: usize, rec: usize, field: usize) -> Result<bool, String> {
+        row_reader::get_bool(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_i32(&self, rec: usize, field: usize) -> Result<i32, String> {
-        row_reader::get_i32(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_i32(&self, bucket: usize, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_i32(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_i64(&self, rec: usize, field: usize) -> Result<i64, String> {
-        row_reader::get_i64(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_i64(&self, bucket: usize, rec: usize, field: usize) -> Result<i64, String> {
+        row_reader::get_i64(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_f32(&self, rec: usize, field: usize) -> Result<f32, String> {
-        row_reader::get_f32(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_f32(&self, bucket: usize, rec: usize, field: usize) -> Result<f32, String> {
+        row_reader::get_f32(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_f64(&self, rec: usize, field: usize) -> Result<f64, String> {
-        row_reader::get_f64(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_f64(&self, bucket: usize, rec: usize, field: usize) -> Result<f64, String> {
+        row_reader::get_f64(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_str(&self, rec: usize, field: usize) -> Result<&str, String> {
-        row_reader::get_str(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_str(&self, bucket: usize, rec: usize, field: usize) -> Result<&str, String> {
+        row_reader::get_str(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_bytes(&self, rec: usize, field: usize) -> Result<&[u8], String> {
-        row_reader::get_bytes(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_bytes(&self, bucket: usize, rec: usize, field: usize) -> Result<&[u8], String> {
+        row_reader::get_bytes(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_date_days(&self, rec: usize, field: usize) -> Result<i32, String> {
-        row_reader::get_date_days(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_date_days(&self, bucket: usize, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_date_days(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_time_millis(&self, rec: usize, field: usize) -> Result<i32, String> {
-        row_reader::get_time_millis(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_time_millis(&self, bucket: usize, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_time_millis(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_ts_millis(&self, rec: usize, field: usize) -> Result<i64, String> {
-        row_reader::get_ts_millis(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_ts_millis(&self, bucket: usize, rec: usize, field: usize) -> Result<i64, String> {
+        row_reader::get_ts_millis(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_get_ts_nanos(&self, rec: usize, field: usize) -> Result<i32, String> {
-        row_reader::get_ts_nanos(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_ts_nanos(&self, bucket: usize, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_ts_nanos(self.resolve(bucket, rec).row(), &self.columns, field)
     }
-    fn sv_is_ts_ltz(&self, _rec: usize, field: usize) -> Result<bool, String> {
+    fn sv_is_ts_ltz(&self, _bucket: usize, _rec: usize, field: usize) -> Result<bool, String> {
         row_reader::is_ts_ltz(&self.columns, field)
     }
-    fn sv_get_decimal_str(&self, rec: usize, field: usize) -> Result<String, String> {
-        row_reader::get_decimal_str(self.records[rec].record.row(), &self.columns, field)
+    fn sv_get_decimal_str(
+        &self,
+        bucket: usize,
+        rec: usize,
+        field: usize,
+    ) -> Result<String, String> {
+        row_reader::get_decimal_str(self.resolve(bucket, rec).row(), &self.columns, field)
+    }
+
+    fn sv_bucket_infos(&self) -> &Vec<ffi::FfiBucketInfo> {
+        &self.bucket_infos
     }
 }
 

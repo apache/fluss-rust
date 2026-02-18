@@ -168,58 +168,75 @@ int main() {
     fluss::ScanRecords records;
     check("poll", scanner.Poll(5000, records));
 
-    std::cout << "Scanned records: " << records.Size() << std::endl;
+    // Flat iteration over all records (regardless of bucket)
+    std::cout << "Scanned records: " << records.Count() << " across " << records.BucketCount()
+              << " buckets" << std::endl;
+    for (const auto& rec : records) {
+        std::cout << "  offset=" << rec.offset << " timestamp=" << rec.timestamp << std::endl;
+    }
+
+    // Per-bucket access (with type verification)
     bool scan_ok = true;
     bool found_null_row = false;
-    for (const auto& rec : records) {
-        // Check if this is the all-null row (matches Rust: is_null_at for every column)
-        if (rec.row.IsNull(0)) {
-            found_null_row = true;
-            for (size_t i = 0; i < rec.row.FieldCount(); ++i) {
-                if (!rec.row.IsNull(i)) {
-                    std::cerr << "ERROR: column " << i << " should be null" << std::endl;
-                    scan_ok = false;
+    for (const auto& tb : records.Buckets()) {
+        auto view = records.Records(tb);
+        std::cout << "  Bucket " << tb.bucket_id;
+        if (tb.partition_id.has_value()) {
+            std::cout << " (partition=" << *tb.partition_id << ")";
+        }
+        std::cout << ": " << view.Size() << " records" << std::endl;
+        for (const auto& rec : view) {
+            // Check if this is the all-null row
+            if (rec.row.IsNull(0)) {
+                found_null_row = true;
+                for (size_t i = 0; i < rec.row.FieldCount(); ++i) {
+                    if (!rec.row.IsNull(i)) {
+                        std::cerr << "ERROR: column " << i << " should be null" << std::endl;
+                        scan_ok = false;
+                    }
                 }
+                std::cout << "    [null row] all " << rec.row.FieldCount() << " fields are null"
+                          << std::endl;
+                continue;
             }
-            std::cout << "  [null row] all " << rec.row.FieldCount() << " fields are null"
-                      << std::endl;
-            continue;
-        }
 
-        // Non-null rows: verify types
-        if (rec.row.GetType(4) != fluss::TypeId::Date) {
-            std::cerr << "ERROR: field 4 expected Date, got "
-                      << static_cast<int>(rec.row.GetType(4)) << std::endl;
-            scan_ok = false;
-        }
-        if (rec.row.GetType(5) != fluss::TypeId::Time) {
-            std::cerr << "ERROR: field 5 expected Time, got "
-                      << static_cast<int>(rec.row.GetType(5)) << std::endl;
-            scan_ok = false;
-        }
-        if (rec.row.GetType(6) != fluss::TypeId::Timestamp) {
-            std::cerr << "ERROR: field 6 expected Timestamp, got "
-                      << static_cast<int>(rec.row.GetType(6)) << std::endl;
-            scan_ok = false;
-        }
-        if (rec.row.GetType(7) != fluss::TypeId::TimestampLtz) {
-            std::cerr << "ERROR: field 7 expected TimestampLtz, got "
-                      << static_cast<int>(rec.row.GetType(7)) << std::endl;
-            scan_ok = false;
-        }
+            // Non-null rows: verify types
+            if (rec.row.GetType(4) != fluss::TypeId::Date) {
+                std::cerr << "ERROR: field 4 expected Date, got "
+                          << static_cast<int>(rec.row.GetType(4)) << std::endl;
+                scan_ok = false;
+            }
+            if (rec.row.GetType(5) != fluss::TypeId::Time) {
+                std::cerr << "ERROR: field 5 expected Time, got "
+                          << static_cast<int>(rec.row.GetType(5)) << std::endl;
+                scan_ok = false;
+            }
+            if (rec.row.GetType(6) != fluss::TypeId::Timestamp) {
+                std::cerr << "ERROR: field 6 expected Timestamp, got "
+                          << static_cast<int>(rec.row.GetType(6)) << std::endl;
+                scan_ok = false;
+            }
+            if (rec.row.GetType(7) != fluss::TypeId::TimestampLtz) {
+                std::cerr << "ERROR: field 7 expected TimestampLtz, got "
+                          << static_cast<int>(rec.row.GetType(7)) << std::endl;
+                scan_ok = false;
+            }
 
-        // Name-based getters (equivalent to index-based above)
-        auto date = rec.row.GetDate("event_date");
-        auto time = rec.row.GetTime("event_time");
-        auto ts_ntz = rec.row.GetTimestamp("created_at");
-        auto ts_ltz = rec.row.GetTimestamp("updated_at");
+            // Name-based getters
+            auto date = rec.row.GetDate("event_date");
+            auto time = rec.row.GetTime("event_time");
+            auto ts_ntz = rec.row.GetTimestamp("created_at");
+            auto ts_ltz = rec.row.GetTimestamp("updated_at");
 
-        std::cout << "  id=" << rec.row.GetInt32("id") << " name=" << rec.row.GetString("name")
-                  << " score=" << rec.row.GetFloat32("score") << " age=" << rec.row.GetInt32("age")
-                  << " date=" << date.Year() << "-" << date.Month() << "-" << date.Day()
-                  << " time=" << time.Hour() << ":" << time.Minute() << ":" << time.Second()
-                  << " ts_ntz=" << ts_ntz.epoch_millis << " ts_ltz=" << ts_ltz.epoch_millis << "+"
-                  << ts_ltz.nano_of_millisecond << "ns" << std::endl;
+            std::cout << "    id=" << rec.row.GetInt32("id")
+                      << " name=" << rec.row.GetString("name")
+                      << " score=" << rec.row.GetFloat32("score")
+                      << " age=" << rec.row.GetInt32("age") << " date=" << date.Year() << "-"
+                      << date.Month() << "-" << date.Day() << " time=" << time.Hour() << ":"
+                      << time.Minute() << ":" << time.Second() << " ts_ntz=" << ts_ntz.epoch_millis
+                      << " ts_ltz=" << ts_ltz.epoch_millis << "+" << ts_ltz.nano_of_millisecond
+                      << "ns" << std::endl;
+        }
     }
 
     if (!found_null_row) {
@@ -246,32 +263,34 @@ int main() {
     fluss::ScanRecords projected_records;
     check("poll_projected", projected_scanner.Poll(5000, projected_records));
 
-    std::cout << "Projected records: " << projected_records.Size() << std::endl;
-    for (const auto& rec : projected_records) {
-        if (rec.row.FieldCount() != 2) {
-            std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
-            scan_ok = false;
-            continue;
-        }
-        // Skip the all-null row
-        if (rec.row.IsNull(0)) {
-            std::cout << "  [null row] skipped" << std::endl;
-            continue;
-        }
-        if (rec.row.GetType(0) != fluss::TypeId::Int) {
-            std::cerr << "ERROR: projected field 0 expected Int, got "
-                      << static_cast<int>(rec.row.GetType(0)) << std::endl;
-            scan_ok = false;
-        }
-        if (rec.row.GetType(1) != fluss::TypeId::TimestampLtz) {
-            std::cerr << "ERROR: projected field 1 expected TimestampLtz, got "
-                      << static_cast<int>(rec.row.GetType(1)) << std::endl;
-            scan_ok = false;
-        }
+    std::cout << "Projected records: " << projected_records.Count() << std::endl;
+    for (const auto& tb : projected_records.Buckets()) {
+        for (const auto& rec : projected_records.Records(tb)) {
+            if (rec.row.FieldCount() != 2) {
+                std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
+                scan_ok = false;
+                continue;
+            }
+            // Skip the all-null row
+            if (rec.row.IsNull(0)) {
+                std::cout << "  [null row] skipped" << std::endl;
+                continue;
+            }
+            if (rec.row.GetType(0) != fluss::TypeId::Int) {
+                std::cerr << "ERROR: projected field 0 expected Int, got "
+                          << static_cast<int>(rec.row.GetType(0)) << std::endl;
+                scan_ok = false;
+            }
+            if (rec.row.GetType(1) != fluss::TypeId::TimestampLtz) {
+                std::cerr << "ERROR: projected field 1 expected TimestampLtz, got "
+                          << static_cast<int>(rec.row.GetType(1)) << std::endl;
+                scan_ok = false;
+            }
 
-        auto ts = rec.row.GetTimestamp(1);
-        std::cout << "  id=" << rec.row.GetInt32(0) << " updated_at=" << ts.epoch_millis << "+"
-                  << ts.nano_of_millisecond << "ns" << std::endl;
+            auto ts = rec.row.GetTimestamp(1);
+            std::cout << "  id=" << rec.row.GetInt32(0) << " updated_at=" << ts.epoch_millis << "+"
+                      << ts.nano_of_millisecond << "ns" << std::endl;
+        }
     }
 
     // 7b) Projected scan by column names — same columns as above but using names
@@ -287,32 +306,34 @@ int main() {
     fluss::ScanRecords name_projected_records;
     check("poll_name_projected", name_projected_scanner.Poll(5000, name_projected_records));
 
-    std::cout << "Name-projected records: " << name_projected_records.Size() << std::endl;
-    for (const auto& rec : name_projected_records) {
-        if (rec.row.FieldCount() != 2) {
-            std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
-            scan_ok = false;
-            continue;
-        }
-        // Skip the all-null row
-        if (rec.row.IsNull(0)) {
-            std::cout << "  [null row] skipped" << std::endl;
-            continue;
-        }
-        if (rec.row.GetType(0) != fluss::TypeId::Int) {
-            std::cerr << "ERROR: name-projected field 0 expected Int, got "
-                      << static_cast<int>(rec.row.GetType(0)) << std::endl;
-            scan_ok = false;
-        }
-        if (rec.row.GetType(1) != fluss::TypeId::TimestampLtz) {
-            std::cerr << "ERROR: name-projected field 1 expected TimestampLtz, got "
-                      << static_cast<int>(rec.row.GetType(1)) << std::endl;
-            scan_ok = false;
-        }
+    std::cout << "Name-projected records: " << name_projected_records.Count() << std::endl;
+    for (const auto& tb : name_projected_records.Buckets()) {
+        for (const auto& rec : name_projected_records.Records(tb)) {
+            if (rec.row.FieldCount() != 2) {
+                std::cerr << "ERROR: expected 2 fields, got " << rec.row.FieldCount() << std::endl;
+                scan_ok = false;
+                continue;
+            }
+            // Skip the all-null row
+            if (rec.row.IsNull(0)) {
+                std::cout << "  [null row] skipped" << std::endl;
+                continue;
+            }
+            if (rec.row.GetType(0) != fluss::TypeId::Int) {
+                std::cerr << "ERROR: name-projected field 0 expected Int, got "
+                          << static_cast<int>(rec.row.GetType(0)) << std::endl;
+                scan_ok = false;
+            }
+            if (rec.row.GetType(1) != fluss::TypeId::TimestampLtz) {
+                std::cerr << "ERROR: name-projected field 1 expected TimestampLtz, got "
+                          << static_cast<int>(rec.row.GetType(1)) << std::endl;
+                scan_ok = false;
+            }
 
-        auto ts = rec.row.GetTimestamp(1);
-        std::cout << "  id=" << rec.row.GetInt32(0) << " updated_at=" << ts.epoch_millis << "+"
-                  << ts.nano_of_millisecond << "ns" << std::endl;
+            auto ts = rec.row.GetTimestamp(1);
+            std::cout << "  id=" << rec.row.GetInt32(0) << " updated_at=" << ts.epoch_millis << "+"
+                      << ts.nano_of_millisecond << "ns" << std::endl;
+        }
     }
 
     if (scan_ok) {
@@ -356,8 +377,8 @@ int main() {
 
     std::unordered_map<int32_t, int64_t> timestamp_offsets;
     check("list_timestamp_offsets",
-          admin.ListOffsets(table_path, all_bucket_ids,
-                            fluss::OffsetSpec::Timestamp(timestamp_ms), timestamp_offsets));
+          admin.ListOffsets(table_path, all_bucket_ids, fluss::OffsetSpec::Timestamp(timestamp_ms),
+                            timestamp_offsets));
     std::cout << "Offsets for timestamp " << timestamp_ms << " (1 hour ago):" << std::endl;
     for (const auto& [bucket_id, offset] : timestamp_offsets) {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
@@ -381,15 +402,21 @@ int main() {
     fluss::ScanRecords batch_records;
     check("poll_batch", batch_scanner.Poll(5000, batch_records));
 
-    std::cout << "Scanned " << batch_records.Size() << " records from batch subscription"
+    std::cout << "Scanned " << batch_records.Count() << " records from batch subscription"
               << std::endl;
-    for (size_t i = 0; i < batch_records.Size() && i < 5; ++i) {
-        const auto& rec = batch_records[i];
-        std::cout << "  Record " << i << ": bucket_id=" << rec.bucket_id
-                  << ", offset=" << rec.offset << ", timestamp=" << rec.timestamp << std::endl;
-    }
-    if (batch_records.Size() > 5) {
-        std::cout << "  ... and " << (batch_records.Size() - 5) << " more records" << std::endl;
+    for (const auto& tb : batch_records.Buckets()) {
+        size_t shown = 0;
+        for (const auto& rec : batch_records.Records(tb)) {
+            if (shown < 5) {
+                std::cout << "  bucket_id=" << tb.bucket_id << ", offset=" << rec.offset
+                          << ", timestamp=" << rec.timestamp << std::endl;
+            }
+            ++shown;
+        }
+        if (shown > 5) {
+            std::cout << "  ... and " << (shown - 5) << " more records in bucket " << tb.bucket_id
+                      << std::endl;
+        }
     }
 
     // 9.1) Unsubscribe from a bucket
@@ -520,11 +547,13 @@ int main() {
 
         fluss::ScanRecords arrow_write_records;
         check("poll_arrow_write", arrow_write_scanner.Poll(5000, arrow_write_records));
-        std::cout << "Scanned " << arrow_write_records.Size()
+        std::cout << "Scanned " << arrow_write_records.Count()
                   << " records written via AppendArrowBatch:" << std::endl;
-        for (const auto& rec : arrow_write_records) {
-            std::cout << "  id=" << rec.row.GetInt32(0) << " name=" << rec.row.GetString(1)
-                      << " score=" << rec.row.GetFloat32(2) << std::endl;
+        for (const auto& tb : arrow_write_records.Buckets()) {
+            for (const auto& rec : arrow_write_records.Records(tb)) {
+                std::cout << "  id=" << rec.row.GetInt32(0) << " name=" << rec.row.GetString(1)
+                          << " score=" << rec.row.GetFloat32(2) << std::endl;
+            }
         }
     }
 
@@ -591,11 +620,13 @@ int main() {
     fluss::ScanRecords decimal_records;
     check("poll_decimal", decimal_scanner.Poll(5000, decimal_records));
 
-    std::cout << "Scanned decimal records: " << decimal_records.Size() << std::endl;
-    for (const auto& rec : decimal_records) {
-        std::cout << "  id=" << rec.row.GetInt32(0) << " price=" << rec.row.GetDecimalString(1)
-                  << " amount=" << rec.row.GetDecimalString(2)
-                  << " is_decimal=" << rec.row.IsDecimal(1) << std::endl;
+    std::cout << "Scanned decimal records: " << decimal_records.Count() << std::endl;
+    for (const auto& tb : decimal_records.Buckets()) {
+        for (const auto& rec : decimal_records.Records(tb)) {
+            std::cout << "  id=" << rec.row.GetInt32(0) << " price=" << rec.row.GetDecimalString(1)
+                      << " amount=" << rec.row.GetDecimalString(2)
+                      << " is_decimal=" << rec.row.IsDecimal(1) << std::endl;
+        }
     }
 
     // 14) Partitioned table example
@@ -690,14 +721,15 @@ int main() {
 
     fluss::ScanRecords partition_records;
     check("poll_partitioned", partition_scanner.Poll(5000, partition_records));
-    std::cout << "Scanned " << partition_records.Size() << " records from partitioned table"
+    std::cout << "Scanned " << partition_records.Count() << " records from partitioned table"
               << std::endl;
-    for (size_t i = 0; i < partition_records.Size(); ++i) {
-        const auto& rec = partition_records[i];
-        std::cout << "  Record " << i << ": partition_id="
-                  << (rec.partition_id.has_value() ? std::to_string(*rec.partition_id) : "none")
-                  << ", id=" << rec.row.GetInt32(0) << ", region=" << rec.row.GetString(1)
-                  << ", value=" << rec.row.GetInt64(2) << std::endl;
+    for (const auto& tb : partition_records.Buckets()) {
+        for (const auto& rec : partition_records.Records(tb)) {
+            std::cout << "  partition_id="
+                      << (tb.partition_id.has_value() ? std::to_string(*tb.partition_id) : "none")
+                      << ", id=" << rec.row.GetInt32(0) << ", region=" << rec.row.GetString(1)
+                      << ", value=" << rec.row.GetInt64(2) << std::endl;
+        }
     }
 
     // 14.2) subscribe_partition_buckets: batch subscribe to all partitions at once
@@ -717,13 +749,13 @@ int main() {
 
     fluss::ScanRecords partition_batch_records;
     check("poll_partition_batch", partition_batch_scanner.Poll(5000, partition_batch_records));
-    std::cout << "Scanned " << partition_batch_records.Size()
+    std::cout << "Scanned " << partition_batch_records.Count()
               << " records from batch partition subscription" << std::endl;
-    for (size_t i = 0; i < partition_batch_records.Size(); ++i) {
-        const auto& rec = partition_batch_records[i];
-        std::cout << "  Record " << i << ": id=" << rec.row.GetInt32(0)
-                  << ", region=" << rec.row.GetString(1) << ", value=" << rec.row.GetInt64(2)
-                  << std::endl;
+    for (const auto& tb : partition_batch_records.Buckets()) {
+        for (const auto& rec : partition_batch_records.Records(tb)) {
+            std::cout << "  id=" << rec.row.GetInt32(0) << ", region=" << rec.row.GetString(1)
+                      << ", value=" << rec.row.GetInt64(2) << std::endl;
+        }
     }
 
     // 14.3) UnsubscribePartition: unsubscribe from one partition, verify remaining
@@ -743,12 +775,12 @@ int main() {
 
     fluss::ScanRecords unsub_records;
     check("poll_after_unsub", unsub_partition_scanner.Poll(5000, unsub_records));
-    std::cout << "After unsubscribe, scanned " << unsub_records.Size() << " records" << std::endl;
-    for (size_t i = 0; i < unsub_records.Size(); ++i) {
-        const auto& rec = unsub_records[i];
-        std::cout << "  Record " << i << ": id=" << rec.row.GetInt32(0)
-                  << ", region=" << rec.row.GetString(1) << ", value=" << rec.row.GetInt64(2)
-                  << std::endl;
+    std::cout << "After unsubscribe, scanned " << unsub_records.Count() << " records" << std::endl;
+    for (const auto& tb : unsub_records.Buckets()) {
+        for (const auto& rec : unsub_records.Records(tb)) {
+            std::cout << "  id=" << rec.row.GetInt32(0) << ", region=" << rec.row.GetString(1)
+                      << ", value=" << rec.row.GetInt64(2) << std::endl;
+        }
     }
 
     // Cleanup

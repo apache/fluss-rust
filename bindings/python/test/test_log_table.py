@@ -492,11 +492,22 @@ async def test_partitioned_table_append_scan(connection, admin):
         (8, "EU", 800),
     ]
 
-    records = _poll_records(scanner, expected_count=8)
-    assert len(records) == 8
+    # Poll and verify per-bucket grouping
+    all_records = []
+    deadline = time.monotonic() + 10
+    while len(all_records) < 8 and time.monotonic() < deadline:
+        scan_records = scanner.poll(5000)
+        for bucket, bucket_records in scan_records.items():
+            assert bucket.partition_id is not None, "Partitioned table should have partition_id"
+            # All records in a bucket should belong to the same partition
+            regions = {r.row["region"] for r in bucket_records}
+            assert len(regions) == 1, f"Bucket has mixed regions: {regions}"
+            all_records.extend(bucket_records)
+
+    assert len(all_records) == 8
 
     collected = sorted(
-        [(r.row["id"], r.row["region"], r.row["value"]) for r in records],
+        [(r.row["id"], r.row["region"], r.row["value"]) for r in all_records],
         key=lambda x: x[0],
     )
     assert collected == expected
