@@ -1321,20 +1321,26 @@ unsafe fn delete_lookuper(lookuper: *mut Lookuper) {
 }
 
 impl Lookuper {
-    /// Pad row with Null to full schema width (same as UpsertWriter::pad_row).
-    /// Ensures the PK row is always full-width, matching Python's behavior.
-    fn pad_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
-        let num_columns = self.table_info.get_schema().columns().len();
-        if row.values.len() < num_columns {
-            row.values.resize(num_columns, fcore::row::Datum::Null);
+    /// Build a dense PK-only row from a (possibly sparse) input row.
+    /// The user may set PK values at their full schema positions (e.g. [0, 2])
+    /// via name-based Set(). We compact them into [0, 1, …] to match
+    /// the lookup_row_type the core KeyEncoder expects.
+    fn dense_pk_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
+        let pk_indices = self.table_info.get_schema().primary_key_indexes();
+        let mut dense = fcore::row::GenericRow::new(pk_indices.len());
+        for (dense_idx, &schema_idx) in pk_indices.iter().enumerate() {
+            if schema_idx < row.values.len() {
+                dense.values[dense_idx] =
+                    std::mem::replace(&mut row.values[schema_idx], fcore::row::Datum::Null);
+            }
         }
-        row
+        dense
     }
 
     fn lookup(&mut self, pk_row: &GenericRowInner) -> Box<LookupResultInner> {
         let schema = self.table_info.get_schema();
         let generic_row = match types::resolve_row_types(&pk_row.row, Some(schema)) {
-            Ok(r) => self.pad_row(r),
+            Ok(r) => self.dense_pk_row(r),
             Err(e) => {
                 return Box::new(LookupResultInner::from_error(
                     CLIENT_ERROR_CODE,
