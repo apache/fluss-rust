@@ -266,32 +266,7 @@ std::string RowView::GetDecimalString(size_t idx) const {
 // ScanRecords — backed by opaque Rust ScanResultInner
 // ============================================================================
 
-ScanRecords::ScanRecords() noexcept = default;
-
-ScanRecords::~ScanRecords() noexcept { Destroy(); }
-
-void ScanRecords::Destroy() noexcept {
-    if (inner_) {
-        rust::Box<ffi::ScanResultInner>::from_raw(inner_);
-        inner_ = nullptr;
-        column_map_.reset();
-    }
-}
-
-ScanRecords::ScanRecords(ScanRecords&& other) noexcept
-    : inner_(other.inner_), column_map_(std::move(other.column_map_)) {
-    other.inner_ = nullptr;
-}
-
-ScanRecords& ScanRecords::operator=(ScanRecords&& other) noexcept {
-    if (this != &other) {
-        Destroy();
-        inner_ = other.inner_;
-        column_map_ = std::move(other.column_map_);
-        other.inner_ = nullptr;
-    }
-    return *this;
-}
+// ScanRecords constructor, destructor, move operations are all defaulted in the header.
 
 size_t ScanRecords::Size() const { return inner_ ? inner_->sv_record_count() : 0; }
 
@@ -331,7 +306,7 @@ ScanRecord ScanRecords::operator[](size_t idx) const {
                       inner_->sv_offset(idx),
                       inner_->sv_timestamp(idx),
                       static_cast<ChangeType>(inner_->sv_change_type(idx)),
-                      RowView(inner_, idx, GetColumnMap().get())};
+                      RowView(inner_, idx, GetColumnMap())};
 }
 
 ScanRecord ScanRecords::Iterator::operator*() const { return owner_->operator[](idx_); }
@@ -1107,8 +1082,10 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
                                  std::string(result_box->sv_error_message()));
     }
 
-    out.Destroy();
-    out.inner_ = result_box.into_raw();
+    out.column_map_.reset();
+    out.inner_ = std::shared_ptr<ffi::ScanResultInner>(
+        result_box.into_raw(),
+        [](ffi::ScanResultInner* p) { rust::Box<ffi::ScanResultInner>::from_raw(p); });
     return utils::make_ok();
 }
 

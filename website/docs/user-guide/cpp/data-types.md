@@ -58,28 +58,31 @@ row.Set("nickname", nullptr);    // set to null
 
 Field values are read through `RowView` (from scan results) and `LookupResult` (from lookups), not through `GenericRow`. Both provide the same getter interface with zero-copy access to string and bytes data.
 
-:::warning Lifetime
-`RowView` borrows from `ScanRecords`. It must not outlive the `ScanRecords` that produced it (similar to `std::string_view` borrowing from `std::string`).
+`ScanRecord` is a value type — it can be freely copied, stored, and accumulated across multiple `Poll()` calls via reference counting.
+
+:::note string_view Lifetime
+`GetString()` returns `std::string_view` that borrows from the underlying data. The `string_view` is valid as long as any `ScanRecord` referencing the same poll result is alive. Copy to `std::string` if you need the value after all records are gone.
 :::
 
 ```cpp
-// DON'T — string_view dangles after ScanRecords is destroyed:
+// ScanRecord is a value type — safe to store and accumulate:
+std::vector<fluss::ScanRecord> all_records;
+fluss::ScanRecords records;
+scanner.Poll(5000, records);
+for (const auto& rec : records) {
+    all_records.push_back(rec);                    // safe! ref-counted
+    auto name = rec.row.GetString(0);              // zero-copy string_view
+    auto owned = std::string(rec.row.GetString(0)); // explicit copy when needed
+}
+
+// DON'T — string_view dangles after all records referencing the data are destroyed:
 std::string_view dangling;
 {
     fluss::ScanRecords records;
     scanner.Poll(5000, records);
-    dangling = records[0].row.GetString(0); // points into ScanRecords memory
+    dangling = records[0].row.GetString(0);
 }
-// dangling is undefined behavior here — ScanRecords is gone!
-
-// DO — use values within ScanRecords lifetime, or copy when you need ownership:
-fluss::ScanRecords records;
-scanner.Poll(5000, records);
-for (const auto& rec : records) {
-    auto name = rec.row.GetString(0);              // zero-copy string_view
-    auto owned = std::string(rec.row.GetString(0)); // explicit copy when needed
-    process(owned);
-}
+// dangling is undefined behavior here — no ScanRecord keeps the data alive!
 ```
 
 ### From Scan Results (RowView)

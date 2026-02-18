@@ -617,15 +617,15 @@ class GenericRow {
 
 /// Read-only row view for scan results. Zero-copy access to string and bytes data.
 ///
-/// WARNING: RowView borrows from ScanRecords. It must not outlive the ScanRecords
-/// that produced it (similar to std::string_view borrowing from std::string).
+/// RowView shares ownership of the underlying scan data via reference counting,
+/// so it can safely outlive the ScanRecords that produced it.
 class RowView : public detail::NamedGetters<RowView> {
     friend struct detail::NamedGetters<RowView>;
 
    public:
-    RowView(const ffi::ScanResultInner* inner, size_t record_idx,
-            const detail::ColumnMap* column_map)
-        : inner_(inner), record_idx_(record_idx), column_map_(column_map) {}
+    RowView(std::shared_ptr<const ffi::ScanResultInner> inner, size_t record_idx,
+            std::shared_ptr<const detail::ColumnMap> column_map)
+        : inner_(std::move(inner)), record_idx_(record_idx), column_map_(std::move(column_map)) {}
 
     // ── Index-based getters ──────────────────────────────────────────
     size_t FieldCount() const;
@@ -665,15 +665,15 @@ class RowView : public detail::NamedGetters<RowView> {
         }
         return detail::ResolveColumn(*column_map_, name);
     }
-    const ffi::ScanResultInner* inner_;
+    std::shared_ptr<const ffi::ScanResultInner> inner_;
     size_t record_idx_;
-    const detail::ColumnMap* column_map_;  // borrowed from ScanRecords (same lifetime as inner_)
+    std::shared_ptr<const detail::ColumnMap> column_map_;
 };
 
 /// A single scan record. Contains metadata and a RowView for field access.
 ///
-/// WARNING: ScanRecord contains a RowView that borrows from ScanRecords.
-/// It must not outlive the ScanRecords that produced it.
+/// ScanRecord is a value type that can be freely copied, stored, and
+/// accumulated across multiple Poll() calls.
 struct ScanRecord {
     int32_t bucket_id;
     std::optional<int64_t> partition_id;
@@ -685,13 +685,13 @@ struct ScanRecord {
 
 class ScanRecords {
    public:
-    ScanRecords() noexcept;
-    ~ScanRecords() noexcept;
+    ScanRecords() noexcept = default;
+    ~ScanRecords() noexcept = default;
 
     ScanRecords(const ScanRecords&) = delete;
     ScanRecords& operator=(const ScanRecords&) = delete;
-    ScanRecords(ScanRecords&& other) noexcept;
-    ScanRecords& operator=(ScanRecords&& other) noexcept;
+    ScanRecords(ScanRecords&&) noexcept = default;
+    ScanRecords& operator=(ScanRecords&&) noexcept = default;
 
     size_t Size() const;
     bool Empty() const;
@@ -720,9 +720,8 @@ class ScanRecords {
     /// Returns the column name-to-index map (lazy-built, cached).
     const std::shared_ptr<detail::ColumnMap>& GetColumnMap() const;
     friend class LogScanner;
-    void Destroy() noexcept;
     void BuildColumnMap() const;
-    ffi::ScanResultInner* inner_{nullptr};
+    std::shared_ptr<ffi::ScanResultInner> inner_;
     mutable std::shared_ptr<detail::ColumnMap> column_map_;
 };
 
