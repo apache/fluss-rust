@@ -171,10 +171,9 @@ pk.Set("user_id", 1001);
 pk.Set("region", "APAC");
 pk.Set("zone", static_cast<int64_t>(1));
 
-bool found = false;
-fluss::GenericRow result;
-lookuper.Lookup(pk, found, result);
-if (found) {
+fluss::LookupResult result;
+lookuper.Lookup(pk, result);
+if (result.Found()) {
     std::cout << "score=" << result.GetInt64(3) << std::endl;
 }
 ```

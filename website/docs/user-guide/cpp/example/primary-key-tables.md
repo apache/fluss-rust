@@ -120,13 +120,12 @@ table.NewLookup().CreateLookuper(lookuper);
 auto pk_row = table.NewRow();
 pk_row.Set("id", 1);
 
-bool found = false;
-fluss::GenericRow result_row;
-lookuper.Lookup(pk_row, found, result_row);
+fluss::LookupResult result;
+lookuper.Lookup(pk_row, result);
 
-if (found) {
-    std::cout << "Found: name=" << result_row.GetString(1)
-              << ", age=" << result_row.GetInt64(2) << std::endl;
+if (result.Found()) {
+    std::cout << "Found: name=" << result.GetString(1)
+              << ", age=" << result.GetInt64(2) << std::endl;
 } else {
     std::cout << "Not found" << std::endl;
 }

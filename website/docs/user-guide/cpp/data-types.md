@@ -24,6 +24,8 @@ sidebar_position: 3
 
 ## GenericRow Setters
 
+`SetInt32` is used for `TinyInt`, `SmallInt`, and `Int` columns. For `TinyInt` and `SmallInt`, the value is validated at write time — an error is returned if it overflows the column's range (e.g., \[-128, 127\] for `TinyInt`, \[-32768, 32767\] for `SmallInt`).
+
 ```cpp
 fluss::GenericRow row;
 row.SetNull(0);
@@ -52,46 +54,90 @@ row.Set("created_at", fluss::Timestamp::FromMillis(1700000000000));
 row.Set("nickname", nullptr);    // set to null
 ```
 
-## GenericRow Getters
+## Reading Field Values
+
+Field values are read through `RowView` (from scan results) and `LookupResult` (from lookups), not through `GenericRow`. Both provide the same getter interface with zero-copy access to string and bytes data.
+
+:::warning Lifetime
+`RowView` borrows from `ScanRecords`. It must not outlive the `ScanRecords` that produced it (similar to `std::string_view` borrowing from `std::string`).
+:::
 
 ```cpp
-std::string name = result_row.GetString(1);
-float score = result_row.GetFloat32(3);
-std::string balance = result_row.DecimalToString(4);
-fluss::Date date = result_row.GetDate(5);
-fluss::Time time = result_row.GetTime(6);
-fluss::Timestamp ts = result_row.GetTimestamp(7);
+// DON'T — string_view dangles after ScanRecords is destroyed:
+std::string_view dangling;
+{
+    fluss::ScanRecords records;
+    scanner.Poll(5000, records);
+    dangling = records[0].row.GetString(0); // points into ScanRecords memory
+}
+// dangling is undefined behavior here — ScanRecords is gone!
+
+// DO — use values within ScanRecords lifetime, or copy when you need ownership:
+fluss::ScanRecords records;
+scanner.Poll(5000, records);
+for (const auto& rec : records) {
+    auto name = rec.row.GetString(0);              // zero-copy string_view
+    auto owned = std::string(rec.row.GetString(0)); // explicit copy when needed
+    process(owned);
+}
 ```
 
-## DatumType Enum
+### From Scan Results (RowView)
 
-| DatumType       | C++ Type               | Getter                 |
-|-----------------|------------------------|------------------------|
-| `Null`          | --                     | `IsNull(idx)`          |
-| `Bool`          | `bool`                 | `GetBool(idx)`         |
-| `Int32`         | `int32_t`              | `GetInt32(idx)`        |
-| `Int64`         | `int64_t`              | `GetInt64(idx)`        |
-| `Float32`       | `float`                | `GetFloat32(idx)`      |
-| `Float64`       | `double`               | `GetFloat64(idx)`      |
-| `String`        | `std::string`          | `GetString(idx)`       |
-| `Bytes`         | `std::vector<uint8_t>` | `GetBytes(idx)`        |
-| `Date`          | `Date`                 | `GetDate(idx)`         |
-| `Time`          | `Time`                 | `GetTime(idx)`         |
-| `TimestampNtz`  | `Timestamp`            | `GetTimestamp(idx)`    |
-| `TimestampLtz`  | `Timestamp`            | `GetTimestamp(idx)`    |
-| `DecimalString` | `std::string`          | `DecimalToString(idx)` |
+```cpp
+for (const auto& rec : records) {
+    auto name = rec.row.GetString(1);          // zero-copy string_view
+    float score = rec.row.GetFloat32(3);
+    auto balance = rec.row.GetDecimalString(4); // std::string (already owned)
+    fluss::Date date = rec.row.GetDate(5);
+    fluss::Time time = rec.row.GetTime(6);
+    fluss::Timestamp ts = rec.row.GetTimestamp(7);
+}
+```
+
+### From Lookup Results (LookupResult)
+
+```cpp
+fluss::LookupResult result;
+lookuper.Lookup(pk_row, result);
+if (result.Found()) {
+    auto name = result.GetString(1);  // zero-copy string_view
+    int64_t age = result.GetInt64(2);
+}
+```
+
+## TypeId Enum
+
+`TinyInt` and `SmallInt` values are widened to `int32_t` on read.
+
+| TypeId          | C++ Type                                    | Getter                    |
+|-----------------|---------------------------------------------|---------------------------|
+| `Boolean`       | `bool`                                      | `GetBool(idx)`            |
+| `TinyInt`       | `int32_t`                                   | `GetInt32(idx)`           |
+| `SmallInt`      | `int32_t`                                   | `GetInt32(idx)`           |
+| `Int`           | `int32_t`                                   | `GetInt32(idx)`           |
+| `BigInt`        | `int64_t`                                   | `GetInt64(idx)`           |
+| `Float`         | `float`                                     | `GetFloat32(idx)`         |
+| `Double`        | `double`                                    | `GetFloat64(idx)`         |
+| `String`        | `std::string_view`                          | `GetString(idx)`          |
+| `Bytes`         | `std::pair<const uint8_t*, size_t>`         | `GetBytes(idx)`           |
+| `Date`          | `Date`                                      | `GetDate(idx)`            |
+| `Time`          | `Time`                                      | `GetTime(idx)`            |
+| `Timestamp`     | `Timestamp`                                 | `GetTimestamp(idx)`       |
+| `TimestampLtz`  | `Timestamp`                                 | `GetTimestamp(idx)`       |
+| `Decimal`       | `std::string`                               | `GetDecimalString(idx)`   |
 
 ## Type Checking
 
 ```cpp
-if (rec.row.GetType(0) == fluss::DatumType::Int32) {
+if (rec.row.GetType(0) == fluss::TypeId::Int) {
     int32_t value = rec.row.GetInt32(0);
 }
 if (rec.row.IsNull(1)) {
     // field is null
 }
 if (rec.row.IsDecimal(2)) {
-    std::string decimal_str = rec.row.DecimalToString(2);
+    std::string decimal_str = rec.row.GetDecimalString(2);
 }
 ```
 

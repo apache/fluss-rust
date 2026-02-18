@@ -145,9 +145,9 @@ Complete API reference for the Fluss C++ client.
 
 ## `Lookuper`
 
-| Method                                                                     |  Description                |
-|----------------------------------------------------------------------------|-----------------------------|
-| `Lookup(const GenericRow& pk_row, bool& found, GenericRow& out) -> Result` | Lookup a row by primary key |
+| Method                                                        |  Description                |
+|---------------------------------------------------------------|-----------------------------|
+| `Lookup(const GenericRow& pk_row, LookupResult& out) -> Result` | Lookup a row by primary key |
 
 ## `LogScanner`
 
@@ -164,21 +164,7 @@ Complete API reference for the Fluss C++ client.
 
 ## `GenericRow`
 
-### Index-Based Getters
-
-| Method                                         |  Description                   |
-|------------------------------------------------|--------------------------------|
-| `GetBool(size_t idx) -> bool`                  | Get boolean value at index     |
-| `GetInt32(size_t idx) -> int32_t`              | Get 32-bit integer at index    |
-| `GetInt64(size_t idx) -> int64_t`              | Get 64-bit integer at index    |
-| `GetFloat32(size_t idx) -> float`              | Get 32-bit float at index      |
-| `GetFloat64(size_t idx) -> double`             | Get 64-bit float at index      |
-| `GetString(size_t idx) -> std::string`         | Get string at index            |
-| `GetBytes(size_t idx) -> std::vector<uint8_t>` | Get binary data at index       |
-| `GetDate(size_t idx) -> Date`                  | Get date at index              |
-| `GetTime(size_t idx) -> Time`                  | Get time at index              |
-| `GetTimestamp(size_t idx) -> Timestamp`        | Get timestamp at index         |
-| `DecimalToString(size_t idx) -> std::string`   | Get decimal as string at index |
+`GenericRow` is a **write-only** row used for append, upsert, delete, and lookup key construction. For reading field values from scan or lookup results, see [`RowView`](#rowview) and [`LookupResult`](#lookupresult).
 
 ### Index-Based Setters
 
@@ -215,34 +201,121 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 | `Set(const std::string& name, const Time& value)`        | Set time by column name           |
 | `Set(const std::string& name, const Timestamp& value)`   | Set timestamp by column name      |
 
-### Row Inspection
+## `RowView`
 
-| Method                             |  Description                     |
-|------------------------------------|----------------------------------|
-| `FieldCount() -> size_t`           | Get the number of fields         |
-| `GetType(size_t idx) -> DatumType` | Get the datum type at index      |
-| `IsNull(size_t idx) -> bool`       | Check if field is null           |
-| `IsDecimal(size_t idx) -> bool`    | Check if field is a decimal type |
+Read-only row view for scan results. Provides zero-copy access to string and bytes data.
+
+:::warning Lifetime
+`RowView` borrows from `ScanRecords`. It must not outlive the `ScanRecords` that produced it (similar to `std::string_view` borrowing from `std::string`).
+:::
+
+### Index-Based Getters
+
+| Method                                                     |  Description                   |
+|------------------------------------------------------------|--------------------------------|
+| `FieldCount() -> size_t`                                   | Get the number of fields       |
+| `GetType(size_t idx) -> TypeId`                            | Get the type at index          |
+| `IsNull(size_t idx) -> bool`                               | Check if field is null         |
+| `GetBool(size_t idx) -> bool`                              | Get boolean value at index     |
+| `GetInt32(size_t idx) -> int32_t`                          | Get 32-bit integer at index    |
+| `GetInt64(size_t idx) -> int64_t`                          | Get 64-bit integer at index    |
+| `GetFloat32(size_t idx) -> float`                          | Get 32-bit float at index      |
+| `GetFloat64(size_t idx) -> double`                         | Get 64-bit float at index      |
+| `GetString(size_t idx) -> std::string_view`                | Get string at index (zero-copy)|
+| `GetBytes(size_t idx) -> std::pair<const uint8_t*, size_t>`| Get binary data at index (zero-copy)|
+| `GetDate(size_t idx) -> Date`                              | Get date at index              |
+| `GetTime(size_t idx) -> Time`                              | Get time at index              |
+| `GetTimestamp(size_t idx) -> Timestamp`                    | Get timestamp at index         |
+| `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
+| `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
+
+### Name-Based Getters
+
+| Method                                                  |  Description                       |
+|---------------------------------------------------------|------------------------------------|
+| `IsNull(const std::string& name) -> bool`               | Check if field is null by name     |
+| `GetBool(const std::string& name) -> bool`              | Get boolean by column name         |
+| `GetInt32(const std::string& name) -> int32_t`          | Get 32-bit integer by column name  |
+| `GetInt64(const std::string& name) -> int64_t`          | Get 64-bit integer by column name  |
+| `GetFloat32(const std::string& name) -> float`          | Get 32-bit float by column name    |
+| `GetFloat64(const std::string& name) -> double`         | Get 64-bit float by column name    |
+| `GetString(const std::string& name) -> std::string_view`| Get string by column name          |
+| `GetBytes(const std::string& name) -> std::pair<const uint8_t*, size_t>` | Get binary data by column name |
+| `GetDate(const std::string& name) -> Date`              | Get date by column name            |
+| `GetTime(const std::string& name) -> Time`              | Get time by column name            |
+| `GetTimestamp(const std::string& name) -> Timestamp`    | Get timestamp by column name       |
+| `GetDecimalString(const std::string& name) -> std::string` | Get decimal as string by column name |
 
 ## `ScanRecord`
 
-| Field          | Type                     | Description                                                         |
-|----------------|--------------------------|---------------------------------------------------------------------|
-| `bucket_id`    | `int32_t`                | Bucket this record belongs to                                       |
-| `partition_id` | `std::optional<int64_t>` | Partition ID (present only for partitioned tables)                  |
-| `offset`       | `int64_t`                | Record offset in the log                                            |
-| `timestamp`    | `int64_t`                | Record timestamp                                                    |
-| `change_type`  | `ChangeType`             | Change type (AppendOnly, Insert, UpdateBefore, UpdateAfter, Delete) |
-| `row`          | `RowView`                | Row data                                                            |
+:::warning Lifetime
+`ScanRecord` contains a `RowView` that borrows from `ScanRecords`. It must not outlive the `ScanRecords` that produced it.
+:::
+
+| Field          | Type                    |  Description                     |
+|----------------|-------------------------|----------------------------------|
+| `bucket_id`    | `int32_t`               | Bucket this record belongs to    |
+| `partition_id` | `std::optional<int64_t>`| Partition ID (if partitioned)    |
+| `offset`       | `int64_t`               | Record offset in the log         |
+| `timestamp`    | `int64_t`               | Record timestamp                 |
+| `change_type`  | `ChangeType`            | Type of change (see `ChangeType`)|
+| `row`          | `RowView`               | Read-only row view for field access |
 
 ## `ScanRecords`
 
-| Method                                        |  Description                               |
-|-----------------------------------------------|--------------------------------------------|
-| `Size() -> size_t`                            | Number of records                          |
-| `Empty() -> bool`                             | Check if empty                             |
-| `operator[](size_t idx) -> const ScanRecord&` | Access record by index                     |
-| `begin() / end()`                             | Iterator support for range-based for loops |
+| Method                                 |  Description                               |
+|----------------------------------------|--------------------------------------------|
+| `Size() -> size_t`                     | Number of records                          |
+| `Empty() -> bool`                      | Check if empty                             |
+| `operator[](size_t idx) -> ScanRecord` | Access record by index                     |
+| `begin() / end()`                      | Iterator support for range-based for loops |
+
+## `LookupResult`
+
+Read-only result for lookup operations. Provides zero-copy access to field values.
+
+### Metadata
+
+| Method                      |  Description                   |
+|-----------------------------|--------------------------------|
+| `Found() -> bool`           | Whether a matching row was found |
+| `FieldCount() -> size_t`    | Get the number of fields       |
+
+### Index-Based Getters
+
+| Method                                                     |  Description                   |
+|------------------------------------------------------------|--------------------------------|
+| `GetType(size_t idx) -> TypeId`                            | Get the type at index          |
+| `IsNull(size_t idx) -> bool`                               | Check if field is null         |
+| `GetBool(size_t idx) -> bool`                              | Get boolean value at index     |
+| `GetInt32(size_t idx) -> int32_t`                          | Get 32-bit integer at index    |
+| `GetInt64(size_t idx) -> int64_t`                          | Get 64-bit integer at index    |
+| `GetFloat32(size_t idx) -> float`                          | Get 32-bit float at index      |
+| `GetFloat64(size_t idx) -> double`                         | Get 64-bit float at index      |
+| `GetString(size_t idx) -> std::string_view`                | Get string at index (zero-copy)|
+| `GetBytes(size_t idx) -> std::pair<const uint8_t*, size_t>`| Get binary data at index (zero-copy)|
+| `GetDate(size_t idx) -> Date`                              | Get date at index              |
+| `GetTime(size_t idx) -> Time`                              | Get time at index              |
+| `GetTimestamp(size_t idx) -> Timestamp`                    | Get timestamp at index         |
+| `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
+| `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
+
+### Name-Based Getters
+
+| Method                                                  |  Description                       |
+|---------------------------------------------------------|------------------------------------|
+| `IsNull(const std::string& name) -> bool`               | Check if field is null by name     |
+| `GetBool(const std::string& name) -> bool`              | Get boolean by column name         |
+| `GetInt32(const std::string& name) -> int32_t`          | Get 32-bit integer by column name  |
+| `GetInt64(const std::string& name) -> int64_t`          | Get 64-bit integer by column name  |
+| `GetFloat32(const std::string& name) -> float`          | Get 32-bit float by column name    |
+| `GetFloat64(const std::string& name) -> double`         | Get 64-bit float by column name    |
+| `GetString(const std::string& name) -> std::string_view`| Get string by column name          |
+| `GetBytes(const std::string& name) -> std::pair<const uint8_t*, size_t>` | Get binary data by column name |
+| `GetDate(const std::string& name) -> Date`              | Get date by column name            |
+| `GetTime(const std::string& name) -> Time`              | Get time by column name            |
+| `GetTimestamp(const std::string& name) -> Timestamp`    | Get timestamp by column name       |
+| `GetDecimalString(const std::string& name) -> std::string` | Get decimal as string by column name |
 
 ## `ArrowRecordBatch`
 
@@ -496,25 +569,15 @@ inline const char* ChangeTypeShortString(ChangeType ct) {
 | `TimestampLtz` | Timestamp with timezone    |
 | `Decimal`      | Decimal                    |
 
-### `DatumType`
+### `ChangeType`
 
-| Value           | C++ Type               |  Description                    |
-|-----------------|------------------------|---------------------------------|
-| `Null`          | --                     | Null value                      |
-| `Bool`          | `bool`                 | Boolean                         |
-| `Int32`         | `int32_t`              | 32-bit integer                  |
-| `Int64`         | `int64_t`              | 64-bit integer                  |
-| `Float32`       | `float`                | 32-bit float                    |
-| `Float64`       | `double`               | 64-bit float                    |
-| `String`        | `std::string`          | String                          |
-| `Bytes`         | `std::vector<uint8_t>` | Binary data                     |
-| `DecimalI64`    | `int64_t`              | Decimal (64-bit internal)       |
-| `DecimalI128`   | `__int128`             | Decimal (128-bit internal)      |
-| `DecimalString` | `std::string`          | Decimal (string representation) |
-| `Date`          | `Date`                 | Date                            |
-| `Time`          | `Time`                 | Time                            |
-| `TimestampNtz`  | `Timestamp`            | Timestamp without timezone      |
-| `TimestampLtz`  | `Timestamp`            | Timestamp with timezone         |
+| Value          |  Description                                |
+|----------------|---------------------------------------------|
+| `AppendOnly`   | Append-only record (log tables)             |
+| `Insert`       | Inserted row (PK tables)                    |
+| `UpdateBefore` | Row value before an update (PK tables)      |
+| `UpdateAfter`  | Row value after an update (PK tables)       |
+| `Delete`       | Deleted row (PK tables)                     |
 
 ### `OffsetSpec`
 
