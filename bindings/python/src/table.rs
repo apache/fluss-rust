@@ -23,7 +23,13 @@ use arrow_schema::SchemaRef;
 use fluss::record::to_arrow_schema;
 use fluss::rpc::message::OffsetSpec;
 use indexmap::IndexMap;
-use pyo3::types::IntoPyDict;
+use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{
+    IntoPyDict, PyBool, PyByteArray, PyBytes, PyDate, PyDateAccess, PyDateTime, PyDelta,
+    PyDeltaAccess, PyDict, PyList, PySequence, PySlice, PyTime, PyTimeAccess, PyTuple, PyType,
+    PyTzInfo,
+};
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,14 +58,14 @@ pub struct ScanRecord {
     #[pyo3(get)]
     change_type: ChangeType,
     /// Store row as a Python dict directly
-    row_dict: Py<pyo3::types::PyDict>,
+    row_dict: Py<PyDict>,
 }
 
 #[pymethods]
 impl ScanRecord {
     /// Get the row data as a dictionary
     #[getter]
-    pub fn row(&self, py: Python) -> Py<pyo3::types::PyDict> {
+    pub fn row(&self, py: Python) -> Py<PyDict> {
         self.row_dict.clone_ref(py)
     }
 
@@ -86,7 +92,7 @@ impl ScanRecord {
     ) -> PyResult<Self> {
         let fields = row_type.fields();
         let row = record.row();
-        let dict = pyo3::types::PyDict::new(py);
+        let dict = PyDict::new(py);
 
         for (pos, field) in fields.iter().enumerate() {
             let value = datum_to_python_value(py, row, pos, field.data_type())?;
@@ -199,7 +205,7 @@ impl ScanRecords {
     ///   records[-1]      → ScanRecord (negative index)
     ///   records[1:3]     → list[ScanRecord] (slice)
     ///   records[bucket]  → list[ScanRecord] (by bucket)
-    fn __getitem__(&self, py: Python, key: &Bound<'_, pyo3::PyAny>) -> PyResult<Py<pyo3::PyAny>> {
+    fn __getitem__(&self, py: Python, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Try integer index first
         if let Ok(mut idx) = key.extract::<isize>() {
             let len = self.total_count as isize;
@@ -207,7 +213,7 @@ impl ScanRecords {
                 idx += len;
             }
             if idx < 0 || idx >= len {
-                return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                return Err(PyIndexError::new_err(format!(
                     "index {idx} out of range for ScanRecords of size {len}"
                 )));
             }
@@ -219,12 +225,12 @@ impl ScanRecords {
                 }
                 offset += recs.len();
             }
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            return Err(PyRuntimeError::new_err(
                 "internal error: total_count out of sync with records",
             ));
         }
         // Try slice
-        if let Ok(slice) = key.downcast::<pyo3::types::PySlice>() {
+        if let Ok(slice) = key.downcast::<PySlice>() {
             let indices = slice.indices(self.total_count as isize)?;
             let mut result: Vec<Py<ScanRecord>> = Vec::new();
             let mut i = indices.start;
@@ -247,7 +253,7 @@ impl ScanRecords {
             let recs = self.records(py, &bucket);
             return Ok(recs.into_pyobject(py).unwrap().into_any().unbind());
         }
-        Err(pyo3::exceptions::PyTypeError::new_err(
+        Err(PyTypeError::new_err(
             "index must be int, slice, or TableBucket",
         ))
     }
@@ -367,7 +373,7 @@ impl ScanRecordsBucketIter {
         slf
     }
 
-    fn __next__(&mut self, py: Python) -> Option<Py<pyo3::PyAny>> {
+    fn __next__(&mut self, py: Python) -> Option<Py<PyAny>> {
         if self.bucket_idx >= self.bucket_keys.len() {
             return None;
         }
@@ -1003,9 +1009,9 @@ impl AppendWriter {
 /// Represents different input shapes for a row
 #[derive(FromPyObject)]
 enum RowInput<'py> {
-    Dict(Bound<'py, pyo3::types::PyDict>),
-    Tuple(Bound<'py, pyo3::types::PyTuple>),
-    List(Bound<'py, pyo3::types::PyList>),
+    Dict(Bound<'py, PyDict>),
+    Tuple(Bound<'py, PyTuple>),
+    List(Bound<'py, PyList>),
 }
 
 /// Convert Python row (dict/list/tuple) to GenericRow requiring all schema columns.
@@ -1019,7 +1025,7 @@ pub fn python_to_generic_row(
 
 /// Process a Python sequence (list or tuple) into datums at the target column positions.
 fn process_sequence(
-    seq: &Bound<pyo3::types::PySequence>,
+    seq: &Bound<PySequence>,
     target_indices: &[usize],
     fields: &[fcore::metadata::DataField],
     datums: &mut [fcore::row::Datum<'static>],
@@ -1164,7 +1170,7 @@ fn python_value_to_datum(
         }
         fcore::metadata::DataType::TinyInt(_) => {
             // Strict type checking: reject bool for int columns
-            if value.is_instance_of::<pyo3::types::PyBool>() {
+            if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
                     "Expected int for TinyInt column, got bool. Use 0 or 1 explicitly.".to_string(),
                 ));
@@ -1173,7 +1179,7 @@ fn python_value_to_datum(
             Ok(Datum::Int8(v))
         }
         fcore::metadata::DataType::SmallInt(_) => {
-            if value.is_instance_of::<pyo3::types::PyBool>() {
+            if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
                     "Expected int for SmallInt column, got bool. Use 0 or 1 explicitly."
                         .to_string(),
@@ -1183,7 +1189,7 @@ fn python_value_to_datum(
             Ok(Datum::Int16(v))
         }
         fcore::metadata::DataType::Int(_) => {
-            if value.is_instance_of::<pyo3::types::PyBool>() {
+            if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
                     "Expected int for Int column, got bool. Use 0 or 1 explicitly.".to_string(),
                 ));
@@ -1192,7 +1198,7 @@ fn python_value_to_datum(
             Ok(Datum::Int32(v))
         }
         fcore::metadata::DataType::BigInt(_) => {
-            if value.is_instance_of::<pyo3::types::PyBool>() {
+            if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
                     "Expected int for BigInt column, got bool. Use 0 or 1 explicitly.".to_string(),
                 ));
@@ -1215,9 +1221,9 @@ fn python_value_to_datum(
         fcore::metadata::DataType::Bytes(_) | fcore::metadata::DataType::Binary(_) => {
             // Efficient extraction: downcast to specific type and use bulk copy.
             // PyBytes::as_bytes() and PyByteArray::to_vec() are O(n) bulk copies of the underlying data.
-            if let Ok(bytes) = value.downcast::<pyo3::types::PyBytes>() {
+            if let Ok(bytes) = value.downcast::<PyBytes>() {
                 Ok(bytes.as_bytes().to_vec().into())
-            } else if let Ok(bytearray) = value.downcast::<pyo3::types::PyByteArray>() {
+            } else if let Ok(bytearray) = value.downcast::<PyByteArray>() {
                 Ok(bytearray.to_vec().into())
             } else {
                 Err(FlussError::new_err(format!(
@@ -1307,11 +1313,11 @@ pub fn datum_to_python_value(
         }
         DataType::Bytes(_) => {
             let b = row.get_bytes(pos);
-            Ok(pyo3::types::PyBytes::new(py, b).into_any().unbind())
+            Ok(PyBytes::new(py, b).into_any().unbind())
         }
         DataType::Binary(binary_type) => {
             let b = row.get_binary(pos, binary_type.length());
-            Ok(pyo3::types::PyBytes::new(py, b).into_any().unbind())
+            Ok(PyBytes::new(py, b).into_any().unbind())
         }
         DataType::Decimal(decimal_type) => {
             let decimal = row.get_decimal(
@@ -1353,8 +1359,6 @@ fn rust_decimal_to_python(py: Python, decimal: &fcore::row::Decimal) -> PyResult
 
 /// Convert Rust Date (days since epoch) to Python datetime.date
 fn rust_date_to_python(py: Python, date: fcore::row::Date) -> PyResult<Py<PyAny>> {
-    use pyo3::types::PyDate;
-
     let days_since_epoch = date.get_inner();
     let epoch = jiff::civil::date(1970, 1, 1);
     let civil_date = epoch + jiff::Span::new().days(days_since_epoch as i64);
@@ -1370,8 +1374,6 @@ fn rust_date_to_python(py: Python, date: fcore::row::Date) -> PyResult<Py<PyAny>
 
 /// Convert Rust Time (millis since midnight) to Python datetime.time
 fn rust_time_to_python(py: Python, time: fcore::row::Time) -> PyResult<Py<PyAny>> {
-    use pyo3::types::PyTime;
-
     let millis = time.get_inner() as i64;
     let hours = millis / MILLIS_PER_HOUR;
     let minutes = (millis % MILLIS_PER_HOUR) / MILLIS_PER_MINUTE;
@@ -1391,8 +1393,6 @@ fn rust_time_to_python(py: Python, time: fcore::row::Time) -> PyResult<Py<PyAny>
 
 /// Convert Rust TimestampNtz to Python naive datetime
 fn rust_timestamp_ntz_to_python(py: Python, ts: fcore::row::TimestampNtz) -> PyResult<Py<PyAny>> {
-    use pyo3::types::PyDateTime;
-
     let millis = ts.get_millisecond();
     let nanos = ts.get_nano_of_millisecond();
     let total_micros = millis * MICROS_PER_MILLI + (nanos as i64 / NANOS_PER_MICRO);
@@ -1418,8 +1418,6 @@ fn rust_timestamp_ntz_to_python(py: Python, ts: fcore::row::TimestampNtz) -> PyR
 
 /// Convert Rust TimestampLtz to Python timezone-aware datetime (UTC)
 fn rust_timestamp_ltz_to_python(py: Python, ts: fcore::row::TimestampLtz) -> PyResult<Py<PyAny>> {
-    use pyo3::types::PyDateTime;
-
     let millis = ts.get_epoch_millisecond();
     let nanos = ts.get_nano_of_millisecond();
     let total_micros = millis * MICROS_PER_MILLI + (nanos as i64 / NANOS_PER_MICRO);
@@ -1452,7 +1450,7 @@ pub fn internal_row_to_dict(
 ) -> PyResult<Py<PyAny>> {
     let row_type = table_info.row_type();
     let fields = row_type.fields();
-    let dict = pyo3::types::PyDict::new(py);
+    let dict = PyDict::new(py);
 
     for (pos, field) in fields.iter().enumerate() {
         let value = datum_to_python_value(py, row, pos, field.data_type())?;
@@ -1464,29 +1462,26 @@ pub fn internal_row_to_dict(
 
 /// Cached decimal.Decimal type
 /// Uses PyOnceLock for thread-safety and subinterpreter compatibility.
-static DECIMAL_TYPE: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
-    pyo3::sync::PyOnceLock::new();
+static DECIMAL_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 /// Cached UTC timezone
-static UTC_TIMEZONE: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+static UTC_TIMEZONE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// Cached UTC epoch type
-static UTC_EPOCH: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+static UTC_EPOCH: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// Get the cached decimal.Decimal type, importing it once per interpreter.
-fn get_decimal_type(py: Python) -> PyResult<Bound<pyo3::types::PyType>> {
+fn get_decimal_type(py: Python) -> PyResult<Bound<PyType>> {
     let ty = DECIMAL_TYPE.get_or_try_init(py, || -> PyResult<_> {
         let decimal_mod = py.import("decimal")?;
-        let decimal_ty = decimal_mod
-            .getattr("Decimal")?
-            .downcast_into::<pyo3::types::PyType>()?;
+        let decimal_ty = decimal_mod.getattr("Decimal")?.downcast_into::<PyType>()?;
         Ok(decimal_ty.unbind())
     })?;
     Ok(ty.bind(py).clone())
 }
 
 /// Get the cached UTC timezone (datetime.timezone.utc), creating it once per interpreter.
-fn get_utc_timezone(py: Python) -> PyResult<Bound<pyo3::types::PyTzInfo>> {
+fn get_utc_timezone(py: Python) -> PyResult<Bound<PyTzInfo>> {
     let tz = UTC_TIMEZONE.get_or_try_init(py, || -> PyResult<_> {
         let datetime_mod = py.import("datetime")?;
         let timezone = datetime_mod.getattr("timezone")?;
@@ -1494,10 +1489,7 @@ fn get_utc_timezone(py: Python) -> PyResult<Bound<pyo3::types::PyTzInfo>> {
         Ok(utc.unbind())
     })?;
     // Downcast to PyTzInfo for use with PyDateTime::new()
-    Ok(tz
-        .bind(py)
-        .clone()
-        .downcast_into::<pyo3::types::PyTzInfo>()?)
+    Ok(tz.bind(py).clone().downcast_into::<PyTzInfo>()?)
 }
 
 /// Get the cached UTC epoch datetime, creating it once per interpreter.
@@ -1553,8 +1545,6 @@ fn python_decimal_to_datum(
 
 /// Convert Python datetime.date to Datum::Date.
 fn python_date_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'static>> {
-    use pyo3::types::{PyDate, PyDateAccess, PyDateTime};
-
     // Reject datetime.datetime (subclass of date) - use timestamp columns for those
     if value.downcast::<PyDateTime>().is_ok() {
         return Err(FlussError::new_err(
@@ -1591,8 +1581,6 @@ fn python_date_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'sta
 /// Sub-millisecond precision (microseconds not divisible by 1000) will raise an error
 /// to prevent silent data loss and ensure fail-fast behavior.
 fn python_time_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'static>> {
-    use pyo3::types::{PyTime, PyTimeAccess};
-
     let time = value.downcast::<PyTime>().map_err(|_| {
         FlussError::new_err(format!(
             "Expected datetime.time, got {}",
@@ -1651,8 +1639,6 @@ fn python_datetime_to_timestamp_ltz(value: &Bound<PyAny>) -> PyResult<fcore::row
 /// Uses integer arithmetic to avoid float precision issues.
 /// For clarity, tz-aware datetimes are rejected - use TimestampLtz for those.
 fn extract_datetime_components_ntz(value: &Bound<PyAny>) -> PyResult<(i64, i32)> {
-    use pyo3::types::PyDateTime;
-
     // Try PyDateTime first
     if let Ok(dt) = value.downcast::<PyDateTime>() {
         // Reject tz-aware datetime for NTZ - it's ambiguous what the user wants
@@ -1705,8 +1691,6 @@ fn extract_datetime_components_ntz(value: &Bound<PyAny>) -> PyResult<(i64, i32)>
 /// Extract epoch milliseconds for TimestampLtz (instant in time, UTC-based).
 /// For naive datetimes, assumes UTC. For aware datetimes, converts to UTC.
 fn extract_datetime_components_ltz(value: &Bound<PyAny>) -> PyResult<(i64, i32)> {
-    use pyo3::types::PyDateTime;
-
     // Try PyDateTime first
     if let Ok(dt) = value.downcast::<PyDateTime>() {
         // Check if timezone-aware
@@ -1746,11 +1730,7 @@ fn extract_datetime_components_ltz(value: &Bound<PyAny>) -> PyResult<(i64, i32)>
 }
 
 /// Convert datetime components to epoch milliseconds treating them as UTC
-fn datetime_to_epoch_millis_as_utc(
-    dt: &pyo3::Bound<'_, pyo3::types::PyDateTime>,
-) -> PyResult<(i64, i32)> {
-    use pyo3::types::{PyDateAccess, PyTimeAccess};
-
+fn datetime_to_epoch_millis_as_utc(dt: &Bound<'_, PyDateTime>) -> PyResult<(i64, i32)> {
     let year = dt.get_year();
     let month = dt.get_month();
     let day = dt.get_day();
@@ -1781,11 +1761,7 @@ fn datetime_to_epoch_millis_as_utc(
 /// Convert timezone-aware datetime to epoch milliseconds using Python's timedelta.
 /// This correctly handles timezone conversions by computing (dt - UTC_EPOCH).
 /// The UTC epoch is cached for performance.
-fn datetime_to_epoch_millis_utc_aware(
-    dt: &pyo3::Bound<'_, pyo3::types::PyDateTime>,
-) -> PyResult<(i64, i32)> {
-    use pyo3::types::{PyDelta, PyDeltaAccess};
-
+fn datetime_to_epoch_millis_utc_aware(dt: &Bound<'_, PyDateTime>) -> PyResult<(i64, i32)> {
     let py = dt.py();
     let epoch = get_utc_epoch(py)?;
 

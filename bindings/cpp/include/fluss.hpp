@@ -777,10 +777,6 @@ class ScanRecords {
     /// Throws std::out_of_range if idx >= BucketCount().
     BucketView BucketAt(size_t idx) const;
 
-   private:
-    /// Returns the column name-to-index map (lazy-built, cached).
-    const std::shared_ptr<detail::ColumnMap>& GetColumnMap() const;
-
     /// Flat iterator over all records across all buckets (matches Java Iterable<ScanRecord>).
     class Iterator {
        public:
@@ -803,6 +799,8 @@ class ScanRecords {
     Iterator end() const { return Iterator(this, BucketCount(), 0); }
 
    private:
+    /// Returns the column name-to-index map (lazy-built, cached).
+    const std::shared_ptr<detail::ColumnMap>& GetColumnMap() const;
     friend class LogScanner;
     friend class BucketView;
     void BuildColumnMap() const;
