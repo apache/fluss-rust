@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: CI
+name: Rust
 
 on:
   push:
@@ -30,37 +30,15 @@ on:
     paths-ignore:
       - 'website/**'
       - '**/*.md'
+      - 'bindings/python/**'
+      - 'bindings/cpp/**'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check License Header
-        uses: apache/skywalking-eyes/header@v0.6.0
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny@0.14.22
-
-      - name: Check dependency licenses (Apache-compatible)
-        run: cargo deny check licenses
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Format
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --workspace -- -D warnings
-
   build:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -98,6 +76,7 @@ jobs:
         run: cargo build --workspace --all-targets
 
   test:
+    timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -140,48 +119,6 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           RUST_TEST_THREADS=1 cargo test --features integration_tests --all-targets --workspace -- --nocapture
-        env:
-          RUST_LOG: DEBUG
-          RUST_BACKTRACE: full
-
-  python-integration-test:
-    timeout-minutes: 60
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.9", "3.10", "3.11", "3.12"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Rust Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build Python bindings
-        working-directory: bindings/python
-        run: |
-          uv sync --extra dev
-          uv run maturin develop
-
-      - name: Run Python integration tests
-        working-directory: bindings/python
-        run: uv run pytest test/ -v
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

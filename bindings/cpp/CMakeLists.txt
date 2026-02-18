@@ -123,3 +123,26 @@ if (FLUSS_ENABLE_ADDRESS_SANITIZER)
     target_compile_options(fluss_cpp PRIVATE -fsanitize=leak,address,undefined -fno-omit-frame-pointer -fno-common -O1)
     target_link_options(fluss_cpp PRIVATE -fsanitize=leak,address,undefined)
 endif()
+
+if (FLUSS_ENABLE_TESTING)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v${FLUSS_GOOGLETEST_VERSION}.tar.gz
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    enable_testing()
+
+    file(GLOB TEST_SOURCE_FILES "test/*.cpp")
+    add_executable(fluss_cpp_test ${TEST_SOURCE_FILES})
+    target_link_libraries(fluss_cpp_test PRIVATE fluss_cpp GTest::gtest)
+    target_link_libraries(fluss_cpp_test PRIVATE Arrow::arrow_shared)
+    target_compile_definitions(fluss_cpp_test PRIVATE ARROW_FOUND)
+    target_include_directories(fluss_cpp_test PRIVATE
+        ${CPP_INCLUDE_DIR}
+        ${PROJECT_SOURCE_DIR}/test
+    )
+
+    add_test(NAME fluss_cpp_integration_tests COMMAND fluss_cpp_test)
+endif()
