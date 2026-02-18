@@ -65,7 +65,7 @@ let records = log_scanner.poll(Duration::from_secs(10)).await?;
 
 // Per-bucket access
 for (bucket, bucket_records) in records.records_by_buckets() {
-    println!("Bucket {}: {} records", bucket.bucket, bucket_records.len());
+    println!("Bucket {}: {} records", bucket.bucket_id(), bucket_records.len());
     for record in bucket_records {
         let row = record.row();
         println!(
