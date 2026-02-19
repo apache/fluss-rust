@@ -286,7 +286,7 @@ for (const auto& rec : records) {
 
 ## `BucketView`
 
-A lightweight, non-owning view of records within a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`.
+A view of records within a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`. `BucketView` is a value type — it shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
 
 | Method                                         |  Description                               |
 |------------------------------------------------|--------------------------------------------|

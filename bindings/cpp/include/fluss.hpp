@@ -507,6 +507,17 @@ struct NamedGetters {
    private:
     const Derived& Self() const { return static_cast<const Derived&>(*this); }
 };
+
+struct ScanData {
+    ffi::ScanResultInner* raw;
+    ColumnMap columns;
+
+    ScanData(ffi::ScanResultInner* r, ColumnMap cols) : raw(r), columns(std::move(cols)) {}
+    ~ScanData();
+
+    ScanData(const ScanData&) = delete;
+    ScanData& operator=(const ScanData&) = delete;
+};
 }  // namespace detail
 
 class GenericRow {
@@ -623,12 +634,8 @@ class RowView : public detail::NamedGetters<RowView> {
     friend struct detail::NamedGetters<RowView>;
 
    public:
-    RowView(std::shared_ptr<const ffi::ScanResultInner> inner, size_t bucket_idx, size_t rec_idx,
-            std::shared_ptr<const detail::ColumnMap> column_map)
-        : inner_(std::move(inner)),
-          bucket_idx_(bucket_idx),
-          rec_idx_(rec_idx),
-          column_map_(std::move(column_map)) {}
+    RowView(std::shared_ptr<const detail::ScanData> data, size_t bucket_idx, size_t rec_idx)
+        : data_(std::move(data)), bucket_idx_(bucket_idx), rec_idx_(rec_idx) {}
 
     // ── Index-based getters ──────────────────────────────────────────
     size_t FieldCount() const;
@@ -663,15 +670,14 @@ class RowView : public detail::NamedGetters<RowView> {
 
    private:
     size_t Resolve(const std::string& name) const {
-        if (!column_map_) {
+        if (!data_) {
             throw std::runtime_error("RowView: name-based access not available");
         }
-        return detail::ResolveColumn(*column_map_, name);
+        return detail::ResolveColumn(data_->columns, name);
     }
-    std::shared_ptr<const ffi::ScanResultInner> inner_;
+    std::shared_ptr<const detail::ScanData> data_;
     size_t bucket_idx_;
     size_t rec_idx_;
-    std::shared_ptr<const detail::ColumnMap> column_map_;
 };
 
 /// Identifies a specific bucket, optionally within a partition.
@@ -699,16 +705,18 @@ struct ScanRecord {
     RowView row;
 };
 
-class ScanRecords;
-
-/// A view into a subset of ScanRecords for a single bucket.
+/// A view into a subset of scan results for a single bucket.
 ///
-/// WARNING: BucketView borrows from ScanRecords. It must not outlive the
-/// ScanRecords that produced it.
+/// BucketView is a value type — it shares ownership of the underlying scan data
+/// via reference counting, so it can safely outlive the ScanRecords that produced it.
 class BucketView {
    public:
-    BucketView(const ScanRecords* owner, TableBucket bucket, size_t bucket_idx, size_t count)
-        : owner_(owner), bucket_(std::move(bucket)), bucket_idx_(bucket_idx), count_(count) {}
+    BucketView(std::shared_ptr<const detail::ScanData> data, TableBucket bucket, size_t bucket_idx,
+               size_t count)
+        : data_(std::move(data)),
+          bucket_(std::move(bucket)),
+          bucket_idx_(bucket_idx),
+          count_(count) {}
 
     /// The bucket these records belong to.
     const TableBucket& Bucket() const { return bucket_; }
@@ -740,7 +748,7 @@ class BucketView {
     Iterator end() const { return Iterator(this, count_); }
 
    private:
-    const ScanRecords* owner_;
+    std::shared_ptr<const detail::ScanData> data_;
     TableBucket bucket_;
     size_t bucket_idx_;
     size_t count_;
@@ -799,14 +807,9 @@ class ScanRecords {
     Iterator end() const { return Iterator(this, BucketCount(), 0); }
 
    private:
-    /// Returns the column name-to-index map (lazy-built, cached).
-    const std::shared_ptr<detail::ColumnMap>& GetColumnMap() const;
     friend class LogScanner;
-    friend class BucketView;
-    void BuildColumnMap() const;
     ScanRecord RecordAt(size_t bucket, size_t rec_idx) const;
-    std::shared_ptr<ffi::ScanResultInner> inner_;
-    mutable std::shared_ptr<detail::ColumnMap> column_map_;
+    std::shared_ptr<const detail::ScanData> data_;
 };
 
 class ArrowRecordBatch {
