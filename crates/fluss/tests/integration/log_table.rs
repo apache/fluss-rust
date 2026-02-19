@@ -39,7 +39,7 @@ mod table_test {
     };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
-    use fluss::metadata::{DataTypes, Schema, TableBucket, TableDescriptor, TablePath};
+    use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::record::ScanRecord;
     use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
@@ -79,6 +79,7 @@ mod table_test {
                     .build()
                     .expect("Failed to build schema"),
             )
+            .distributed_by(Some(3), vec!["c1".to_string()])
             .build()
             .expect("Failed to build table");
 
@@ -127,37 +128,33 @@ mod table_test {
                 .expect("Failed to subscribe with EARLIEST_OFFSET");
         }
 
-        // Poll for records
-        let scan_records = log_scanner
-            .poll(tokio::time::Duration::from_secs(10))
-            .await
-            .expect("Failed to poll records");
-
-        // Verify the scanned records
-        let table_bucket = TableBucket::new(table.get_table_info().table_id, 0);
-        let records = scan_records.records(&table_bucket);
-
-        assert_eq!(records.len(), 6, "Expected 6 records");
-
-        // Verify record contents match what was appended
-        let expected_c1_values = vec![1, 2, 3, 4, 5, 6];
-        let expected_c2_values = vec!["a1", "a2", "a3", "a4", "a5", "a6"];
-
-        for (i, record) in records.iter().enumerate() {
-            let row = record.row();
-            assert_eq!(
-                row.get_int(0),
-                expected_c1_values[i],
-                "c1 value mismatch at row {}",
-                i
-            );
-            assert_eq!(
-                row.get_string(1),
-                expected_c2_values[i],
-                "c2 value mismatch at row {}",
-                i
-            );
+        // Poll for records across all buckets
+        let mut collected: Vec<(i32, String)> = Vec::new();
+        let start_time = std::time::Instant::now();
+        while collected.len() < 6 && start_time.elapsed() < Duration::from_secs(10) {
+            let scan_records = log_scanner
+                .poll(Duration::from_millis(500))
+                .await
+                .expect("Failed to poll records");
+            for rec in scan_records {
+                let row = rec.row();
+                collected.push((row.get_int(0), row.get_string(1).to_string()));
+            }
         }
+
+        assert_eq!(collected.len(), 6, "Expected 6 records");
+
+        // Sort and verify record contents
+        collected.sort();
+        let expected: Vec<(i32, String)> = vec![
+            (1, "a1".to_string()),
+            (2, "a2".to_string()),
+            (3, "a3".to_string()),
+            (4, "a4".to_string()),
+            (5, "a5".to_string()),
+            (6, "a6".to_string()),
+        ];
+        assert_eq!(collected, expected);
 
         // Test unsubscribe: unsubscribe from bucket 0, verify no error
         log_scanner

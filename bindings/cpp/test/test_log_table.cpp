@@ -49,6 +49,8 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
+                                .SetBucketCount(3)
+                                .SetBucketKeys({"c1"})
                                 .SetProperty("table.replication.factor", "1")
                                 .Build();
 
@@ -91,10 +93,11 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
 
     ASSERT_OK(append_writer.Flush());
 
-    // Create scanner and subscribe
+    // Create scanner and subscribe to all 3 buckets
     fluss::Table scan_table;
     ASSERT_OK(conn.GetTable(table_path, scan_table));
     int32_t num_buckets = scan_table.GetTableInfo().num_buckets;
+    ASSERT_EQ(num_buckets, 3) << "Table should have 3 buckets";
 
     auto table_scan = scan_table.NewScan();
     fluss::LogScanner log_scanner;
@@ -104,27 +107,24 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
         ASSERT_OK(log_scanner.Subscribe(bucket_id, fluss::EARLIEST_OFFSET));
     }
 
-    // Poll for records
-    fluss::ScanRecords scan_records;
-    ASSERT_OK(log_scanner.Poll(10000, scan_records));
-
-    ASSERT_EQ(scan_records.Size(), 6u) << "Expected 6 records";
-
-    // Collect and sort by offset
+    // Poll for records across all buckets
     std::vector<std::pair<int32_t, std::string>> records;
-    for (size_t i = 0; i < scan_records.Size(); ++i) {
-        auto rec = scan_records[i];
-        records.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)));
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (records.size() < 6 && std::chrono::steady_clock::now() < deadline) {
+        fluss::ScanRecords scan_records;
+        ASSERT_OK(log_scanner.Poll(500, scan_records));
+        for (size_t i = 0; i < scan_records.Size(); ++i) {
+            auto rec = scan_records[i];
+            records.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)));
+        }
     }
+
+    ASSERT_EQ(records.size(), 6u) << "Expected 6 records";
     std::sort(records.begin(), records.end());
 
-    std::vector<int32_t> expected_c1 = {1, 2, 3, 4, 5, 6};
-    std::vector<std::string> expected_c2 = {"a1", "a2", "a3", "a4", "a5", "a6"};
-
-    for (size_t i = 0; i < 6; ++i) {
-        EXPECT_EQ(records[i].first, expected_c1[i]) << "c1 mismatch at row " << i;
-        EXPECT_EQ(records[i].second, expected_c2[i]) << "c2 mismatch at row " << i;
-    }
+    std::vector<std::pair<int32_t, std::string>> expected = {
+        {1, "a1"}, {2, "a2"}, {3, "a3"}, {4, "a4"}, {5, "a5"}, {6, "a6"}};
+    EXPECT_EQ(records, expected);
 
     // Test unsubscribe
     ASSERT_OK(log_scanner.Unsubscribe(0));

@@ -341,6 +341,96 @@ TEST_F(KvTableTest, PartialUpdate) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
+TEST_F(KvTableTest, PartialUpdateByIndex) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_partial_update_by_index_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("name", fluss::DataType::String())
+                      .AddColumn("age", fluss::DataType::BigInt())
+                      .AddColumn("score", fluss::DataType::BigInt())
+                      .SetPrimaryKeys({"id"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    // Insert initial record with all columns
+    auto table_upsert = table.NewUpsert();
+    fluss::UpsertWriter upsert_writer;
+    ASSERT_OK(table_upsert.CreateWriter(upsert_writer));
+
+    {
+        fluss::GenericRow row(4);
+        row.SetInt32(0, 1);
+        row.SetString(1, "Verso");
+        row.SetInt64(2, 32);
+        row.SetInt64(3, 6942);
+        fluss::WriteResult wr;
+        ASSERT_OK(upsert_writer.Upsert(row, wr));
+        ASSERT_OK(wr.Wait());
+    }
+
+    // Verify initial record
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+
+    {
+        fluss::GenericRow key(4);
+        key.SetInt32(0, 1);
+        fluss::LookupResult result;
+        ASSERT_OK(lookuper.Lookup(key, result));
+        ASSERT_TRUE(result.Found());
+        EXPECT_EQ(result.GetInt32(0), 1);
+        EXPECT_EQ(result.GetString(1), "Verso");
+        EXPECT_EQ(result.GetInt64(2), 32);
+        EXPECT_EQ(result.GetInt64(3), 6942);
+    }
+
+    // Create partial update writer using column indices: 0 (id) and 3 (score)
+    auto partial_upsert = table.NewUpsert();
+    partial_upsert.PartialUpdateByIndex({0, 3});
+    fluss::UpsertWriter partial_writer;
+    ASSERT_OK(partial_upsert.CreateWriter(partial_writer));
+
+    // Update only the score column (await acknowledgment)
+    {
+        fluss::GenericRow partial_row(4);
+        partial_row.SetInt32(0, 1);
+        partial_row.SetNull(1);  // not in partial update
+        partial_row.SetNull(2);  // not in partial update
+        partial_row.SetInt64(3, 420);
+        fluss::WriteResult wr;
+        ASSERT_OK(partial_writer.Upsert(partial_row, wr));
+        ASSERT_OK(wr.Wait());
+    }
+
+    // Verify partial update - name and age should remain unchanged
+    {
+        fluss::GenericRow key(4);
+        key.SetInt32(0, 1);
+        fluss::LookupResult result;
+        ASSERT_OK(lookuper.Lookup(key, result));
+        ASSERT_TRUE(result.Found());
+        EXPECT_EQ(result.GetInt32(0), 1) << "id should remain 1";
+        EXPECT_EQ(result.GetString(1), "Verso") << "name should remain unchanged";
+        EXPECT_EQ(result.GetInt64(2), 32) << "age should remain unchanged";
+        EXPECT_EQ(result.GetInt64(3), 420) << "score should be updated to 420";
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
 TEST_F(KvTableTest, PartitionedTableUpsertAndLookup) {
     auto& adm = admin();
     auto& conn = connection();
