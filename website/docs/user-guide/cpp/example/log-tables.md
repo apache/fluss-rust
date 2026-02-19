@@ -62,6 +62,34 @@ for (const auto& rec : records) {
 }
 ```
 
+**Continuous polling:**
+
+```cpp
+while (running) {
+    fluss::ScanRecords records;
+    scanner.Poll(1000, records);
+    for (const auto& rec : records) {
+        process(rec);
+    }
+}
+```
+
+**Accumulating records across polls:**
+
+`ScanRecord` is a value type — it can be freely copied, stored, and accumulated. The underlying data stays alive via reference counting (zero-copy).
+
+```cpp
+std::vector<fluss::ScanRecord> all_records;
+while (all_records.size() < 1000) {
+    fluss::ScanRecords records;
+    scanner.Poll(1000, records);
+    for (const auto& rec : records) {
+        all_records.push_back(rec);  // ref-counted, no data copy
+    }
+}
+// all_records is valid — each record keeps its data alive
+```
+
 **Batch subscribe:**
 
 ```cpp

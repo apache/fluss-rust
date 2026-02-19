@@ -203,10 +203,10 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `RowView`
 
-Read-only row view for scan results. Provides zero-copy access to string and bytes data.
+Read-only row view for scan results. Provides zero-copy access to string and bytes data. `RowView` shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
 
-:::warning Lifetime
-`RowView` borrows from `ScanRecords`. It must not outlive the `ScanRecords` that produced it (similar to `std::string_view` borrowing from `std::string`).
+:::note string_view Lifetime
+`GetString()` returns `std::string_view` that borrows from the underlying data. The `string_view` is valid as long as any `RowView` (or `ScanRecord`) referencing the same poll result is alive. Copy to `std::string` if you need the value after all references are gone.
 :::
 
 ### Index-Based Getters
@@ -248,9 +248,7 @@ Read-only row view for scan results. Provides zero-copy access to string and byt
 
 ## `ScanRecord`
 
-:::warning Lifetime
-`ScanRecord` contains a `RowView` that borrows from `ScanRecords`. It must not outlive the `ScanRecords` that produced it.
-:::
+`ScanRecord` is a value type that can be freely copied, stored, and accumulated across multiple `Poll()` calls. It shares ownership of the underlying scan data via reference counting.
 
 | Field          | Type                    |  Description                     |
 |----------------|-------------------------|----------------------------------|
