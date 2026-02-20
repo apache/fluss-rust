@@ -351,21 +351,26 @@ async def main():
 
         record_scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-        # Poll returns List[ScanRecord] with per-record metadata
+        # Poll returns ScanRecords — records grouped by bucket
         print("\n--- Testing poll() method (record-by-record) ---")
         try:
-            records = record_scanner.poll(5000)
-            print(f"Number of records: {len(records)}")
+            scan_records = record_scanner.poll(5000)
+            print(f"Total records: {scan_records.count()}, buckets: {len(scan_records.buckets())}")
 
-            # Show first few records with metadata
-            for i, record in enumerate(records[:5]):
-                print(f"  Record {i}: offset={record.offset}, "
-                      f"timestamp={record.timestamp}, "
-                      f"change_type={record.change_type}, "
-                      f"row={record.row}")
+            # Flat iteration over all records (regardless of bucket)
+            print(f"  Flat iteration: {scan_records.count()} records")
+            for record in scan_records:
+                print(f"    offset={record.offset}, timestamp={record.timestamp}")
 
-            if len(records) > 5:
-                print(f"  ... and {len(records) - 5} more records")
+            # Per-bucket access
+            for bucket in scan_records.buckets():
+                bucket_recs = scan_records.records(bucket)
+                print(f"  Bucket {bucket}: {len(bucket_recs)} records")
+                for record in bucket_recs[:3]:
+                    print(f"    offset={record.offset}, "
+                          f"timestamp={record.timestamp}, "
+                          f"change_type={record.change_type}, "
+                          f"row={record.row}")
 
         except Exception as e:
             print(f"Error during poll: {e}")

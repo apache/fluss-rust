@@ -60,6 +60,18 @@ for (const auto& rec : records) {
               << " timestamp=" << rec.row.GetInt64(2)
               << " @ offset=" << rec.offset << std::endl;
 }
+
+// Or per-bucket access
+for (const auto& bucket : records.Buckets()) {
+    auto view = records.Records(bucket);
+    std::cout << "Bucket " << bucket.bucket_id << ": "
+              << view.Size() << " records" << std::endl;
+    for (const auto& rec : view) {
+        std::cout << "  event_id=" << rec.row.GetInt32(0)
+                  << " event_type=" << rec.row.GetString(1)
+                  << " @ offset=" << rec.offset << std::endl;
+    }
+}
 ```
 
 **Continuous polling:**

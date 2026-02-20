@@ -250,23 +250,60 @@ Read-only row view for scan results. Provides zero-copy access to string and byt
 
 `ScanRecord` is a value type that can be freely copied, stored, and accumulated across multiple `Poll()` calls. It shares ownership of the underlying scan data via reference counting.
 
-| Field          | Type                    |  Description                     |
-|----------------|-------------------------|----------------------------------|
-| `bucket_id`    | `int32_t`               | Bucket this record belongs to    |
-| `partition_id` | `std::optional<int64_t>`| Partition ID (if partitioned)    |
-| `offset`       | `int64_t`               | Record offset in the log         |
-| `timestamp`    | `int64_t`               | Record timestamp                 |
-| `change_type`  | `ChangeType`            | Type of change (see `ChangeType`)|
-| `row`          | `RowView`               | Read-only row view for field access |
+| Field         | Type         |  Description                                                        |
+|---------------|--------------|---------------------------------------------------------------------|
+| `offset`      | `int64_t`    | Record offset in the log                                            |
+| `timestamp`   | `int64_t`    | Record timestamp                                                    |
+| `change_type` | `ChangeType` | Change type (AppendOnly, Insert, UpdateBefore, UpdateAfter, Delete) |
+| `row`         | `RowView`    | Row data (value type, shares ownership via reference counting)      |
 
 ## `ScanRecords`
 
-| Method                                 |  Description                               |
-|----------------------------------------|--------------------------------------------|
-| `Size() -> size_t`                     | Number of records                          |
-| `Empty() -> bool`                      | Check if empty                             |
-| `operator[](size_t idx) -> ScanRecord` | Access record by index                     |
-| `begin() / end()`                      | Iterator support for range-based for loops |
+### Flat Access
+
+| Method                                  |  Description                               |
+|-----------------------------------------|--------------------------------------------|
+| `Count() -> size_t`                     | Total number of records across all buckets |
+| `IsEmpty() -> bool`                     | Check if empty                             |
+| `begin() / end()`                       | Iterator support for range-based for loops |
+
+Flat iteration over all records (regardless of bucket):
+
+```cpp
+for (const auto& rec : records) {
+    std::cout << "offset=" << rec.offset << std::endl;
+}
+```
+
+### Per-Bucket Access
+
+| Method                                                          |  Description                                                          |
+|-----------------------------------------------------------------|-----------------------------------------------------------------------|
+| `BucketCount() -> size_t`                                       | Number of distinct buckets                                            |
+| `Buckets() -> std::vector<TableBucket>`                         | List of distinct buckets                                              |
+| `Records(const TableBucket& bucket) -> BucketView`              | Records for a specific bucket (empty view if bucket not present)      |
+| `BucketAt(size_t idx) -> BucketView`                            | Records by bucket index (0-based, O(1))                               |
+
+## `BucketView`
+
+A view of records within a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`. `BucketView` is a value type — it shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
+
+| Method                                         |  Description                               |
+|------------------------------------------------|--------------------------------------------|
+| `Size() -> size_t`                         | Number of records in this bucket           |
+| `Empty() -> bool`                          | Check if empty                             |
+| `Bucket() -> const TableBucket&`           | Get the bucket                             |
+| `operator[](size_t idx) -> ScanRecord`     | Access record by index within this bucket  |
+| `begin() / end()`                          | Iterator support for range-based for loops |
+
+## `TableBucket`
+
+| Field / Method                        |  Description                                    |
+|---------------------------------------|-------------------------------------------------|
+| `table_id -> int64_t`                    | Table ID                                        |
+| `bucket_id -> int32_t`                   | Bucket ID                                       |
+| `partition_id -> std::optional<int64_t>` | Partition ID (empty if non-partitioned)         |
+| `operator==(const TableBucket&) -> bool` | Equality comparison                             |
 
 ## `LookupResult`
 

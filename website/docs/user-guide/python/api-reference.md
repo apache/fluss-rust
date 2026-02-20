@@ -137,17 +137,69 @@ Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
 | `.subscribe_partition_buckets(partition_bucket_offsets)`      | Subscribe to multiple partition+bucket combos (`{(part_id, bucket_id): offset}`) |
 | `.unsubscribe(bucket_id)`                                     | Unsubscribe from a bucket (non-partitioned tables)                               |
 | `.unsubscribe_partition(partition_id, bucket_id)`             | Unsubscribe from a partition bucket                                              |
-| `.poll(timeout_ms) -> list[ScanRecord]`                       | Poll individual records (record scanner only)                                    |
+| `.poll(timeout_ms) -> ScanRecords`                            | Poll individual records (record scanner only)                                    |
 | `.poll_arrow(timeout_ms) -> pa.Table`                         | Poll as Arrow Table (batch scanner only)                                         |
 | `.poll_record_batch(timeout_ms) -> list[RecordBatch]`         | Poll batches with metadata (batch scanner only)                                  |
 | `.to_arrow() -> pa.Table`                                     | Read all subscribed data as Arrow Table (batch scanner only)                     |
 | `.to_pandas() -> pd.DataFrame`                                | Read all subscribed data as DataFrame (batch scanner only)                       |
 
+## `ScanRecords`
+
+Returned by `LogScanner.poll()`. Records are grouped by bucket.
+
+> **Note:** Flat iteration and integer indexing traverse buckets in an arbitrary order that is consistent within a single `ScanRecords` instance but may differ between `poll()` calls. Use per-bucket access (`.items()`, `.records(bucket)`) when bucket ordering matters.
+
+```python
+scan_records = scanner.poll(timeout_ms=5000)
+
+# Sequence access
+scan_records[0]                              # first record
+scan_records[-1]                             # last record
+scan_records[:5]                             # first 5 records
+
+# Per-bucket access
+for bucket, records in scan_records.items():
+    for record in records:
+        print(f"bucket={bucket.bucket_id}, offset={record.offset}, row={record.row}")
+
+# Flat iteration
+for record in scan_records:
+    print(record.row)
+```
+
+### Methods
+
+| Method                                 |  Description                                                     |
+|----------------------------------------|------------------------------------------------------------------|
+| `.buckets() -> list[TableBucket]`      | List of distinct buckets                                         |
+| `.records(bucket) -> list[ScanRecord]` | Records for a specific bucket (empty list if bucket not present) |
+| `.count() -> int`                      | Total record count across all buckets                            |
+| `.is_empty() -> bool`                  | Check if empty                                                   |
+
+### Indexing
+
+| Expression                   | Returns              | Description                       |
+|------------------------------|----------------------|-----------------------------------|
+| `scan_records[0]`           | `ScanRecord`         | Record by flat index              |
+| `scan_records[-1]`          | `ScanRecord`         | Negative indexing                  |
+| `scan_records[1:5]`         | `list[ScanRecord]`   | Slice                             |
+| `scan_records[bucket]`      | `list[ScanRecord]`   | Records for a bucket              |
+
+### Mapping Protocol
+
+| Method / Protocol              | Description                                     |
+|--------------------------------|-------------------------------------------------|
+| `.keys()`                      | Same as `.buckets()`                            |
+| `.values()`                    | Lazy iterator over record lists, one per bucket |
+| `.items()`                     | Lazy iterator over `(bucket, records)` pairs    |
+| `len(scan_records)`           | Same as `.count()`                              |
+| `bucket in scan_records`      | Membership test                                 |
+| `for record in scan_records`  | Flat iteration over all records                 |
+
 ## `ScanRecord`
 
 | Property                     |  Description                                                        |
 |------------------------------|---------------------------------------------------------------------|
-| `.bucket -> TableBucket`     | Bucket this record belongs to                                       |
 | `.offset -> int`             | Record offset in the log                                            |
 | `.timestamp -> int`          | Record timestamp                                                    |
 | `.change_type -> ChangeType` | Change type (AppendOnly, Insert, UpdateBefore, UpdateAfter, Delete) |

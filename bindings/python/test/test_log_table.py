@@ -492,11 +492,22 @@ async def test_partitioned_table_append_scan(connection, admin):
         (8, "EU", 800),
     ]
 
-    records = _poll_records(scanner, expected_count=8)
-    assert len(records) == 8
+    # Poll and verify per-bucket grouping
+    all_records = []
+    deadline = time.monotonic() + 10
+    while len(all_records) < 8 and time.monotonic() < deadline:
+        scan_records = scanner.poll(5000)
+        for bucket, bucket_records in scan_records.items():
+            assert bucket.partition_id is not None, "Partitioned table should have partition_id"
+            # All records in a bucket should belong to the same partition
+            regions = {r.row["region"] for r in bucket_records}
+            assert len(regions) == 1, f"Bucket has mixed regions: {regions}"
+            all_records.extend(bucket_records)
+
+    assert len(all_records) == 8
 
     collected = sorted(
-        [(r.row["id"], r.row["region"], r.row["value"]) for r in records],
+        [(r.row["id"], r.row["region"], r.row["value"]) for r in all_records],
         key=lambda x: x[0],
     )
     assert collected == expected
@@ -652,6 +663,70 @@ async def test_partitioned_table_to_arrow(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def test_scan_records_indexing_and_slicing(connection, admin):
+    """Test ScanRecords indexing, slicing (incl. negative steps), and iteration consistency."""
+    table_path = fluss.TablePath("fluss", "py_test_scan_records_indexing")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [pa.array(list(range(1, 9)), type=pa.int32()),
+             pa.array([f"v{i}" for i in range(1, 9)])],
+            schema=pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())]),
+        )
+    )
+    await writer.flush()
+
+    scanner = await table.new_scan().create_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+    # Poll until we get a non-empty ScanRecords (need ≥2 records for slice tests)
+    sr = None
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        sr = scanner.poll(5000)
+        if len(sr) >= 2:
+            break
+    assert sr is not None and len(sr) >= 2, "Expected at least 2 records"
+    n = len(sr)
+    offsets = [sr[i].offset for i in range(n)]
+
+    # Iteration and indexing must produce the same order
+    assert [r.offset for r in sr] == offsets
+
+    # Negative indexing
+    assert sr[-1].offset == offsets[-1]
+    assert sr[-n].offset == offsets[0]
+
+    # Verify slices match the same operation on the offsets reference list
+    test_slices = [
+        slice(1, n - 1),          # forward subrange
+        slice(None, None, -1),    # [::-1] full reverse
+        slice(n - 2, 0, -1),      # reverse with bounds
+        slice(n - 1, 0, -2),      # reverse with step
+        slice(None, None, 2),     # [::2]
+        slice(1, None, 3),        # [1::3]
+        slice(2, 2),              # empty
+    ]
+    for s in test_slices:
+        result = [r.offset for r in sr[s]]
+        assert result == offsets[s], f"slice {s}: got {result}, expected {offsets[s]}"
+
+    # Bucket-based indexing
+    for bucket in sr.buckets():
+        assert len(sr[bucket]) > 0
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -665,6 +740,8 @@ def _poll_records(scanner, expected_count, timeout_s=10):
         records = scanner.poll(5000)
         collected.extend(records)
     return collected
+
+
 
 
 def _poll_arrow_ids(scanner, expected_count, timeout_s=10):

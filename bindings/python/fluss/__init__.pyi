@@ -19,7 +19,7 @@
 
 from enum import IntEnum
 from types import TracebackType
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple, Union, overload
 
 import pandas as pd
 import pyarrow as pa
@@ -43,12 +43,12 @@ class ChangeType(IntEnum):
         ...
 
 class ScanRecord:
-    """Represents a single scan record with metadata."""
+    """Represents a single scan record with metadata.
 
-    @property
-    def bucket(self) -> TableBucket:
-        """The bucket this record belongs to."""
-        ...
+    The bucket is the key in ScanRecords, not on the individual record
+    (matches Rust/Java).
+    """
+
     @property
     def offset(self) -> int:
         """The position of this record in the log."""
@@ -87,6 +87,47 @@ class RecordBatch:
     def last_offset(self) -> int:
         """The offset of the last record in this batch."""
         ...
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+
+class ScanRecords:
+    """A collection of scan records grouped by bucket.
+
+    Returned by ``LogScanner.poll()``. Supports flat iteration
+    (``for rec in records``) and per-bucket access (``records.records(bucket)``).
+    """
+
+    def buckets(self) -> List[TableBucket]:
+        """List of distinct buckets that have records."""
+        ...
+    def records(self, bucket: TableBucket) -> List[ScanRecord]:
+        """Get records for a specific bucket. Returns empty list if bucket not present."""
+        ...
+    def count(self) -> int:
+        """Total number of records across all buckets."""
+        ...
+    def is_empty(self) -> bool:
+        """Whether the result set is empty."""
+        ...
+    def keys(self) -> List[TableBucket]:
+        """Mapping protocol: alias for ``buckets()``."""
+        ...
+    def values(self) -> Iterator[List[ScanRecord]]:
+        """Mapping protocol: lazy iterator over record lists, one per bucket."""
+        ...
+    def items(self) -> Iterator[Tuple[TableBucket, List[ScanRecord]]]:
+        """Mapping protocol: lazy iterator over ``(bucket, records)`` pairs."""
+        ...
+    def __len__(self) -> int: ...
+    @overload
+    def __getitem__(self, index: int) -> ScanRecord: ...
+    @overload
+    def __getitem__(self, index: slice) -> List[ScanRecord]: ...
+    @overload
+    def __getitem__(self, bucket: TableBucket) -> List[ScanRecord]: ...
+    def __getitem__(self, key: Union[int, slice, TableBucket]) -> Union[ScanRecord, List[ScanRecord]]: ...
+    def __contains__(self, bucket: TableBucket) -> bool: ...
+    def __iter__(self) -> Iterator[ScanRecord]: ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
@@ -590,7 +631,7 @@ class LogScanner:
             bucket_id: The bucket ID within the partition
         """
         ...
-    def poll(self, timeout_ms: int) -> List[ScanRecord]:
+    def poll(self, timeout_ms: int) -> ScanRecords:
         """Poll for individual records with metadata.
 
         Requires a record-based scanner (created with new_scan().create_log_scanner()).
@@ -599,11 +640,12 @@ class LogScanner:
             timeout_ms: Timeout in milliseconds to wait for records.
 
         Returns:
-            List of ScanRecord objects, each containing bucket, offset, timestamp,
-            change_type, and row data as a dictionary.
+            ScanRecords grouped by bucket. Supports flat iteration
+            (``for rec in records``) and per-bucket access
+            (``records.buckets()``, ``records.records(bucket)``).
 
         Note:
-            Returns an empty list if no records are available or timeout expires.
+            Returns an empty ScanRecords if no records are available or timeout expires.
         """
         ...
     def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]:

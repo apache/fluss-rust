@@ -63,6 +63,21 @@ log_scanner.subscribe(0, 0).await?;
 // Poll for records
 let records = log_scanner.poll(Duration::from_secs(10)).await?;
 
+// Per-bucket access
+for (bucket, bucket_records) in records.records_by_buckets() {
+    println!("Bucket {}: {} records", bucket.bucket_id(), bucket_records.len());
+    for record in bucket_records {
+        let row = record.row();
+        println!(
+            "  event_id={}, event_type={} @ offset={}",
+            row.get_int(0),
+            row.get_string(1),
+            record.offset()
+        );
+    }
+}
+
+// Or flat iteration (consumes ScanRecords)
 for record in records {
     let row = record.row();
     println!(
