@@ -112,6 +112,10 @@ let partition_offsets = admin.list_partition_offsets(
 
 ## Lake Snapshot
 
+:::note
+Lake snapshots require [lake integration](https://fluss.apache.org/docs/maintenance/tiered-storage/overview/) (e.g. Paimon or Iceberg) to be enabled on the server. Without it, `get_latest_lake_snapshot` will return an error.
+:::
+
 ```rust
 let snapshot = admin.get_latest_lake_snapshot(&table_path).await?;
 println!("Snapshot ID: {}", snapshot.snapshot_id);
