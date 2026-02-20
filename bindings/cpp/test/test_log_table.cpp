@@ -113,8 +113,7 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
     while (records.size() < 6 && std::chrono::steady_clock::now() < deadline) {
         fluss::ScanRecords scan_records;
         ASSERT_OK(log_scanner.Poll(500, scan_records));
-        for (size_t i = 0; i < scan_records.Size(); ++i) {
-            auto rec = scan_records[i];
+        for (auto rec : scan_records) {
             records.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)));
         }
     }
@@ -125,6 +124,45 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
     std::vector<std::pair<int32_t, std::string>> expected = {
         {1, "a1"}, {2, "a2"}, {3, "a3"}, {4, "a4"}, {5, "a5"}, {6, "a6"}};
     EXPECT_EQ(records, expected);
+
+    // Verify per-bucket iteration via BucketView
+    {
+        fluss::Table bucket_table;
+        ASSERT_OK(conn.GetTable(table_path, bucket_table));
+        auto bucket_scan = bucket_table.NewScan();
+        fluss::LogScanner bucket_scanner;
+        ASSERT_OK(bucket_scan.CreateLogScanner(bucket_scanner));
+
+        for (int32_t bid = 0; bid < num_buckets; ++bid) {
+            ASSERT_OK(bucket_scanner.Subscribe(bid, fluss::EARLIEST_OFFSET));
+        }
+
+        std::vector<std::pair<int32_t, std::string>> bucket_records;
+        auto bucket_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        size_t buckets_with_data = 0;
+        while (bucket_records.size() < 6 && std::chrono::steady_clock::now() < bucket_deadline) {
+            fluss::ScanRecords scan_records;
+            ASSERT_OK(bucket_scanner.Poll(500, scan_records));
+
+            // Iterate by bucket
+            for (size_t b = 0; b < scan_records.BucketCount(); ++b) {
+                auto bucket_view = scan_records.BucketAt(b);
+                if (!bucket_view.Empty()) {
+                    buckets_with_data++;
+                }
+                for (auto rec : bucket_view) {
+                    bucket_records.emplace_back(rec.row.GetInt32(0),
+                                                std::string(rec.row.GetString(1)));
+                }
+            }
+        }
+
+        ASSERT_EQ(bucket_records.size(), 6u) << "Expected 6 records via per-bucket iteration";
+        EXPECT_GT(buckets_with_data, 1u) << "Records should be distributed across multiple buckets";
+
+        std::sort(bucket_records.begin(), bucket_records.end());
+        EXPECT_EQ(bucket_records, expected);
+    }
 
     // Test unsubscribe
     ASSERT_OK(log_scanner.Unsubscribe(0));
@@ -290,15 +328,14 @@ TEST_F(LogTableTest, TestProject) {
         fluss::ScanRecords records;
         ASSERT_OK(scanner.Poll(10000, records));
 
-        ASSERT_EQ(records.Size(), 3u) << "Should have 3 records with project_by_name";
+        ASSERT_EQ(records.Count(), 3u) << "Should have 3 records with project_by_name";
 
         std::vector<std::string> expected_col_b = {"x", "y", "z"};
         std::vector<int32_t> expected_col_c = {10, 20, 30};
 
         // Collect and sort by col_c to get deterministic order
         std::vector<std::pair<std::string, int32_t>> collected;
-        for (size_t i = 0; i < records.Size(); ++i) {
-            auto rec = records[i];
+        for (auto rec : records) {
             collected.emplace_back(std::string(rec.row.GetString(0)), rec.row.GetInt32(1));
         }
         std::sort(collected.begin(), collected.end(),
@@ -324,14 +361,13 @@ TEST_F(LogTableTest, TestProject) {
         fluss::ScanRecords records;
         ASSERT_OK(scanner.Poll(10000, records));
 
-        ASSERT_EQ(records.Size(), 3u);
+        ASSERT_EQ(records.Count(), 3u);
 
         std::vector<std::string> expected_col_b = {"x", "y", "z"};
         std::vector<int32_t> expected_col_a = {1, 2, 3};
 
         std::vector<std::pair<std::string, int32_t>> collected;
-        for (size_t i = 0; i < records.Size(); ++i) {
-            auto rec = records[i];
+        for (auto rec : records) {
             collected.emplace_back(std::string(rec.row.GetString(0)), rec.row.GetInt32(1));
         }
         std::sort(collected.begin(), collected.end(),
@@ -585,22 +621,19 @@ TEST_F(LogTableTest, AllSupportedDatatypes) {
     ASSERT_OK(log_scanner.Subscribe(0, 0));
 
     // Poll until we get 2 records
-    std::vector<fluss::ScanRecords> all_records;
-    size_t total_records = 0;
+    std::vector<fluss::ScanRecord> all_records;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (total_records < 2 && std::chrono::steady_clock::now() < deadline) {
+    while (all_records.size() < 2 && std::chrono::steady_clock::now() < deadline) {
         fluss::ScanRecords records;
         ASSERT_OK(log_scanner.Poll(5000, records));
-        total_records += records.Size();
-        if (records.Size() > 0) {
-            all_records.push_back(std::move(records));
+        for (auto rec : records) {
+            all_records.push_back(rec);
         }
     }
-    ASSERT_EQ(total_records, 2u) << "Expected 2 records";
+    ASSERT_EQ(all_records.size(), 2u) << "Expected 2 records";
 
     // Verify first record (all values)
-    auto rec = all_records[0][0];
-    auto& row = rec.row;
+    auto& row = all_records[0].row;
 
     EXPECT_EQ(row.GetInt32(0), col_tinyint) << "col_tinyint mismatch";
     EXPECT_EQ(row.GetInt32(1), col_smallint) << "col_smallint mismatch";
@@ -635,10 +668,9 @@ TEST_F(LogTableTest, AllSupportedDatatypes) {
         << "col_binary mismatch";
 
     // Verify second record (all nulls)
-    // The second record might be in the same ScanRecords or a different one
-    fluss::ScanRecord null_rec = (all_records[0].Size() > 1) ? all_records[0][1] : all_records[1][0];
+    auto& null_row = all_records[1].row;
     for (size_t i = 0; i < field_count; ++i) {
-        EXPECT_TRUE(null_rec.row.IsNull(i)) << "column " << i << " should be null";
+        EXPECT_TRUE(null_row.IsNull(i)) << "column " << i << " should be null";
     }
 
     ASSERT_OK(adm.DropTable(table_path, false));
@@ -767,8 +799,7 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
     while (collected.size() < 8 && std::chrono::steady_clock::now() < deadline) {
         fluss::ScanRecords records;
         ASSERT_OK(log_scanner.Poll(500, records));
-        for (size_t i = 0; i < records.Size(); ++i) {
-            auto rec = records[i];
+        for (auto rec : records) {
             collected.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)),
                                    rec.row.GetInt64(2));
         }
@@ -806,8 +837,7 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
         while (us_only.size() < 4 && std::chrono::steady_clock::now() < unsub_deadline) {
             fluss::ScanRecords records;
             ASSERT_OK(unsub_scanner.Poll(300, records));
-            for (size_t i = 0; i < records.Size(); ++i) {
-                auto rec = records[i];
+            for (auto rec : records) {
                 us_only.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)),
                                      rec.row.GetInt64(2));
             }
@@ -838,8 +868,7 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
         while (batch_collected.size() < 8 && std::chrono::steady_clock::now() < batch_deadline) {
             fluss::ScanRecords records;
             ASSERT_OK(batch_scanner.Poll(500, records));
-            for (size_t i = 0; i < records.Size(); ++i) {
-                auto rec = records[i];
+            for (auto rec : records) {
                 batch_collected.emplace_back(rec.row.GetInt32(0),
                                              std::string(rec.row.GetString(1)),
                                              rec.row.GetInt64(2));
