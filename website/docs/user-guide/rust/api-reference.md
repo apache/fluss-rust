@@ -16,6 +16,7 @@ Complete API reference for the Fluss Rust client.
 | `writer_batch_size`               | `i32`    | `2097152` (2 MB)   | Batch size for writes in bytes                          |
 | `scanner_remote_log_prefetch_num` | `usize`  | `4`                | Number of remote log segments to prefetch               |
 | `remote_file_download_thread_num` | `usize`  | `3`                | Number of threads for remote log downloads              |
+| `scanner_log_max_poll_records`    | `usize`  | `500`              | Maximum number of records returned in a single poll()   |
 
 ## `FlussConnection`
 

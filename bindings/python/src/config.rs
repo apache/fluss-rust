@@ -70,6 +70,11 @@ impl Config {
                             config.remote_file_download_thread_num = num;
                         }
                     }
+                    "scanner.log.max-poll-records" => {
+                        if let Ok(num) = value.parse::<usize>() {
+                            config.scanner_log_max_poll_records = num;
+                        }
+                    }
                     _ => {
                         return Err(FlussError::new_err(format!("Unknown property: {key}")));
                     }
@@ -162,6 +167,18 @@ impl Config {
     #[setter]
     fn set_remote_file_download_thread_num(&mut self, num: usize) {
         self.inner.remote_file_download_thread_num = num;
+    }
+
+    /// Get the scanner log max poll records
+    #[getter]
+    fn scanner_log_max_poll_records(&self) -> usize {
+        self.inner.scanner_log_max_poll_records
+    }
+
+    /// Set the scanner log max poll records
+    #[setter]
+    fn set_scanner_log_max_poll_records(&mut self, num: usize) {
+        self.inner.scanner_log_max_poll_records = num;
     }
 }
 

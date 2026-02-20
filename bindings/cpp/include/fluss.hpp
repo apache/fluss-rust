@@ -983,6 +983,8 @@ struct Configuration {
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
     size_t remote_file_download_thread_num{3};
+    // Maximum number of records returned in a single call to Poll() for LogScanner
+    size_t scanner_log_max_poll_records{500};
 };
 
 class Connection {

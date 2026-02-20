@@ -636,6 +636,7 @@ struct LogFetcher {
     security_token_manager: Arc<SecurityTokenManager>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
+    max_poll_records: usize,
 }
 
 struct FetchResponseContext {
@@ -694,6 +695,7 @@ impl LogFetcher {
             security_token_manager,
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
+            max_poll_records: config.scanner_log_max_poll_records,
         })
     }
 
@@ -1092,9 +1094,8 @@ impl LogFetcher {
     /// Collect completed fetches from buffer
     /// Reference: LogFetchCollector.collectFetch in Java
     fn collect_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
-        const MAX_POLL_RECORDS: usize = 500; // Default max poll records
         let mut result: HashMap<TableBucket, Vec<ScanRecord>> = HashMap::new();
-        let mut records_remaining = MAX_POLL_RECORDS;
+        let mut records_remaining = self.max_poll_records;
 
         let collect_result: Result<()> = {
             while records_remaining > 0 {
