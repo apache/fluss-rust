@@ -106,6 +106,41 @@ impl BucketAssigner for StickyBucketAssigner {
     }
 }
 
+/// Unlike [StickyBucketAssigner], each record is assigned to the next bucket
+/// in a rotating sequence, providing even data distribution across all buckets.
+pub struct RoundRobinBucketAssigner {
+    table_path: Arc<PhysicalTablePath>,
+    counter: AtomicI32,
+}
+
+impl RoundRobinBucketAssigner {
+    pub fn new(table_path: Arc<PhysicalTablePath>) -> Self {
+        Self {
+            table_path,
+            counter: AtomicI32::new(0),
+        }
+    }
+}
+
+impl BucketAssigner for RoundRobinBucketAssigner {
+    fn abort_if_batch_full(&self) -> bool {
+        false
+    }
+
+    fn on_new_batch(&self, _cluster: &Cluster, _prev_bucket_id: i32) {}
+
+    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<i32> {
+        let available_buckets = cluster.get_available_buckets_for_table_path(&self.table_path);
+        let idx = self.counter.fetch_add(1, Ordering::Relaxed) & i32::MAX;
+        if available_buckets.is_empty() {
+            let num_buckets = cluster.get_bucket_count(self.table_path.get_table_path());
+            Ok(idx % num_buckets)
+        } else {
+            Ok(available_buckets[(idx % available_buckets.len() as i32) as usize].bucket_id())
+        }
+    }
+}
+
 /// A [BucketAssigner] which assigns based on a modulo hashing function
 pub struct HashBucketAssigner {
     num_buckets: i32,
@@ -171,6 +206,35 @@ mod tests {
         assigner.on_new_batch(&cluster, bucket);
         let next_bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
         assert!((0..2).contains(&next_bucket));
+    }
+
+    #[test]
+    fn round_robin_assigner_cycles_through_buckets() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let num_buckets = 3;
+        let cluster = build_cluster(&table_path, 1, num_buckets);
+        let assigner = RoundRobinBucketAssigner::new(Arc::new(PhysicalTablePath::of(Arc::new(
+            table_path.clone(),
+        ))));
+
+        let mut seen = Vec::new();
+        for _ in 0..(num_buckets * 2) {
+            let bucket = assigner.assign_bucket(None, &cluster).expect("bucket");
+            assert!((0..num_buckets).contains(&bucket));
+            seen.push(bucket);
+        }
+
+        assert_eq!(seen[0], seen[3]);
+        assert_eq!(seen[1], seen[4]);
+        assert_eq!(seen[2], seen[5]);
+    }
+
+    #[test]
+    fn round_robin_assigner_does_not_abort_on_batch_full() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let assigner =
+            RoundRobinBucketAssigner::new(Arc::new(PhysicalTablePath::of(Arc::new(table_path))));
+        assert!(!assigner.abort_if_batch_full());
     }
 
     #[test]
