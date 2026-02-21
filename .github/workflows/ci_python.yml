@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Python Bindings
+name: Python Build and Tests
 
 on:
   push:
@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python-integration-test:
+  python-build-and-tests:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     strategy:

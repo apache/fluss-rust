@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Rust
+name: Rust Build and Tests
 
 on:
   push:
@@ -39,37 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install protoc
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            brew install protobuf
-          fi
-
-      - name: Rust Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build
-        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp
-
-  test:
+  rust-build-and-tests:
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:
@@ -95,7 +65,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp
 
       - name: Unit Test
         run: cargo test --all-targets --workspace --exclude fluss_python --exclude fluss-cpp

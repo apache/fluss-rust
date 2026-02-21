@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: C++ Bindings
+name: C++ Build and Tests
 
 on:
   push:
@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cpp-integration-test:
+  cpp-build-and-tests:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:

@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Check
+name: License and Formatting Check
 
 on:
   push:
@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  license-and-formatting-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
