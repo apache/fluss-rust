@@ -46,14 +46,8 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
 
       - name: Install protoc
         run: |
@@ -70,10 +64,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: build-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
+          key: build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp
 
   test:
     timeout-minutes: 60
@@ -83,14 +77,8 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
 
       - name: Install protoc
         run: |
@@ -107,10 +95,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
+          key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Unit Test
-        run: cargo test --all-targets --workspace
+        run: cargo test --all-targets --workspace --exclude fluss_python --exclude fluss-cpp
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
@@ -118,7 +106,7 @@ jobs:
       - name: Integration Test (Linux only)
         if: runner.os == 'Linux'
         run: |
-          RUST_TEST_THREADS=1 cargo test --features integration_tests --all-targets --workspace -- --nocapture
+          RUST_TEST_THREADS=1 cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp -- --nocapture
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

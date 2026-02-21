@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Bindings C++
+name: C++ Bindings
 
 on:
   push:
