@@ -283,4 +283,33 @@ inline void CreatePartitions(fluss::Admin& admin, const fluss::TablePath& path,
     }
 }
 
+/// Poll a LogScanner for ScanRecords until `expected_count` items are collected or timeout.
+/// `extract_fn` is called for each ScanRecord and should return a value of type T.
+template <typename T, typename ExtractFn>
+void PollRecords(fluss::LogScanner& scanner, size_t expected_count,
+                 ExtractFn extract_fn, std::vector<T>& out) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (out.size() < expected_count && std::chrono::steady_clock::now() < deadline) {
+        fluss::ScanRecords records;
+        ASSERT_OK(scanner.Poll(1000, records));
+        for (auto rec : records) {
+            out.push_back(extract_fn(rec));
+        }
+    }
+}
+
+/// Poll a LogScanner for ArrowRecordBatches until `expected_count` items are collected or timeout.
+/// `extract_fn` is called with the full ArrowRecordBatches and should return a std::vector<T>.
+template <typename T, typename ExtractFn>
+void PollRecordBatches(fluss::LogScanner& scanner, size_t expected_count,
+                       ExtractFn extract_fn, std::vector<T>& out) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (out.size() < expected_count && std::chrono::steady_clock::now() < deadline) {
+        fluss::ArrowRecordBatches batches;
+        ASSERT_OK(scanner.PollRecordBatch(1000, batches));
+        auto items = extract_fn(batches);
+        out.insert(out.end(), items.begin(), items.end());
+    }
+}
+
 }  // namespace fluss_test

@@ -109,15 +109,9 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
 
     // Poll for records across all buckets
     std::vector<std::pair<int32_t, std::string>> records;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (records.size() < 6 && std::chrono::steady_clock::now() < deadline) {
-        fluss::ScanRecords scan_records;
-        ASSERT_OK(log_scanner.Poll(500, scan_records));
-        for (auto rec : scan_records) {
-            records.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)));
-        }
-    }
-
+    fluss_test::PollRecords(log_scanner, 6, [](const fluss::ScanRecord& rec) {
+        return std::make_pair(rec.row.GetInt32(0), std::string(rec.row.GetString(1)));
+    }, records);
     ASSERT_EQ(records.size(), 6u) << "Expected 6 records";
     std::sort(records.begin(), records.end());
 
@@ -454,13 +448,7 @@ TEST_F(LogTableTest, TestPollBatches) {
 
     // Test 2: Poll until we get all 6 records
     std::vector<int32_t> all_ids;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (all_ids.size() < 6 && std::chrono::steady_clock::now() < deadline) {
-        fluss::ArrowRecordBatches batches;
-        ASSERT_OK(scanner.PollRecordBatch(5000, batches));
-        auto ids = extract_ids(batches);
-        all_ids.insert(all_ids.end(), ids.begin(), ids.end());
-    }
+    fluss_test::PollRecordBatches(scanner, 6, extract_ids, all_ids);
     ASSERT_EQ(all_ids, (std::vector<int32_t>{1, 2, 3, 4, 5, 6}));
 
     // Test 3: Append more and verify offset continuation (no duplicates)
@@ -468,13 +456,7 @@ TEST_F(LogTableTest, TestPollBatches) {
     ASSERT_OK(writer.Flush());
 
     std::vector<int32_t> new_ids;
-    deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (new_ids.size() < 2 && std::chrono::steady_clock::now() < deadline) {
-        fluss::ArrowRecordBatches batches;
-        ASSERT_OK(scanner.PollRecordBatch(5000, batches));
-        auto ids = extract_ids(batches);
-        new_ids.insert(new_ids.end(), ids.begin(), ids.end());
-    }
+    fluss_test::PollRecordBatches(scanner, 2, extract_ids, new_ids);
     ASSERT_EQ(new_ids, (std::vector<int32_t>{7, 8}));
 
     // Test 4: Subscribing from mid-offset should truncate batch
@@ -487,13 +469,7 @@ TEST_F(LogTableTest, TestPollBatches) {
         ASSERT_OK(trunc_scanner.Subscribe(0, 3));
 
         std::vector<int32_t> trunc_ids;
-        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (trunc_ids.size() < 5 && std::chrono::steady_clock::now() < deadline) {
-            fluss::ArrowRecordBatches batches;
-            ASSERT_OK(trunc_scanner.PollRecordBatch(5000, batches));
-            auto ids = extract_ids(batches);
-            trunc_ids.insert(trunc_ids.end(), ids.begin(), ids.end());
-        }
+        fluss_test::PollRecordBatches(trunc_scanner, 5, extract_ids, trunc_ids);
         ASSERT_EQ(trunc_ids, (std::vector<int32_t>{4, 5, 6, 7, 8}));
     }
 
@@ -622,14 +598,8 @@ TEST_F(LogTableTest, AllSupportedDatatypes) {
 
     // Poll until we get 2 records
     std::vector<fluss::ScanRecord> all_records;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (all_records.size() < 2 && std::chrono::steady_clock::now() < deadline) {
-        fluss::ScanRecords records;
-        ASSERT_OK(log_scanner.Poll(5000, records));
-        for (auto rec : records) {
-            all_records.push_back(rec);
-        }
-    }
+    fluss_test::PollRecords(log_scanner, 2,
+        [](const fluss::ScanRecord& rec) { return rec; }, all_records);
     ASSERT_EQ(all_records.size(), 2u) << "Expected 2 records";
 
     // Verify first record (all values)
@@ -794,16 +764,11 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
 
     // Collect all records
     using Record = std::tuple<int32_t, std::string, int64_t>;
+    auto extract_record = [](const fluss::ScanRecord& rec) -> Record {
+        return {rec.row.GetInt32(0), std::string(rec.row.GetString(1)), rec.row.GetInt64(2)};
+    };
     std::vector<Record> collected;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (collected.size() < 8 && std::chrono::steady_clock::now() < deadline) {
-        fluss::ScanRecords records;
-        ASSERT_OK(log_scanner.Poll(500, records));
-        for (auto rec : records) {
-            collected.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)),
-                                   rec.row.GetInt64(2));
-        }
-    }
+    fluss_test::PollRecords(log_scanner, 8, extract_record, collected);
 
     ASSERT_EQ(collected.size(), 8u) << "Expected 8 records total";
     std::sort(collected.begin(), collected.end());
@@ -833,15 +798,7 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
         ASSERT_OK(unsub_scanner.UnsubscribePartition(eu_partition_id, 0));
 
         std::vector<Record> us_only;
-        auto unsub_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (us_only.size() < 4 && std::chrono::steady_clock::now() < unsub_deadline) {
-            fluss::ScanRecords records;
-            ASSERT_OK(unsub_scanner.Poll(300, records));
-            for (auto rec : records) {
-                us_only.emplace_back(rec.row.GetInt32(0), std::string(rec.row.GetString(1)),
-                                     rec.row.GetInt64(2));
-            }
-        }
+        fluss_test::PollRecords(unsub_scanner, 4, extract_record, us_only);
 
         ASSERT_EQ(us_only.size(), 4u) << "Should receive exactly 4 US records";
         for (const auto& [id, region, val] : us_only) {
@@ -864,16 +821,7 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
         ASSERT_OK(batch_scanner.SubscribePartitionBuckets(subs));
 
         std::vector<Record> batch_collected;
-        auto batch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (batch_collected.size() < 8 && std::chrono::steady_clock::now() < batch_deadline) {
-            fluss::ScanRecords records;
-            ASSERT_OK(batch_scanner.Poll(500, records));
-            for (auto rec : records) {
-                batch_collected.emplace_back(rec.row.GetInt32(0),
-                                             std::string(rec.row.GetString(1)),
-                                             rec.row.GetInt64(2));
-            }
-        }
+        fluss_test::PollRecords(batch_scanner, 8, extract_record, batch_collected);
         ASSERT_EQ(batch_collected.size(), 8u);
         std::sort(batch_collected.begin(), batch_collected.end());
         EXPECT_EQ(batch_collected, expected);
