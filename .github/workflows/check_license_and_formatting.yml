@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  license-and-formatting-check:
+  check-license-and-formatting:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

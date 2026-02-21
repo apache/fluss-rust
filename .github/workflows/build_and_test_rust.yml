@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-build-and-tests:
+  build-and-test-rust:
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:

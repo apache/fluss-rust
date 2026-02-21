@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: C++ Build and Tests
+name: Python Build and Tests
 
 on:
   push:
@@ -30,7 +30,7 @@ on:
     paths-ignore:
       - 'website/**'
       - '**/*.md'
-      - 'bindings/python/**'
+      - 'bindings/cpp/**'
   workflow_dispatch:
 
 concurrency:
@@ -38,22 +38,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cpp-build-and-tests:
+  build-and-test-python:
     timeout-minutes: 60
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install Apache Arrow C++
-        run: |
-          sudo apt-get install -y -V ca-certificates lsb-release wget
-          wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-          sudo apt-get install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-          sudo apt-get update
-          sudo apt-get install -y -V libarrow-dev
 
       - name: Rust Cache
         uses: actions/cache@v4
@@ -62,17 +65,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cpp-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build C++ bindings and tests
-        working-directory: bindings/cpp
+      - name: Build Python bindings
+        working-directory: bindings/python
         run: |
-          cmake -B build -DFLUSS_ENABLE_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build --parallel
+          uv sync --extra dev
+          uv run maturin develop
 
-      - name: Run C++ integration tests
-        working-directory: bindings/cpp
-        run: cd build && ctest --output-on-failure --timeout 300
+      - name: Run Python integration tests
+        working-directory: bindings/python
+        run: uv run pytest test/ -v
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
