@@ -78,6 +78,22 @@ Complete API reference for the Fluss C++ client.
 |-----------------------------------------------------------------------------|------------------------------|
 | `GetLatestLakeSnapshot(const TablePath& path, LakeSnapshot& out) -> Result` | Get the latest lake snapshot |
 
+### Cluster Operations
+
+| Method                                                    | Description                                        |
+|-----------------------------------------------------------|----------------------------------------------------|
+| `GetServerNodes(std::vector<ServerNode>& out) -> Result`  | Get all alive server nodes (coordinator + tablets) |
+
+## `ServerNode`
+
+| Field         | Type          | Description                                              |
+|---------------|---------------|----------------------------------------------------------|
+| `id`          | `int32_t`     | Server node ID                                           |
+| `host`        | `std::string` | Hostname of the server                                   |
+| `port`        | `uint32_t`    | Port number                                              |
+| `server_type` | `std::string` | Server type (`"CoordinatorServer"` or `"TabletServer"`)  |
+| `uid`         | `std::string` | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)             |
+
 ## `Table`
 
 | Method                        | Description                              |

@@ -369,6 +369,15 @@ impl Cluster {
             .unwrap_or(&EMPTY)
     }
 
+    pub fn get_server_nodes(&self) -> Vec<ServerNode> {
+        let mut nodes = Vec::new();
+        if let Some(coordinator) = &self.coordinator_server {
+            nodes.push(coordinator.clone());
+        }
+        nodes.extend(self.alive_tablet_servers.iter().cloned());
+        nodes
+    }
+
     pub fn get_one_available_server(&self) -> Option<&ServerNode> {
         if self.alive_tablet_servers.is_empty() {
             return None;
@@ -426,4 +435,107 @@ fn get_bucket_locations(
         ));
     }
     bucket_locations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_coordinator() -> ServerNode {
+        ServerNode::new(
+            0,
+            "coord-host".to_string(),
+            9123,
+            ServerType::CoordinatorServer,
+        )
+    }
+
+    fn make_tablet_servers() -> HashMap<i32, ServerNode> {
+        let mut servers = HashMap::new();
+        servers.insert(
+            1,
+            ServerNode::new(1, "ts1-host".to_string(), 9124, ServerType::TabletServer),
+        );
+        servers.insert(
+            2,
+            ServerNode::new(2, "ts2-host".to_string(), 9125, ServerType::TabletServer),
+        );
+        servers
+    }
+
+    #[test]
+    fn test_server_node_getters() {
+        let node = ServerNode::new(5, "myhost".to_string(), 8080, ServerType::TabletServer);
+        assert_eq!(node.id(), 5);
+        assert_eq!(node.host(), "myhost");
+        assert_eq!(node.port(), 8080);
+        assert_eq!(node.server_type(), &ServerType::TabletServer);
+        assert_eq!(node.uid(), "ts-5");
+        assert_eq!(node.url(), "myhost:8080");
+    }
+
+    #[test]
+    fn test_server_type_display() {
+        assert_eq!(ServerType::TabletServer.to_string(), "TabletServer");
+        assert_eq!(
+            ServerType::CoordinatorServer.to_string(),
+            "CoordinatorServer"
+        );
+    }
+
+    #[test]
+    fn test_get_server_nodes_with_coordinator_and_tablets() {
+        let cluster = Cluster::new(
+            Some(make_coordinator()),
+            make_tablet_servers(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+
+        let nodes = cluster.get_server_nodes();
+        assert_eq!(nodes.len(), 3);
+
+        let coordinator_count = nodes
+            .iter()
+            .filter(|n| *n.server_type() == ServerType::CoordinatorServer)
+            .count();
+        assert_eq!(coordinator_count, 1);
+
+        let tablet_count = nodes
+            .iter()
+            .filter(|n| *n.server_type() == ServerType::TabletServer)
+            .count();
+        assert_eq!(tablet_count, 2);
+    }
+
+    #[test]
+    fn test_get_server_nodes_no_coordinator() {
+        let cluster = Cluster::new(
+            None,
+            make_tablet_servers(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+
+        let nodes = cluster.get_server_nodes();
+        assert_eq!(nodes.len(), 2);
+        assert!(
+            nodes
+                .iter()
+                .all(|n| *n.server_type() == ServerType::TabletServer)
+        );
+    }
+
+    #[test]
+    fn test_get_server_nodes_empty_cluster() {
+        let cluster = Cluster::default();
+        let nodes = cluster.get_server_nodes();
+        assert!(nodes.is_empty());
+    }
 }

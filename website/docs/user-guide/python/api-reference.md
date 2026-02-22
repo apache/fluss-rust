@@ -50,6 +50,17 @@ Supports `with` statement (context manager).
 | `await drop_partition(table_path, partition_spec, ignore_if_not_exists=False)`                                        | Drop a partition                      |
 | `await list_partition_infos(table_path) -> list[PartitionInfo]`                                                       | List partitions                       |
 | `await get_latest_lake_snapshot(table_path) -> LakeSnapshot`                                                          | Get latest lake snapshot              |
+| `await get_server_nodes() -> list[ServerNode]`                                                                        | Get all alive server nodes            |
+
+## `ServerNode`
+
+| Property                 | Description                                                |
+|--------------------------|------------------------------------------------------------|
+| `.id -> int`             | Server node ID                                             |
+| `.host -> str`           | Hostname of the server                                     |
+| `.port -> int`           | Port number                                                |
+| `.server_type -> str`    | Server type (`"CoordinatorServer"` or `"TabletServer"`)    |
+| `.uid -> str`            | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)               |
 
 ## `FlussTable`
 

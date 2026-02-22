@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::metadata::Metadata;
+use crate::cluster::ServerNode;
 use crate::metadata::{
     DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, PartitionInfo, PartitionSpec,
     PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
@@ -265,6 +266,13 @@ impl FlussAdmin {
             response.created_time,
             response.modified_time,
         ))
+    }
+
+    /// Get all alive server nodes in the cluster, including the coordinator
+    /// and all tablet servers. Refreshes cluster metadata before returning.
+    pub async fn get_server_nodes(&self) -> Result<Vec<ServerNode>> {
+        self.metadata.reinit_cluster().await?;
+        Ok(self.metadata.get_cluster().get_server_nodes())
     }
 
     /// Get the latest lake snapshot for a table

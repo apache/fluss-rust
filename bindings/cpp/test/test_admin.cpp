@@ -285,6 +285,31 @@ TEST_F(AdminTest, ErrorTableAlreadyExist) {
     ASSERT_OK(adm.DropDatabase(db_name, true, true));
 }
 
+TEST_F(AdminTest, GetServerNodes) {
+    auto& adm = admin();
+
+    std::vector<fluss::ServerNode> nodes;
+    ASSERT_OK(adm.GetServerNodes(nodes));
+
+    ASSERT_GT(nodes.size(), 0u) << "Expected at least one server node";
+
+    bool has_coordinator = false;
+    bool has_tablet = false;
+    for (const auto& node : nodes) {
+        EXPECT_FALSE(node.host.empty()) << "Server node host should not be empty";
+        EXPECT_GT(node.port, 0u) << "Server node port should be > 0";
+        EXPECT_FALSE(node.uid.empty()) << "Server node uid should not be empty";
+
+        if (node.server_type == "CoordinatorServer") {
+            has_coordinator = true;
+        } else if (node.server_type == "TabletServer") {
+            has_tablet = true;
+        }
+    }
+    EXPECT_TRUE(has_coordinator) << "Expected a coordinator server node";
+    EXPECT_TRUE(has_tablet) << "Expected at least one tablet server node";
+}
+
 TEST_F(AdminTest, ErrorTableNotExist) {
     auto& adm = admin();
 

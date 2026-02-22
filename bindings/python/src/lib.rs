@@ -125,6 +125,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ScanRecords>()?;
     m.add_class::<RecordBatch>()?;
     m.add_class::<PartitionInfo>()?;
+    m.add_class::<ServerNode>()?;
     m.add_class::<OffsetSpec>()?;
     m.add_class::<WriteResultHandle>()?;
     m.add_class::<DatabaseDescriptor>()?;
