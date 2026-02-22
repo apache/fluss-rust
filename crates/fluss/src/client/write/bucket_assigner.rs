@@ -110,14 +110,17 @@ impl BucketAssigner for StickyBucketAssigner {
 /// in a rotating sequence, providing even data distribution across all buckets.
 pub struct RoundRobinBucketAssigner {
     table_path: Arc<PhysicalTablePath>,
+    num_buckets: i32,
     counter: AtomicI32,
 }
 
 impl RoundRobinBucketAssigner {
-    pub fn new(table_path: Arc<PhysicalTablePath>) -> Self {
+    pub fn new(table_path: Arc<PhysicalTablePath>, num_buckets: i32) -> Self {
+        let mut rng = rand::rng();
         Self {
             table_path,
-            counter: AtomicI32::new(0),
+            num_buckets,
+            counter: AtomicI32::new(rng.random()),
         }
     }
 }
@@ -130,13 +133,13 @@ impl BucketAssigner for RoundRobinBucketAssigner {
     fn on_new_batch(&self, _cluster: &Cluster, _prev_bucket_id: i32) {}
 
     fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<i32> {
+        let next_value = self.counter.fetch_add(1, Ordering::Relaxed);
         let available_buckets = cluster.get_available_buckets_for_table_path(&self.table_path);
-        let idx = self.counter.fetch_add(1, Ordering::Relaxed) & i32::MAX;
         if available_buckets.is_empty() {
-            let num_buckets = cluster.get_bucket_count(self.table_path.get_table_path());
-            Ok(idx % num_buckets)
+            Ok((next_value & i32::MAX) % self.num_buckets)
         } else {
-            Ok(available_buckets[(idx % available_buckets.len() as i32) as usize].bucket_id())
+            let idx = (next_value & i32::MAX) % available_buckets.len() as i32;
+            Ok(available_buckets[idx as usize].bucket_id())
         }
     }
 }
@@ -213,9 +216,8 @@ mod tests {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let num_buckets = 3;
         let cluster = build_cluster(&table_path, 1, num_buckets);
-        let assigner = RoundRobinBucketAssigner::new(Arc::new(PhysicalTablePath::of(Arc::new(
-            table_path.clone(),
-        ))));
+        let physical = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let assigner = RoundRobinBucketAssigner::new(physical, num_buckets);
 
         let mut seen = Vec::new();
         for _ in 0..(num_buckets * 2) {
@@ -232,8 +234,8 @@ mod tests {
     #[test]
     fn round_robin_assigner_does_not_abort_on_batch_full() {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
-        let assigner =
-            RoundRobinBucketAssigner::new(Arc::new(PhysicalTablePath::of(Arc::new(table_path))));
+        let physical = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let assigner = RoundRobinBucketAssigner::new(physical, 3);
         assert!(!assigner.abort_if_batch_full());
     }
 

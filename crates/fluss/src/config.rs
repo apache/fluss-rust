@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 const DEFAULT_BOOTSTRAP_SERVER: &str = "127.0.0.1:9123";
 const DEFAULT_REQUEST_MAX_SIZE: i32 = 10 * 1024 * 1024;
@@ -27,7 +28,26 @@ const DEFAULT_DOWNLOAD_THREADS: usize = 3;
 const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 
 const DEFAULT_ACKS: &str = "all";
-const DEFAULT_BUCKET_NO_KEY_ASSIGNER: &str = "sticky";
+
+/// Bucket assigner strategy for tables without bucket keys.
+/// Matches Java `client.writer.bucket.no-key-assigner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BucketAssignerType {
+    /// Sticks to one bucket until the batch is full, then switches.
+    Sticky,
+    /// Assigns each record to the next bucket in a rotating sequence.
+    RoundRobin,
+}
+
+impl fmt::Display for BucketAssignerType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BucketAssignerType::Sticky => write!(f, "sticky"),
+            BucketAssignerType::RoundRobin => write!(f, "round_robin"),
+        }
+    }
+}
 
 #[derive(Parser, Debug, Clone, Deserialize, Serialize)]
 #[command(author, version, about, long_about = None)]
@@ -47,10 +67,8 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_SIZE)]
     pub writer_batch_size: i32,
 
-    /// Bucket assigner for tables without bucket keys: "sticky" or "round_robin".
-    /// It is to match Java `client.writer.bucket.no-key-assigner`.
-    #[arg(long, default_value_t = String::from(DEFAULT_BUCKET_NO_KEY_ASSIGNER))]
-    pub writer_bucket_no_key_assigner: String,
+    #[arg(long, value_enum, default_value_t = BucketAssignerType::Sticky)]
+    pub writer_bucket_no_key_assigner: BucketAssignerType,
 
     /// Maximum number of remote log segments to prefetch
     /// Default: 4 (matching Java CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM)
@@ -76,7 +94,7 @@ impl Default for Config {
             writer_acks: String::from(DEFAULT_ACKS),
             writer_retries: i32::MAX,
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
-            writer_bucket_no_key_assigner: String::from(DEFAULT_BUCKET_NO_KEY_ASSIGNER),
+            writer_bucket_no_key_assigner: BucketAssignerType::Sticky,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,

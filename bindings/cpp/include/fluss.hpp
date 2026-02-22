@@ -979,6 +979,8 @@ struct Configuration {
     int32_t writer_retries{std::numeric_limits<int32_t>::max()};
     // Writer batch size in bytes (2 MB)
     int32_t writer_batch_size{2 * 1024 * 1024};
+    // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
+    std::string writer_bucket_no_key_assigner{"sticky"};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data

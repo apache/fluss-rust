@@ -23,6 +23,7 @@ use crate::client::write::bucket_assigner::{
 };
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
+use crate::config::BucketAssignerType;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo};
@@ -99,7 +100,12 @@ impl WriterClient {
         let (bucket_assigner, bucket_id) =
             self.assign_bucket(&record.table_info, bucket_key, physical_table_path)?;
 
-        let mut result = self.accumulate.append(record, bucket_id, &cluster, true)?;
+        let mut result = self.accumulate.append(
+            record,
+            bucket_id,
+            &cluster,
+            bucket_assigner.abort_if_batch_full(),
+        )?;
 
         if result.abort_record_for_new_batch {
             let prev_bucket_id = bucket_id;
@@ -132,7 +138,7 @@ impl WriterClient {
                     &self.config,
                 )?;
                 self.bucket_assigners
-                    .insert(Arc::clone(table_path), Arc::clone(&assigner.clone()));
+                    .insert(Arc::clone(table_path), Arc::clone(&assigner));
                 assigner
             }
         };
@@ -178,14 +184,12 @@ impl WriterClient {
                 function,
             )))
         } else {
-            match config.writer_bucket_no_key_assigner.as_str() {
-                "sticky" => Ok(Arc::new(StickyBucketAssigner::new(table_path))),
-                "round_robin" => Ok(Arc::new(RoundRobinBucketAssigner::new(table_path))),
-                other => Err(Error::IllegalArgument {
-                    message: format!(
-                        "unknown writer_bucket_no_key_assigner '{other}', expected 'sticky' or 'round_robin'"
-                    ),
-                }),
+            match config.writer_bucket_no_key_assigner {
+                BucketAssignerType::Sticky => Ok(Arc::new(StickyBucketAssigner::new(table_path))),
+                BucketAssignerType::RoundRobin => Ok(Arc::new(RoundRobinBucketAssigner::new(
+                    table_path,
+                    table_info.num_buckets,
+                ))),
             }
         }
     }
