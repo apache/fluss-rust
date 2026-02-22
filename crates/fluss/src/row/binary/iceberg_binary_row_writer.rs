@@ -99,7 +99,7 @@ impl BinaryWriter for IcebergBinaryRowWriter {
     }
 
     fn set_null_at(&mut self, _pos: usize) {
-        // Key columns are non-null; no null bitmap in Iceberg key encoding
+        panic!("Iceberg key columns do not support null values");
     }
 
     fn write_boolean(&mut self, value: bool) {
@@ -158,24 +158,28 @@ impl BinaryWriter for IcebergBinaryRowWriter {
     }
 
     fn write_time(&mut self, value: i32, _precision: u32) {
-        // Iceberg: convert milliseconds to microseconds, write as i64 LE
-        let micros = (value as i64) * MICROS_PER_MILLI;
+        // NOTE: this is the same with Java's long arithmetic wraps on overflow.
+        let micros = (value as i64).wrapping_mul(MICROS_PER_MILLI);
         self.write_raw(&micros.to_le_bytes());
     }
 
     fn write_timestamp_ntz(&mut self, value: &crate::row::datum::TimestampNtz, _precision: u32) {
-        // Iceberg: convert to total microseconds, write as i64 LE
+        // NOTE: this is the same with Java's long arithmetic wraps on overflow.
         let millis = value.get_millisecond();
         let nanos = value.get_nano_of_millisecond();
-        let micros = millis * MICROS_PER_MILLI + (nanos as i64) / MICROS_PER_MILLI;
+        let micros = millis
+            .wrapping_mul(MICROS_PER_MILLI)
+            .wrapping_add((nanos as i64) / MICROS_PER_MILLI);
         self.write_raw(&micros.to_le_bytes());
     }
 
     fn write_timestamp_ltz(&mut self, value: &crate::row::datum::TimestampLtz, _precision: u32) {
-        // Iceberg: convert to total microseconds, write as i64 LE
+        // NOTE: this is the same with Java's long arithmetic wraps on overflow.
         let millis = value.get_epoch_millisecond();
         let nanos = value.get_nano_of_millisecond();
-        let micros = millis * MICROS_PER_MILLI + (nanos as i64) / MICROS_PER_MILLI;
+        let micros = millis
+            .wrapping_mul(MICROS_PER_MILLI)
+            .wrapping_add((nanos as i64) / MICROS_PER_MILLI);
         self.write_raw(&micros.to_le_bytes());
     }
 
@@ -286,6 +290,26 @@ mod tests {
     }
 
     #[test]
+    fn test_write_timestamp_ntz_overflow_wraps_like_java() {
+        let mut w = IcebergBinaryRowWriter::new();
+        let ts = TimestampNtz::from_millis_nanos(i64::MAX, 999_999).unwrap();
+        w.write_timestamp_ntz(&ts, 9);
+
+        let expected = i64::MAX.wrapping_mul(MICROS_PER_MILLI).wrapping_add(999);
+        assert_eq!(w.buffer(), &expected.to_le_bytes());
+    }
+
+    #[test]
+    fn test_write_timestamp_ltz_overflow_wraps_like_java() {
+        let mut w = IcebergBinaryRowWriter::new();
+        let ts = TimestampLtz::from_millis_nanos(i64::MIN, 999_999).unwrap();
+        w.write_timestamp_ltz(&ts, 9);
+
+        let expected = i64::MIN.wrapping_mul(MICROS_PER_MILLI).wrapping_add(999);
+        assert_eq!(w.buffer(), &expected.to_le_bytes());
+    }
+
+    #[test]
     fn test_write_decimal_compact() {
         let mut w = IcebergBinaryRowWriter::new();
         let bd = BigDecimal::new(BigInt::from(12345), 2); // 123.45
@@ -316,6 +340,13 @@ mod tests {
         w.reset();
         w.write_boolean(false);
         assert_eq!(w.buffer(), &[0u8]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Iceberg key columns do not support null values")]
+    fn test_set_null_panics() {
+        let mut w = IcebergBinaryRowWriter::new();
+        w.set_null_at(0);
     }
 
     #[test]
