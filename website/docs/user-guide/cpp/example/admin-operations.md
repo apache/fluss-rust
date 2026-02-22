@@ -142,6 +142,10 @@ admin.ListPartitionOffsets(table_path, "partition_name",
 
 ## Lake Snapshot
 
+:::note
+Lake snapshots require [lake integration](https://fluss.apache.org/docs/maintenance/tiered-storage/overview/) (e.g. Paimon or Iceberg) to be enabled on the server. Without it, `GetLatestLakeSnapshot` will return an error.
+:::
+
 ```cpp
 fluss::LakeSnapshot snapshot;
 admin.GetLatestLakeSnapshot(table_path, snapshot);
