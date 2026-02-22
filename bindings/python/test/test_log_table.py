@@ -36,7 +36,9 @@ async def test_append_and_scan(connection, admin):
     schema = fluss.Schema(
         pa.schema([pa.field("c1", pa.int32()), pa.field("c2", pa.string())])
     )
-    table_descriptor = fluss.TableDescriptor(schema)
+    table_descriptor = fluss.TableDescriptor(
+        schema, bucket_count=3, bucket_keys=["c1"]
+    )
     await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
 
     table = await connection.get_table(table_path)

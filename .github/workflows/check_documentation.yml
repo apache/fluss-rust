@@ -17,7 +17,7 @@
 ################################################################################
 
 # This workflow is meant for checking broken links in the documentation.
-name: Check Documentation
+name: Documentation Check
 permissions:
   contents: read
 on:
@@ -31,7 +31,7 @@ on:
       - 'website/**'
 
 jobs:
-  test-deploy:
+  check-documentation:
     runs-on: ubuntu-latest
     defaults:
       run:
