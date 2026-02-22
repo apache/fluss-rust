@@ -27,6 +27,7 @@ const DEFAULT_DOWNLOAD_THREADS: usize = 3;
 const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 
 const DEFAULT_ACKS: &str = "all";
+const DEFAULT_BUCKET_NO_KEY_ASSIGNER: &str = "sticky";
 
 #[derive(Parser, Debug, Clone, Deserialize, Serialize)]
 #[command(author, version, about, long_about = None)]
@@ -45,6 +46,11 @@ pub struct Config {
 
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_SIZE)]
     pub writer_batch_size: i32,
+
+    /// Bucket assigner for tables without bucket keys: "sticky" or "round_robin".
+    /// It is to match Java `client.writer.bucket.no-key-assigner`.
+    #[arg(long, default_value_t = String::from(DEFAULT_BUCKET_NO_KEY_ASSIGNER))]
+    pub writer_bucket_no_key_assigner: String,
 
     /// Maximum number of remote log segments to prefetch
     /// Default: 4 (matching Java CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM)
@@ -70,6 +76,7 @@ impl Default for Config {
             writer_acks: String::from(DEFAULT_ACKS),
             writer_retries: i32::MAX,
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
+            writer_bucket_no_key_assigner: String::from(DEFAULT_BUCKET_NO_KEY_ASSIGNER),
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
