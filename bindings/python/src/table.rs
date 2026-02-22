@@ -1263,84 +1263,109 @@ pub fn datum_to_python_value(
     match data_type {
         DataType::Boolean(_) => Ok(row
             .get_boolean(pos)
+            .map_err(|e| FlussError::from_core_error(&e))?
             .into_pyobject(py)?
             .to_owned()
             .into_any()
             .unbind()),
         DataType::TinyInt(_) => Ok(row
             .get_byte(pos)
+            .map_err(|e| FlussError::from_core_error(&e))?
             .into_pyobject(py)?
             .to_owned()
             .into_any()
             .unbind()),
         DataType::SmallInt(_) => Ok(row
             .get_short(pos)
+            .map_err(|e| FlussError::from_core_error(&e))?
             .into_pyobject(py)?
             .to_owned()
             .into_any()
             .unbind()),
         DataType::Int(_) => Ok(row
             .get_int(pos)
+            .map_err(|e| FlussError::from_core_error(&e))?
             .into_pyobject(py)?
             .to_owned()
             .into_any()
             .unbind()),
         DataType::BigInt(_) => Ok(row
             .get_long(pos)
+            .map_err(|e| FlussError::from_core_error(&e))?
             .into_pyobject(py)?
             .to_owned()
             .into_any()
             .unbind()),
         DataType::Float(_) => Ok(row
             .get_float(pos)
+            .map_err(|e| FlussError::from_core_error(&e))?
             .into_pyobject(py)?
             .to_owned()
             .into_any()
             .unbind()),
         DataType::Double(_) => Ok(row
             .get_double(pos)
+            .map_err(|e| FlussError::from_core_error(&e))?
             .into_pyobject(py)?
             .to_owned()
             .into_any()
             .unbind()),
         DataType::String(_) => {
-            let s = row.get_string(pos);
+            let s = row
+                .get_string(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?;
             Ok(s.into_pyobject(py)?.into_any().unbind())
         }
         DataType::Char(char_type) => {
-            let s = row.get_char(pos, char_type.length() as usize);
+            let s = row
+                .get_char(pos, char_type.length() as usize)
+                .map_err(|e| FlussError::from_core_error(&e))?;
             Ok(s.into_pyobject(py)?.into_any().unbind())
         }
         DataType::Bytes(_) => {
-            let b = row.get_bytes(pos);
+            let b = row
+                .get_bytes(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?;
             Ok(PyBytes::new(py, b).into_any().unbind())
         }
         DataType::Binary(binary_type) => {
-            let b = row.get_binary(pos, binary_type.length());
+            let b = row
+                .get_binary(pos, binary_type.length())
+                .map_err(|e| FlussError::from_core_error(&e))?;
             Ok(PyBytes::new(py, b).into_any().unbind())
         }
         DataType::Decimal(decimal_type) => {
-            let decimal = row.get_decimal(
-                pos,
-                decimal_type.precision() as usize,
-                decimal_type.scale() as usize,
-            );
+            let decimal = row
+                .get_decimal(
+                    pos,
+                    decimal_type.precision() as usize,
+                    decimal_type.scale() as usize,
+                )
+                .map_err(|e| FlussError::from_core_error(&e))?;
             rust_decimal_to_python(py, &decimal)
         }
         DataType::Date(_) => {
-            let date = row.get_date(pos);
+            let date = row
+                .get_date(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?;
             rust_date_to_python(py, date)
         }
         DataType::Time(_) => {
-            let time = row.get_time(pos);
+            let time = row
+                .get_time(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?;
             rust_time_to_python(py, time)
         }
         DataType::Timestamp(ts_type) => {
-            let ts = row.get_timestamp_ntz(pos, ts_type.precision());
+            let ts = row
+                .get_timestamp_ntz(pos, ts_type.precision())
+                .map_err(|e| FlussError::from_core_error(&e))?;
             rust_timestamp_ntz_to_python(py, ts)
         }
         DataType::TimestampLTz(ts_type) => {
-            let ts = row.get_timestamp_ltz(pos, ts_type.precision());
+            let ts = row
+                .get_timestamp_ltz(pos, ts_type.precision())
+                .map_err(|e| FlussError::from_core_error(&e))?;
             rust_timestamp_ltz_to_python(py, ts)
         }
         _ => Err(FlussError::new_err(format!(

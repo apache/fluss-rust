@@ -16,9 +16,11 @@
 // under the License.
 
 use crate::client::WriteFormat;
+use crate::error::Result;
 use crate::metadata::RowType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
-use crate::row::{GenericRow, InternalRow};
+use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+use crate::row::{Decimal, GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
 
 // Reference implementation:
@@ -88,67 +90,67 @@ impl<'a> InternalRow for CompactedRow<'a> {
             && self.reader.is_null_at(pos)
     }
 
-    fn get_boolean(&self, pos: usize) -> bool {
+    fn get_boolean(&self, pos: usize) -> Result<bool> {
         self.decoded_row().get_boolean(pos)
     }
 
-    fn get_byte(&self, pos: usize) -> i8 {
+    fn get_byte(&self, pos: usize) -> Result<i8> {
         self.decoded_row().get_byte(pos)
     }
 
-    fn get_short(&self, pos: usize) -> i16 {
+    fn get_short(&self, pos: usize) -> Result<i16> {
         self.decoded_row().get_short(pos)
     }
 
-    fn get_int(&self, pos: usize) -> i32 {
+    fn get_int(&self, pos: usize) -> Result<i32> {
         self.decoded_row().get_int(pos)
     }
 
-    fn get_long(&self, pos: usize) -> i64 {
+    fn get_long(&self, pos: usize) -> Result<i64> {
         self.decoded_row().get_long(pos)
     }
 
-    fn get_float(&self, pos: usize) -> f32 {
+    fn get_float(&self, pos: usize) -> Result<f32> {
         self.decoded_row().get_float(pos)
     }
 
-    fn get_double(&self, pos: usize) -> f64 {
+    fn get_double(&self, pos: usize) -> Result<f64> {
         self.decoded_row().get_double(pos)
     }
 
-    fn get_char(&self, pos: usize, length: usize) -> &str {
+    fn get_char(&self, pos: usize, length: usize) -> Result<&str> {
         self.decoded_row().get_char(pos, length)
     }
 
-    fn get_string(&self, pos: usize) -> &str {
+    fn get_string(&self, pos: usize) -> Result<&str> {
         self.decoded_row().get_string(pos)
     }
 
-    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> crate::row::Decimal {
+    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Result<Decimal> {
         self.decoded_row().get_decimal(pos, precision, scale)
     }
 
-    fn get_date(&self, pos: usize) -> crate::row::datum::Date {
+    fn get_date(&self, pos: usize) -> Result<Date> {
         self.decoded_row().get_date(pos)
     }
 
-    fn get_time(&self, pos: usize) -> crate::row::datum::Time {
+    fn get_time(&self, pos: usize) -> Result<Time> {
         self.decoded_row().get_time(pos)
     }
 
-    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampNtz {
+    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz> {
         self.decoded_row().get_timestamp_ntz(pos, precision)
     }
 
-    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampLtz {
+    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz> {
         self.decoded_row().get_timestamp_ltz(pos, precision)
     }
 
-    fn get_binary(&self, pos: usize, length: usize) -> &[u8] {
+    fn get_binary(&self, pos: usize, length: usize) -> Result<&[u8]> {
         self.decoded_row().get_binary(pos, length)
     }
 
-    fn get_bytes(&self, pos: usize) -> &[u8] {
+    fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
         self.decoded_row().get_bytes(pos)
     }
 
@@ -203,15 +205,15 @@ mod tests {
         let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         assert_eq!(row.get_field_count(), 9);
-        assert!(row.get_boolean(0));
-        assert_eq!(row.get_byte(1), 1);
-        assert_eq!(row.get_short(2), 100);
-        assert_eq!(row.get_int(3), 1000);
-        assert_eq!(row.get_long(4), 10000);
-        assert_eq!(row.get_float(5), 1.5);
-        assert_eq!(row.get_double(6), 2.5);
-        assert_eq!(row.get_string(7), "Hello World");
-        assert_eq!(row.get_bytes(8), &[1, 2, 3, 4, 5]);
+        assert!(row.get_boolean(0).unwrap());
+        assert_eq!(row.get_byte(1).unwrap(), 1);
+        assert_eq!(row.get_short(2).unwrap(), 100);
+        assert_eq!(row.get_int(3).unwrap(), 1000);
+        assert_eq!(row.get_long(4).unwrap(), 10000);
+        assert_eq!(row.get_float(5).unwrap(), 1.5);
+        assert_eq!(row.get_double(6).unwrap(), 2.5);
+        assert_eq!(row.get_string(7).unwrap(), "Hello World");
+        assert_eq!(row.get_bytes(8).unwrap(), &[1, 2, 3, 4, 5]);
 
         // Test with nulls and negative values
         let row_type = RowType::with_data_types(vec![
@@ -231,10 +233,10 @@ mod tests {
         assert!(!row.is_null_at(0));
         assert!(row.is_null_at(1));
         assert!(!row.is_null_at(2));
-        assert_eq!(row.get_int(0), -42);
-        assert_eq!(row.get_double(2), 2.71);
+        assert_eq!(row.get_int(0).unwrap(), -42);
+        assert_eq!(row.get_double(2).unwrap(), 2.71);
         // Verify caching works on repeated reads
-        assert_eq!(row.get_int(0), -42);
+        assert_eq!(row.get_int(0).unwrap(), -42);
     }
 
     #[test]
@@ -285,30 +287,33 @@ mod tests {
         let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
         // Verify all values
-        assert_eq!(row.get_date(0).get_inner(), 19651);
-        assert_eq!(row.get_time(1).get_inner(), 34200000);
-        assert_eq!(row.get_timestamp_ntz(2, 3).get_millisecond(), 1698235273182);
+        assert_eq!(row.get_date(0).unwrap().get_inner(), 19651);
+        assert_eq!(row.get_time(1).unwrap().get_inner(), 34200000);
         assert_eq!(
-            row.get_timestamp_ltz(3, 3).get_epoch_millisecond(),
+            row.get_timestamp_ntz(2, 3).unwrap().get_millisecond(),
             1698235273182
         );
-        let read_ts_ntz = row.get_timestamp_ntz(4, 6);
+        assert_eq!(
+            row.get_timestamp_ltz(3, 3).unwrap().get_epoch_millisecond(),
+            1698235273182
+        );
+        let read_ts_ntz = row.get_timestamp_ntz(4, 6).unwrap();
         assert_eq!(read_ts_ntz.get_millisecond(), 1698235273182);
         assert_eq!(read_ts_ntz.get_nano_of_millisecond(), 123456);
-        let read_ts_ltz = row.get_timestamp_ltz(5, 9);
+        let read_ts_ltz = row.get_timestamp_ltz(5, 9).unwrap();
         assert_eq!(read_ts_ltz.get_epoch_millisecond(), 1698235273182);
         assert_eq!(read_ts_ltz.get_nano_of_millisecond(), 987654);
         // Assert on Decimal equality
-        assert_eq!(row.get_decimal(6, 10, 2), small_decimal);
-        assert_eq!(row.get_decimal(7, 28, 10), large_decimal);
+        assert_eq!(row.get_decimal(6, 10, 2).unwrap(), small_decimal);
+        assert_eq!(row.get_decimal(7, 28, 10).unwrap(), large_decimal);
 
         // Assert on Decimal components to catch any regressions
-        let read_small_decimal = row.get_decimal(6, 10, 2);
+        let read_small_decimal = row.get_decimal(6, 10, 2).unwrap();
         assert_eq!(read_small_decimal.precision(), 10);
         assert_eq!(read_small_decimal.scale(), 2);
         assert_eq!(read_small_decimal.to_unscaled_long().unwrap(), 12345);
 
-        let read_large_decimal = row.get_decimal(7, 28, 10);
+        let read_large_decimal = row.get_decimal(7, 28, 10).unwrap();
         assert_eq!(read_large_decimal.precision(), 28);
         assert_eq!(read_large_decimal.scale(), 10);
         assert_eq!(

@@ -114,9 +114,9 @@ impl<'a> TableScan<'a> {
     ///         let row = record.row();
     ///         println!(
     ///             "{{{}, {}, {}}}@{}",
-    ///             row.get_int(0),
-    ///             row.get_string(2),
-    ///             row.get_string(3),
+    ///             row.get_int(0)?,
+    ///             row.get_string(2)?,
+    ///             row.get_string(3)?,
     ///             record.offset()
     ///         );
     ///     }
@@ -188,8 +188,8 @@ impl<'a> TableScan<'a> {
     ///         let row = record.row();
     ///         println!(
     ///             "{{{}, {}}}@{}",
-    ///             row.get_int(0),
-    ///             row.get_string(1),
+    ///             row.get_int(0)?,
+    ///             row.get_string(1)?,
     ///             record.offset()
     ///         );
     ///     }

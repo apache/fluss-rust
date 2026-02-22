@@ -112,8 +112,8 @@ mod tests {
 
         // Verify
         assert_eq!(row.get_field_count(), 2);
-        assert_eq!(row.get_int(0), 42);
-        assert_eq!(row.get_string(1), "hello");
+        assert_eq!(row.get_int(0).unwrap(), 42);
+        assert_eq!(row.get_string(1).unwrap(), "hello");
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod tests {
         let row = decoder.decode(&data);
 
         // Verify
-        assert_eq!(row.get_int(0), 100);
-        assert_eq!(row.get_string(1), "world");
+        assert_eq!(row.get_int(0).unwrap(), 100);
+        assert_eq!(row.get_string(1).unwrap(), "world");
     }
 }

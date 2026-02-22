@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(record1.key().as_ref(), key1);
         assert!(!record1.is_deletion());
         let row1 = record1.row(&*decoder).unwrap();
-        assert_eq!(row1.get_bytes(0), &[1, 2, 3, 4, 5]);
+        assert_eq!(row1.get_bytes(0).unwrap(), &[1, 2, 3, 4, 5]);
 
         let record2 = iter.next().unwrap().unwrap();
         assert_eq!(record2.key().as_ref(), key2);
