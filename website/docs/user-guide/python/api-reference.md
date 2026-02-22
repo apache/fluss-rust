@@ -10,13 +10,14 @@ Complete API reference for the Fluss Python client.
 | Method / Property                  | Description                                               |
 |------------------------------------|-----------------------------------------------------------|
 | `Config(properties: dict = None)`  | Create config from a dict of key-value pairs              |
-| `.bootstrap_servers`               | Get/set coordinator server address                        |
-| `.writer_request_max_size`         | Get/set max request size in bytes                         |
-| `.writer_acks`                     | Get/set acknowledgment setting (`"all"` for all replicas) |
-| `.writer_retries`                  | Get/set number of retries on failure                      |
-| `.writer_batch_size`               | Get/set write batch size in bytes                         |
-| `.scanner_remote_log_prefetch_num` | Get/set number of remote log segments to prefetch         |
-| `.remote_file_download_thread_num` | Get/set number of threads for remote log downloads        |
+| `bootstrap_servers`                | Get/set coordinator server address                        |
+| `writer_request_max_size`          | Get/set max request size in bytes                         |
+| `writer_acks`                      | Get/set acknowledgment setting (`"all"` for all replicas) |
+| `writer_retries`                   | Get/set number of retries on failure                      |
+| `writer_batch_size`                | Get/set write batch size in bytes                         |
+| `scanner_remote_log_prefetch_num`  | Get/set number of remote log segments to prefetch         |
+| `remote_file_download_thread_num`  | Get/set number of threads for remote log downloads        |
+| `scanner_log_max_poll_records`     | Get/set max number of records returned in a single poll() |
 
 ## `FlussConnection`
 

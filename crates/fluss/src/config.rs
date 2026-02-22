@@ -24,6 +24,7 @@ const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
+const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 
 const DEFAULT_ACKS: &str = "all";
 
@@ -54,6 +55,11 @@ pub struct Config {
     /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
     #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
     pub remote_file_download_thread_num: usize,
+
+    /// Maximum number of records returned in a single call to poll() for LogScanner.
+    /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
+    #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
+    pub scanner_log_max_poll_records: usize,
 }
 
 impl Default for Config {
@@ -66,6 +72,7 @@ impl Default for Config {
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
+            scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
         }
     }
 }

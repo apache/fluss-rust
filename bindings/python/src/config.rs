@@ -43,32 +43,46 @@ impl Config {
                         config.bootstrap_servers = value;
                     }
                     "writer.request-max-size" => {
-                        if let Ok(size) = value.parse::<i32>() {
-                            config.writer_request_max_size = size;
-                        }
+                        config.writer_request_max_size = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
                     }
                     "writer.acks" => {
                         config.writer_acks = value;
                     }
                     "writer.retries" => {
-                        if let Ok(retries) = value.parse::<i32>() {
-                            config.writer_retries = retries;
-                        }
+                        config.writer_retries = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
                     }
                     "writer.batch-size" => {
-                        if let Ok(size) = value.parse::<i32>() {
-                            config.writer_batch_size = size;
-                        }
+                        config.writer_batch_size = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
                     }
                     "scanner.remote-log.prefetch-num" => {
-                        if let Ok(num) = value.parse::<usize>() {
-                            config.scanner_remote_log_prefetch_num = num;
-                        }
+                        config.scanner_remote_log_prefetch_num =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
                     }
                     "remote-file.download-thread-num" => {
-                        if let Ok(num) = value.parse::<usize>() {
-                            config.remote_file_download_thread_num = num;
-                        }
+                        config.remote_file_download_thread_num =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "scanner.log.max-poll-records" => {
+                        config.scanner_log_max_poll_records =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
                     }
                     _ => {
                         return Err(FlussError::new_err(format!("Unknown property: {key}")));
@@ -162,6 +176,18 @@ impl Config {
     #[setter]
     fn set_remote_file_download_thread_num(&mut self, num: usize) {
         self.inner.remote_file_download_thread_num = num;
+    }
+
+    /// Get the scanner log max poll records
+    #[getter]
+    fn scanner_log_max_poll_records(&self) -> usize {
+        self.inner.scanner_log_max_poll_records
+    }
+
+    /// Set the scanner log max poll records
+    #[setter]
+    fn set_scanner_log_max_poll_records(&mut self, num: usize) {
+        self.inner.scanner_log_max_poll_records = num;
     }
 }
 

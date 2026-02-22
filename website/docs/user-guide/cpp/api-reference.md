@@ -24,6 +24,7 @@ Complete API reference for the Fluss C++ client.
 | `writer_batch_size`               | `int32_t`     | `2097152` (2 MB)     | Batch size for writes in bytes                                  |
 | `scanner_remote_log_prefetch_num` | `size_t`      | `4`                  | Number of remote log segments to prefetch                       |
 | `remote_file_download_thread_num` | `size_t`      | `3`                  | Number of threads for remote log downloads                      |
+| `scanner_log_max_poll_records`    | `size_t`      | `500`                | Maximum number of records returned in a single Poll()           |
 
 ## `Connection`
 

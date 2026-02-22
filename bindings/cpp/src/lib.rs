@@ -45,6 +45,7 @@ mod ffi {
         writer_batch_size: i32,
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
+        scanner_log_max_poll_records: usize,
     }
 
     struct FfiResult {
@@ -614,6 +615,7 @@ fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
         writer_batch_size: config.writer_batch_size,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
+        scanner_log_max_poll_records: config.scanner_log_max_poll_records,
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config).await });
