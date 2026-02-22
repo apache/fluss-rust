@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::WriterClient;
+use crate::client::{WriterClient};
 use crate::client::admin::FlussAdmin;
 use crate::client::metadata::Metadata;
 use crate::client::table::FlussTable;
@@ -23,6 +23,7 @@ use crate::config::Config;
 use crate::rpc::RpcClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::TablePath;
@@ -32,6 +33,7 @@ pub struct FlussConnection {
     network_connects: Arc<RpcClient>,
     args: Config,
     writer_client: RwLock<Option<Arc<WriterClient>>>,
+    admin_client: OnceCell<FlussAdmin>,
 }
 
 impl FlussConnection {
@@ -44,6 +46,7 @@ impl FlussConnection {
             network_connects: connections.clone(),
             args: arg.clone(),
             writer_client: Default::default(),
+            admin_client: OnceCell::new(),
         })
     }
 
@@ -60,7 +63,16 @@ impl FlussConnection {
     }
 
     pub async fn get_admin(&self) -> Result<FlussAdmin> {
-        FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()).await
+        // Lazily initialize and cache the FlussAdmin instance. The cached FlussAdmin
+        // holds a reference to RpcClient, which manages connection reuse and re-acquisition
+        // when a cached connection becomes poisoned. Subsequent calls clone cheaply —
+        // all internal fields (ServerConnection, Arc<Metadata>, Arc<RpcClient>) are
+        // Arc-backed so cloning is just a reference-count bump.
+        let admin = self
+            .admin_client
+            .get_or_try_init(|| FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()))
+            .await?;
+        Ok(admin.clone())
     }
 
     pub fn get_or_create_writer_client(&self) -> Result<Arc<WriterClient>> {
