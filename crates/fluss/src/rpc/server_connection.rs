@@ -84,7 +84,7 @@ impl RpcClient {
                 }
             }
 
-            connections.insert(server_id.clone(), new_server.clone());
+            connections.insert(server_id.to_owned(), new_server.clone());
         }
         Ok(new_server)
     }

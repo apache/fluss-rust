@@ -48,7 +48,7 @@ impl ServerNode {
         }
     }
 
-    pub fn uid(&self) -> &String {
+    pub fn uid(&self) -> &str {
         &self.uid
     }
 

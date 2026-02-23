@@ -85,7 +85,7 @@ Complete API reference for the Fluss Rust client.
 | `fn host(&self) -> &str`         | Hostname of the server                               |
 | `fn port(&self) -> u32`          | Port number                                          |
 | `fn server_type(&self) -> &ServerType` | Server type (`CoordinatorServer` or `TabletServer`) |
-| `fn uid(&self) -> String`        | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)         |
+| `fn uid(&self) -> &str`          | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)         |
 
 ## `FlussTable<'a>`
 
