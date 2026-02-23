@@ -200,11 +200,17 @@ mod admin_test {
             "Bucket keys mismatch"
         );
 
-        assert_eq!(
-            table_info.get_properties(),
-            table_descriptor.properties(),
-            "Properties mismatch"
-        );
+        // The server may add extra default properties, so verify that all
+        // expected properties are present rather than requiring an exact match.
+        let actual_props = table_info.get_properties();
+        for (key, value) in table_descriptor.properties() {
+            assert_eq!(
+                actual_props.get(key),
+                Some(value),
+                "Property mismatch for key '{}'",
+                key
+            );
+        }
 
         // drop table
         admin
