@@ -86,8 +86,8 @@ impl Config {
                     }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner = match value.as_str() {
-                            "round_robin" => fcore::config::BucketAssignerType::RoundRobin,
-                            "sticky" => fcore::config::BucketAssignerType::Sticky,
+                            "round_robin" => fcore::config::NoKeyAssigner::RoundRobin,
+                            "sticky" => fcore::config::NoKeyAssigner::Sticky,
                             other => {
                                 return Err(FlussError::new_err(format!(
                                     "Unknown bucket assigner type: {other}, expected 'sticky' or 'round_robin'"

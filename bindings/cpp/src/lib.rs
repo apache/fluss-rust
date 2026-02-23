@@ -609,8 +609,8 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
     let assigner_type = match config.writer_bucket_no_key_assigner.as_str() {
-        "round_robin" => fluss::config::BucketAssignerType::RoundRobin,
-        _ => fluss::config::BucketAssignerType::Sticky,
+        "round_robin" => fluss::config::NoKeyAssigner::RoundRobin,
+        _ => fluss::config::NoKeyAssigner::Sticky,
     };
     let config = fluss::config::Config {
         bootstrap_servers: config.bootstrap_servers.to_string(),

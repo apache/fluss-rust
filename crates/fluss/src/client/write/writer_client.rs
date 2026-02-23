@@ -23,8 +23,8 @@ use crate::client::write::bucket_assigner::{
 };
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
-use crate::config::BucketAssignerType;
 use crate::config::Config;
+use crate::config::NoKeyAssigner;
 use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo};
 use bytes::Bytes;
@@ -185,8 +185,8 @@ impl WriterClient {
             )))
         } else {
             match config.writer_bucket_no_key_assigner {
-                BucketAssignerType::Sticky => Ok(Arc::new(StickyBucketAssigner::new(table_path))),
-                BucketAssignerType::RoundRobin => Ok(Arc::new(RoundRobinBucketAssigner::new(
+                NoKeyAssigner::Sticky => Ok(Arc::new(StickyBucketAssigner::new(table_path))),
+                NoKeyAssigner::RoundRobin => Ok(Arc::new(RoundRobinBucketAssigner::new(
                     table_path,
                     table_info.num_buckets,
                 ))),
