@@ -2061,7 +2061,7 @@ impl ScanResultInner {
         self.columns.len()
     }
 
-    // Field accessors — C++ validates bounds in BucketView/RecordAt, validate() checks field.
+    // Field accessors — C++ validates bounds in BucketRecords/RecordAt, validate() checks field.
     fn sv_is_null(&self, bucket: usize, rec: usize, field: usize) -> Result<bool, String> {
         row_reader::is_null(self.resolve(bucket, rec).row(), &self.columns, field)
     }

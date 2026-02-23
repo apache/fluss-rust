@@ -282,12 +282,12 @@ for (const auto& rec : records) {
 |-----------------------------------------------------------------|-----------------------------------------------------------------------|
 | `BucketCount() -> size_t`                                       | Number of distinct buckets                                            |
 | `Buckets() -> std::vector<TableBucket>`                         | List of distinct buckets                                              |
-| `Records(const TableBucket& bucket) -> BucketView`              | Records for a specific bucket (empty view if bucket not present)      |
-| `BucketAt(size_t idx) -> BucketView`                            | Records by bucket index (0-based, O(1))                               |
+| `Records(const TableBucket& bucket) -> BucketRecords`              | Records for a specific bucket (empty if bucket not present)           |
+| `BucketAt(size_t idx) -> BucketRecords`                            | Records by bucket index (0-based, O(1))                               |
 
-## `BucketView`
+## `BucketRecords`
 
-A view of records within a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`. `BucketView` is a value type — it shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
+A bundle of scan records belonging to a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`. `BucketRecords` is a value type — it shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
 
 | Method                                         |  Description                               |
 |------------------------------------------------|--------------------------------------------|
