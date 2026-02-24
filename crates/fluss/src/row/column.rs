@@ -61,6 +61,18 @@ impl ColumnarRow {
         &self.record_batch
     }
 
+    fn column(&self, pos: usize) -> Result<&Arc<dyn Array>> {
+        self.record_batch
+            .columns()
+            .get(pos)
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "column index {pos} out of bounds (batch has {} columns)",
+                    self.record_batch.num_columns()
+                ),
+            })
+    }
+
     /// Generic helper to read timestamp from Arrow, handling all TimeUnit conversions.
     /// Like Java, the precision parameter is ignored - conversion is determined by Arrow TimeUnit.
     fn read_timestamp_from_arrow<T>(
@@ -72,7 +84,7 @@ impl ColumnarRow {
     ) -> Result<T> {
         let schema = self.record_batch.schema();
         let arrow_field = schema.field(pos);
-        let column = self.record_batch.column(pos);
+        let column = self.column(pos)?;
 
         // Read value based on the actual Arrow timestamp type
         let value = match arrow_field.data_type() {
@@ -139,8 +151,7 @@ impl ColumnarRow {
     /// Read date value from Arrow Date32Array
     fn read_date_from_arrow(&self, pos: usize) -> Result<i32> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_primitive_opt::<Date32Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected Date32Array at position {pos}"),
@@ -152,7 +163,7 @@ impl ColumnarRow {
     fn read_time_from_arrow(&self, pos: usize) -> Result<i32> {
         let schema = self.record_batch.schema();
         let arrow_field = schema.field(pos);
-        let column = self.record_batch.column(pos);
+        let column = self.column(pos)?;
 
         match arrow_field.data_type() {
             ArrowDataType::Time32(TimeUnit::Second) => {
@@ -201,21 +212,12 @@ impl InternalRow for ColumnarRow {
     }
 
     fn is_null_at(&self, pos: usize) -> Result<bool> {
-        if pos >= self.record_batch.num_columns() {
-            return Err(IllegalArgument {
-                message: format!(
-                    "position {pos} out of bounds (row has {} fields)",
-                    self.record_batch.num_columns()
-                ),
-            });
-        }
-        Ok(self.record_batch.column(pos).is_null(self.row_id))
+        Ok(self.column(pos)?.is_null(self.row_id))
     }
 
     fn get_boolean(&self, pos: usize) -> Result<bool> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_boolean_opt()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected boolean array at position {pos}"),
@@ -225,8 +227,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_byte(&self, pos: usize) -> Result<i8> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_primitive_opt::<Int8Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected byte array at position {pos}"),
@@ -236,8 +237,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_short(&self, pos: usize) -> Result<i16> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_primitive_opt::<Int16Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected short array at position {pos}"),
@@ -247,8 +247,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_int(&self, pos: usize) -> Result<i32> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_primitive_opt::<Int32Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected int array at position {pos}"),
@@ -258,8 +257,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_long(&self, pos: usize) -> Result<i64> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_primitive_opt::<Int64Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected long array at position {pos}"),
@@ -269,8 +267,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_float(&self, pos: usize) -> Result<f32> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_primitive_opt::<Float32Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected float32 array at position {pos}"),
@@ -280,8 +277,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_double(&self, pos: usize) -> Result<f64> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_primitive_opt::<Float64Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected float64 array at position {pos}"),
@@ -291,8 +287,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_char(&self, pos: usize, _length: usize) -> Result<&str> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| IllegalArgument {
@@ -303,8 +298,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_string(&self, pos: usize) -> Result<&str> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| IllegalArgument {
@@ -321,7 +315,7 @@ impl InternalRow for ColumnarRow {
     ) -> Result<crate::row::Decimal> {
         use arrow::datatypes::DataType;
 
-        let column = self.record_batch.column(pos);
+        let column = self.column(pos)?;
         let array = column
             .as_primitive_opt::<Decimal128Type>()
             .ok_or_else(|| IllegalArgument {
@@ -392,8 +386,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_binary(&self, pos: usize, _length: usize) -> Result<&[u8]> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_fixed_size_binary_opt()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected binary array at position {pos}"),
@@ -403,8 +396,7 @@ impl InternalRow for ColumnarRow {
 
     fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
         Ok(self
-            .record_batch
-            .column(pos)
+            .column(pos)?
             .as_any()
             .downcast_ref::<BinaryArray>()
             .ok_or_else(|| IllegalArgument {
