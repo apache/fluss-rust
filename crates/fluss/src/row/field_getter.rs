@@ -28,7 +28,7 @@ impl FieldGetter {
     pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Result<Datum<'a>> {
         match self {
             FieldGetter::Nullable(getter) => {
-                if row.is_null_at(getter.pos()) {
+                if row.is_null_at(getter.pos())? {
                     Ok(Datum::Null)
                 } else {
                     getter.get_field(row)

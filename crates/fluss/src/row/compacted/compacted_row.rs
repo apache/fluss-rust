@@ -83,11 +83,17 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.arity
     }
 
-    fn is_null_at(&self, pos: usize) -> bool {
-        self.deserializer.get_row_type().fields().as_slice()[pos]
-            .data_type
-            .is_nullable()
-            && self.reader.is_null_at(pos)
+    fn is_null_at(&self, pos: usize) -> Result<bool> {
+        let fields = self.deserializer.get_row_type().fields();
+        if pos >= fields.len() {
+            return Err(crate::error::Error::IllegalArgument {
+                message: format!(
+                    "position {pos} out of bounds (row has {} fields)",
+                    fields.len()
+                ),
+            });
+        }
+        Ok(fields.as_slice()[pos].data_type.is_nullable() && self.reader.is_null_at(pos))
     }
 
     fn get_boolean(&self, pos: usize) -> Result<bool> {
@@ -230,9 +236,9 @@ mod tests {
         let bytes = writer.to_bytes();
         let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
-        assert!(!row.is_null_at(0));
-        assert!(row.is_null_at(1));
-        assert!(!row.is_null_at(2));
+        assert!(!row.is_null_at(0).unwrap());
+        assert!(row.is_null_at(1).unwrap());
+        assert!(!row.is_null_at(2).unwrap());
         assert_eq!(row.get_int(0).unwrap(), -42);
         assert_eq!(row.get_double(2).unwrap(), 2.71);
         // Verify caching works on repeated reads

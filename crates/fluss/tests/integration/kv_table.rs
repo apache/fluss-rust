@@ -724,7 +724,11 @@ mod kv_table_test {
             col_boolean,
             "col_boolean mismatch"
         );
-        assert_eq!(found_row.get_byte(2).unwrap(), col_tinyint, "col_tinyint mismatch");
+        assert_eq!(
+            found_row.get_byte(2).unwrap(),
+            col_tinyint,
+            "col_tinyint mismatch"
+        );
         assert_eq!(
             found_row.get_short(3).unwrap(),
             col_smallint,

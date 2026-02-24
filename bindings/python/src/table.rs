@@ -1256,7 +1256,10 @@ pub fn datum_to_python_value(
     use fcore::metadata::DataType;
 
     // Check for null first
-    if row.is_null_at(pos) {
+    if row
+        .is_null_at(pos)
+        .map_err(|e| FlussError::from_core_error(&e))?
+    {
         return Ok(py.None());
     }
 

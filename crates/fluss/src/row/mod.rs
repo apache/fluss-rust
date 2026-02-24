@@ -62,7 +62,7 @@ pub trait InternalRow: Send + Sync {
     fn get_field_count(&self) -> usize;
 
     /// Returns true if the element is null at the given position
-    fn is_null_at(&self, pos: usize) -> bool;
+    fn is_null_at(&self, pos: usize) -> Result<bool>;
 
     /// Returns the boolean value at the given position
     fn get_boolean(&self, pos: usize) -> Result<bool>;
@@ -158,8 +158,8 @@ impl<'a> InternalRow for GenericRow<'a> {
         self.values.len()
     }
 
-    fn is_null_at(&self, pos: usize) -> bool {
-        self.values.get(pos).is_none_or(|v| v.is_null())
+    fn is_null_at(&self, pos: usize) -> Result<bool> {
+        Ok(self.get_value(pos)?.is_null())
     }
 
     fn get_boolean(&self, pos: usize) -> Result<bool> {
@@ -321,17 +321,27 @@ mod tests {
         row.set_field(0, Datum::Null);
         row.set_field(1, 42_i32);
 
-        assert!(row.is_null_at(0));
-        assert!(!row.is_null_at(1));
+        assert!(row.is_null_at(0).unwrap());
+        assert!(!row.is_null_at(1).unwrap());
+    }
+
+    #[test]
+    fn is_null_at_out_of_bounds_returns_error() {
+        let row = GenericRow::from_data(vec![42_i32]);
+        let err = row.is_null_at(5).unwrap_err();
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "Expected out of bounds error, got: {err}"
+        );
     }
 
     #[test]
     fn new_initializes_nulls() {
         let row = GenericRow::new(3);
         assert_eq!(row.get_field_count(), 3);
-        assert!(row.is_null_at(0));
-        assert!(row.is_null_at(1));
-        assert!(row.is_null_at(2));
+        assert!(row.is_null_at(0).unwrap());
+        assert!(row.is_null_at(1).unwrap());
+        assert!(row.is_null_at(2).unwrap());
     }
 
     #[test]
@@ -342,8 +352,8 @@ mod tests {
         // Fields 1 and 2 remain null
         assert_eq!(row.get_field_count(), 3);
         assert_eq!(row.get_int(0).unwrap(), 123);
-        assert!(row.is_null_at(1));
-        assert!(row.is_null_at(2));
+        assert!(row.is_null_at(1).unwrap());
+        assert!(row.is_null_at(2).unwrap());
     }
 
     #[test]

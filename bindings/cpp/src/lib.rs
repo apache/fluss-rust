@@ -1773,7 +1773,7 @@ mod row_reader {
         allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
     ) -> Result<&'a fcore::metadata::DataType, String> {
         let col = get_column(columns, field)?;
-        if row.is_null_at(field) {
+        if row.is_null_at(field).map_err(|e| e.to_string())? {
             return Err(format!("field {field} is null"));
         }
         let dt = col.data_type();
@@ -1801,7 +1801,7 @@ mod row_reader {
         field: usize,
     ) -> Result<bool, String> {
         get_column(columns, field)?;
-        Ok(row.is_null_at(field))
+        row.is_null_at(field).map_err(|e| e.to_string())
     }
 
     pub fn get_bool(

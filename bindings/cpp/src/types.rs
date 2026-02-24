@@ -371,7 +371,7 @@ pub fn compacted_row_to_owned(
     let mut out = fcore::row::GenericRow::new(columns.len());
 
     for (i, col) in columns.iter().enumerate() {
-        if row.is_null_at(i) {
+        if row.is_null_at(i)? {
             out.set_field(i, Datum::Null);
             continue;
         }

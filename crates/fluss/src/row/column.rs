@@ -19,14 +19,13 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::row::InternalRow;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
-use arrow::array::{
-    Array, AsArray, BinaryArray, Date32Array, Decimal128Array, FixedSizeBinaryArray, Float32Array,
-    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch, StringArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
+use arrow::array::{Array, AsArray, BinaryArray, RecordBatch, StringArray};
+use arrow::datatypes::{
+    DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -69,8 +68,8 @@ impl ColumnarRow {
         pos: usize,
         _precision: u32,
         construct_compact: impl FnOnce(i64) -> T,
-        construct_with_nanos: impl FnOnce(i64, i32) -> crate::error::Result<T>,
-    ) -> T {
+        construct_with_nanos: impl FnOnce(i64, i32) -> Result<T>,
+    ) -> Result<T> {
         let schema = self.record_batch.schema();
         let arrow_field = schema.field(pos);
         let column = self.record_batch.column(pos);
@@ -78,26 +77,34 @@ impl ColumnarRow {
         // Read value based on the actual Arrow timestamp type
         let value = match arrow_field.data_type() {
             ArrowDataType::Timestamp(TimeUnit::Second, _) => column
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .expect("Expected TimestampSecondArray")
+                .as_primitive_opt::<TimestampSecondType>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("expected TimestampSecondArray at position {pos}"),
+                })?
                 .value(self.row_id),
             ArrowDataType::Timestamp(TimeUnit::Millisecond, _) => column
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .expect("Expected TimestampMillisecondArray")
+                .as_primitive_opt::<TimestampMillisecondType>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("expected TimestampMillisecondArray at position {pos}"),
+                })?
                 .value(self.row_id),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, _) => column
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .expect("Expected TimestampMicrosecondArray")
+                .as_primitive_opt::<TimestampMicrosecondType>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("expected TimestampMicrosecondArray at position {pos}"),
+                })?
                 .value(self.row_id),
             ArrowDataType::Timestamp(TimeUnit::Nanosecond, _) => column
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .expect("Expected TimestampNanosecondArray")
+                .as_primitive_opt::<TimestampNanosecondType>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("expected TimestampNanosecondArray at position {pos}"),
+                })?
                 .value(self.row_id),
-            other => panic!("Expected Timestamp column at position {pos}, got {other:?}"),
+            other => {
+                return Err(IllegalArgument {
+                    message: format!("expected Timestamp column at position {pos}, got {other:?}"),
+                });
+            }
         };
 
         // Convert based on Arrow TimeUnit
@@ -123,25 +130,26 @@ impl ColumnarRow {
         };
 
         if nanos == 0 {
-            construct_compact(millis)
+            Ok(construct_compact(millis))
         } else {
-            // nanos is guaranteed to be in valid range [0, 999_999] by arithmetic
-            construct_with_nanos(millis, nanos).expect("nanos in valid range by construction")
+            construct_with_nanos(millis, nanos)
         }
     }
 
     /// Read date value from Arrow Date32Array
-    fn read_date_from_arrow(&self, pos: usize) -> i32 {
-        self.record_batch
+    fn read_date_from_arrow(&self, pos: usize) -> Result<i32> {
+        Ok(self
+            .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<Date32Array>()
-            .expect("Expected Date32Array")
-            .value(self.row_id)
+            .as_primitive_opt::<Date32Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected Date32Array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
     /// Read time value from Arrow Time32/Time64 arrays, converting to milliseconds
-    fn read_time_from_arrow(&self, pos: usize) -> i32 {
+    fn read_time_from_arrow(&self, pos: usize) -> Result<i32> {
         let schema = self.record_batch.schema();
         let arrow_field = schema.field(pos);
         let column = self.record_batch.column(pos);
@@ -149,34 +157,40 @@ impl ColumnarRow {
         match arrow_field.data_type() {
             ArrowDataType::Time32(TimeUnit::Second) => {
                 let value = column
-                    .as_any()
-                    .downcast_ref::<Time32SecondArray>()
-                    .expect("Expected Time32SecondArray")
+                    .as_primitive_opt::<Time32SecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected Time32SecondArray at position {pos}"),
+                    })?
                     .value(self.row_id);
-                value * 1000 // Convert seconds to milliseconds
+                Ok(value * 1000) // Convert seconds to milliseconds
             }
-            ArrowDataType::Time32(TimeUnit::Millisecond) => column
-                .as_any()
-                .downcast_ref::<Time32MillisecondArray>()
-                .expect("Expected Time32MillisecondArray")
-                .value(self.row_id),
+            ArrowDataType::Time32(TimeUnit::Millisecond) => Ok(column
+                .as_primitive_opt::<Time32MillisecondType>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("expected Time32MillisecondArray at position {pos}"),
+                })?
+                .value(self.row_id)),
             ArrowDataType::Time64(TimeUnit::Microsecond) => {
                 let value = column
-                    .as_any()
-                    .downcast_ref::<Time64MicrosecondArray>()
-                    .expect("Expected Time64MicrosecondArray")
+                    .as_primitive_opt::<Time64MicrosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected Time64MicrosecondArray at position {pos}"),
+                    })?
                     .value(self.row_id);
-                (value / 1000) as i32 // Convert microseconds to milliseconds
+                Ok((value / 1000) as i32) // Convert microseconds to milliseconds
             }
             ArrowDataType::Time64(TimeUnit::Nanosecond) => {
                 let value = column
-                    .as_any()
-                    .downcast_ref::<Time64NanosecondArray>()
-                    .expect("Expected Time64NanosecondArray")
+                    .as_primitive_opt::<Time64NanosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected Time64NanosecondArray at position {pos}"),
+                    })?
                     .value(self.row_id);
-                (value / 1_000_000) as i32 // Convert nanoseconds to milliseconds
+                Ok((value / 1_000_000) as i32) // Convert nanoseconds to milliseconds
             }
-            other => panic!("Expected Time column at position {pos}, got {other:?}"),
+            other => Err(IllegalArgument {
+                message: format!("expected Time column at position {pos}, got {other:?}"),
+            }),
         }
     }
 }
@@ -186,15 +200,26 @@ impl InternalRow for ColumnarRow {
         self.record_batch.num_columns()
     }
 
-    fn is_null_at(&self, pos: usize) -> bool {
-        self.record_batch.column(pos).is_null(self.row_id)
+    fn is_null_at(&self, pos: usize) -> Result<bool> {
+        if pos >= self.record_batch.num_columns() {
+            return Err(IllegalArgument {
+                message: format!(
+                    "position {pos} out of bounds (row has {} fields)",
+                    self.record_batch.num_columns()
+                ),
+            });
+        }
+        Ok(self.record_batch.column(pos).is_null(self.row_id))
     }
 
     fn get_boolean(&self, pos: usize) -> Result<bool> {
         Ok(self
             .record_batch
             .column(pos)
-            .as_boolean()
+            .as_boolean_opt()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected boolean array at position {pos}"),
+            })?
             .value(self.row_id))
     }
 
@@ -202,8 +227,7 @@ impl InternalRow for ColumnarRow {
         Ok(self
             .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<Int8Array>()
+            .as_primitive_opt::<Int8Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected byte array at position {pos}"),
             })?
@@ -214,8 +238,7 @@ impl InternalRow for ColumnarRow {
         Ok(self
             .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<Int16Array>()
+            .as_primitive_opt::<Int16Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected short array at position {pos}"),
             })?
@@ -226,8 +249,7 @@ impl InternalRow for ColumnarRow {
         Ok(self
             .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<Int32Array>()
+            .as_primitive_opt::<Int32Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected int array at position {pos}"),
             })?
@@ -238,8 +260,7 @@ impl InternalRow for ColumnarRow {
         Ok(self
             .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<Int64Array>()
+            .as_primitive_opt::<Int64Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected long array at position {pos}"),
             })?
@@ -250,8 +271,7 @@ impl InternalRow for ColumnarRow {
         Ok(self
             .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<Float32Array>()
+            .as_primitive_opt::<Float32Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected float32 array at position {pos}"),
             })?
@@ -262,8 +282,7 @@ impl InternalRow for ColumnarRow {
         Ok(self
             .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<Float64Array>()
+            .as_primitive_opt::<Float64Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected float64 array at position {pos}"),
             })?
@@ -304,8 +323,7 @@ impl InternalRow for ColumnarRow {
 
         let column = self.record_batch.column(pos);
         let array = column
-            .as_any()
-            .downcast_ref::<Decimal128Array>()
+            .as_primitive_opt::<Decimal128Type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!(
                     "expected Decimal128Array at column {pos}, found: {:?}",
@@ -347,37 +365,36 @@ impl InternalRow for ColumnarRow {
     }
 
     fn get_date(&self, pos: usize) -> Result<Date> {
-        Ok(Date::new(self.read_date_from_arrow(pos)))
+        Ok(Date::new(self.read_date_from_arrow(pos)?))
     }
 
     fn get_time(&self, pos: usize) -> Result<Time> {
-        Ok(Time::new(self.read_time_from_arrow(pos)))
+        Ok(Time::new(self.read_time_from_arrow(pos)?))
     }
 
     fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz> {
-        Ok(self.read_timestamp_from_arrow(
+        self.read_timestamp_from_arrow(
             pos,
             precision,
             TimestampNtz::new,
             TimestampNtz::from_millis_nanos,
-        ))
+        )
     }
 
     fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz> {
-        Ok(self.read_timestamp_from_arrow(
+        self.read_timestamp_from_arrow(
             pos,
             precision,
             TimestampLtz::new,
             TimestampLtz::from_millis_nanos,
-        ))
+        )
     }
 
     fn get_binary(&self, pos: usize, _length: usize) -> Result<&[u8]> {
         Ok(self
             .record_batch
             .column(pos)
-            .as_any()
-            .downcast_ref::<FixedSizeBinaryArray>()
+            .as_fixed_size_binary_opt()
             .ok_or_else(|| IllegalArgument {
                 message: format!("expected binary array at position {pos}"),
             })?
@@ -401,8 +418,8 @@ impl InternalRow for ColumnarRow {
 mod tests {
     use super::*;
     use arrow::array::{
-        BinaryArray, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-        Int64Array, StringArray,
+        BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array,
+        Int16Array, Int32Array, Int64Array, StringArray,
     };
     use arrow::datatypes::{DataType, Field, Schema};
 
