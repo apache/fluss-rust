@@ -705,14 +705,14 @@ struct ScanRecord {
     RowView row;
 };
 
-/// A view into a subset of scan results for a single bucket.
+/// A bundle of scan records belonging to a single bucket.
 ///
-/// BucketView is a value type — it shares ownership of the underlying scan data
+/// BucketRecords is a value type — it shares ownership of the underlying scan data
 /// via reference counting, so it can safely outlive the ScanRecords that produced it.
-class BucketView {
+class BucketRecords {
    public:
-    BucketView(std::shared_ptr<const detail::ScanData> data, TableBucket bucket, size_t bucket_idx,
-               size_t count)
+    BucketRecords(std::shared_ptr<const detail::ScanData> data, TableBucket bucket,
+                  size_t bucket_idx, size_t count)
         : data_(std::move(data)),
           bucket_(std::move(bucket)),
           bucket_idx_(bucket_idx),
@@ -738,9 +738,9 @@ class BucketView {
         bool operator!=(const Iterator& other) const { return idx_ != other.idx_; }
 
        private:
-        friend class BucketView;
-        Iterator(const BucketView* owner, size_t idx) : owner_(owner), idx_(idx) {}
-        const BucketView* owner_;
+        friend class BucketRecords;
+        Iterator(const BucketRecords* owner, size_t idx) : owner_(owner), idx_(idx) {}
+        const BucketRecords* owner_;
         size_t idx_;
     };
 
@@ -774,16 +774,16 @@ class ScanRecords {
     /// List of distinct buckets that have records.
     std::vector<TableBucket> Buckets() const;
 
-    /// Get a view of records for a specific bucket.
+    /// Get records for a specific bucket.
     ///
-    /// Returns an empty BucketView if the bucket is not present (matches Rust/Java).
+    /// Returns an empty BucketRecords if the bucket is not present (matches Rust/Java).
     /// Note: O(B) linear scan. For iteration over all buckets, prefer BucketAt(idx).
-    BucketView Records(const TableBucket& bucket) const;
+    BucketRecords Records(const TableBucket& bucket) const;
 
-    /// Get a view of records by bucket index (0-based). O(1).
+    /// Get records by bucket index (0-based). O(1).
     ///
     /// Throws std::out_of_range if idx >= BucketCount().
-    BucketView BucketAt(size_t idx) const;
+    BucketRecords BucketAt(size_t idx) const;
 
     /// Flat iterator over all records across all buckets (matches Java Iterable<ScanRecord>).
     class Iterator {

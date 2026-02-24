@@ -119,7 +119,7 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
         {1, "a1"}, {2, "a2"}, {3, "a3"}, {4, "a4"}, {5, "a5"}, {6, "a6"}};
     EXPECT_EQ(records, expected);
 
-    // Verify per-bucket iteration via BucketView
+    // Verify per-bucket iteration via BucketRecords
     {
         fluss::Table bucket_table;
         ASSERT_OK(conn.GetTable(table_path, bucket_table));
@@ -140,11 +140,11 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
 
             // Iterate by bucket
             for (size_t b = 0; b < scan_records.BucketCount(); ++b) {
-                auto bucket_view = scan_records.BucketAt(b);
-                if (!bucket_view.Empty()) {
+                auto bkt_records = scan_records.BucketAt(b);
+                if (!bkt_records.Empty()) {
                     buckets_with_data++;
                 }
-                for (auto rec : bucket_view) {
+                for (auto rec : bkt_records) {
                     bucket_records.emplace_back(rec.row.GetInt32(0),
                                                 std::string(rec.row.GetString(1)));
                 }
