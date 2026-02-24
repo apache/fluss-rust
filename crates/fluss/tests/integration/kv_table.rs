@@ -847,28 +847,70 @@ mod kv_table_test {
             pk_int_2,
             "pk_int mismatch"
         );
-        assert!(found_row_nulls.is_null_at(1), "col_boolean should be null");
-        assert!(found_row_nulls.is_null_at(2), "col_tinyint should be null");
-        assert!(found_row_nulls.is_null_at(3), "col_smallint should be null");
-        assert!(found_row_nulls.is_null_at(4), "col_int should be null");
-        assert!(found_row_nulls.is_null_at(5), "col_bigint should be null");
-        assert!(found_row_nulls.is_null_at(6), "col_float should be null");
-        assert!(found_row_nulls.is_null_at(7), "col_double should be null");
-        assert!(found_row_nulls.is_null_at(8), "col_char should be null");
-        assert!(found_row_nulls.is_null_at(9), "col_string should be null");
-        assert!(found_row_nulls.is_null_at(10), "col_decimal should be null");
-        assert!(found_row_nulls.is_null_at(11), "col_date should be null");
-        assert!(found_row_nulls.is_null_at(12), "col_time should be null");
         assert!(
-            found_row_nulls.is_null_at(13),
+            found_row_nulls.is_null_at(1).unwrap(),
+            "col_boolean should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(2).unwrap(),
+            "col_tinyint should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(3).unwrap(),
+            "col_smallint should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(4).unwrap(),
+            "col_int should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(5).unwrap(),
+            "col_bigint should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(6).unwrap(),
+            "col_float should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(7).unwrap(),
+            "col_double should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(8).unwrap(),
+            "col_char should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(9).unwrap(),
+            "col_string should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(10).unwrap(),
+            "col_decimal should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(11).unwrap(),
+            "col_date should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(12).unwrap(),
+            "col_time should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(13).unwrap(),
             "col_timestamp should be null"
         );
         assert!(
-            found_row_nulls.is_null_at(14),
+            found_row_nulls.is_null_at(14).unwrap(),
             "col_timestamp_ltz should be null"
         );
-        assert!(found_row_nulls.is_null_at(15), "col_bytes should be null");
-        assert!(found_row_nulls.is_null_at(16), "col_binary should be null");
+        assert!(
+            found_row_nulls.is_null_at(15).unwrap(),
+            "col_bytes should be null"
+        );
+        assert!(
+            found_row_nulls.is_null_at(16).unwrap(),
+            "col_binary should be null"
+        );
 
         admin
             .drop_table(&table_path, false)

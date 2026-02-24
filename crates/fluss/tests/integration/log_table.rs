@@ -1004,7 +1004,11 @@ mod table_test {
         // Verify row with all nulls (record index 1)
         let found_row_nulls = records[1].row();
         for i in 0..field_count {
-            assert!(found_row_nulls.is_null_at(i), "column {} should be null", i);
+            assert!(
+                found_row_nulls.is_null_at(i).unwrap(),
+                "column {} should be null",
+                i
+            );
         }
 
         admin
