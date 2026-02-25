@@ -128,7 +128,7 @@ class FlussTestCluster {
         // 9223)
         std::string sasl_jaas =
             "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
-            " user_admin=\\\"admin-secret\\\" user_alice=\\\"alice-secret\\\";";
+            " user_admin=\"admin-secret\" user_alice=\"alice-secret\";";
         std::string coord_props =
             "zookeeper.address: " + std::string(kZookeeperName) +
             ":2181\\n"
