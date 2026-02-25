@@ -985,6 +985,7 @@ struct Configuration {
     size_t remote_file_download_thread_num{3};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
+    int64_t writer_batch_timeout_ms{100};
 };
 
 class Connection {

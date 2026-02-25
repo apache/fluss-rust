@@ -62,7 +62,7 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
     pub scanner_log_max_poll_records: usize,
 
-    /// The maximum time to wait for a writer batch to fill up before sending.
+    /// The maximum time to wait for a batch to be completed in milliseconds.
     /// Default: 100 (matching Java CLIENT_WRITER_BATCH_TIMEOUT)
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_TIMEOUT_MS)]
     pub writer_batch_timeout_ms: i64,

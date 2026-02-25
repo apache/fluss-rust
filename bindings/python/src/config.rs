@@ -195,17 +195,17 @@ impl Config {
         self.inner.scanner_log_max_poll_records = num;
     }
 
-     /// Get the writer batch timeout in milliseconds
-     #[getter]
-     fn writer_batch_timeout_ms(&self) -> i64 {
-         self.inner.writer_batch_timeout_ms
-     }
+    /// Get the writer batch timeout in milliseconds
+    #[getter]
+    fn writer_batch_timeout_ms(&self) -> i64 {
+        self.inner.writer_batch_timeout_ms
+    }
 
-     /// Set the writer batch timeout in milliseconds
-     #[setter]
-     fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
-         self.inner.writer_batch_timeout_ms = timeout;
-     }
+    /// Set the writer batch timeout in milliseconds
+    #[setter]
+    fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
+        self.inner.writer_batch_timeout_ms = timeout;
+    }
 }
 
 impl Config {
