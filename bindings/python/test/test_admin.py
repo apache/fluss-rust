@@ -190,6 +190,7 @@ async def test_fluss_error_response(admin):
         await admin.get_table_info(table_path)
 
     assert exc_info.value.error_code == fluss.ErrorCode.TABLE_NOT_EXIST
+    assert exc_info.value.is_retriable() is False
 
 
 async def test_error_database_not_exist(admin):
@@ -299,3 +300,41 @@ async def test_error_table_not_partitioned(admin):
 
     await admin.drop_table(table_path, ignore_if_not_exists=True)
     await admin.drop_database(db_name, ignore_if_not_exists=True, cascade=True)
+
+
+def test_fluss_error_is_retriable():
+    client_err = fluss.FlussError("connection failed", fluss.ErrorCode.CLIENT_ERROR)
+    assert client_err.is_retriable() is False
+
+    table_not_exist = fluss.FlussError(
+        "table not found", fluss.ErrorCode.TABLE_NOT_EXIST
+    )
+    assert table_not_exist.is_retriable() is False
+
+    db_not_exist = fluss.FlussError(
+        "database not found", fluss.ErrorCode.DATABASE_NOT_EXIST
+    )
+    assert db_not_exist.is_retriable() is False
+
+    assert (
+        fluss.FlussError("network", fluss.ErrorCode.NETWORK_EXCEPTION).is_retriable()
+        is True
+    )
+    assert (
+        fluss.FlussError(
+            "timeout", fluss.ErrorCode.REQUEST_TIME_OUT
+        ).is_retriable()
+        is True
+    )
+    assert (
+        fluss.FlussError(
+            "leader not available", fluss.ErrorCode.LEADER_NOT_AVAILABLE_EXCEPTION
+        ).is_retriable()
+        is True
+    )
+    assert (
+        fluss.FlussError(
+            "retriable auth", fluss.ErrorCode.RETRIABLE_AUTHENTICATE_EXCEPTION
+        ).is_retriable()
+        is True
+    )

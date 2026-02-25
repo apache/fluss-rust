@@ -23,6 +23,22 @@ use pyo3::prelude::*;
 /// collide with current or future API codes. Consistent with the CPP binding.
 const CLIENT_ERROR_CODE: i32 = -2;
 
+const RETRIABLE_ERROR_CODES: &[i32] = &[
+    1,  // NetworkException
+    3,  // CorruptMessage
+    10, // LogStorageException
+    11, // KvStorageException
+    12, // NotLeaderOrFollower
+    14, // CorruptRecordException
+    21, // UnknownTableOrBucketException
+    25, // RequestTimeOut
+    26, // StorageException
+    28, // NotEnoughReplicasAfterAppendException
+    29, // NotEnoughReplicasException
+    44, // LeaderNotAvailableException
+    51, // RetriableAuthenticateException
+];
+
 /// Fluss errors
 #[pyclass(extends=PyException)]
 #[derive(Debug, Clone)]
@@ -42,6 +58,10 @@ impl FlussError {
             message,
             error_code,
         }
+    }
+
+    fn is_retriable(&self) -> bool {
+        RETRIABLE_ERROR_CODES.contains(&self.error_code)
     }
 
     fn __str__(&self) -> String {
