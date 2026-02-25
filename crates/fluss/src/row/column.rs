@@ -82,36 +82,46 @@ impl ColumnarRow {
         construct_compact: impl FnOnce(i64) -> T,
         construct_with_nanos: impl FnOnce(i64, i32) -> Result<T>,
     ) -> Result<T> {
-        let schema = self.record_batch.schema();
-        let arrow_field = schema.field(pos);
         let column = self.column(pos)?;
 
-        // Read value based on the actual Arrow timestamp type
-        let value = match arrow_field.data_type() {
-            ArrowDataType::Timestamp(TimeUnit::Second, _) => column
-                .as_primitive_opt::<TimestampSecondType>()
-                .ok_or_else(|| IllegalArgument {
-                    message: format!("expected TimestampSecondArray at position {pos}"),
-                })?
-                .value(self.row_id),
-            ArrowDataType::Timestamp(TimeUnit::Millisecond, _) => column
-                .as_primitive_opt::<TimestampMillisecondType>()
-                .ok_or_else(|| IllegalArgument {
-                    message: format!("expected TimestampMillisecondArray at position {pos}"),
-                })?
-                .value(self.row_id),
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, _) => column
-                .as_primitive_opt::<TimestampMicrosecondType>()
-                .ok_or_else(|| IllegalArgument {
-                    message: format!("expected TimestampMicrosecondArray at position {pos}"),
-                })?
-                .value(self.row_id),
-            ArrowDataType::Timestamp(TimeUnit::Nanosecond, _) => column
-                .as_primitive_opt::<TimestampNanosecondType>()
-                .ok_or_else(|| IllegalArgument {
-                    message: format!("expected TimestampNanosecondArray at position {pos}"),
-                })?
-                .value(self.row_id),
+        // Read value and time unit based on the actual Arrow timestamp type
+        let (value, time_unit) = match column.data_type() {
+            ArrowDataType::Timestamp(TimeUnit::Second, _) => (
+                column
+                    .as_primitive_opt::<TimestampSecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampSecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Second,
+            ),
+            ArrowDataType::Timestamp(TimeUnit::Millisecond, _) => (
+                column
+                    .as_primitive_opt::<TimestampMillisecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampMillisecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Millisecond,
+            ),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, _) => (
+                column
+                    .as_primitive_opt::<TimestampMicrosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampMicrosecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Microsecond,
+            ),
+            ArrowDataType::Timestamp(TimeUnit::Nanosecond, _) => (
+                column
+                    .as_primitive_opt::<TimestampNanosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampNanosecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Nanosecond,
+            ),
             other => {
                 return Err(IllegalArgument {
                     message: format!("expected Timestamp column at position {pos}, got {other:?}"),
@@ -120,25 +130,22 @@ impl ColumnarRow {
         };
 
         // Convert based on Arrow TimeUnit
-        let (millis, nanos) = match arrow_field.data_type() {
-            ArrowDataType::Timestamp(time_unit, _) => match time_unit {
-                TimeUnit::Second => (value * 1000, 0),
-                TimeUnit::Millisecond => (value, 0),
-                TimeUnit::Microsecond => {
-                    // Use Euclidean division so that nanos is always non-negative,
-                    // even for timestamps before the Unix epoch.
-                    let millis = value.div_euclid(1000);
-                    let nanos = (value.rem_euclid(1000) * 1000) as i32;
-                    (millis, nanos)
-                }
-                TimeUnit::Nanosecond => {
-                    // Use Euclidean division so that nanos is always in [0, 999_999].
-                    let millis = value.div_euclid(1_000_000);
-                    let nanos = value.rem_euclid(1_000_000) as i32;
-                    (millis, nanos)
-                }
-            },
-            _ => unreachable!(),
+        let (millis, nanos) = match time_unit {
+            TimeUnit::Second => (value * 1000, 0),
+            TimeUnit::Millisecond => (value, 0),
+            TimeUnit::Microsecond => {
+                // Use Euclidean division so that nanos is always non-negative,
+                // even for timestamps before the Unix epoch.
+                let millis = value.div_euclid(1000);
+                let nanos = (value.rem_euclid(1000) * 1000) as i32;
+                (millis, nanos)
+            }
+            TimeUnit::Nanosecond => {
+                // Use Euclidean division so that nanos is always in [0, 999_999].
+                let millis = value.div_euclid(1_000_000);
+                let nanos = value.rem_euclid(1_000_000) as i32;
+                (millis, nanos)
+            }
         };
 
         if nanos == 0 {
@@ -161,11 +168,9 @@ impl ColumnarRow {
 
     /// Read time value from Arrow Time32/Time64 arrays, converting to milliseconds
     fn read_time_from_arrow(&self, pos: usize) -> Result<i32> {
-        let schema = self.record_batch.schema();
-        let arrow_field = schema.field(pos);
         let column = self.column(pos)?;
 
-        match arrow_field.data_type() {
+        match column.data_type() {
             ArrowDataType::Time32(TimeUnit::Second) => {
                 let value = column
                     .as_primitive_opt::<Time32SecondType>()
@@ -333,10 +338,8 @@ impl InternalRow for ColumnarRow {
             self.row_id
         );
 
-        // Read scale from Arrow schema field metadata
-        let schema = self.record_batch.schema();
-        let field = schema.field(pos);
-        let arrow_scale = match field.data_type() {
+        // Read scale from Arrow column data type
+        let arrow_scale = match column.data_type() {
             DataType::Decimal128(_p, s) => *s as i64,
             dt => {
                 return Err(IllegalArgument {
