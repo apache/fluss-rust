@@ -15,49 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::integration::fluss_cluster::FlussTestingCluster;
-use parking_lot::RwLock;
-
-use std::sync::Arc;
-use std::sync::LazyLock;
-
 #[cfg(test)]
-use test_env_helpers::*;
-
-// Module-level shared cluster instance (only for this test file)
-static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> =
-    LazyLock::new(|| Arc::new(RwLock::new(None)));
-
-#[cfg(test)]
-#[before_all]
-#[after_all]
 mod admin_test {
-    use super::SHARED_FLUSS_CLUSTER;
-    use crate::integration::fluss_cluster::FlussTestingCluster;
-    use crate::integration::utils::{get_cluster, start_cluster, stop_cluster};
+    use crate::integration::utils::get_shared_cluster;
     use fluss::error::FlussError;
     use fluss::metadata::{
         DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat, PartitionSpec, Schema,
         TableDescriptor, TablePath,
     };
     use std::collections::HashMap;
-    use std::sync::Arc;
-
-    fn before_all() {
-        start_cluster("test-admin", SHARED_FLUSS_CLUSTER.clone());
-    }
-
-    fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
-        get_cluster(&SHARED_FLUSS_CLUSTER)
-    }
-
-    fn after_all() {
-        stop_cluster(SHARED_FLUSS_CLUSTER.clone());
-    }
 
     #[tokio::test]
     async fn test_create_database() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("should get admin");
@@ -97,13 +67,11 @@ mod admin_test {
 
         // database shouldn't exist now
         assert!(!admin.database_exists(db_name).await.unwrap());
-
-        // Note: We don't stop the shared cluster here as it's used by other tests
     }
 
     #[tokio::test]
     async fn test_create_table() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection
             .get_admin()
@@ -232,7 +200,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_partition_apis() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection
             .get_admin()
@@ -371,7 +339,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_fluss_error_response() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection
             .get_admin()
@@ -405,7 +373,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_error_database_not_exist() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.unwrap();
 
@@ -424,7 +392,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_error_database_already_exist() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.unwrap();
 
@@ -454,7 +422,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_error_table_already_exist() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.unwrap();
 
@@ -502,7 +470,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_error_table_not_exist() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.unwrap();
 
@@ -521,7 +489,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_error_table_not_partitioned() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.unwrap();
 

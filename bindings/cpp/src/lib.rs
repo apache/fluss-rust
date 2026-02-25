@@ -49,6 +49,11 @@ mod ffi {
         scanner_remote_log_read_concurrency: usize,
         scanner_log_max_poll_records: usize,
         writer_batch_timeout_ms: i64,
+        connect_timeout_ms: u64,
+        security_protocol: String,
+        security_sasl_mechanism: String,
+        security_sasl_username: String,
+        security_sasl_password: String,
     }
 
     struct FfiResult {
@@ -245,6 +250,9 @@ mod ffi {
         type LookupResultInner;
 
         // Connection
+        // TODO: all Result<*mut T> methods lose server error codes (mapped to CLIENT_ERROR).
+        // Fix by introducing  some struct like { result: FfiResult, ptr: i64 } to preserve error
+        // codes from the server, matching how Rust and Python bindings handle errors.
         fn new_connection(config: &FfiConfig) -> Result<*mut Connection>;
         unsafe fn delete_connection(conn: *mut Connection);
         fn get_admin(self: &Connection) -> Result<*mut Admin>;
@@ -631,6 +639,11 @@ fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
         remote_file_download_thread_num: config.remote_file_download_thread_num,
         scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
+        connect_timeout_ms: config.connect_timeout_ms,
+        security_protocol: config.security_protocol.to_string(),
+        security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
+        security_sasl_username: config.security_sasl_username.to_string(),
+        security_sasl_password: config.security_sasl_password.to_string(),
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });

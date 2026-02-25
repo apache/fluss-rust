@@ -49,23 +49,23 @@
 
 namespace fluss_test {
 
-static constexpr const char* kFlussVersion = "0.7.0";
+static constexpr const char* kFlussImage = "apache/fluss";
+static constexpr const char* kFlussVersion = "0.8.0-incubating";
 static constexpr const char* kNetworkName = "fluss-cpp-test-network";
 static constexpr const char* kZookeeperName = "zookeeper-cpp-test";
 static constexpr const char* kCoordinatorName = "coordinator-server-cpp-test";
 static constexpr const char* kTabletServerName = "tablet-server-cpp-test";
 static constexpr int kCoordinatorPort = 9123;
 static constexpr int kTabletServerPort = 9124;
+static constexpr int kPlainClientPort = 9223;
+static constexpr int kPlainClientTabletPort = 9224;
 
 /// Execute a shell command and return its exit code.
-inline int RunCommand(const std::string& cmd) {
-    return system(cmd.c_str());
-}
+inline int RunCommand(const std::string& cmd) { return system(cmd.c_str()); }
 
 /// Wait until a TCP port is accepting connections, or timeout.
 inline bool WaitForPort(const std::string& host, int port, int timeout_seconds = 60) {
-    auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
 
     while (std::chrono::steady_clock::now() < deadline) {
         int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -114,10 +114,8 @@ class FlussTestCluster {
         RunCommand(std::string("docker network create ") + kNetworkName + " 2>/dev/null || true");
 
         // Start ZooKeeper
-        std::string zk_cmd = std::string("docker run -d --rm") +
-                              " --name " + kZookeeperName +
-                              " --network " + kNetworkName +
-                              " zookeeper:3.9.2";
+        std::string zk_cmd = std::string("docker run -d --rm") + " --name " + kZookeeperName +
+                             " --network " + kNetworkName + " zookeeper:3.9.2";
         if (RunCommand(zk_cmd) != 0) {
             std::cerr << "Failed to start ZooKeeper" << std::endl;
             return false;
@@ -126,22 +124,32 @@ class FlussTestCluster {
         // Wait for ZooKeeper to be ready before starting Fluss servers
         std::this_thread::sleep_for(std::chrono::seconds(5));
 
-        // Start Coordinator Server
+        // Start Coordinator Server (dual listeners: CLIENT=SASL on 9123, PLAIN_CLIENT=plaintext on
+        // 9223)
+        std::string sasl_jaas =
+            "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+            " user_admin=\\\"admin-secret\\\" user_alice=\\\"alice-secret\\\";";
         std::string coord_props =
-            "zookeeper.address: " + std::string(kZookeeperName) + ":2181\\n"
-            "bind.listeners: INTERNAL://" + std::string(kCoordinatorName) + ":0, CLIENT://" +
-            std::string(kCoordinatorName) + ":9123\\n"
-            "advertised.listeners: CLIENT://localhost:9123\\n"
+            "zookeeper.address: " + std::string(kZookeeperName) +
+            ":2181\\n"
+            "bind.listeners: INTERNAL://" +
+            std::string(kCoordinatorName) + ":0, CLIENT://" + std::string(kCoordinatorName) +
+            ":9123, PLAIN_CLIENT://" + std::string(kCoordinatorName) +
+            ":9223\\n"
+            "advertised.listeners: CLIENT://localhost:9123, PLAIN_CLIENT://localhost:9223\\n"
             "internal.listener.name: INTERNAL\\n"
+            "security.protocol.map: CLIENT:sasl\\n"
+            "security.sasl.enabled.mechanisms: plain\\n"
+            "security.sasl.plain.jaas.config: " +
+            sasl_jaas +
+            "\\n"
             "netty.server.num-network-threads: 1\\n"
             "netty.server.num-worker-threads: 3";
 
-        std::string coord_cmd = std::string("docker run -d --rm") +
-                                " --name " + kCoordinatorName +
-                                " --network " + kNetworkName +
-                                " -p 9123:9123" +
-                                " -e FLUSS_PROPERTIES=\"$(printf '" + coord_props + "')\"" +
-                                " fluss/fluss:" + kFlussVersion +
+        std::string coord_cmd = std::string("docker run -d --rm") + " --name " + kCoordinatorName +
+                                " --network " + kNetworkName + " -p 9123:9123" + " -p 9223:9223" +
+                                " -e FLUSS_PROPERTIES=\"$(printf '" + coord_props + "')\"" + " " +
+                                std::string(kFlussImage) + ":" + kFlussVersion +
                                 " coordinatorServer";
         if (RunCommand(coord_cmd) != 0) {
             std::cerr << "Failed to start Coordinator Server" << std::endl;
@@ -156,24 +164,34 @@ class FlussTestCluster {
             return false;
         }
 
-        // Start Tablet Server
+        // Start Tablet Server (dual listeners: CLIENT=SASL on 9123, PLAIN_CLIENT=plaintext on 9223)
         std::string ts_props =
-            "zookeeper.address: " + std::string(kZookeeperName) + ":2181\\n"
-            "bind.listeners: INTERNAL://" + std::string(kTabletServerName) + ":0, CLIENT://" +
-            std::string(kTabletServerName) + ":9123\\n"
-            "advertised.listeners: CLIENT://localhost:" + std::to_string(kTabletServerPort) + "\\n"
+            "zookeeper.address: " + std::string(kZookeeperName) +
+            ":2181\\n"
+            "bind.listeners: INTERNAL://" +
+            std::string(kTabletServerName) + ":0, CLIENT://" + std::string(kTabletServerName) +
+            ":9123, PLAIN_CLIENT://" + std::string(kTabletServerName) +
+            ":9223\\n"
+            "advertised.listeners: CLIENT://localhost:" +
+            std::to_string(kTabletServerPort) +
+            ", PLAIN_CLIENT://localhost:" + std::to_string(kPlainClientTabletPort) +
+            "\\n"
             "internal.listener.name: INTERNAL\\n"
+            "security.protocol.map: CLIENT:sasl\\n"
+            "security.sasl.enabled.mechanisms: plain\\n"
+            "security.sasl.plain.jaas.config: " +
+            sasl_jaas +
+            "\\n"
             "tablet-server.id: 0\\n"
             "netty.server.num-network-threads: 1\\n"
             "netty.server.num-worker-threads: 3";
 
-        std::string ts_cmd = std::string("docker run -d --rm") +
-                             " --name " + kTabletServerName +
-                             " --network " + kNetworkName +
-                             " -p " + std::to_string(kTabletServerPort) + ":9123" +
-                             " -e FLUSS_PROPERTIES=\"$(printf '" + ts_props + "')\"" +
-                             " fluss/fluss:" + kFlussVersion +
-                             " tabletServer";
+        std::string ts_cmd = std::string("docker run -d --rm") + " --name " + kTabletServerName +
+                             " --network " + kNetworkName + " -p " +
+                             std::to_string(kTabletServerPort) + ":9123" + " -p " +
+                             std::to_string(kPlainClientTabletPort) + ":9223" +
+                             " -e FLUSS_PROPERTIES=\"$(printf '" + ts_props + "')\"" + " " +
+                             std::string(kFlussImage) + ":" + kFlussVersion + " tabletServer";
         if (RunCommand(ts_cmd) != 0) {
             std::cerr << "Failed to start Tablet Server" << std::endl;
             Stop();
@@ -187,7 +205,20 @@ class FlussTestCluster {
             return false;
         }
 
-        bootstrap_servers_ = "127.0.0.1:9123";
+        // Wait for plaintext listeners
+        if (!WaitForPort("127.0.0.1", kPlainClientPort)) {
+            std::cerr << "Coordinator plaintext listener did not become ready" << std::endl;
+            Stop();
+            return false;
+        }
+        if (!WaitForPort("127.0.0.1", kPlainClientTabletPort)) {
+            std::cerr << "Tablet Server plaintext listener did not become ready" << std::endl;
+            Stop();
+            return false;
+        }
+
+        bootstrap_servers_ = "127.0.0.1:" + std::to_string(kPlainClientPort);
+        sasl_bootstrap_servers_ = "127.0.0.1:" + std::to_string(kCoordinatorPort);
         std::cout << "Fluss cluster started successfully." << std::endl;
         return true;
     }
@@ -204,9 +235,11 @@ class FlussTestCluster {
     }
 
     const std::string& GetBootstrapServers() const { return bootstrap_servers_; }
+    const std::string& GetSaslBootstrapServers() const { return sasl_bootstrap_servers_; }
 
    private:
     std::string bootstrap_servers_;
+    std::string sasl_bootstrap_servers_;
     bool external_cluster_{false};
 };
 
@@ -230,8 +263,7 @@ class FlussTestEnvironment : public ::testing::Environment {
         fluss::Configuration config;
         config.bootstrap_servers = cluster_.GetBootstrapServers();
 
-        auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         while (std::chrono::steady_clock::now() < deadline) {
             auto result = fluss::Connection::Create(config, connection_);
             if (result.Ok()) {
@@ -247,13 +279,12 @@ class FlussTestEnvironment : public ::testing::Environment {
         GTEST_SKIP() << "Fluss cluster did not become ready within timeout.";
     }
 
-    void TearDown() override {
-        cluster_.Stop();
-    }
+    void TearDown() override { cluster_.Stop(); }
 
     fluss::Connection& GetConnection() { return connection_; }
     fluss::Admin& GetAdmin() { return admin_; }
     const std::string& GetBootstrapServers() { return cluster_.GetBootstrapServers(); }
+    const std::string& GetSaslBootstrapServers() { return cluster_.GetSaslBootstrapServers(); }
 
    private:
     FlussTestEnvironment() = default;
@@ -286,8 +317,8 @@ inline void CreatePartitions(fluss::Admin& admin, const fluss::TablePath& path,
 /// Poll a LogScanner for ScanRecords until `expected_count` items are collected or timeout.
 /// `extract_fn` is called for each ScanRecord and should return a value of type T.
 template <typename T, typename ExtractFn>
-void PollRecords(fluss::LogScanner& scanner, size_t expected_count,
-                 ExtractFn extract_fn, std::vector<T>& out) {
+void PollRecords(fluss::LogScanner& scanner, size_t expected_count, ExtractFn extract_fn,
+                 std::vector<T>& out) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (out.size() < expected_count && std::chrono::steady_clock::now() < deadline) {
         fluss::ScanRecords records;
@@ -301,8 +332,8 @@ void PollRecords(fluss::LogScanner& scanner, size_t expected_count,
 /// Poll a LogScanner for ArrowRecordBatches until `expected_count` items are collected or timeout.
 /// `extract_fn` is called with the full ArrowRecordBatches and should return a std::vector<T>.
 template <typename T, typename ExtractFn>
-void PollRecordBatches(fluss::LogScanner& scanner, size_t expected_count,
-                       ExtractFn extract_fn, std::vector<T>& out) {
+void PollRecordBatches(fluss::LogScanner& scanner, size_t expected_count, ExtractFn extract_fn,
+                       std::vector<T>& out) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (out.size() < expected_count && std::chrono::steady_clock::now() < deadline) {
         fluss::ArrowRecordBatches batches;

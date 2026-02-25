@@ -990,6 +990,16 @@ struct Configuration {
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
     int64_t writer_batch_timeout_ms{100};
+    // Connect timeout in milliseconds for TCP transport connect
+    uint64_t connect_timeout_ms{120000};
+    // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
+    std::string security_protocol{"PLAINTEXT"};
+    // SASL mechanism (only "PLAIN" is supported)
+    std::string security_sasl_mechanism{"PLAIN"};
+    // SASL username (required when security_protocol is "sasl")
+    std::string security_sasl_username;
+    // SASL password (required when security_protocol is "sasl")
+    std::string security_sasl_password;
 };
 
 class Connection {

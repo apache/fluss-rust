@@ -108,6 +108,23 @@ impl Config {
                             }
                         };
                     }
+                    "client.connect-timeout" => {
+                        config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "client.security.protocol" => {
+                        config.security_protocol = value;
+                    }
+                    "client.security.sasl.mechanism" => {
+                        config.security_sasl_mechanism = value;
+                    }
+                    "client.security.sasl.username" => {
+                        config.security_sasl_username = value;
+                    }
+                    "client.security.sasl.password" => {
+                        config.security_sasl_password = value;
+                    }
                     _ => {
                         return Err(FlussError::new_err(format!("Unknown property: {key}")));
                     }
@@ -236,6 +253,66 @@ impl Config {
     #[setter]
     fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
         self.inner.writer_batch_timeout_ms = timeout;
+    }
+
+    /// Get the connect timeout in milliseconds
+    #[getter]
+    fn connect_timeout_ms(&self) -> u64 {
+        self.inner.connect_timeout_ms
+    }
+
+    /// Set the connect timeout in milliseconds
+    #[setter]
+    fn set_connect_timeout_ms(&mut self, timeout: u64) {
+        self.inner.connect_timeout_ms = timeout;
+    }
+
+    /// Get the security protocol
+    #[getter]
+    fn security_protocol(&self) -> String {
+        self.inner.security_protocol.clone()
+    }
+
+    /// Set the security protocol
+    #[setter]
+    fn set_security_protocol(&mut self, protocol: String) {
+        self.inner.security_protocol = protocol;
+    }
+
+    /// Get the SASL mechanism
+    #[getter]
+    fn security_sasl_mechanism(&self) -> String {
+        self.inner.security_sasl_mechanism.clone()
+    }
+
+    /// Set the SASL mechanism
+    #[setter]
+    fn set_security_sasl_mechanism(&mut self, mechanism: String) {
+        self.inner.security_sasl_mechanism = mechanism;
+    }
+
+    /// Get the SASL username
+    #[getter]
+    fn security_sasl_username(&self) -> String {
+        self.inner.security_sasl_username.clone()
+    }
+
+    /// Set the SASL username
+    #[setter]
+    fn set_security_sasl_username(&mut self, username: String) {
+        self.inner.security_sasl_username = username;
+    }
+
+    /// Get the SASL password
+    #[getter]
+    fn security_sasl_password(&self) -> String {
+        self.inner.security_sasl_password.clone()
+    }
+
+    /// Set the SASL password
+    #[setter]
+    fn set_security_sasl_password(&mut self, password: String) {
+        self.inner.security_sasl_password = password;
     }
 }
 

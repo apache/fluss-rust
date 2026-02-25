@@ -94,6 +94,7 @@ if (!result.Ok()) {
 | `ErrorCode::PARTITION_ALREADY_EXISTS`         | 42   | Partition already exists            |
 | `ErrorCode::PARTITION_SPEC_INVALID_EXCEPTION` | 43   | Invalid partition spec              |
 | `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for partition   |
+| `ErrorCode::AUTHENTICATE_EXCEPTION`           | 46   | Authentication failed (bad credentials) |
 
 See `fluss::ErrorCode` in `fluss.hpp` for the full list of named constants.
 
@@ -143,6 +144,26 @@ fluss::Result result = writer.Upsert(row, wr);
 if (!result.Ok()) {
     if (result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
         std::cerr << "Partition not found, create partitions before writing" << std::endl;
+    }
+}
+```
+
+### Authentication Failed
+
+SASL credentials are incorrect or the user does not exist:
+
+```cpp
+fluss::Configuration config;
+config.bootstrap_servers = "127.0.0.1:9123";
+config.security_protocol = "sasl";
+config.security_sasl_username = "admin";
+config.security_sasl_password = "wrong-password";
+
+fluss::Connection conn;
+fluss::Result result = fluss::Connection::Create(config, conn);
+if (!result.Ok()) {
+    if (result.error_code == fluss::ErrorCode::AUTHENTICATE_EXCEPTION) {
+        std::cerr << "Authentication failed: " << result.error_message << std::endl;
     }
 }
 ```

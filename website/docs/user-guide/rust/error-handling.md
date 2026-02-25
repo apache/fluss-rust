@@ -71,6 +71,9 @@ match result {
     Err(ref e) if e.api_error() == Some(FlussError::LeaderNotAvailableException) => {
         eprintln!("Leader not available: {}", e);
     }
+    Err(ref e) if e.api_error() == Some(FlussError::AuthenticateException) => {
+        eprintln!("Authentication failed: {}", e);
+    }
     _ => {}
 }
 ```
@@ -128,6 +131,22 @@ let result = admin.drop_partition(&table_path, &spec, false).await;
 match result {
     Err(ref e) if e.api_error() == Some(FlussError::PartitionNotExists) => {
         eprintln!("Partition does not exist: {}", e);
+    }
+    _ => {}
+}
+```
+
+### Authentication Failed
+
+SASL credentials are incorrect or the user does not exist.
+
+```rust
+use fluss::error::{Error, FlussError};
+
+let result = FlussConnection::new(config).await;
+match result {
+    Err(ref e) if e.api_error() == Some(FlussError::AuthenticateException) => {
+        eprintln!("Authentication failed: {}", e);
     }
     _ => {}
 }

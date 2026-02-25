@@ -29,6 +29,7 @@ use futures::future::BoxFuture;
 use log::warn;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::fmt;
 use std::io::Cursor;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -44,12 +45,34 @@ pub type MessengerTransport = ServerConnectionInner<BufStream<Transport>>;
 
 pub type ServerConnection = Arc<MessengerTransport>;
 
+// Matches Java's ExponentialBackoff(100ms initial, 2x multiplier, 5000ms max, 0.2 jitter).
+const AUTH_INITIAL_BACKOFF_MS: f64 = 100.0;
+const AUTH_MAX_BACKOFF_MS: f64 = 5000.0;
+const AUTH_BACKOFF_MULTIPLIER: f64 = 2.0;
+const AUTH_JITTER: f64 = 0.2;
+
+#[derive(Clone)]
+pub struct SaslConfig {
+    pub username: String,
+    pub password: String,
+}
+
+impl fmt::Debug for SaslConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SaslConfig")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct RpcClient {
     connections: RwLock<HashMap<String, ServerConnection>>,
     client_id: Arc<str>,
     timeout: Option<Duration>,
     max_message_size: usize,
+    sasl_config: Option<SaslConfig>,
 }
 
 impl RpcClient {
@@ -59,13 +82,24 @@ impl RpcClient {
             client_id: Arc::from(""),
             timeout: None,
             max_message_size: usize::MAX,
+            sasl_config: None,
         }
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn with_sasl(mut self, username: String, password: String) -> Self {
+        self.sasl_config = Some(SaslConfig { username, password });
+        self
     }
 
     pub async fn get_connection(
         &self,
         server_node: &ServerNode,
-    ) -> Result<ServerConnection, RpcError> {
+    ) -> Result<ServerConnection, Error> {
         let server_id = server_node.uid();
         {
             let connections = self.connections.read();
@@ -89,7 +123,7 @@ impl RpcClient {
         Ok(new_server)
     }
 
-    async fn connect(&self, server_node: &ServerNode) -> Result<ServerConnection, RpcError> {
+    async fn connect(&self, server_node: &ServerNode) -> Result<ServerConnection, Error> {
         let url = server_node.url();
         let transport = Transport::connect(&url, self.timeout)
             .await
@@ -100,7 +134,74 @@ impl RpcClient {
             self.max_message_size,
             self.client_id.clone(),
         );
-        Ok(ServerConnection::new(messenger))
+        let connection = ServerConnection::new(messenger);
+
+        if let Some(ref sasl) = self.sasl_config {
+            Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
+        }
+
+        Ok(connection)
+    }
+
+    /// Perform SASL/PLAIN authentication handshake.
+    ///
+    /// Retries on `RetriableAuthenticateException` with exponential backoff
+    /// (matching Java's unbounded retry behaviour). Non-retriable errors
+    /// (wrong password, unknown user) propagate immediately as
+    /// `Error::FlussAPIError` with the original error code.
+    async fn authenticate(
+        connection: &ServerConnection,
+        username: &str,
+        password: &str,
+    ) -> Result<(), Error> {
+        use crate::rpc::fluss_api_error::FlussError;
+        use crate::rpc::message::AuthenticateRequest;
+        use rand::Rng;
+
+        let initial_request = AuthenticateRequest::new_plain(username, password);
+        let mut retry_count: u32 = 0;
+
+        loop {
+            let request = initial_request.clone();
+            let result = connection.request(request).await;
+
+            match result {
+                Ok(response) => {
+                    // Check for server challenge (multi-round auth).
+                    // PLAIN mechanism never sends a challenge, but we handle it
+                    // for protocol correctness matching Java's handleAuthenticateResponse.
+                    if let Some(challenge) = response.challenge {
+                        let challenge_req = AuthenticateRequest::from_challenge("PLAIN", challenge);
+                        connection.request(challenge_req).await?;
+                    }
+                    return Ok(());
+                }
+                Err(Error::FlussAPIError { ref api_error })
+                    if FlussError::for_code(api_error.code)
+                        == FlussError::RetriableAuthenticateException =>
+                {
+                    retry_count += 1;
+                    // Cap the exponent like Java's ExponentialBackoff.expMax so that
+                    // jitter still produces a range at steady state instead of being
+                    // clamped to AUTH_MAX_BACKOFF_MS.
+                    let exp_max = (AUTH_MAX_BACKOFF_MS / AUTH_INITIAL_BACKOFF_MS).log2();
+                    let exp = ((retry_count as f64) - 1.0).min(exp_max);
+                    let term = AUTH_INITIAL_BACKOFF_MS * AUTH_BACKOFF_MULTIPLIER.powf(exp);
+                    let jitter_factor =
+                        1.0 - AUTH_JITTER + rand::rng().random::<f64>() * (2.0 * AUTH_JITTER);
+                    let backoff_ms = (term * jitter_factor) as u64;
+                    log::warn!(
+                        "SASL authentication retriable failure (attempt {retry_count}), \
+                         retrying in {backoff_ms}ms: {}",
+                        api_error.message
+                    );
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                }
+                // Server-side auth errors (wrong password, unknown user, etc.)
+                // propagate with their original error code preserved.
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 

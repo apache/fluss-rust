@@ -23,6 +23,7 @@ use crate::config::Config;
 use crate::rpc::RpcClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::TablePath;
@@ -36,7 +37,22 @@ pub struct FlussConnection {
 
 impl FlussConnection {
     pub async fn new(arg: Config) -> Result<Self> {
-        let connections = Arc::new(RpcClient::new());
+        arg.validate_security()
+            .map_err(|msg| Error::IllegalArgument { message: msg })?;
+
+        let timeout = Duration::from_millis(arg.connect_timeout_ms);
+        let connections = if arg.is_sasl_enabled() {
+            Arc::new(
+                RpcClient::new()
+                    .with_sasl(
+                        arg.security_sasl_username.clone(),
+                        arg.security_sasl_password.clone(),
+                    )
+                    .with_timeout(timeout),
+            )
+        } else {
+            Arc::new(RpcClient::new().with_timeout(timeout))
+        };
         let metadata = Metadata::new(arg.bootstrap_servers.as_str(), connections.clone()).await?;
 
         Ok(FlussConnection {

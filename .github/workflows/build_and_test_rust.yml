@@ -79,7 +79,7 @@ jobs:
       - name: Integration Test (Linux only)
         if: runner.os == 'Linux'
         run: |
-          RUST_TEST_THREADS=1 cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp -- --nocapture
+          cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

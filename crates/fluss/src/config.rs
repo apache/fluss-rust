@@ -30,6 +30,9 @@ const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
 
 const DEFAULT_ACKS: &str = "all";
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
+const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
 /// Bucket assigner strategy for tables without bucket keys.
 /// Matches Java `client.writer.bucket.no-key-assigner`.
@@ -51,7 +54,7 @@ impl fmt::Display for NoKeyAssigner {
     }
 }
 
-#[derive(Parser, Debug, Clone, Deserialize, Serialize)]
+#[derive(Parser, Clone, Deserialize, Serialize)]
 #[command(author, version, about, long_about = None)]
 pub struct Config {
     #[arg(long, default_value_t = String::from(DEFAULT_BOOTSTRAP_SERVER))]
@@ -96,6 +99,58 @@ pub struct Config {
     /// Default: 100 (matching Java CLIENT_WRITER_BATCH_TIMEOUT)
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_TIMEOUT_MS)]
     pub writer_batch_timeout_ms: i64,
+
+    /// Connect timeout in milliseconds for TCP transport connect.
+    /// Default: 120000 (120 seconds).
+    #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
+    pub connect_timeout_ms: u64,
+
+    #[arg(long, default_value_t = String::from(DEFAULT_SECURITY_PROTOCOL))]
+    pub security_protocol: String,
+
+    #[arg(long, default_value_t = String::from(DEFAULT_SASL_MECHANISM))]
+    pub security_sasl_mechanism: String,
+
+    #[arg(long, default_value_t = String::new())]
+    pub security_sasl_username: String,
+
+    #[arg(long, default_value_t = String::new())]
+    #[serde(skip_serializing)]
+    pub security_sasl_password: String,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bootstrap_servers", &self.bootstrap_servers)
+            .field("writer_request_max_size", &self.writer_request_max_size)
+            .field("writer_acks", &self.writer_acks)
+            .field("writer_retries", &self.writer_retries)
+            .field("writer_batch_size", &self.writer_batch_size)
+            .field(
+                "writer_bucket_no_key_assigner",
+                &self.writer_bucket_no_key_assigner,
+            )
+            .field(
+                "scanner_remote_log_prefetch_num",
+                &self.scanner_remote_log_prefetch_num,
+            )
+            .field(
+                "remote_file_download_thread_num",
+                &self.remote_file_download_thread_num,
+            )
+            .field(
+                "scanner_log_max_poll_records",
+                &self.scanner_log_max_poll_records,
+            )
+            .field("writer_batch_timeout_ms", &self.writer_batch_timeout_ms)
+            .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("security_protocol", &self.security_protocol)
+            .field("security_sasl_mechanism", &self.security_sasl_mechanism)
+            .field("security_sasl_username", &self.security_sasl_username)
+            .field("security_sasl_password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl Default for Config {
@@ -112,6 +167,115 @@ impl Default for Config {
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
+            connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
+            security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
+            security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
+            security_sasl_username: String::new(),
+            security_sasl_password: String::new(),
         }
+    }
+}
+
+impl Config {
+    /// Returns true when the security protocol indicates SASL authentication
+    /// should be performed. Matches Java's `SaslAuthenticationPlugin` which
+    /// registers as `"sasl"` (case-insensitive).
+    pub fn is_sasl_enabled(&self) -> bool {
+        self.security_protocol.eq_ignore_ascii_case("sasl")
+    }
+
+    /// Validates security configuration. Returns `Ok(())` when the config is
+    /// consistent, or an error message when SASL is enabled but the config is
+    /// incomplete or uses an unsupported mechanism.
+    pub fn validate_security(&self) -> Result<(), String> {
+        if !self.is_sasl_enabled() {
+            return Ok(());
+        }
+        if !self.security_sasl_mechanism.eq_ignore_ascii_case("PLAIN") {
+            return Err(format!(
+                "Unsupported SASL mechanism: '{}'. Only 'PLAIN' is supported.",
+                self.security_sasl_mechanism
+            ));
+        }
+        if self.security_sasl_username.is_empty() {
+            return Err(
+                "security_sasl_username must be set when security_protocol is 'sasl'".to_string(),
+            );
+        }
+        if self.security_sasl_password.is_empty() {
+            return Err(
+                "security_sasl_password must be set when security_protocol is 'sasl'".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_is_not_sasl() {
+        let config = Config::default();
+        assert!(!config.is_sasl_enabled());
+        assert!(config.validate_security().is_ok());
+    }
+
+    #[test]
+    fn test_sasl_enabled_valid() {
+        let config = Config {
+            security_protocol: "sasl".to_string(),
+            security_sasl_mechanism: "PLAIN".to_string(),
+            security_sasl_username: "admin".to_string(),
+            security_sasl_password: "secret".to_string(),
+            ..Config::default()
+        };
+        assert!(config.is_sasl_enabled());
+        assert!(config.validate_security().is_ok());
+    }
+
+    #[test]
+    fn test_sasl_enabled_case_insensitive() {
+        let config = Config {
+            security_protocol: "SASL".to_string(),
+            security_sasl_username: "admin".to_string(),
+            security_sasl_password: "secret".to_string(),
+            ..Config::default()
+        };
+        assert!(config.is_sasl_enabled());
+        assert!(config.validate_security().is_ok());
+    }
+
+    #[test]
+    fn test_sasl_missing_username() {
+        let config = Config {
+            security_protocol: "sasl".to_string(),
+            security_sasl_password: "secret".to_string(),
+            ..Config::default()
+        };
+        assert!(config.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_sasl_missing_password() {
+        let config = Config {
+            security_protocol: "sasl".to_string(),
+            security_sasl_username: "admin".to_string(),
+            ..Config::default()
+        };
+        assert!(config.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_sasl_unsupported_mechanism() {
+        let config = Config {
+            security_protocol: "sasl".to_string(),
+            security_sasl_mechanism: "SCRAM-SHA-256".to_string(),
+            security_sasl_username: "admin".to_string(),
+            security_sasl_password: "secret".to_string(),
+            ..Config::default()
+        };
+        assert!(config.validate_security().is_err());
     }
 }

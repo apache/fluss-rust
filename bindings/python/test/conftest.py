@@ -33,7 +33,8 @@ import pytest_asyncio
 
 import fluss
 
-FLUSS_VERSION = "0.7.0"
+FLUSS_IMAGE = "apache/fluss"
+FLUSS_VERSION = "0.8.0-incubating"
 BOOTSTRAP_SERVERS_ENV = os.environ.get("FLUSS_BOOTSTRAP_SERVERS")
 
 
@@ -53,7 +54,7 @@ def _wait_for_port(host, port, timeout=60):
 def fluss_cluster():
     """Start a Fluss cluster using testcontainers, or use an existing one."""
     if BOOTSTRAP_SERVERS_ENV:
-        yield BOOTSTRAP_SERVERS_ENV
+        yield (BOOTSTRAP_SERVERS_ENV, BOOTSTRAP_SERVERS_ENV)
         return
 
     from testcontainers.core.container import DockerContainer
@@ -68,20 +69,30 @@ def fluss_cluster():
         .with_name("zookeeper-python-test")
     )
 
+    sasl_jaas = (
+        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
+        ' user_admin="admin-secret" user_alice="alice-secret";'
+    )
     coordinator_props = "\n".join([
         "zookeeper.address: zookeeper-python-test:2181",
         "bind.listeners: INTERNAL://coordinator-server-python-test:0,"
-        " CLIENT://coordinator-server-python-test:9123",
-        "advertised.listeners: CLIENT://localhost:9123",
+        " CLIENT://coordinator-server-python-test:9123,"
+        " PLAIN_CLIENT://coordinator-server-python-test:9223",
+        "advertised.listeners: CLIENT://localhost:9123,"
+        " PLAIN_CLIENT://localhost:9223",
         "internal.listener.name: INTERNAL",
+        "security.protocol.map: CLIENT:sasl",
+        "security.sasl.enabled.mechanisms: plain",
+        f"security.sasl.plain.jaas.config: {sasl_jaas}",
         "netty.server.num-network-threads: 1",
         "netty.server.num-worker-threads: 3",
     ])
     coordinator = (
-        DockerContainer(f"fluss/fluss:{FLUSS_VERSION}")
+        DockerContainer(f"{FLUSS_IMAGE}:{FLUSS_VERSION}")
         .with_network(network)
         .with_name("coordinator-server-python-test")
         .with_bind_ports(9123, 9123)
+        .with_bind_ports(9223, 9223)
         .with_command("coordinatorServer")
         .with_env("FLUSS_PROPERTIES", coordinator_props)
     )
@@ -89,18 +100,24 @@ def fluss_cluster():
     tablet_props = "\n".join([
         "zookeeper.address: zookeeper-python-test:2181",
         "bind.listeners: INTERNAL://tablet-server-python-test:0,"
-        " CLIENT://tablet-server-python-test:9123",
-        "advertised.listeners: CLIENT://localhost:9124",
+        " CLIENT://tablet-server-python-test:9123,"
+        " PLAIN_CLIENT://tablet-server-python-test:9223",
+        "advertised.listeners: CLIENT://localhost:9124,"
+        " PLAIN_CLIENT://localhost:9224",
         "internal.listener.name: INTERNAL",
+        "security.protocol.map: CLIENT:sasl",
+        "security.sasl.enabled.mechanisms: plain",
+        f"security.sasl.plain.jaas.config: {sasl_jaas}",
         "tablet-server.id: 0",
         "netty.server.num-network-threads: 1",
         "netty.server.num-worker-threads: 3",
     ])
     tablet_server = (
-        DockerContainer(f"fluss/fluss:{FLUSS_VERSION}")
+        DockerContainer(f"{FLUSS_IMAGE}:{FLUSS_VERSION}")
         .with_network(network)
         .with_name("tablet-server-python-test")
         .with_bind_ports(9123, 9124)
+        .with_bind_ports(9223, 9224)
         .with_command("tabletServer")
         .with_env("FLUSS_PROPERTIES", tablet_props)
     )
@@ -111,10 +128,13 @@ def fluss_cluster():
 
     _wait_for_port("localhost", 9123)
     _wait_for_port("localhost", 9124)
+    _wait_for_port("localhost", 9223)
+    _wait_for_port("localhost", 9224)
     # Extra wait for cluster to fully initialize
     time.sleep(10)
 
-    yield "127.0.0.1:9123"
+    # (plaintext_bootstrap, sasl_bootstrap)
+    yield ("127.0.0.1:9223", "127.0.0.1:9123")
 
     tablet_server.stop()
     coordinator.stop()
@@ -124,11 +144,19 @@ def fluss_cluster():
 
 @pytest_asyncio.fixture(scope="session")
 async def connection(fluss_cluster):
-    """Session-scoped connection to the Fluss cluster."""
-    config = fluss.Config({"bootstrap.servers": fluss_cluster})
+    """Session-scoped connection to the Fluss cluster (plaintext)."""
+    plaintext_addr, _sasl_addr = fluss_cluster
+    config = fluss.Config({"bootstrap.servers": plaintext_addr})
     conn = await fluss.FlussConnection.create(config)
     yield conn
     conn.close()
+
+
+@pytest.fixture(scope="session")
+def sasl_bootstrap_servers(fluss_cluster):
+    """Bootstrap servers for the SASL listener."""
+    _plaintext_addr, sasl_addr = fluss_cluster
+    return sasl_addr
 
 
 @pytest_asyncio.fixture(scope="session")
