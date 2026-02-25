@@ -30,6 +30,7 @@ config.writer_request_max_size = 10 * 1024 * 1024;     // Max request size (10 M
 config.writer_acks = "all";                      // Wait for all replicas
 config.writer_retries = std::numeric_limits<int32_t>::max();  // Retry on failure
 config.writer_batch_size = 2 * 1024 * 1024;     // Batch size (2 MB)
+config.writer_bucket_no_key_assigner = "sticky"; // "sticky" or "round_robin"
 config.scanner_remote_log_prefetch_num = 4;      // Remote log prefetch count
 config.remote_file_download_thread_num = 3;  // Download threads
 ```

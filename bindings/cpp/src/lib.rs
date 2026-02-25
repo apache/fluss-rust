@@ -43,6 +43,7 @@ mod ffi {
         writer_acks: String,
         writer_retries: i32,
         writer_batch_size: i32,
+        writer_bucket_no_key_assigner: String,
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
         scanner_log_max_poll_records: usize,
@@ -607,12 +608,22 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
 
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
+    let assigner_type = match config.writer_bucket_no_key_assigner.as_str() {
+        "round_robin" => fluss::config::NoKeyAssigner::RoundRobin,
+        "sticky" => fluss::config::NoKeyAssigner::Sticky,
+        other => {
+            return Err(format!(
+                "Unknown bucket assigner type: '{other}', expected 'sticky' or 'round_robin'"
+            ));
+        }
+    };
     let config = fluss::config::Config {
         bootstrap_servers: config.bootstrap_servers.to_string(),
         writer_request_max_size: config.writer_request_max_size,
         writer_acks: config.writer_acks.to_string(),
         writer_retries: config.writer_retries,
         writer_batch_size: config.writer_batch_size,
+        writer_bucket_no_key_assigner: assigner_type,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
