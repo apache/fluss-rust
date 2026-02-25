@@ -609,7 +609,6 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
 
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
-    // 1. Parse the bucket assigner type (the upstream feature)
     let assigner_type = match config.writer_bucket_no_key_assigner.as_str() {
         "round_robin" => fluss::config::NoKeyAssigner::RoundRobin,
         "sticky" => fluss::config::NoKeyAssigner::Sticky,
@@ -619,8 +618,6 @@ fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
             ));
         }
     };
-
-    // 2. Build the config with BOTH your timeout and the new assigner
     let config = fluss::config::Config {
         bootstrap_servers: config.bootstrap_servers.to_string(),
         writer_request_max_size: config.writer_request_max_size,
