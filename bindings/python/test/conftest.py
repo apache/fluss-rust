@@ -159,6 +159,13 @@ def sasl_bootstrap_servers(fluss_cluster):
     return sasl_addr
 
 
+@pytest.fixture(scope="session")
+def plaintext_bootstrap_servers(fluss_cluster):
+    """Bootstrap servers for the plaintext (non-SASL) listener."""
+    plaintext_addr, _sasl_addr = fluss_cluster
+    return plaintext_addr
+
+
 @pytest_asyncio.fixture(scope="session")
 async def admin(connection):
     """Session-scoped admin client."""

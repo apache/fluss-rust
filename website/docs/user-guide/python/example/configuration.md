@@ -34,11 +34,11 @@ with await fluss.FlussConnection.create(config) as conn:
 | `remote-file.download-thread-num`     | Number of threads for remote log downloads                                            | `3`                |
 | `scanner.remote-log.read-concurrency` | Streaming read concurrency within a remote log file                                   | `4`                |
 | `scanner.log.max-poll-records`        | Max records returned in a single poll()                                               | `500`              |
-| `client.connect-timeout`              | TCP connect timeout in milliseconds                                                   | `120000`           |
-| `client.security.protocol`            | `PLAINTEXT` (default) or `sasl` for SASL auth                                        | `PLAINTEXT`        |
-| `client.security.sasl.mechanism`      | SASL mechanism (only `PLAIN` is supported)                                            | `PLAIN`            |
-| `client.security.sasl.username`       | SASL username (required when protocol is `sasl`)                                      | (empty)            |
-| `client.security.sasl.password`       | SASL password (required when protocol is `sasl`)                                      | (empty)            |
+| `connect-timeout`                     | TCP connect timeout in milliseconds                                                   | `120000`           |
+| `security.protocol`                   | `PLAINTEXT` (default) or `sasl` for SASL auth                                        | `PLAINTEXT`        |
+| `security.sasl.mechanism`             | SASL mechanism (only `PLAIN` is supported)                                            | `PLAIN`            |
+| `security.sasl.username`              | SASL username (required when protocol is `sasl`)                                      | (empty)            |
+| `security.sasl.password`              | SASL password (required when protocol is `sasl`)                                      | (empty)            |
 
 ## SASL Authentication
 
@@ -47,10 +47,10 @@ To connect to a Fluss cluster with SASL/PLAIN authentication enabled:
 ```python
 config = fluss.Config({
     "bootstrap.servers": "127.0.0.1:9123",
-    "client.security.protocol": "sasl",
-    "client.security.sasl.mechanism": "PLAIN",
-    "client.security.sasl.username": "admin",
-    "client.security.sasl.password": "admin-secret",
+    "security.protocol": "sasl",
+    "security.sasl.mechanism": "PLAIN",
+    "security.sasl.username": "admin",
+    "security.sasl.password": "admin-secret",
 })
 conn = await fluss.FlussConnection.create(config)
 ```

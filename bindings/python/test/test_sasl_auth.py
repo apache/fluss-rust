@@ -29,10 +29,10 @@ async def test_sasl_connect_with_valid_credentials(sasl_bootstrap_servers):
     """Verify that a client with correct SASL credentials can connect and perform operations."""
     config = fluss.Config({
         "bootstrap.servers": sasl_bootstrap_servers,
-        "client.security.protocol": "sasl",
-        "client.security.sasl.mechanism": "PLAIN",
-        "client.security.sasl.username": "admin",
-        "client.security.sasl.password": "admin-secret",
+        "security.protocol": "sasl",
+        "security.sasl.mechanism": "PLAIN",
+        "security.sasl.username": "admin",
+        "security.sasl.password": "admin-secret",
     })
     conn = await fluss.FlussConnection.create(config)
     admin = await conn.get_admin()
@@ -48,14 +48,31 @@ async def test_sasl_connect_with_valid_credentials(sasl_bootstrap_servers):
     conn.close()
 
 
+async def test_sasl_connect_with_second_user(sasl_bootstrap_servers):
+    """Verify that a second user can also authenticate successfully."""
+    config = fluss.Config({
+        "bootstrap.servers": sasl_bootstrap_servers,
+        "security.protocol": "sasl",
+        "security.sasl.mechanism": "PLAIN",
+        "security.sasl.username": "alice",
+        "security.sasl.password": "alice-secret",
+    })
+    conn = await fluss.FlussConnection.create(config)
+    admin = await conn.get_admin()
+
+    # Basic operation to confirm functional connection
+    assert not await admin.database_exists("some_nonexistent_db_alice")
+    conn.close()
+
+
 async def test_sasl_connect_with_wrong_password(sasl_bootstrap_servers):
     """Verify that wrong credentials are rejected with AUTHENTICATE_EXCEPTION."""
     config = fluss.Config({
         "bootstrap.servers": sasl_bootstrap_servers,
-        "client.security.protocol": "sasl",
-        "client.security.sasl.mechanism": "PLAIN",
-        "client.security.sasl.username": "admin",
-        "client.security.sasl.password": "wrong-password",
+        "security.protocol": "sasl",
+        "security.sasl.mechanism": "PLAIN",
+        "security.sasl.username": "admin",
+        "security.sasl.password": "wrong-password",
     })
     with pytest.raises(fluss.FlussError) as exc_info:
         await fluss.FlussConnection.create(config)
@@ -67,12 +84,25 @@ async def test_sasl_connect_with_unknown_user(sasl_bootstrap_servers):
     """Verify that a nonexistent user is rejected with AUTHENTICATE_EXCEPTION."""
     config = fluss.Config({
         "bootstrap.servers": sasl_bootstrap_servers,
-        "client.security.protocol": "sasl",
-        "client.security.sasl.mechanism": "PLAIN",
-        "client.security.sasl.username": "nonexistent_user",
-        "client.security.sasl.password": "some-password",
+        "security.protocol": "sasl",
+        "security.sasl.mechanism": "PLAIN",
+        "security.sasl.username": "nonexistent_user",
+        "security.sasl.password": "some-password",
     })
     with pytest.raises(fluss.FlussError) as exc_info:
         await fluss.FlussConnection.create(config)
 
     assert exc_info.value.error_code == fluss.ErrorCode.AUTHENTICATE_EXCEPTION
+
+
+async def test_sasl_client_to_plaintext_server(plaintext_bootstrap_servers):
+    """Verify that a SASL-configured client fails when connecting to a plaintext server."""
+    config = fluss.Config({
+        "bootstrap.servers": plaintext_bootstrap_servers,
+        "security.protocol": "sasl",
+        "security.sasl.mechanism": "PLAIN",
+        "security.sasl.username": "admin",
+        "security.sasl.password": "admin-secret",
+    })
+    with pytest.raises(fluss.FlussError):
+        await fluss.FlussConnection.create(config)

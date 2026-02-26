@@ -18,6 +18,8 @@
 #[cfg(test)]
 mod sasl_auth_test {
     use crate::integration::utils::get_shared_cluster;
+    use fluss::client::FlussConnection;
+    use fluss::config::Config;
     use fluss::error::FlussError;
     use fluss::metadata::DatabaseDescriptorBuilder;
 
@@ -99,6 +101,29 @@ mod sasl_auth_test {
             err.api_error(),
             Some(FlussError::AuthenticateException),
             "Wrong password should produce AuthenticateException, got: {err}"
+        );
+    }
+
+    /// Verify that a SASL-configured client fails when connecting to a plaintext server.
+    #[tokio::test]
+    async fn test_sasl_client_to_plaintext_server() {
+        let cluster = get_shared_cluster();
+        let plaintext_addr = cluster.plaintext_bootstrap_servers().to_string();
+
+        let config = Config {
+            writer_acks: "all".to_string(),
+            bootstrap_servers: plaintext_addr,
+            security_protocol: "sasl".to_string(),
+            security_sasl_mechanism: "PLAIN".to_string(),
+            security_sasl_username: SASL_USERNAME.to_string(),
+            security_sasl_password: SASL_PASSWORD.to_string(),
+            ..Default::default()
+        };
+
+        let result = FlussConnection::new(config).await;
+        assert!(
+            result.is_err(),
+            "SASL client connecting to plaintext server should fail"
         );
     }
 

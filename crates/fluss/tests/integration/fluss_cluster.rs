@@ -378,6 +378,11 @@ impl FlussTestingCluster {
         &self.sasl_users
     }
 
+    /// Returns the plaintext (non-SASL) bootstrap servers address.
+    pub fn plaintext_bootstrap_servers(&self) -> &str {
+        &self.bootstrap_servers
+    }
+
     pub async fn get_fluss_connection(&self) -> FlussConnection {
         let config = Config {
             writer_acks: "all".to_string(),

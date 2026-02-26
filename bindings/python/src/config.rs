@@ -108,21 +108,21 @@ impl Config {
                             }
                         };
                     }
-                    "client.connect-timeout" => {
+                    "connect-timeout" => {
                         config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
-                    "client.security.protocol" => {
+                    "security.protocol" => {
                         config.security_protocol = value;
                     }
-                    "client.security.sasl.mechanism" => {
+                    "security.sasl.mechanism" => {
                         config.security_sasl_mechanism = value;
                     }
-                    "client.security.sasl.username" => {
+                    "security.sasl.username" => {
                         config.security_sasl_username = value;
                     }
-                    "client.security.sasl.password" => {
+                    "security.sasl.password" => {
                         config.security_sasl_password = value;
                     }
                     _ => {

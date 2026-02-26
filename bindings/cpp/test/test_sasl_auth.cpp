@@ -26,6 +26,9 @@ class SaslAuthTest : public ::testing::Test {
     const std::string& sasl_servers() {
         return fluss_test::FlussTestEnvironment::Instance()->GetSaslBootstrapServers();
     }
+    const std::string& plaintext_servers() {
+        return fluss_test::FlussTestEnvironment::Instance()->GetBootstrapServers();
+    }
 };
 
 TEST_F(SaslAuthTest, SaslConnectWithValidCredentials) {
@@ -53,6 +56,26 @@ TEST_F(SaslAuthTest, SaslConnectWithValidCredentials) {
     ASSERT_TRUE(exists);
 
     ASSERT_OK(admin.DropDatabase(db_name, true, true));
+}
+
+TEST_F(SaslAuthTest, SaslConnectWithSecondUser) {
+    fluss::Configuration config;
+    config.bootstrap_servers = sasl_servers();
+    config.security_protocol = "sasl";
+    config.security_sasl_mechanism = "PLAIN";
+    config.security_sasl_username = "alice";
+    config.security_sasl_password = "alice-secret";
+
+    fluss::Connection conn;
+    ASSERT_OK(fluss::Connection::Create(config, conn));
+
+    fluss::Admin admin;
+    ASSERT_OK(conn.GetAdmin(admin));
+
+    // Basic operation to confirm functional connection
+    bool exists = false;
+    ASSERT_OK(admin.DatabaseExists("some_nonexistent_db_alice", exists));
+    ASSERT_FALSE(exists);
 }
 
 TEST_F(SaslAuthTest, SaslConnectWithWrongPassword) {
@@ -86,4 +109,17 @@ TEST_F(SaslAuthTest, SaslConnectWithUnknownUser) {
     // TODO: same as above — should check error_code == AUTHENTICATE_EXCEPTION once fixed.
     EXPECT_NE(result.error_message.find("Authentication failed"), std::string::npos)
         << "Expected 'Authentication failed' in: " << result.error_message;
+}
+
+TEST_F(SaslAuthTest, SaslClientToPlaintextServer) {
+    fluss::Configuration config;
+    config.bootstrap_servers = plaintext_servers();
+    config.security_protocol = "sasl";
+    config.security_sasl_mechanism = "PLAIN";
+    config.security_sasl_username = "admin";
+    config.security_sasl_password = "admin-secret";
+
+    fluss::Connection conn;
+    auto result = fluss::Connection::Create(config, conn);
+    ASSERT_FALSE(result.Ok()) << "SASL client connecting to plaintext server should fail";
 }

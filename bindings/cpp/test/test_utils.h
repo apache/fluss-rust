@@ -63,6 +63,29 @@ static constexpr int kPlainClientTabletPort = 9224;
 /// Execute a shell command and return its exit code.
 inline int RunCommand(const std::string& cmd) { return system(cmd.c_str()); }
 
+/// Join property lines with the escaped newline separator used by `printf` in docker commands.
+inline std::string JoinProps(const std::vector<std::string>& lines) {
+    std::string result;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) result += "\\n";
+        result += lines[i];
+    }
+    return result;
+}
+
+/// Build a `docker run` command with FLUSS_PROPERTIES.
+inline std::string DockerRunCmd(const std::string& name, const std::string& props,
+                                const std::vector<std::string>& port_mappings,
+                                const std::string& server_type) {
+    std::string cmd = "docker run -d --rm --name " + name + " --network " + kNetworkName;
+    for (const auto& pm : port_mappings) {
+        cmd += " -p " + pm;
+    }
+    cmd += " -e FLUSS_PROPERTIES=\"$(printf '" + props + "')\"";
+    cmd += " " + std::string(kFlussImage) + ":" + kFlussVersion + " " + server_type;
+    return cmd;
+}
+
 /// Wait until a TCP port is accepting connections, or timeout.
 inline bool WaitForPort(const std::string& host, int port, int timeout_seconds = 60) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
@@ -129,28 +152,24 @@ class FlussTestCluster {
         std::string sasl_jaas =
             "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
             " user_admin=\"admin-secret\" user_alice=\"alice-secret\";";
-        std::string coord_props =
-            "zookeeper.address: " + std::string(kZookeeperName) +
-            ":2181\\n"
-            "bind.listeners: INTERNAL://" +
-            std::string(kCoordinatorName) + ":0, CLIENT://" + std::string(kCoordinatorName) +
-            ":9123, PLAIN_CLIENT://" + std::string(kCoordinatorName) +
-            ":9223\\n"
-            "advertised.listeners: CLIENT://localhost:9123, PLAIN_CLIENT://localhost:9223\\n"
-            "internal.listener.name: INTERNAL\\n"
-            "security.protocol.map: CLIENT:sasl\\n"
-            "security.sasl.enabled.mechanisms: plain\\n"
-            "security.sasl.plain.jaas.config: " +
-            sasl_jaas +
-            "\\n"
-            "netty.server.num-network-threads: 1\\n"
-            "netty.server.num-worker-threads: 3";
 
-        std::string coord_cmd = std::string("docker run -d --rm") + " --name " + kCoordinatorName +
-                                " --network " + kNetworkName + " -p 9123:9123" + " -p 9223:9223" +
-                                " -e FLUSS_PROPERTIES=\"$(printf '" + coord_props + "')\"" + " " +
-                                std::string(kFlussImage) + ":" + kFlussVersion +
-                                " coordinatorServer";
+        std::string coord = std::string(kCoordinatorName);
+        std::string zk = std::string(kZookeeperName);
+        std::string coord_props = JoinProps({
+            "zookeeper.address: " + zk + ":2181",
+            "bind.listeners: INTERNAL://" + coord + ":0, CLIENT://" + coord +
+                ":9123, PLAIN_CLIENT://" + coord + ":9223",
+            "advertised.listeners: CLIENT://localhost:9123, PLAIN_CLIENT://localhost:9223",
+            "internal.listener.name: INTERNAL",
+            "security.protocol.map: CLIENT:sasl",
+            "security.sasl.enabled.mechanisms: plain",
+            "security.sasl.plain.jaas.config: " + sasl_jaas,
+            "netty.server.num-network-threads: 1",
+            "netty.server.num-worker-threads: 3",
+        });
+
+        std::string coord_cmd = DockerRunCmd(kCoordinatorName, coord_props,
+                                             {"9123:9123", "9223:9223"}, "coordinatorServer");
         if (RunCommand(coord_cmd) != 0) {
             std::cerr << "Failed to start Coordinator Server" << std::endl;
             Stop();
@@ -165,33 +184,26 @@ class FlussTestCluster {
         }
 
         // Start Tablet Server (dual listeners: CLIENT=SASL on 9123, PLAIN_CLIENT=plaintext on 9223)
-        std::string ts_props =
-            "zookeeper.address: " + std::string(kZookeeperName) +
-            ":2181\\n"
-            "bind.listeners: INTERNAL://" +
-            std::string(kTabletServerName) + ":0, CLIENT://" + std::string(kTabletServerName) +
-            ":9123, PLAIN_CLIENT://" + std::string(kTabletServerName) +
-            ":9223\\n"
-            "advertised.listeners: CLIENT://localhost:" +
-            std::to_string(kTabletServerPort) +
-            ", PLAIN_CLIENT://localhost:" + std::to_string(kPlainClientTabletPort) +
-            "\\n"
-            "internal.listener.name: INTERNAL\\n"
-            "security.protocol.map: CLIENT:sasl\\n"
-            "security.sasl.enabled.mechanisms: plain\\n"
-            "security.sasl.plain.jaas.config: " +
-            sasl_jaas +
-            "\\n"
-            "tablet-server.id: 0\\n"
-            "netty.server.num-network-threads: 1\\n"
-            "netty.server.num-worker-threads: 3";
+        std::string ts = std::string(kTabletServerName);
+        std::string ts_props = JoinProps({
+            "zookeeper.address: " + zk + ":2181",
+            "bind.listeners: INTERNAL://" + ts + ":0, CLIENT://" + ts + ":9123, PLAIN_CLIENT://" +
+                ts + ":9223",
+            "advertised.listeners: CLIENT://localhost:" + std::to_string(kTabletServerPort) +
+                ", PLAIN_CLIENT://localhost:" + std::to_string(kPlainClientTabletPort),
+            "internal.listener.name: INTERNAL",
+            "security.protocol.map: CLIENT:sasl",
+            "security.sasl.enabled.mechanisms: plain",
+            "security.sasl.plain.jaas.config: " + sasl_jaas,
+            "tablet-server.id: 0",
+            "netty.server.num-network-threads: 1",
+            "netty.server.num-worker-threads: 3",
+        });
 
-        std::string ts_cmd = std::string("docker run -d --rm") + " --name " + kTabletServerName +
-                             " --network " + kNetworkName + " -p " +
-                             std::to_string(kTabletServerPort) + ":9123" + " -p " +
-                             std::to_string(kPlainClientTabletPort) + ":9223" +
-                             " -e FLUSS_PROPERTIES=\"$(printf '" + ts_props + "')\"" + " " +
-                             std::string(kFlussImage) + ":" + kFlussVersion + " tabletServer";
+        std::string ts_cmd = DockerRunCmd(kTabletServerName, ts_props,
+                                          {std::to_string(kTabletServerPort) + ":9123",
+                                           std::to_string(kPlainClientTabletPort) + ":9223"},
+                                          "tabletServer");
         if (RunCommand(ts_cmd) != 0) {
             std::cerr << "Failed to start Tablet Server" << std::endl;
             Stop();
