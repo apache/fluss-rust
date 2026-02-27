@@ -1,3 +1,7 @@
+---
+sidebar_position: 4
+---
+
 # Creating a Fluss Rust Client Release
 
 This document describes in detail how to create a release of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss-rust) repository. It is based on the [Creating a Fluss Release](https://fluss.apache.org/community/how-to-release/creating-a-fluss-release/) guide of the Apache Fluss project and the [release guide of Apache OpenDAL](https://nightlies.apache.org/opendal/opendal-docs-stable/community/release/); releases are source archives plus CI-published crates.io and PyPI.
@@ -6,7 +10,7 @@ Publishing software has legal consequences. This guide complements the foundatio
 
 ## Overview
 
-![Release process overview](assets/release-guide.png)
+![Release process overview](/img/release-guide.png)
 
 The release process consists of:
 
@@ -22,7 +26,7 @@ The release process consists of:
 
 Deciding to release and selecting a Release Manager is the first step. This is a consensus-based decision of the community.
 
-Anybody can propose a release (e.g. on the dev mailing list), giving a short rationale and nominating a committer as Release Manager (including themselves). Any objections should be resolved by consensus before starting.
+Anybody can propose a release (e.g. on the dev [mailing list](https://fluss.apache.org/community/welcome/)), giving a short rationale and nominating a committer as Release Manager (including themselves). Any objections should be resolved by consensus before starting.
 
 **Checklist to proceed**
 
@@ -360,7 +364,7 @@ svn commit -m "Remove RC after release fluss-rust ${RELEASE_VERSION}"
 2. Choose tag `$RELEASE_TAG`.
 3. Set the target to the release branch `release-${RELEASE_VERSION}` (i.e., the branch/commit used to create `$RELEASE_TAG`).
 4. Click **Generate release notes**, then add: notable changes, breaking changes (if any) from component upgrade docs, **official download link** (source archive and verification), and install instructions for fluss-rust, fluss-python, fluss-cpp.
-   - **Download link:** `https://downloads.apache.org/incubator/fluss/fluss-rust-${RELEASE_VERSION}/` (or the project download page). In the release description, include checksums and GPG verification steps.
+    - **Download link:** `https://downloads.apache.org/incubator/fluss/fluss-rust-${RELEASE_VERSION}/` (or the project download page). In the release description, include checksums and GPG verification steps.
 5. Click **Publish release**.
 
 ### 6. Update CHANGELOG.md on main

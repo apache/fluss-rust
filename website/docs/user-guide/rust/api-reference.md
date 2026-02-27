@@ -16,6 +16,7 @@ Complete API reference for the Fluss Rust client.
 | `writer_batch_size`               | `i32`    | `2097152` (2 MB)   | Batch size for writes in bytes                          |
 | `scanner_remote_log_prefetch_num` | `usize`  | `4`                | Number of remote log segments to prefetch               |
 | `remote_file_download_thread_num` | `usize`  | `3`                | Number of threads for remote log downloads              |
+| `scanner_log_max_poll_records`    | `usize`  | `500`              | Maximum number of records returned in a single poll()   |
 
 ## `FlussConnection`
 
@@ -50,11 +51,12 @@ Complete API reference for the Fluss Rust client.
 
 ### Partition Operations
 
-| Method                                                                                                                   | Description         |
-|--------------------------------------------------------------------------------------------------------------------------|---------------------|
-| `async fn list_partition_infos(&self, table_path: &TablePath) -> Result<Vec<PartitionInfo>>`                             | List all partitions |
-| `async fn create_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_exists: bool) -> Result<()>`   | Create a partition  |
-| `async fn drop_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_not_exists: bool) -> Result<()>` | Drop a partition    |
+| Method                                                                                                                               | Description                     |
+|--------------------------------------------------------------------------------------------------------------------------------------|---------------------------------|
+| `async fn list_partition_infos(&self, table_path: &TablePath) -> Result<Vec<PartitionInfo>>`                                         | List all partitions             |
+| `async fn list_partition_infos_with_spec(&self, table_path: &TablePath, spec: Option<&PartitionSpec>) -> Result<Vec<PartitionInfo>>` | List partitions matching a spec |
+| `async fn create_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_exists: bool) -> Result<()>`               | Create a partition              |
+| `async fn drop_partition(&self, table_path: &TablePath, spec: &PartitionSpec, ignore_if_not_exists: bool) -> Result<()>`             | Drop a partition                |
 
 ### Offset Operations
 
@@ -238,27 +240,30 @@ writer.append(&row)?.await?;
 
 ## `TableDescriptor`
 
-| Method                                             |  Description                         |
-|----------------------------------------------------|--------------------------------------|
-| `fn builder() -> TableDescriptorBuilder`           | Create a table descriptor builder    |
-| `fn schema(&self) -> &Schema`                      | Get the table schema                 |
-| `fn partition_keys(&self) -> &[String]`            | Get partition key column names       |
-| `fn has_primary_key(&self) -> bool`                | Check if the table has a primary key |
-| `fn properties(&self) -> &HashMap<String, String>` | Get all table properties             |
-| `fn comment(&self) -> Option<&str>`                | Get table comment                    |
+| Method                                                    | Description                          |
+|-----------------------------------------------------------|--------------------------------------|
+| `fn builder() -> TableDescriptorBuilder`                  | Create a table descriptor builder    |
+| `fn schema(&self) -> &Schema`                             | Get the table schema                 |
+| `fn partition_keys(&self) -> &[String]`                   | Get partition key column names       |
+| `fn has_primary_key(&self) -> bool`                       | Check if the table has a primary key |
+| `fn properties(&self) -> &HashMap<String, String>`        | Get all table properties             |
+| `fn custom_properties(&self) -> &HashMap<String, String>` | Get custom properties                |
+| `fn comment(&self) -> Option<&str>`                       | Get table comment                    |
 
 ## `TableDescriptorBuilder`
 
-| Method                                                                           |  Description                                |
-|----------------------------------------------------------------------------------|---------------------------------------------|
-| `fn schema(schema: Schema) -> Self`                                              | Set the schema                              |
-| `fn log_format(format: LogFormat) -> Self`                                       | Set log format (e.g., `LogFormat::ARROW`)   |
-| `fn kv_format(format: KvFormat) -> Self`                                         | Set KV format (e.g., `KvFormat::COMPACTED`) |
-| `fn property(key: &str, value: &str) -> Self`                                    | Set a table property                        |
-| `fn partitioned_by(keys: Vec<&str>) -> Self`                                     | Set partition columns                       |
-| `fn distributed_by(bucket_count: Option<i32>, bucket_keys: Vec<String>) -> Self` | Set bucket distribution                     |
-| `fn comment(comment: &str) -> Self`                                              | Set table comment                           |
-| `fn build() -> Result<TableDescriptor>`                                          | Build the table descriptor                  |
+| Method                                                                                    | Description                                 |
+|-------------------------------------------------------------------------------------------|---------------------------------------------|
+| `fn schema(schema: Schema) -> Self`                                                       | Set the schema                              |
+| `fn log_format(format: LogFormat) -> Self`                                                | Set log format (e.g., `LogFormat::ARROW`)   |
+| `fn kv_format(format: KvFormat) -> Self`                                                  | Set KV format (e.g., `KvFormat::COMPACTED`) |
+| `fn property(key: &str, value: &str) -> Self`                                             | Set a table property                        |
+| `fn custom_property(key: impl Into<String>, value: impl Into<String>) -> Self`            | Set a single custom property                |
+| `fn custom_properties(properties: HashMap<impl Into<String>, impl Into<String>>) -> Self` | Set custom properties                       |
+| `fn partitioned_by(keys: Vec<&str>) -> Self`                                              | Set partition columns                       |
+| `fn distributed_by(bucket_count: Option<i32>, bucket_keys: Vec<String>) -> Self`          | Set bucket distribution                     |
+| `fn comment(comment: &str) -> Self`                                                       | Set table comment                           |
+| `fn build() -> Result<TableDescriptor>`                                                   | Build the table descriptor                  |
 
 ## `TablePath`
 

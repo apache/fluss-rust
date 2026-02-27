@@ -138,19 +138,19 @@ int main() {
         auto pk_row = kv_table.NewRow();
         pk_row.Set("user_id", 1);
 
-        bool found = false;
-        fluss::GenericRow result_row;
-        check("lookup_1", lookuper.Lookup(pk_row, found, result_row));
-        if (found) {
-            auto date = result_row.GetDate(5);
-            auto time = result_row.GetTime(6);
-            auto created = result_row.GetTimestamp(7);
-            auto seen = result_row.GetTimestamp(8);
+        fluss::LookupResult result;
+        check("lookup_1", lookuper.Lookup(pk_row, result));
+        if (result.Found()) {
+            // Name-based getters — same data as index-based but self-documenting
+            auto date = result.GetDate("birth_date");
+            auto time = result.GetTime("login_time");
+            auto created = result.GetTimestamp("created_at");
+            auto seen = result.GetTimestamp("last_seen");
             std::cout << "Found user_id=1:"
-                      << "\n  name=" << result_row.GetString(1)
-                      << "\n  email=" << result_row.GetString(2)
-                      << "\n  score=" << result_row.GetFloat32(3)
-                      << "\n  balance=" << result_row.DecimalToString(4)
+                      << "\n  name=" << result.GetString("name")
+                      << "\n  email=" << result.GetString("email")
+                      << "\n  score=" << result.GetFloat32("score")
+                      << "\n  balance=" << result.GetDecimalString("balance")
                       << "\n  birth_date=" << date.Year() << "-" << date.Month() << "-"
                       << date.Day() << "\n  login_time=" << time.Hour() << ":" << time.Minute()
                       << ":" << time.Second() << "\n  created_at(ms)=" << created.epoch_millis
@@ -166,13 +166,63 @@ int main() {
         auto pk_row = kv_table.NewRow();
         pk_row.Set("user_id", 999);
 
-        bool found = false;
-        fluss::GenericRow result_row;
-        check("lookup_999", lookuper.Lookup(pk_row, found, result_row));
-        if (!found) {
+        fluss::LookupResult result;
+        check("lookup_999", lookuper.Lookup(pk_row, result));
+        if (!result.Found()) {
             std::cout << "user_id=999 not found (expected)" << std::endl;
         } else {
             std::cerr << "ERROR: Expected user_id=999 to not be found" << std::endl;
+            std::exit(1);
+        }
+    }
+
+    // 4b) Null row round-trip (matches Rust kv_table.rs all_supported_datatypes)
+    //     Upsert a row with all non-PK fields null, lookup, verify IsNull
+    std::cout << "\n--- Null Row Round-Trip ---" << std::endl;
+    {
+        auto row = kv_table.NewRow();
+        row.Set("user_id", 100);
+        row.SetNull(1);  // name
+        row.SetNull(2);  // email
+        row.SetNull(3);  // score
+        row.SetNull(4);  // balance
+        row.SetNull(5);  // birth_date
+        row.SetNull(6);  // login_time
+        row.SetNull(7);  // created_at
+        row.SetNull(8);  // last_seen
+        fluss::WriteResult wr;
+        check("upsert_null_row", upsert_writer.Upsert(row, wr));
+        check("upsert_null_row_wait", wr.Wait());
+    }
+    {
+        auto pk_row = kv_table.NewRow();
+        pk_row.Set("user_id", 100);
+
+        fluss::LookupResult result;
+        check("lookup_null_row", lookuper.Lookup(pk_row, result));
+        if (!result.Found()) {
+            std::cerr << "ERROR: Expected to find user_id=100 (null row)" << std::endl;
+            std::exit(1);
+        }
+
+        // Verify PK is not null
+        if (result.IsNull(0)) {
+            std::cerr << "ERROR: PK (user_id) should not be null" << std::endl;
+            std::exit(1);
+        }
+
+        // Verify all nullable columns are null (matches Rust is_null_at assertions)
+        bool null_ok = true;
+        for (size_t i = 1; i < result.FieldCount(); ++i) {
+            if (!result.IsNull(i)) {
+                std::cerr << "ERROR: column " << i << " should be null" << std::endl;
+                null_ok = false;
+            }
+        }
+        if (null_ok) {
+            std::cout << "Null row verified: all " << (result.FieldCount() - 1)
+                      << " nullable fields are null" << std::endl;
+        } else {
             std::exit(1);
         }
     }
@@ -200,13 +250,12 @@ int main() {
         auto pk_row = kv_table.NewRow();
         pk_row.Set("user_id", 1);
 
-        bool found = false;
-        fluss::GenericRow result_row;
-        check("lookup_updated", lookuper.Lookup(pk_row, found, result_row));
-        if (found && result_row.GetString(1) == "Alice Updated") {
-            std::cout << "Update verified: name=" << result_row.GetString(1)
-                      << " balance=" << result_row.DecimalToString(4)
-                      << " last_seen(ms)=" << result_row.GetTimestamp(8).epoch_millis << std::endl;
+        fluss::LookupResult result;
+        check("lookup_updated", lookuper.Lookup(pk_row, result));
+        if (result.Found() && result.GetString(1) == "Alice Updated") {
+            std::cout << "Update verified: name=" << result.GetString(1)
+                      << " balance=" << result.GetDecimalString(4)
+                      << " last_seen(ms)=" << result.GetTimestamp(8).epoch_millis << std::endl;
         } else {
             std::cerr << "ERROR: Update verification failed" << std::endl;
             std::exit(1);
@@ -229,10 +278,9 @@ int main() {
         auto pk_row = kv_table.NewRow();
         pk_row.Set("user_id", 2);
 
-        bool found = false;
-        fluss::GenericRow result_row;
-        check("lookup_deleted", lookuper.Lookup(pk_row, found, result_row));
-        if (!found) {
+        fluss::LookupResult result;
+        check("lookup_deleted", lookuper.Lookup(pk_row, result));
+        if (!result.Found()) {
             std::cout << "Delete verified: user_id=2 not found" << std::endl;
         } else {
             std::cerr << "ERROR: Expected user_id=2 to be deleted" << std::endl;
@@ -263,15 +311,14 @@ int main() {
         auto pk_row = kv_table.NewRow();
         pk_row.Set("user_id", 3);
 
-        bool found = false;
-        fluss::GenericRow result_row;
-        check("lookup_partial", lookuper.Lookup(pk_row, found, result_row));
-        if (found) {
+        fluss::LookupResult result;
+        check("lookup_partial", lookuper.Lookup(pk_row, result));
+        if (result.Found()) {
             std::cout << "Partial update verified:"
-                      << "\n  name=" << result_row.GetString(1) << " (unchanged)"
-                      << "\n  balance=" << result_row.DecimalToString(4) << " (updated)"
-                      << "\n  last_seen(ms)=" << result_row.GetTimestamp(8).epoch_millis
-                      << " (updated)" << std::endl;
+                      << "\n  name=" << result.GetString(1) << " (unchanged)"
+                      << "\n  balance=" << result.GetDecimalString(4) << " (updated)"
+                      << "\n  last_seen(ms)=" << result.GetTimestamp(8).epoch_millis << " (updated)"
+                      << std::endl;
         } else {
             std::cerr << "ERROR: Expected to find user_id=3" << std::endl;
             std::exit(1);
@@ -302,14 +349,13 @@ int main() {
         auto pk_row = kv_table.NewRow();
         pk_row.Set("user_id", 3);
 
-        bool found = false;
-        fluss::GenericRow result_row;
-        check("lookup_partial_idx", lookuper.Lookup(pk_row, found, result_row));
-        if (found) {
+        fluss::LookupResult result;
+        check("lookup_partial_idx", lookuper.Lookup(pk_row, result));
+        if (result.Found()) {
             std::cout << "Partial update by indices verified:"
-                      << "\n  name=" << result_row.GetString(1) << " (updated)"
-                      << "\n  balance=" << result_row.DecimalToString(4) << " (unchanged)"
-                      << "\n  last_seen(ms)=" << result_row.GetTimestamp(8).epoch_millis
+                      << "\n  name=" << result.GetString(1) << " (updated)"
+                      << "\n  balance=" << result.GetDecimalString(4) << " (unchanged)"
+                      << "\n  last_seen(ms)=" << result.GetTimestamp(8).epoch_millis
                       << " (unchanged)" << std::endl;
         } else {
             std::cerr << "ERROR: Expected to find user_id=3" << std::endl;
@@ -325,11 +371,13 @@ int main() {
     fluss::TablePath partitioned_kv_path("fluss", "partitioned_kv_cpp_v1");
     admin.DropTable(partitioned_kv_path, true);
 
+    // PK columns intentionally interleaved with non-PK columns to verify
+    // that lookup correctly builds a dense PK-only row (not sparse full-width).
     auto partitioned_kv_schema = fluss::Schema::NewBuilder()
                                      .AddColumn("region", fluss::DataType::String())
+                                     .AddColumn("score", fluss::DataType::BigInt())
                                      .AddColumn("user_id", fluss::DataType::Int())
                                      .AddColumn("name", fluss::DataType::String())
-                                     .AddColumn("score", fluss::DataType::BigInt())
                                      .SetPrimaryKeys({"region", "user_id"})
                                      .Build();
 
@@ -357,23 +405,24 @@ int main() {
           partitioned_kv_table.NewUpsert().CreateWriter(partitioned_writer));
 
     // Upsert rows across partitions
+    // Column order: region(0), score(1), user_id(2), name(3)
     struct TestRow {
         const char* region;
+        int64_t score;
         int32_t user_id;
         const char* name;
-        int64_t score;
     };
     TestRow test_data[] = {
-        {"US", 1, "Gustave", 100}, {"US", 2, "Lune", 200},   {"EU", 1, "Sciel", 150},
-        {"EU", 2, "Maelle", 250},  {"APAC", 1, "Noco", 300},
+        {"US", 100, 1, "Gustave"}, {"US", 200, 2, "Lune"},   {"EU", 150, 1, "Sciel"},
+        {"EU", 250, 2, "Maelle"},  {"APAC", 300, 1, "Noco"},
     };
 
     for (const auto& td : test_data) {
         auto row = partitioned_kv_table.NewRow();
         row.Set("region", td.region);
+        row.Set("score", td.score);
         row.Set("user_id", td.user_id);
         row.Set("name", td.name);
-        row.Set("score", td.score);
         check("partitioned_upsert", partitioned_writer.Upsert(row));
     }
     check("partitioned_flush", partitioned_writer.Flush());
@@ -389,15 +438,14 @@ int main() {
         pk.Set("region", td.region);
         pk.Set("user_id", td.user_id);
 
-        bool found = false;
-        fluss::GenericRow result;
-        check("partitioned_lookup", partitioned_lookuper.Lookup(pk, found, result));
-        if (!found) {
+        fluss::LookupResult result;
+        check("partitioned_lookup", partitioned_lookuper.Lookup(pk, result));
+        if (!result.Found()) {
             std::cerr << "ERROR: Expected to find region=" << td.region << " user_id=" << td.user_id
                       << std::endl;
             std::exit(1);
         }
-        if (result.GetString(2) != td.name || result.GetInt64(3) != td.score) {
+        if (result.GetString(3) != td.name || result.GetInt64(1) != td.score) {
             std::cerr << "ERROR: Data mismatch for region=" << td.region
                       << " user_id=" << td.user_id << std::endl;
             std::exit(1);
@@ -409,9 +457,9 @@ int main() {
     {
         auto row = partitioned_kv_table.NewRow();
         row.Set("region", "US");
+        row.Set("score", static_cast<int64_t>(999));
         row.Set("user_id", 1);
         row.Set("name", "Gustave Updated");
-        row.Set("score", static_cast<int64_t>(999));
         fluss::WriteResult wr;
         check("partitioned_update", partitioned_writer.Upsert(row, wr));
         check("partitioned_update_wait", wr.Wait());
@@ -420,15 +468,15 @@ int main() {
         auto pk = partitioned_kv_table.NewRow();
         pk.Set("region", "US");
         pk.Set("user_id", 1);
-        bool found = false;
-        fluss::GenericRow result;
-        check("partitioned_lookup_updated", partitioned_lookuper.Lookup(pk, found, result));
-        if (!found || result.GetString(2) != "Gustave Updated" || result.GetInt64(3) != 999) {
+        fluss::LookupResult result;
+        check("partitioned_lookup_updated", partitioned_lookuper.Lookup(pk, result));
+        if (!result.Found() || result.GetString(3) != "Gustave Updated" ||
+            result.GetInt64(1) != 999) {
             std::cerr << "ERROR: Partition update verification failed" << std::endl;
             std::exit(1);
         }
-        std::cout << "Update verified: US/1 name=" << result.GetString(2)
-                  << " score=" << result.GetInt64(3) << std::endl;
+        std::cout << "Update verified: US/1 name=" << result.GetString(3)
+                  << " score=" << result.GetInt64(1) << std::endl;
     }
 
     // Lookup in non-existent partition
@@ -436,10 +484,9 @@ int main() {
         auto pk = partitioned_kv_table.NewRow();
         pk.Set("region", "UNKNOWN");
         pk.Set("user_id", 1);
-        bool found = false;
-        fluss::GenericRow result;
-        check("partitioned_lookup_unknown", partitioned_lookuper.Lookup(pk, found, result));
-        if (found) {
+        fluss::LookupResult result;
+        check("partitioned_lookup_unknown", partitioned_lookuper.Lookup(pk, result));
+        if (result.Found()) {
             std::cerr << "ERROR: Expected UNKNOWN partition lookup to return not found"
                       << std::endl;
             std::exit(1);
@@ -460,10 +507,9 @@ int main() {
         auto pk = partitioned_kv_table.NewRow();
         pk.Set("region", "EU");
         pk.Set("user_id", 1);
-        bool found = false;
-        fluss::GenericRow result;
-        check("partitioned_lookup_deleted", partitioned_lookuper.Lookup(pk, found, result));
-        if (found) {
+        fluss::LookupResult result;
+        check("partitioned_lookup_deleted", partitioned_lookuper.Lookup(pk, result));
+        if (result.Found()) {
             std::cerr << "ERROR: Expected EU/1 to be deleted" << std::endl;
             std::exit(1);
         }
@@ -475,14 +521,13 @@ int main() {
         auto pk = partitioned_kv_table.NewRow();
         pk.Set("region", "EU");
         pk.Set("user_id", 2);
-        bool found = false;
-        fluss::GenericRow result;
-        check("partitioned_lookup_eu2", partitioned_lookuper.Lookup(pk, found, result));
-        if (!found || result.GetString(2) != "Maelle") {
+        fluss::LookupResult result;
+        check("partitioned_lookup_eu2", partitioned_lookuper.Lookup(pk, result));
+        if (!result.Found() || result.GetString(3) != "Maelle") {
             std::cerr << "ERROR: Expected EU/2 (Maelle) to still exist" << std::endl;
             std::exit(1);
         }
-        std::cout << "EU/2 still exists: name=" << result.GetString(2) << std::endl;
+        std::cout << "EU/2 still exists: name=" << result.GetString(3) << std::endl;
     }
 
     check("drop_partitioned_kv", admin.DropTable(partitioned_kv_path, true));

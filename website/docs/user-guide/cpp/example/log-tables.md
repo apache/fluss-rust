@@ -60,6 +60,46 @@ for (const auto& rec : records) {
               << " timestamp=" << rec.row.GetInt64(2)
               << " @ offset=" << rec.offset << std::endl;
 }
+
+// Or per-bucket access
+for (const auto& bucket : records.Buckets()) {
+    auto view = records.Records(bucket);
+    std::cout << "Bucket " << bucket.bucket_id << ": "
+              << view.Size() << " records" << std::endl;
+    for (const auto& rec : view) {
+        std::cout << "  event_id=" << rec.row.GetInt32(0)
+                  << " event_type=" << rec.row.GetString(1)
+                  << " @ offset=" << rec.offset << std::endl;
+    }
+}
+```
+
+**Continuous polling:**
+
+```cpp
+while (running) {
+    fluss::ScanRecords records;
+    scanner.Poll(1000, records);
+    for (const auto& rec : records) {
+        process(rec);
+    }
+}
+```
+
+**Accumulating records across polls:**
+
+`ScanRecord` is a value type — it can be freely copied, stored, and accumulated. The underlying data stays alive via reference counting (zero-copy).
+
+```cpp
+std::vector<fluss::ScanRecord> all_records;
+while (all_records.size() < 1000) {
+    fluss::ScanRecords records;
+    scanner.Poll(1000, records);
+    for (const auto& rec : records) {
+        all_records.push_back(rec);  // ref-counted, no data copy
+    }
+}
+// all_records is valid — each record keeps its data alive
 ```
 
 **Batch subscribe:**

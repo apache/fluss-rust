@@ -37,3 +37,4 @@ arrow-array = "57.0.0"
 pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
 jiff = { workspace = true }
 bigdecimal = "0.4"
+indexmap = "2"

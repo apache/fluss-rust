@@ -83,13 +83,20 @@ while True:
     if result.num_rows > 0:
         print(result.to_pandas())
 
-# Record scanner: poll individual records with metadata
+# Record scanner: poll individual records
 scanner = await table.new_scan().create_log_scanner()
 scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
 while True:
-    for record in scanner.poll(timeout_ms=5000):
+    scan_records = scanner.poll(timeout_ms=5000)
+
+    for record in scan_records:
         print(f"offset={record.offset}, change={record.change_type.short_string()}, row={record.row}")
+
+    # Or per-bucket access (dict-like)
+    for bucket, records in scan_records.items():
+        for record in records:
+            print(f"bucket={bucket.bucket_id}, offset={record.offset}, row={record.row}")
 ```
 
 ### Unsubscribing

@@ -17,6 +17,7 @@
 
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
 use crate::client::{WriteRecord, WriteResultFuture, WriterClient};
+use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
 use crate::row::{ColumnarRow, InternalRow};
@@ -69,6 +70,21 @@ pub struct AppendWriter {
 }
 
 impl AppendWriter {
+    fn check_field_count<R: InternalRow>(&self, row: &R) -> Result<()> {
+        let expected = self.table_info.get_row_type().fields().len();
+        if row.get_field_count() != expected {
+            return Err(IllegalArgument {
+                message: format!(
+                    "The field count of the row does not match the table schema. \
+                     Expected: {}, Actual: {}",
+                    expected,
+                    row.get_field_count()
+                ),
+            });
+        }
+        Ok(())
+    }
+
     /// Appends a row to the table.
     ///
     /// This method returns a [`WriteResultFuture`] immediately after queueing the write,
@@ -81,6 +97,7 @@ impl AppendWriter {
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
     pub fn append<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
+        self.check_field_count(row)?;
         let physical_table_path = Arc::new(get_physical_path(
             &self.table_path,
             self.partition_getter.as_ref(),

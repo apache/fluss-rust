@@ -122,6 +122,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TableBucket>()?;
     m.add_class::<ChangeType>()?;
     m.add_class::<ScanRecord>()?;
+    m.add_class::<ScanRecords>()?;
     m.add_class::<RecordBatch>()?;
     m.add_class::<PartitionInfo>()?;
     m.add_class::<OffsetSpec>()?;

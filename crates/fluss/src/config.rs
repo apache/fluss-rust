@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 const DEFAULT_BOOTSTRAP_SERVER: &str = "127.0.0.1:9123";
 const DEFAULT_REQUEST_MAX_SIZE: i32 = 10 * 1024 * 1024;
@@ -26,6 +27,7 @@ const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
 const DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ: bool = true;
 const DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY: usize = 4;
+const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 
 const DEFAULT_ACKS: &str = "all";
 
@@ -35,6 +37,26 @@ fn default_scanner_remote_log_streaming_read() -> bool {
 
 fn default_scanner_remote_log_streaming_read_concurrency() -> usize {
     DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY
+}
+
+/// Bucket assigner strategy for tables without bucket keys.
+/// Matches Java `client.writer.bucket.no-key-assigner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoKeyAssigner {
+    /// Sticks to one bucket until the batch is full, then switches.
+    Sticky,
+    /// Assigns each record to the next bucket in a rotating sequence.
+    RoundRobin,
+}
+
+impl fmt::Display for NoKeyAssigner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NoKeyAssigner::Sticky => write!(f, "sticky"),
+            NoKeyAssigner::RoundRobin => write!(f, "round_robin"),
+        }
+    }
 }
 
 #[derive(Parser, Debug, Clone, Deserialize, Serialize)]
@@ -54,6 +76,9 @@ pub struct Config {
 
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_SIZE)]
     pub writer_batch_size: i32,
+
+    #[arg(long, value_enum, default_value_t = NoKeyAssigner::Sticky)]
+    pub writer_bucket_no_key_assigner: NoKeyAssigner,
 
     /// Maximum number of remote log segments to prefetch
     /// Default: 4 (matching Java CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM)
@@ -83,6 +108,11 @@ pub struct Config {
     )]
     #[serde(default = "default_scanner_remote_log_streaming_read_concurrency")]
     pub scanner_remote_log_streaming_read_concurrency: usize,
+
+    /// Maximum number of records returned in a single call to poll() for LogScanner.
+    /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
+    #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
+    pub scanner_log_max_poll_records: usize,
 }
 
 impl Default for Config {
@@ -93,11 +123,13 @@ impl Default for Config {
             writer_acks: String::from(DEFAULT_ACKS),
             writer_retries: i32::MAX,
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
+            writer_bucket_no_key_assigner: NoKeyAssigner::Sticky,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_remote_log_streaming_read: DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ,
             scanner_remote_log_streaming_read_concurrency:
                 DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY,
+            scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
         }
     }
 }

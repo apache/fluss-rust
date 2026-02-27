@@ -82,7 +82,7 @@ cargo build --workspace --all-targets
 # Run unit tests
 cargo test --workspace
 
-# Run integration tests (requires a running Fluss cluster)
+# Run integration tests (requires Docker)
 RUST_TEST_THREADS=1 cargo test --features integration_tests --workspace
 
 # Run a single test
@@ -93,9 +93,15 @@ cargo test test_name
 
 ```bash
 cd bindings/python
-pip install maturin
-pip install -e ".[dev]"
-maturin develop
+
+# Install dev dependencies and build the extension
+uv sync --extra dev && uv run maturin develop
+
+# Run integration tests (requires Docker)
+uv run pytest test/ -v
+
+# To run against an existing cluster instead
+FLUSS_BOOTSTRAP_SERVERS=127.0.0.1:9123 uv run pytest test/ -v
 ```
 
 ### C++ Bindings

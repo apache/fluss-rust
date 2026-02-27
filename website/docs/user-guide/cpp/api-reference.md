@@ -24,6 +24,7 @@ Complete API reference for the Fluss C++ client.
 | `writer_batch_size`               | `int32_t`     | `2097152` (2 MB)     | Batch size for writes in bytes                                  |
 | `scanner_remote_log_prefetch_num` | `size_t`      | `4`                  | Number of remote log segments to prefetch                       |
 | `remote_file_download_thread_num` | `size_t`      | `3`                  | Number of threads for remote log downloads                      |
+| `scanner_log_max_poll_records`    | `size_t`      | `500`                | Maximum number of records returned in a single Poll()           |
 
 ## `Connection`
 
@@ -145,9 +146,9 @@ Complete API reference for the Fluss C++ client.
 
 ## `Lookuper`
 
-| Method                                                                     |  Description                |
-|----------------------------------------------------------------------------|-----------------------------|
-| `Lookup(const GenericRow& pk_row, bool& found, GenericRow& out) -> Result` | Lookup a row by primary key |
+| Method                                                        |  Description                |
+|---------------------------------------------------------------|-----------------------------|
+| `Lookup(const GenericRow& pk_row, LookupResult& out) -> Result` | Lookup a row by primary key |
 
 ## `LogScanner`
 
@@ -164,21 +165,7 @@ Complete API reference for the Fluss C++ client.
 
 ## `GenericRow`
 
-### Index-Based Getters
-
-| Method                                         |  Description                   |
-|------------------------------------------------|--------------------------------|
-| `GetBool(size_t idx) -> bool`                  | Get boolean value at index     |
-| `GetInt32(size_t idx) -> int32_t`              | Get 32-bit integer at index    |
-| `GetInt64(size_t idx) -> int64_t`              | Get 64-bit integer at index    |
-| `GetFloat32(size_t idx) -> float`              | Get 32-bit float at index      |
-| `GetFloat64(size_t idx) -> double`             | Get 64-bit float at index      |
-| `GetString(size_t idx) -> std::string`         | Get string at index            |
-| `GetBytes(size_t idx) -> std::vector<uint8_t>` | Get binary data at index       |
-| `GetDate(size_t idx) -> Date`                  | Get date at index              |
-| `GetTime(size_t idx) -> Time`                  | Get time at index              |
-| `GetTimestamp(size_t idx) -> Timestamp`        | Get timestamp at index         |
-| `DecimalToString(size_t idx) -> std::string`   | Get decimal as string at index |
+`GenericRow` is a **write-only** row used for append, upsert, delete, and lookup key construction. For reading field values from scan or lookup results, see [`RowView`](#rowview) and [`LookupResult`](#lookupresult).
 
 ### Index-Based Setters
 
@@ -202,8 +189,9 @@ Complete API reference for the Fluss C++ client.
 
 When using `table.NewRow()`, the `Set()` method auto-routes to the correct type based on the schema:
 
-| Method                                                   |  Description                      |
+| Method                                                   | Description                       |
 |----------------------------------------------------------|-----------------------------------|
+| `Set(const std::string& name, std::nullptr_t)`           | Set field to null by column name  |
 | `Set(const std::string& name, bool value)`               | Set boolean by column name        |
 | `Set(const std::string& name, int32_t value)`            | Set integer by column name        |
 | `Set(const std::string& name, int64_t value)`            | Set big integer by column name    |
@@ -214,32 +202,156 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 | `Set(const std::string& name, const Time& value)`        | Set time by column name           |
 | `Set(const std::string& name, const Timestamp& value)`   | Set timestamp by column name      |
 
-### Row Inspection
+## `RowView`
 
-| Method                             |  Description                     |
-|------------------------------------|----------------------------------|
-| `FieldCount() -> size_t`           | Get the number of fields         |
-| `GetType(size_t idx) -> DatumType` | Get the datum type at index      |
-| `IsNull(size_t idx) -> bool`       | Check if field is null           |
-| `IsDecimal(size_t idx) -> bool`    | Check if field is a decimal type |
+Read-only row view for scan results. Provides zero-copy access to string and bytes data. `RowView` shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
+
+:::note string_view Lifetime
+`GetString()` returns `std::string_view` that borrows from the underlying data. The `string_view` is valid as long as any `RowView` (or `ScanRecord`) referencing the same poll result is alive. Copy to `std::string` if you need the value after all references are gone.
+:::
+
+### Index-Based Getters
+
+| Method                                                     |  Description                   |
+|------------------------------------------------------------|--------------------------------|
+| `FieldCount() -> size_t`                                   | Get the number of fields       |
+| `GetType(size_t idx) -> TypeId`                            | Get the type at index          |
+| `IsNull(size_t idx) -> bool`                               | Check if field is null         |
+| `GetBool(size_t idx) -> bool`                              | Get boolean value at index     |
+| `GetInt32(size_t idx) -> int32_t`                          | Get 32-bit integer at index    |
+| `GetInt64(size_t idx) -> int64_t`                          | Get 64-bit integer at index    |
+| `GetFloat32(size_t idx) -> float`                          | Get 32-bit float at index      |
+| `GetFloat64(size_t idx) -> double`                         | Get 64-bit float at index      |
+| `GetString(size_t idx) -> std::string_view`                | Get string at index (zero-copy)|
+| `GetBytes(size_t idx) -> std::pair<const uint8_t*, size_t>`| Get binary data at index (zero-copy)|
+| `GetDate(size_t idx) -> Date`                              | Get date at index              |
+| `GetTime(size_t idx) -> Time`                              | Get time at index              |
+| `GetTimestamp(size_t idx) -> Timestamp`                    | Get timestamp at index         |
+| `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
+| `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
+
+### Name-Based Getters
+
+| Method                                                  |  Description                       |
+|---------------------------------------------------------|------------------------------------|
+| `IsNull(const std::string& name) -> bool`               | Check if field is null by name     |
+| `GetBool(const std::string& name) -> bool`              | Get boolean by column name         |
+| `GetInt32(const std::string& name) -> int32_t`          | Get 32-bit integer by column name  |
+| `GetInt64(const std::string& name) -> int64_t`          | Get 64-bit integer by column name  |
+| `GetFloat32(const std::string& name) -> float`          | Get 32-bit float by column name    |
+| `GetFloat64(const std::string& name) -> double`         | Get 64-bit float by column name    |
+| `GetString(const std::string& name) -> std::string_view`| Get string by column name          |
+| `GetBytes(const std::string& name) -> std::pair<const uint8_t*, size_t>` | Get binary data by column name |
+| `GetDate(const std::string& name) -> Date`              | Get date by column name            |
+| `GetTime(const std::string& name) -> Time`              | Get time by column name            |
+| `GetTimestamp(const std::string& name) -> Timestamp`    | Get timestamp by column name       |
+| `GetDecimalString(const std::string& name) -> std::string` | Get decimal as string by column name |
 
 ## `ScanRecord`
 
-| Field       | Type         |  Description                  |
-|-------------|--------------|-------------------------------|
-| `bucket_id` | `int32_t`    | Bucket this record belongs to |
-| `offset`    | `int64_t`    | Record offset in the log      |
-| `timestamp` | `int64_t`    | Record timestamp              |
-| `row`       | `GenericRow` | Row data                      |
+`ScanRecord` is a value type that can be freely copied, stored, and accumulated across multiple `Poll()` calls. It shares ownership of the underlying scan data via reference counting.
+
+| Field         | Type         |  Description                                                        |
+|---------------|--------------|---------------------------------------------------------------------|
+| `offset`      | `int64_t`    | Record offset in the log                                            |
+| `timestamp`   | `int64_t`    | Record timestamp                                                    |
+| `change_type` | `ChangeType` | Change type (AppendOnly, Insert, UpdateBefore, UpdateAfter, Delete) |
+| `row`         | `RowView`    | Row data (value type, shares ownership via reference counting)      |
 
 ## `ScanRecords`
 
-| Method                                        |  Description                               |
-|-----------------------------------------------|--------------------------------------------|
-| `Size() -> size_t`                            | Number of records                          |
-| `Empty() -> bool`                             | Check if empty                             |
-| `operator[](size_t idx) -> const ScanRecord&` | Access record by index                     |
-| `begin() / end()`                             | Iterator support for range-based for loops |
+### Flat Access
+
+| Method                                  |  Description                               |
+|-----------------------------------------|--------------------------------------------|
+| `Count() -> size_t`                     | Total number of records across all buckets |
+| `IsEmpty() -> bool`                     | Check if empty                             |
+| `begin() / end()`                       | Iterator support for range-based for loops |
+
+Flat iteration over all records (regardless of bucket):
+
+```cpp
+for (const auto& rec : records) {
+    std::cout << "offset=" << rec.offset << std::endl;
+}
+```
+
+### Per-Bucket Access
+
+| Method                                                          |  Description                                                          |
+|-----------------------------------------------------------------|-----------------------------------------------------------------------|
+| `BucketCount() -> size_t`                                       | Number of distinct buckets                                            |
+| `Buckets() -> std::vector<TableBucket>`                         | List of distinct buckets                                              |
+| `Records(const TableBucket& bucket) -> BucketRecords`              | Records for a specific bucket (empty if bucket not present)           |
+| `BucketAt(size_t idx) -> BucketRecords`                            | Records by bucket index (0-based, O(1))                               |
+
+## `BucketRecords`
+
+A bundle of scan records belonging to a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`. `BucketRecords` is a value type — it shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
+
+| Method                                         |  Description                               |
+|------------------------------------------------|--------------------------------------------|
+| `Size() -> size_t`                         | Number of records in this bucket           |
+| `Empty() -> bool`                          | Check if empty                             |
+| `Bucket() -> const TableBucket&`           | Get the bucket                             |
+| `operator[](size_t idx) -> ScanRecord`     | Access record by index within this bucket  |
+| `begin() / end()`                          | Iterator support for range-based for loops |
+
+## `TableBucket`
+
+| Field / Method                        |  Description                                    |
+|---------------------------------------|-------------------------------------------------|
+| `table_id -> int64_t`                    | Table ID                                        |
+| `bucket_id -> int32_t`                   | Bucket ID                                       |
+| `partition_id -> std::optional<int64_t>` | Partition ID (empty if non-partitioned)         |
+| `operator==(const TableBucket&) -> bool` | Equality comparison                             |
+
+## `LookupResult`
+
+Read-only result for lookup operations. Provides zero-copy access to field values.
+
+### Metadata
+
+| Method                      |  Description                   |
+|-----------------------------|--------------------------------|
+| `Found() -> bool`           | Whether a matching row was found |
+| `FieldCount() -> size_t`    | Get the number of fields       |
+
+### Index-Based Getters
+
+| Method                                                     |  Description                   |
+|------------------------------------------------------------|--------------------------------|
+| `GetType(size_t idx) -> TypeId`                            | Get the type at index          |
+| `IsNull(size_t idx) -> bool`                               | Check if field is null         |
+| `GetBool(size_t idx) -> bool`                              | Get boolean value at index     |
+| `GetInt32(size_t idx) -> int32_t`                          | Get 32-bit integer at index    |
+| `GetInt64(size_t idx) -> int64_t`                          | Get 64-bit integer at index    |
+| `GetFloat32(size_t idx) -> float`                          | Get 32-bit float at index      |
+| `GetFloat64(size_t idx) -> double`                         | Get 64-bit float at index      |
+| `GetString(size_t idx) -> std::string_view`                | Get string at index (zero-copy)|
+| `GetBytes(size_t idx) -> std::pair<const uint8_t*, size_t>`| Get binary data at index (zero-copy)|
+| `GetDate(size_t idx) -> Date`                              | Get date at index              |
+| `GetTime(size_t idx) -> Time`                              | Get time at index              |
+| `GetTimestamp(size_t idx) -> Timestamp`                    | Get timestamp at index         |
+| `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
+| `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
+
+### Name-Based Getters
+
+| Method                                                  |  Description                       |
+|---------------------------------------------------------|------------------------------------|
+| `IsNull(const std::string& name) -> bool`               | Check if field is null by name     |
+| `GetBool(const std::string& name) -> bool`              | Get boolean by column name         |
+| `GetInt32(const std::string& name) -> int32_t`          | Get 32-bit integer by column name  |
+| `GetInt64(const std::string& name) -> int64_t`          | Get 64-bit integer by column name  |
+| `GetFloat32(const std::string& name) -> float`          | Get 32-bit float by column name    |
+| `GetFloat64(const std::string& name) -> double`         | Get 64-bit float by column name    |
+| `GetString(const std::string& name) -> std::string_view`| Get string by column name          |
+| `GetBytes(const std::string& name) -> std::pair<const uint8_t*, size_t>` | Get binary data by column name |
+| `GetDate(const std::string& name) -> Date`              | Get date by column name            |
+| `GetTime(const std::string& name) -> Time`              | Get time by column name            |
+| `GetTimestamp(const std::string& name) -> Timestamp`    | Get timestamp by column name       |
+| `GetDecimalString(const std::string& name) -> std::string` | Get decimal as string by column name |
 
 ## `ArrowRecordBatch`
 
@@ -285,15 +397,16 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `TableDescriptor::Builder`
 
-| Method                                                                      |  Description               |
-|-----------------------------------------------------------------------------|----------------------------|
-| `SetSchema(const Schema& schema) -> Builder&`                               | Set the table schema       |
-| `SetPartitionKeys(const std::vector<std::string>& keys) -> Builder&`        | Set partition key columns  |
-| `SetBucketCount(int32_t count) -> Builder&`                                 | Set the number of buckets  |
-| `SetBucketKeys(const std::vector<std::string>& keys) -> Builder&`           | Set bucket key columns     |
-| `SetProperty(const std::string& key, const std::string& value) -> Builder&` | Set a table property       |
-| `SetComment(const std::string& comment) -> Builder&`                        | Set a table comment        |
-| `Build() -> TableDescriptor`                                                | Build the table descriptor |
+| Method                                                                            | Description                |
+|-----------------------------------------------------------------------------------|----------------------------|
+| `SetSchema(const Schema& schema) -> Builder&`                                     | Set the table schema       |
+| `SetPartitionKeys(const std::vector<std::string>& keys) -> Builder&`              | Set partition key columns  |
+| `SetBucketCount(int32_t count) -> Builder&`                                       | Set the number of buckets  |
+| `SetBucketKeys(const std::vector<std::string>& keys) -> Builder&`                 | Set bucket key columns     |
+| `SetProperty(const std::string& key, const std::string& value) -> Builder&`       | Set a table property       |
+| `SetCustomProperty(const std::string& key, const std::string& value) -> Builder&` | Set a custom property      |
+| `SetComment(const std::string& comment) -> Builder&`                              | Set a table comment        |
+| `Build() -> TableDescriptor`                                                      | Build the table descriptor |
 
 ## `DataType`
 
@@ -335,22 +448,23 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 
 ## `TableInfo`
 
-| Field             | Type                                           |  Description                        |
-|-------------------|------------------------------------------------|-------------------------------------|
-| `table_id`        | `int64_t`                                      | Table ID                            |
-| `schema_id`       | `int32_t`                                      | Schema ID                           |
-| `table_path`      | `TablePath`                                    | Table path                          |
-| `created_time`    | `int64_t`                                      | Creation timestamp                  |
-| `modified_time`   | `int64_t`                                      | Last modification timestamp         |
-| `primary_keys`    | `std::vector<std::string>`                     | Primary key columns                 |
-| `bucket_keys`     | `std::vector<std::string>`                     | Bucket key columns                  |
-| `partition_keys`  | `std::vector<std::string>`                     | Partition key columns               |
-| `num_buckets`     | `int32_t`                                      | Number of buckets                   |
-| `has_primary_key` | `bool`                                         | Whether the table has a primary key |
-| `is_partitioned`  | `bool`                                         | Whether the table is partitioned    |
-| `properties`      | `std::unordered_map<std::string, std::string>` | Table properties                    |
-| `comment`         | `std::string`                                  | Table comment                       |
-| `schema`          | `Schema`                                       | Table schema                        |
+| Field               | Type                                           | Description                         |
+|---------------------|------------------------------------------------|-------------------------------------|
+| `table_id`          | `int64_t`                                      | Table ID                            |
+| `schema_id`         | `int32_t`                                      | Schema ID                           |
+| `table_path`        | `TablePath`                                    | Table path                          |
+| `created_time`      | `int64_t`                                      | Creation timestamp                  |
+| `modified_time`     | `int64_t`                                      | Last modification timestamp         |
+| `primary_keys`      | `std::vector<std::string>`                     | Primary key columns                 |
+| `bucket_keys`       | `std::vector<std::string>`                     | Bucket key columns                  |
+| `partition_keys`    | `std::vector<std::string>`                     | Partition key columns               |
+| `num_buckets`       | `int32_t`                                      | Number of buckets                   |
+| `has_primary_key`   | `bool`                                         | Whether the table has a primary key |
+| `is_partitioned`    | `bool`                                         | Whether the table is partitioned    |
+| `properties`        | `std::unordered_map<std::string, std::string>` | Table properties                    |
+| `custom_properties` | `std::unordered_map<std::string, std::string>` | Custom properties                   |
+| `comment`           | `std::string`                                  | Table comment                       |
+| `schema`            | `Schema`                                       | Table schema                        |
 
 ## Temporal Types
 
@@ -447,6 +561,31 @@ scanner.Subscribe(0, offsets[0]);
 
 ## Enums
 
+### `ChangeType`
+
+| Value          | Short String | Description                      |
+|----------------|--------------|----------------------------------|
+| `AppendOnly`   | `+A`         | Append-only record               |
+| `Insert`       | `+I`         | Inserted row                     |
+| `UpdateBefore` | `-U`         | Previous value of an updated row |
+| `UpdateAfter`  | `+U`         | New value of an updated row      |
+| `Delete`       | `-D`         | Deleted row                      |
+
+You may refer to the following example to convert ChangeType enum to its short string representation.
+
+```cpp
+inline const char* ChangeTypeShortString(ChangeType ct) {
+    switch (ct) {
+        case ChangeType::AppendOnly: return "+A";
+        case ChangeType::Insert: return "+I";
+        case ChangeType::UpdateBefore: return "-U";
+        case ChangeType::UpdateAfter: return "+U";
+        case ChangeType::Delete: return "-D";
+    }
+    throw std::invalid_argument("Unknown ChangeType");
+}
+```
+
 ### `TypeId`
 
 | Value          |  Description               |
@@ -466,25 +605,15 @@ scanner.Subscribe(0, offsets[0]);
 | `TimestampLtz` | Timestamp with timezone    |
 | `Decimal`      | Decimal                    |
 
-### `DatumType`
+### `ChangeType`
 
-| Value           | C++ Type               |  Description                    |
-|-----------------|------------------------|---------------------------------|
-| `Null`          | --                     | Null value                      |
-| `Bool`          | `bool`                 | Boolean                         |
-| `Int32`         | `int32_t`              | 32-bit integer                  |
-| `Int64`         | `int64_t`              | 64-bit integer                  |
-| `Float32`       | `float`                | 32-bit float                    |
-| `Float64`       | `double`               | 64-bit float                    |
-| `String`        | `std::string`          | String                          |
-| `Bytes`         | `std::vector<uint8_t>` | Binary data                     |
-| `DecimalI64`    | `int64_t`              | Decimal (64-bit internal)       |
-| `DecimalI128`   | `__int128`             | Decimal (128-bit internal)      |
-| `DecimalString` | `std::string`          | Decimal (string representation) |
-| `Date`          | `Date`                 | Date                            |
-| `Time`          | `Time`                 | Time                            |
-| `TimestampNtz`  | `Timestamp`            | Timestamp without timezone      |
-| `TimestampLtz`  | `Timestamp`            | Timestamp with timezone         |
+| Value          |  Description                                |
+|----------------|---------------------------------------------|
+| `AppendOnly`   | Append-only record (log tables)             |
+| `Insert`       | Inserted row (PK tables)                    |
+| `UpdateBefore` | Row value before an update (PK tables)      |
+| `UpdateAfter`  | Row value after an update (PK tables)       |
+| `Delete`       | Deleted row (PK tables)                     |
 
 ### `OffsetSpec`
 
