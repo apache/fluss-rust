@@ -166,8 +166,13 @@ def _list_files(repo_ctx, base_dir, suffixes):
     result = repo_ctx.execute([
         "/usr/bin/find",
         base_dir,
+        "(",
         "-type",
         "f",
+        "-o",
+        "-type",
+        "l",
+        ")",
     ])
     if result.return_code != 0:
         fail("failed to enumerate files under %s: %s" % (base_dir, result.stderr))
@@ -179,38 +184,57 @@ def _list_files(repo_ctx, base_dir, suffixes):
                 break
     return sorted(files)
 
+def _copy_file_to_sysroot(repo_ctx, prefix, rel_path):
+    if rel_path.startswith("/"):
+        fail("expected relative path under prefix, got absolute path: %s" % rel_path)
+    src = prefix + "/" + rel_path
+    dst = "sysroot/" + rel_path
+    dst_parent = dst.rsplit("/", 1)[0] if "/" in dst else "sysroot"
+    mkdir_res = repo_ctx.execute(["/bin/mkdir", "-p", dst_parent])
+    if mkdir_res.return_code != 0:
+        fail("failed to create directory %s: %s" % (dst_parent, mkdir_res.stderr))
+    # Resolve symlinks into real files to keep the generated sysroot self-contained.
+    cp_res = repo_ctx.execute(["/bin/cp", "-L", src, dst])
+    if cp_res.return_code != 0:
+        fail("failed to copy %s to %s: %s" % (src, dst, cp_res.stderr))
+
 def _system_arrow_repo_impl(repo_ctx):
     prefix = repo_ctx.attr.prefix.rstrip("/")
     include_dir = repo_ctx.attr.include_dir
     shared_library = repo_ctx.attr.shared_library
     runtime_glob = repo_ctx.attr.runtime_glob
 
-    repo_ctx.execute(["/bin/mkdir", "-p", "sysroot"])
-    copy_res = repo_ctx.execute(["/bin/cp", "-a", prefix + "/.", "sysroot"])
-    if copy_res.return_code != 0:
-        fail("failed to copy system arrow prefix %s: %s" % (prefix, copy_res.stderr))
+    mkdir_res = repo_ctx.execute(["/bin/mkdir", "-p", "sysroot"])
+    if mkdir_res.return_code != 0:
+        fail("failed to create sysroot directory: %s" % mkdir_res.stderr)
 
     include_dir_for_scan = include_dir
     if include_dir_for_scan.endswith("/"):
         include_dir_for_scan = include_dir_for_scan[:-1]
     header_root = prefix + "/" + include_dir_for_scan + "/arrow"
     headers = _list_files(repo_ctx, header_root, [".h", ".hpp"])
+    header_srcs_rel = []
     header_srcs = []
     for h in headers:
         if not h.startswith(prefix + "/"):
             fail("header path %s is outside prefix %s" % (h, prefix))
-        header_srcs.append("sysroot/" + h[len(prefix) + 1:])
+        rel = h[len(prefix) + 1:]
+        header_srcs_rel.append(rel)
+        header_srcs.append("sysroot/" + rel)
 
     runtime_dir = runtime_glob.rsplit("/", 1)[0]
     runtime_prefix = runtime_glob.rsplit("/", 1)[1].replace("*", "")
     runtime_files = _list_files(repo_ctx, prefix + "/" + runtime_dir, [""])
+    runtime_srcs_rel = []
     runtime_srcs = []
     for f in runtime_files:
         rel = f[len(prefix) + 1:] if f.startswith(prefix + "/") else None
         if rel == None:
             continue
         if rel.startswith(runtime_dir + "/") and rel.rsplit("/", 1)[1].startswith(runtime_prefix):
+            runtime_srcs_rel.append(rel)
             runtime_srcs.append("sysroot/" + rel)
+    runtime_srcs_rel = sorted(runtime_srcs_rel)
     runtime_srcs = sorted(runtime_srcs)
 
     # Prefer a versioned soname file as the imported shared library so Bazel
@@ -218,17 +242,24 @@ def _system_arrow_repo_impl(repo_ctx):
     shared_import_rel = "sysroot/" + shared_library
     shared_basename = shared_library.rsplit("/", 1)[1]
     soname_candidates = []
-    for rel in runtime_srcs:
+    for rel in runtime_srcs_rel:
         base = rel.rsplit("/", 1)[1]
         if base == shared_basename:
             continue
         if base.startswith(shared_basename + "."):
-            soname_candidates.append(rel)
+            soname_candidates.append("sysroot/" + rel)
     if soname_candidates:
         # Prefer shortest suffix first (e.g. libarrow.so.1900 before
         # libarrow.so.1900.1.0) to match ELF SONAME naming when available.
         soname_candidates = sorted(soname_candidates, key = lambda s: (len(s), s))
         shared_import_rel = soname_candidates[0]
+
+    # Copy only required Arrow artifacts instead of mirroring the full system prefix.
+    copy_rel_paths = {}
+    for rel in header_srcs_rel + runtime_srcs_rel + [shared_library]:
+        copy_rel_paths[rel] = True
+    for rel in sorted(copy_rel_paths.keys()):
+        _copy_file_to_sysroot(repo_ctx, prefix, rel)
 
     build_file = _render_system_arrow_build_file(repo_ctx.attr, shared_library_override = shared_import_rel[len("sysroot/"):]).replace(
         "__SYSTEM_ARROW_HDRS__",
