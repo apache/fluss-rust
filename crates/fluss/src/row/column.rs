@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
 use crate::row::InternalRow;
-use arrow::array::{
-    Array, AsArray, BinaryArray, Date32Array, Decimal128Array, FixedSizeBinaryArray, Float32Array,
-    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, RecordBatch, StringArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
+use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+use arrow::array::{Array, AsArray, BinaryArray, RecordBatch, StringArray};
+use arrow::datatypes::{
+    DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -59,6 +61,18 @@ impl ColumnarRow {
         &self.record_batch
     }
 
+    fn column(&self, pos: usize) -> Result<&Arc<dyn Array>> {
+        self.record_batch
+            .columns()
+            .get(pos)
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "column index {pos} out of bounds (batch has {} columns)",
+                    self.record_batch.num_columns()
+                ),
+            })
+    }
+
     /// Generic helper to read timestamp from Arrow, handling all TimeUnit conversions.
     /// Like Java, the precision parameter is ignored - conversion is determined by Arrow TimeUnit.
     fn read_timestamp_from_arrow<T>(
@@ -66,114 +80,133 @@ impl ColumnarRow {
         pos: usize,
         _precision: u32,
         construct_compact: impl FnOnce(i64) -> T,
-        construct_with_nanos: impl FnOnce(i64, i32) -> crate::error::Result<T>,
-    ) -> T {
-        let schema = self.record_batch.schema();
-        let arrow_field = schema.field(pos);
-        let column = self.record_batch.column(pos);
+        construct_with_nanos: impl FnOnce(i64, i32) -> Result<T>,
+    ) -> Result<T> {
+        let column = self.column(pos)?;
 
-        // Read value based on the actual Arrow timestamp type
-        let value = match arrow_field.data_type() {
-            ArrowDataType::Timestamp(TimeUnit::Second, _) => column
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .expect("Expected TimestampSecondArray")
-                .value(self.row_id),
-            ArrowDataType::Timestamp(TimeUnit::Millisecond, _) => column
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .expect("Expected TimestampMillisecondArray")
-                .value(self.row_id),
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, _) => column
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .expect("Expected TimestampMicrosecondArray")
-                .value(self.row_id),
-            ArrowDataType::Timestamp(TimeUnit::Nanosecond, _) => column
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .expect("Expected TimestampNanosecondArray")
-                .value(self.row_id),
-            other => panic!("Expected Timestamp column at position {pos}, got {other:?}"),
+        // Read value and time unit based on the actual Arrow timestamp type
+        let (value, time_unit) = match column.data_type() {
+            ArrowDataType::Timestamp(TimeUnit::Second, _) => (
+                column
+                    .as_primitive_opt::<TimestampSecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampSecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Second,
+            ),
+            ArrowDataType::Timestamp(TimeUnit::Millisecond, _) => (
+                column
+                    .as_primitive_opt::<TimestampMillisecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampMillisecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Millisecond,
+            ),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, _) => (
+                column
+                    .as_primitive_opt::<TimestampMicrosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampMicrosecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Microsecond,
+            ),
+            ArrowDataType::Timestamp(TimeUnit::Nanosecond, _) => (
+                column
+                    .as_primitive_opt::<TimestampNanosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected TimestampNanosecondArray at position {pos}"),
+                    })?
+                    .value(self.row_id),
+                TimeUnit::Nanosecond,
+            ),
+            other => {
+                return Err(IllegalArgument {
+                    message: format!("expected Timestamp column at position {pos}, got {other:?}"),
+                });
+            }
         };
 
         // Convert based on Arrow TimeUnit
-        let (millis, nanos) = match arrow_field.data_type() {
-            ArrowDataType::Timestamp(time_unit, _) => match time_unit {
-                TimeUnit::Second => (value * 1000, 0),
-                TimeUnit::Millisecond => (value, 0),
-                TimeUnit::Microsecond => {
-                    // Use Euclidean division so that nanos is always non-negative,
-                    // even for timestamps before the Unix epoch.
-                    let millis = value.div_euclid(1000);
-                    let nanos = (value.rem_euclid(1000) * 1000) as i32;
-                    (millis, nanos)
-                }
-                TimeUnit::Nanosecond => {
-                    // Use Euclidean division so that nanos is always in [0, 999_999].
-                    let millis = value.div_euclid(1_000_000);
-                    let nanos = value.rem_euclid(1_000_000) as i32;
-                    (millis, nanos)
-                }
-            },
-            _ => unreachable!(),
+        let (millis, nanos) = match time_unit {
+            TimeUnit::Second => (value * 1000, 0),
+            TimeUnit::Millisecond => (value, 0),
+            TimeUnit::Microsecond => {
+                // Use Euclidean division so that nanos is always non-negative,
+                // even for timestamps before the Unix epoch.
+                let millis = value.div_euclid(1000);
+                let nanos = (value.rem_euclid(1000) * 1000) as i32;
+                (millis, nanos)
+            }
+            TimeUnit::Nanosecond => {
+                // Use Euclidean division so that nanos is always in [0, 999_999].
+                let millis = value.div_euclid(1_000_000);
+                let nanos = value.rem_euclid(1_000_000) as i32;
+                (millis, nanos)
+            }
         };
 
         if nanos == 0 {
-            construct_compact(millis)
+            Ok(construct_compact(millis))
         } else {
-            // nanos is guaranteed to be in valid range [0, 999_999] by arithmetic
-            construct_with_nanos(millis, nanos).expect("nanos in valid range by construction")
+            construct_with_nanos(millis, nanos)
         }
     }
 
     /// Read date value from Arrow Date32Array
-    fn read_date_from_arrow(&self, pos: usize) -> i32 {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<Date32Array>()
-            .expect("Expected Date32Array")
-            .value(self.row_id)
+    fn read_date_from_arrow(&self, pos: usize) -> Result<i32> {
+        Ok(self
+            .column(pos)?
+            .as_primitive_opt::<Date32Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected Date32Array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
     /// Read time value from Arrow Time32/Time64 arrays, converting to milliseconds
-    fn read_time_from_arrow(&self, pos: usize) -> i32 {
-        let schema = self.record_batch.schema();
-        let arrow_field = schema.field(pos);
-        let column = self.record_batch.column(pos);
+    fn read_time_from_arrow(&self, pos: usize) -> Result<i32> {
+        let column = self.column(pos)?;
 
-        match arrow_field.data_type() {
+        match column.data_type() {
             ArrowDataType::Time32(TimeUnit::Second) => {
                 let value = column
-                    .as_any()
-                    .downcast_ref::<Time32SecondArray>()
-                    .expect("Expected Time32SecondArray")
+                    .as_primitive_opt::<Time32SecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected Time32SecondArray at position {pos}"),
+                    })?
                     .value(self.row_id);
-                value * 1000 // Convert seconds to milliseconds
+                Ok(value * 1000) // Convert seconds to milliseconds
             }
-            ArrowDataType::Time32(TimeUnit::Millisecond) => column
-                .as_any()
-                .downcast_ref::<Time32MillisecondArray>()
-                .expect("Expected Time32MillisecondArray")
-                .value(self.row_id),
+            ArrowDataType::Time32(TimeUnit::Millisecond) => Ok(column
+                .as_primitive_opt::<Time32MillisecondType>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("expected Time32MillisecondArray at position {pos}"),
+                })?
+                .value(self.row_id)),
             ArrowDataType::Time64(TimeUnit::Microsecond) => {
                 let value = column
-                    .as_any()
-                    .downcast_ref::<Time64MicrosecondArray>()
-                    .expect("Expected Time64MicrosecondArray")
+                    .as_primitive_opt::<Time64MicrosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected Time64MicrosecondArray at position {pos}"),
+                    })?
                     .value(self.row_id);
-                (value / 1000) as i32 // Convert microseconds to milliseconds
+                Ok((value / 1000) as i32) // Convert microseconds to milliseconds
             }
             ArrowDataType::Time64(TimeUnit::Nanosecond) => {
                 let value = column
-                    .as_any()
-                    .downcast_ref::<Time64NanosecondArray>()
-                    .expect("Expected Time64NanosecondArray")
+                    .as_primitive_opt::<Time64NanosecondType>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("expected Time64NanosecondArray at position {pos}"),
+                    })?
                     .value(self.row_id);
-                (value / 1_000_000) as i32 // Convert nanoseconds to milliseconds
+                Ok((value / 1_000_000) as i32) // Convert nanoseconds to milliseconds
             }
-            other => panic!("Expected Time column at position {pos}, got {other:?}"),
+            other => Err(IllegalArgument {
+                message: format!("expected Time column at position {pos}, got {other:?}"),
+            }),
         }
     }
 }
@@ -183,106 +216,121 @@ impl InternalRow for ColumnarRow {
         self.record_batch.num_columns()
     }
 
-    fn is_null_at(&self, pos: usize) -> bool {
-        self.record_batch.column(pos).is_null(self.row_id)
+    fn is_null_at(&self, pos: usize) -> Result<bool> {
+        Ok(self.column(pos)?.is_null(self.row_id))
     }
 
-    fn get_boolean(&self, pos: usize) -> bool {
-        self.record_batch
-            .column(pos)
-            .as_boolean()
-            .value(self.row_id)
+    fn get_boolean(&self, pos: usize) -> Result<bool> {
+        Ok(self
+            .column(pos)?
+            .as_boolean_opt()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected boolean array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_byte(&self, pos: usize) -> i8 {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<Int8Array>()
-            .expect("Expect byte array")
-            .value(self.row_id)
+    fn get_byte(&self, pos: usize) -> Result<i8> {
+        Ok(self
+            .column(pos)?
+            .as_primitive_opt::<Int8Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected byte array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_short(&self, pos: usize) -> i16 {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<Int16Array>()
-            .expect("Expect short array")
-            .value(self.row_id)
+    fn get_short(&self, pos: usize) -> Result<i16> {
+        Ok(self
+            .column(pos)?
+            .as_primitive_opt::<Int16Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected short array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_int(&self, pos: usize) -> i32 {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Expect int array")
-            .value(self.row_id)
+    fn get_int(&self, pos: usize) -> Result<i32> {
+        Ok(self
+            .column(pos)?
+            .as_primitive_opt::<Int32Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected int array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_long(&self, pos: usize) -> i64 {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("Expect long array")
-            .value(self.row_id)
+    fn get_long(&self, pos: usize) -> Result<i64> {
+        Ok(self
+            .column(pos)?
+            .as_primitive_opt::<Int64Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected long array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_float(&self, pos: usize) -> f32 {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .expect("Expect float32 array")
-            .value(self.row_id)
+    fn get_float(&self, pos: usize) -> Result<f32> {
+        Ok(self
+            .column(pos)?
+            .as_primitive_opt::<Float32Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected float32 array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_double(&self, pos: usize) -> f64 {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("Expect float64 array")
-            .value(self.row_id)
+    fn get_double(&self, pos: usize) -> Result<f64> {
+        Ok(self
+            .column(pos)?
+            .as_primitive_opt::<Float64Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected float64 array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_char(&self, pos: usize, _length: usize) -> &str {
-        self.record_batch
-            .column(pos)
+    fn get_char(&self, pos: usize, _length: usize) -> Result<&str> {
+        Ok(self
+            .column(pos)?
             .as_any()
             .downcast_ref::<StringArray>()
-            .expect("Expected String array for char type")
-            .value(self.row_id)
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected String array for char type at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_string(&self, pos: usize) -> &str {
-        self.record_batch
-            .column(pos)
+    fn get_string(&self, pos: usize) -> Result<&str> {
+        Ok(self
+            .column(pos)?
             .as_any()
             .downcast_ref::<StringArray>()
-            .expect("Expected String array.")
-            .value(self.row_id)
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected String array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> crate::row::Decimal {
+    fn get_decimal(
+        &self,
+        pos: usize,
+        precision: usize,
+        scale: usize,
+    ) -> Result<crate::row::Decimal> {
         use arrow::datatypes::DataType;
 
-        let column = self.record_batch.column(pos);
+        let column = self.column(pos)?;
         let array = column
-            .as_any()
-            .downcast_ref::<Decimal128Array>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Expected Decimal128Array at column {}, found: {:?}",
-                    pos,
+            .as_primitive_opt::<Decimal128Type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "expected Decimal128Array at column {pos}, found: {:?}",
                     column.data_type()
-                )
-            });
+                ),
+            })?;
 
         // Contract: caller must check is_null_at() before calling get_decimal.
-        // Calling on null value violates the contract and returns garbage data
         debug_assert!(
             !array.is_null(self.row_id),
             "get_decimal called on null value at pos {} row {}",
@@ -290,12 +338,16 @@ impl InternalRow for ColumnarRow {
             self.row_id
         );
 
-        // Read scale from Arrow schema field metadata
-        let schema = self.record_batch.schema();
-        let field = schema.field(pos);
-        let arrow_scale = match field.data_type() {
+        // Read scale from Arrow column data type
+        let arrow_scale = match column.data_type() {
             DataType::Decimal128(_p, s) => *s as i64,
-            dt => panic!("Expected Decimal128 data type at column {pos}, found: {dt:?}"),
+            dt => {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "expected Decimal128 data type at column {pos}, found: {dt:?}"
+                    ),
+                });
+            }
         };
 
         let i128_val = array.value(self.row_id);
@@ -307,60 +359,53 @@ impl InternalRow for ColumnarRow {
             precision as u32,
             scale as u32,
         )
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to create Decimal at column {} row {}: {}",
-                pos, self.row_id, e
-            )
-        })
     }
 
-    fn get_date(&self, pos: usize) -> crate::row::datum::Date {
-        crate::row::datum::Date::new(self.read_date_from_arrow(pos))
+    fn get_date(&self, pos: usize) -> Result<Date> {
+        Ok(Date::new(self.read_date_from_arrow(pos)?))
     }
 
-    fn get_time(&self, pos: usize) -> crate::row::datum::Time {
-        crate::row::datum::Time::new(self.read_time_from_arrow(pos))
+    fn get_time(&self, pos: usize) -> Result<Time> {
+        Ok(Time::new(self.read_time_from_arrow(pos)?))
     }
 
-    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampNtz {
-        // Like Java's ArrowTimestampNtzColumnVector, we ignore the precision parameter
-        // and determine the conversion from the Arrow column's TimeUnit.
+    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz> {
         self.read_timestamp_from_arrow(
             pos,
             precision,
-            crate::row::datum::TimestampNtz::new,
-            crate::row::datum::TimestampNtz::from_millis_nanos,
+            TimestampNtz::new,
+            TimestampNtz::from_millis_nanos,
         )
     }
 
-    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> crate::row::datum::TimestampLtz {
-        // Like Java's ArrowTimestampLtzColumnVector, we ignore the precision parameter
-        // and determine the conversion from the Arrow column's TimeUnit.
+    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz> {
         self.read_timestamp_from_arrow(
             pos,
             precision,
-            crate::row::datum::TimestampLtz::new,
-            crate::row::datum::TimestampLtz::from_millis_nanos,
+            TimestampLtz::new,
+            TimestampLtz::from_millis_nanos,
         )
     }
 
-    fn get_binary(&self, pos: usize, _length: usize) -> &[u8] {
-        self.record_batch
-            .column(pos)
-            .as_any()
-            .downcast_ref::<FixedSizeBinaryArray>()
-            .expect("Expected binary array.")
-            .value(self.row_id)
+    fn get_binary(&self, pos: usize, _length: usize) -> Result<&[u8]> {
+        Ok(self
+            .column(pos)?
+            .as_fixed_size_binary_opt()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected binary array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 
-    fn get_bytes(&self, pos: usize) -> &[u8] {
-        self.record_batch
-            .column(pos)
+    fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
+        Ok(self
+            .column(pos)?
             .as_any()
             .downcast_ref::<BinaryArray>()
-            .expect("Expected bytes array.")
-            .value(self.row_id)
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected bytes array at position {pos}"),
+            })?
+            .value(self.row_id))
     }
 }
 
@@ -368,8 +413,8 @@ impl InternalRow for ColumnarRow {
 mod tests {
     use super::*;
     use arrow::array::{
-        BinaryArray, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-        Int64Array, StringArray,
+        BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array,
+        Int16Array, Int32Array, Int64Array, StringArray,
     };
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -407,16 +452,16 @@ mod tests {
 
         let mut row = ColumnarRow::new(Arc::new(batch));
         assert_eq!(row.get_field_count(), 10);
-        assert!(row.get_boolean(0));
-        assert_eq!(row.get_byte(1), 1);
-        assert_eq!(row.get_short(2), 2);
-        assert_eq!(row.get_int(3), 3);
-        assert_eq!(row.get_long(4), 4);
-        assert_eq!(row.get_float(5), 1.25);
-        assert_eq!(row.get_double(6), 2.5);
-        assert_eq!(row.get_string(7), "hello");
-        assert_eq!(row.get_bytes(8), b"data");
-        assert_eq!(row.get_char(9, 2), "ab");
+        assert!(row.get_boolean(0).unwrap());
+        assert_eq!(row.get_byte(1).unwrap(), 1);
+        assert_eq!(row.get_short(2).unwrap(), 2);
+        assert_eq!(row.get_int(3).unwrap(), 3);
+        assert_eq!(row.get_long(4).unwrap(), 4);
+        assert_eq!(row.get_float(5).unwrap(), 1.25);
+        assert_eq!(row.get_double(6).unwrap(), 2.5);
+        assert_eq!(row.get_string(7).unwrap(), "hello");
+        assert_eq!(row.get_bytes(8).unwrap(), b"data");
+        assert_eq!(row.get_char(9, 2).unwrap(), "ab");
         row.set_row_id(0);
         assert_eq!(row.get_row_id(), 0);
     }
@@ -465,12 +510,12 @@ mod tests {
 
         // Verify decimal values
         assert_eq!(
-            row.get_decimal(0, 10, 2),
+            row.get_decimal(0, 10, 2).unwrap(),
             crate::row::Decimal::from_big_decimal(BigDecimal::new(BigInt::from(12345), 2), 10, 2)
                 .unwrap()
         );
         assert_eq!(
-            row.get_decimal(1, 20, 5),
+            row.get_decimal(1, 20, 5).unwrap(),
             crate::row::Decimal::from_big_decimal(
                 BigDecimal::new(BigInt::from(1234567890), 5),
                 20,
@@ -479,7 +524,7 @@ mod tests {
             .unwrap()
         );
         assert_eq!(
-            row.get_decimal(2, 38, 10),
+            row.get_decimal(2, 38, 10).unwrap(),
             crate::row::Decimal::from_big_decimal(
                 BigDecimal::new(BigInt::from(999999999999999999i128), 10),
                 38,

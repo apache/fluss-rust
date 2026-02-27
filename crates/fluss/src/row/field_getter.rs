@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Result;
 use crate::metadata::{DataType, RowType};
 use crate::row::{Datum, InternalRow};
 
@@ -24,11 +25,11 @@ pub enum FieldGetter {
     NonNullable(InnerFieldGetter),
 }
 impl FieldGetter {
-    pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
+    pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Result<Datum<'a>> {
         match self {
             FieldGetter::Nullable(getter) => {
-                if row.is_null_at(getter.pos()) {
-                    Datum::Null
+                if row.is_null_at(getter.pos())? {
+                    Ok(Datum::Null)
                 } else {
                     getter.get_field(row)
                 }
@@ -151,33 +152,33 @@ pub enum InnerFieldGetter {
 }
 
 impl InnerFieldGetter {
-    pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Datum<'a> {
-        match self {
-            InnerFieldGetter::Char { pos, len } => Datum::from(row.get_char(*pos, *len)),
-            InnerFieldGetter::String { pos } => Datum::from(row.get_string(*pos)),
-            InnerFieldGetter::Bool { pos } => Datum::from(row.get_boolean(*pos)),
-            InnerFieldGetter::Binary { pos, len } => Datum::from(row.get_binary(*pos, *len)),
-            InnerFieldGetter::Bytes { pos } => Datum::from(row.get_bytes(*pos)),
-            InnerFieldGetter::TinyInt { pos } => Datum::from(row.get_byte(*pos)),
-            InnerFieldGetter::SmallInt { pos } => Datum::from(row.get_short(*pos)),
-            InnerFieldGetter::Int { pos } => Datum::from(row.get_int(*pos)),
-            InnerFieldGetter::BigInt { pos } => Datum::from(row.get_long(*pos)),
-            InnerFieldGetter::Float { pos } => Datum::from(row.get_float(*pos)),
-            InnerFieldGetter::Double { pos } => Datum::from(row.get_double(*pos)),
+    pub fn get_field<'a>(&self, row: &'a dyn InternalRow) -> Result<Datum<'a>> {
+        Ok(match self {
+            InnerFieldGetter::Char { pos, len } => Datum::from(row.get_char(*pos, *len)?),
+            InnerFieldGetter::String { pos } => Datum::from(row.get_string(*pos)?),
+            InnerFieldGetter::Bool { pos } => Datum::from(row.get_boolean(*pos)?),
+            InnerFieldGetter::Binary { pos, len } => Datum::from(row.get_binary(*pos, *len)?),
+            InnerFieldGetter::Bytes { pos } => Datum::from(row.get_bytes(*pos)?),
+            InnerFieldGetter::TinyInt { pos } => Datum::from(row.get_byte(*pos)?),
+            InnerFieldGetter::SmallInt { pos } => Datum::from(row.get_short(*pos)?),
+            InnerFieldGetter::Int { pos } => Datum::from(row.get_int(*pos)?),
+            InnerFieldGetter::BigInt { pos } => Datum::from(row.get_long(*pos)?),
+            InnerFieldGetter::Float { pos } => Datum::from(row.get_float(*pos)?),
+            InnerFieldGetter::Double { pos } => Datum::from(row.get_double(*pos)?),
             InnerFieldGetter::Decimal {
                 pos,
                 precision,
                 scale,
-            } => Datum::Decimal(row.get_decimal(*pos, *precision, *scale)),
-            InnerFieldGetter::Date { pos } => Datum::Date(row.get_date(*pos)),
-            InnerFieldGetter::Time { pos } => Datum::Time(row.get_time(*pos)),
+            } => Datum::Decimal(row.get_decimal(*pos, *precision, *scale)?),
+            InnerFieldGetter::Date { pos } => Datum::Date(row.get_date(*pos)?),
+            InnerFieldGetter::Time { pos } => Datum::Time(row.get_time(*pos)?),
             InnerFieldGetter::Timestamp { pos, precision } => {
-                Datum::TimestampNtz(row.get_timestamp_ntz(*pos, *precision))
+                Datum::TimestampNtz(row.get_timestamp_ntz(*pos, *precision)?)
             }
             InnerFieldGetter::TimestampLtz { pos, precision } => {
-                Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision))
+                Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision)?)
             } //TODO Array, Map, Row
-        }
+        })
     }
 
     pub fn pos(&self) -> usize {

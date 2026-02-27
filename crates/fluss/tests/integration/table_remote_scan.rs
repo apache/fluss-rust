@@ -192,8 +192,18 @@ mod table_remote_scan_test {
             let row = record.row();
             let expected_c1 = i as i32;
             let expected_c2 = format!("v{}", i);
-            assert_eq!(row.get_int(1), expected_c1, "c1 mismatch at index {}", i);
-            assert_eq!(row.get_string(0), expected_c2, "c2 mismatch at index {}", i);
+            assert_eq!(
+                row.get_int(1).unwrap(),
+                expected_c1,
+                "c1 mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                row.get_string(0).unwrap(),
+                expected_c2,
+                "c2 mismatch at index {}",
+                i
+            );
         }
     }
 

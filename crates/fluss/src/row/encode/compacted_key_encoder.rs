@@ -83,7 +83,7 @@ impl KeyEncoder for CompactedKeyEncoder {
 
         // iterate all the fields of the row, and encode each field
         for (pos, field_getter) in self.field_getters.iter().enumerate() {
-            match &field_getter.get_field(row) {
+            match &field_getter.get_field(row)? {
                 Datum::Null => {
                     return Err(IllegalArgument {
                         message: format!("Cannot encode key with null value at position: {pos:?}"),

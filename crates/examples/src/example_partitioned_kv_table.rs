@@ -90,9 +90,9 @@ pub async fn main() -> Result<()> {
         let row = result.get_single_row()?.unwrap();
         println!(
             "Found id={id}: region={}, zone={}, score={}",
-            row.get_string(1),
-            row.get_long(2),
-            row.get_long(3)
+            row.get_string(1)?,
+            row.get_long(2)?,
+            row.get_long(3)?
         );
     }
 
@@ -109,8 +109,8 @@ pub async fn main() -> Result<()> {
     let row = result.get_single_row()?.unwrap();
     println!(
         "Verified update: region={}, zone={}",
-        row.get_string(1),
-        row.get_long(2)
+        row.get_string(1)?,
+        row.get_long(2)?
     );
 
     println!("\n=== Deleting ===");

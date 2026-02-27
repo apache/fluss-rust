@@ -371,42 +371,42 @@ pub fn compacted_row_to_owned(
     let mut out = fcore::row::GenericRow::new(columns.len());
 
     for (i, col) in columns.iter().enumerate() {
-        if row.is_null_at(i) {
+        if row.is_null_at(i)? {
             out.set_field(i, Datum::Null);
             continue;
         }
 
         let datum = match col.data_type() {
-            fcore::metadata::DataType::Boolean(_) => Datum::Bool(row.get_boolean(i)),
-            fcore::metadata::DataType::TinyInt(_) => Datum::Int8(row.get_byte(i)),
-            fcore::metadata::DataType::SmallInt(_) => Datum::Int16(row.get_short(i)),
-            fcore::metadata::DataType::Int(_) => Datum::Int32(row.get_int(i)),
-            fcore::metadata::DataType::BigInt(_) => Datum::Int64(row.get_long(i)),
-            fcore::metadata::DataType::Float(_) => Datum::Float32(row.get_float(i).into()),
-            fcore::metadata::DataType::Double(_) => Datum::Float64(row.get_double(i).into()),
+            fcore::metadata::DataType::Boolean(_) => Datum::Bool(row.get_boolean(i)?),
+            fcore::metadata::DataType::TinyInt(_) => Datum::Int8(row.get_byte(i)?),
+            fcore::metadata::DataType::SmallInt(_) => Datum::Int16(row.get_short(i)?),
+            fcore::metadata::DataType::Int(_) => Datum::Int32(row.get_int(i)?),
+            fcore::metadata::DataType::BigInt(_) => Datum::Int64(row.get_long(i)?),
+            fcore::metadata::DataType::Float(_) => Datum::Float32(row.get_float(i)?.into()),
+            fcore::metadata::DataType::Double(_) => Datum::Float64(row.get_double(i)?.into()),
             fcore::metadata::DataType::String(_) => {
-                Datum::String(Cow::Owned(row.get_string(i).to_string()))
+                Datum::String(Cow::Owned(row.get_string(i)?.to_string()))
             }
             fcore::metadata::DataType::Bytes(_) => {
-                Datum::Blob(Cow::Owned(row.get_bytes(i).to_vec()))
+                Datum::Blob(Cow::Owned(row.get_bytes(i)?.to_vec()))
             }
-            fcore::metadata::DataType::Date(_) => Datum::Date(row.get_date(i)),
-            fcore::metadata::DataType::Time(_) => Datum::Time(row.get_time(i)),
+            fcore::metadata::DataType::Date(_) => Datum::Date(row.get_date(i)?),
+            fcore::metadata::DataType::Time(_) => Datum::Time(row.get_time(i)?),
             fcore::metadata::DataType::Timestamp(dt) => {
-                Datum::TimestampNtz(row.get_timestamp_ntz(i, dt.precision()))
+                Datum::TimestampNtz(row.get_timestamp_ntz(i, dt.precision())?)
             }
             fcore::metadata::DataType::TimestampLTz(dt) => {
-                Datum::TimestampLtz(row.get_timestamp_ltz(i, dt.precision()))
+                Datum::TimestampLtz(row.get_timestamp_ltz(i, dt.precision())?)
             }
             fcore::metadata::DataType::Decimal(dt) => {
-                let decimal = row.get_decimal(i, dt.precision() as usize, dt.scale() as usize);
+                let decimal = row.get_decimal(i, dt.precision() as usize, dt.scale() as usize)?;
                 Datum::Decimal(decimal)
             }
             fcore::metadata::DataType::Char(dt) => Datum::String(Cow::Owned(
-                row.get_char(i, dt.length() as usize).to_string(),
+                row.get_char(i, dt.length() as usize)?.to_string(),
             )),
             fcore::metadata::DataType::Binary(dt) => {
-                Datum::Blob(Cow::Owned(row.get_binary(i, dt.length()).to_vec()))
+                Datum::Blob(Cow::Owned(row.get_binary(i, dt.length())?.to_vec()))
             }
             other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
         };

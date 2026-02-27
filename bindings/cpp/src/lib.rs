@@ -1784,7 +1784,7 @@ mod row_reader {
         allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
     ) -> Result<&'a fcore::metadata::DataType, String> {
         let col = get_column(columns, field)?;
-        if row.is_null_at(field) {
+        if row.is_null_at(field).map_err(|e| e.to_string())? {
             return Err(format!("field {field} is null"));
         }
         let dt = col.data_type();
@@ -1812,7 +1812,7 @@ mod row_reader {
         field: usize,
     ) -> Result<bool, String> {
         get_column(columns, field)?;
-        Ok(row.is_null_at(field))
+        row.is_null_at(field).map_err(|e| e.to_string())
     }
 
     pub fn get_bool(
@@ -1823,7 +1823,7 @@ mod row_reader {
         validate(row, columns, field, "get_bool", |dt| {
             matches!(dt, fcore::metadata::DataType::Boolean(_))
         })?;
-        Ok(row.get_boolean(field))
+        row.get_boolean(field).map_err(|e| e.to_string())
     }
 
     pub fn get_i32(
@@ -1839,11 +1839,17 @@ mod row_reader {
                     | fcore::metadata::DataType::Int(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::TinyInt(_) => row.get_byte(field) as i32,
-            fcore::metadata::DataType::SmallInt(_) => row.get_short(field) as i32,
-            _ => row.get_int(field),
-        })
+        match dt {
+            fcore::metadata::DataType::TinyInt(_) => row
+                .get_byte(field)
+                .map(|v| v as i32)
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::SmallInt(_) => row
+                .get_short(field)
+                .map(|v| v as i32)
+                .map_err(|e| e.to_string()),
+            _ => row.get_int(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_i64(
@@ -1854,7 +1860,7 @@ mod row_reader {
         validate(row, columns, field, "get_i64", |dt| {
             matches!(dt, fcore::metadata::DataType::BigInt(_))
         })?;
-        Ok(row.get_long(field))
+        row.get_long(field).map_err(|e| e.to_string())
     }
 
     pub fn get_f32(
@@ -1865,7 +1871,7 @@ mod row_reader {
         validate(row, columns, field, "get_f32", |dt| {
             matches!(dt, fcore::metadata::DataType::Float(_))
         })?;
-        Ok(row.get_float(field))
+        row.get_float(field).map_err(|e| e.to_string())
     }
 
     pub fn get_f64(
@@ -1876,7 +1882,7 @@ mod row_reader {
         validate(row, columns, field, "get_f64", |dt| {
             matches!(dt, fcore::metadata::DataType::Double(_))
         })?;
-        Ok(row.get_double(field))
+        row.get_double(field).map_err(|e| e.to_string())
     }
 
     pub fn get_str<'a>(
@@ -1890,10 +1896,12 @@ mod row_reader {
                 fcore::metadata::DataType::Char(_) | fcore::metadata::DataType::String(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::Char(ct) => row.get_char(field, ct.length() as usize),
-            _ => row.get_string(field),
-        })
+        match dt {
+            fcore::metadata::DataType::Char(ct) => row
+                .get_char(field, ct.length() as usize)
+                .map_err(|e| e.to_string()),
+            _ => row.get_string(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_bytes<'a>(
@@ -1907,10 +1915,12 @@ mod row_reader {
                 fcore::metadata::DataType::Binary(_) | fcore::metadata::DataType::Bytes(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::Binary(bt) => row.get_binary(field, bt.length()),
-            _ => row.get_bytes(field),
-        })
+        match dt {
+            fcore::metadata::DataType::Binary(bt) => row
+                .get_binary(field, bt.length())
+                .map_err(|e| e.to_string()),
+            _ => row.get_bytes(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_date_days(
@@ -1921,7 +1931,9 @@ mod row_reader {
         validate(row, columns, field, "get_date_days", |dt| {
             matches!(dt, fcore::metadata::DataType::Date(_))
         })?;
-        Ok(row.get_date(field).get_inner())
+        row.get_date(field)
+            .map(|d| d.get_inner())
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_time_millis(
@@ -1932,7 +1944,9 @@ mod row_reader {
         validate(row, columns, field, "get_time_millis", |dt| {
             matches!(dt, fcore::metadata::DataType::Time(_))
         })?;
-        Ok(row.get_time(field).get_inner())
+        row.get_time(field)
+            .map(|t| t.get_inner())
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_ts_millis(
@@ -1948,12 +1962,14 @@ mod row_reader {
             )
         })?;
         match dt {
-            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+            fcore::metadata::DataType::TimestampLTz(ts) => row
                 .get_timestamp_ltz(field, ts.precision())
-                .get_epoch_millisecond()),
-            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .map(|v| v.get_epoch_millisecond())
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::Timestamp(ts) => row
                 .get_timestamp_ntz(field, ts.precision())
-                .get_millisecond()),
+                .map(|v| v.get_millisecond())
+                .map_err(|e| e.to_string()),
             dt => Err(format!("get_ts_millis: unexpected type {dt}")),
         }
     }
@@ -1971,12 +1987,14 @@ mod row_reader {
             )
         })?;
         match dt {
-            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+            fcore::metadata::DataType::TimestampLTz(ts) => row
                 .get_timestamp_ltz(field, ts.precision())
-                .get_nano_of_millisecond()),
-            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .map(|v| v.get_nano_of_millisecond())
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::Timestamp(ts) => row
                 .get_timestamp_ntz(field, ts.precision())
-                .get_nano_of_millisecond()),
+                .map(|v| v.get_nano_of_millisecond())
+                .map_err(|e| e.to_string()),
             dt => Err(format!("get_ts_nanos: unexpected type {dt}")),
         }
     }
@@ -1998,7 +2016,9 @@ mod row_reader {
         })?;
         match dt {
             fcore::metadata::DataType::Decimal(dd) => {
-                let decimal = row.get_decimal(field, dd.precision() as usize, dd.scale() as usize);
+                let decimal = row
+                    .get_decimal(field, dd.precision() as usize, dd.scale() as usize)
+                    .map_err(|e| e.to_string())?;
                 Ok(decimal.to_big_decimal().to_string())
             }
             dt => Err(format!("get_decimal_str: unexpected type {dt}")),
