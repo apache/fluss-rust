@@ -73,6 +73,9 @@ use_repo(fluss_cpp, "apache_arrow_cpp")
 
 ### Build and run (consumer workspace pattern)
 
+Run from your consumer workspace root (the directory containing
+`MODULE.bazel` and your top-level `BUILD.bazel`).
+
 ```bash
 PROTOC_BIN="$(command -v protoc)"
 CARGO_BIN="$(command -v cargo)"
@@ -125,9 +128,13 @@ Notes:
 - `build` mode in the core Bazel integration still uses `PROTOC` (env / PATH).
 - To auto-download a pinned `protoc` for `build` mode, use
   `bindings/cpp/scripts/ensure_protoc.sh` and pass the result via `--action_env=PROTOC=...`.
+- `ensure_protoc.sh` auto-detects host OS/arch (`linux`/`osx`, `x86_64`/`aarch_64`).
 - Some environments may require `ep_cmake_ar/ranlib/nm` overrides.
 
 ### Build and run (consumer workspace pattern, with auto-downloaded `protoc`)
+
+Run from the `fluss-rust` repository root, or adjust the script path if you
+copied it elsewhere.
 
 ```bash
 PROTOC_BIN="$(bash bindings/cpp/scripts/ensure_protoc.sh --print-path)"
@@ -176,9 +183,9 @@ local_path_override(
 
 Do not keep local overrides in long-lived branches.
 
-Repository-local examples in this repo use `version = "0.0.0"` together with
-`local_path_override(...)` because the root `MODULE.bazel` in this branch is not
-a published release module.
+Repository-local examples in this repo use `version = "0.1.0"` together with
+`local_path_override(...)` for local validation before publishing to the Bazel
+registry.
 
 ## Repository-local Validation (Direct Commands)
 
@@ -234,7 +241,7 @@ tmp_dir="$(mktemp -d /tmp/fluss-bazel-system-doc.XXXXXX)"
 FLUSS_RUST_ROOT="$(pwd)"
 cp -a bindings/cpp/examples/bazel-consumer/system/. "$tmp_dir/"
 sed -i \
-  -e "s|path = \"/path/to/fluss-rust\"|path = \"$FLUSS_RUST_ROOT\"|" \
+  -e "s|path = \"../../../../../\"|path = \"$FLUSS_RUST_ROOT\"|" \
   -e 's|system_arrow_prefix = "/usr"|system_arrow_prefix = "/tmp/fluss-system-arrow-19.0.1"|' \
   -e 's|system_arrow_shared_library = "lib/x86_64-linux-gnu/libarrow.so"|system_arrow_shared_library = "lib/libarrow.so"|' \
   -e 's|system_arrow_runtime_glob = "lib/x86_64-linux-gnu/libarrow.so\\*"|system_arrow_runtime_glob = "lib/libarrow.so*"|' \

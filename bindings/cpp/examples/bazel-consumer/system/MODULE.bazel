@@ -18,11 +18,14 @@
 module(name = "fluss_cpp_consumer_system")
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "fluss-cpp", version = "0.0.0")
+bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
+# Repository-local example path (repository root containing `bindings/cpp`).
+# If you copy this example out of tree, replace this with an absolute path
+# (for example: /path/to/fluss-rust).
 local_path_override(
     module_name = "fluss-cpp",
-    path = "/path/to/fluss-rust",
+    path = "../../../../../",
 )
 
 # Intended interface for preinstalled protoc + Arrow C++ environments.

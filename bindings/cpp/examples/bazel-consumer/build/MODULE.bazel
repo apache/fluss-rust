@@ -18,11 +18,12 @@
 module(name = "fluss_cpp_consumer_build")
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "fluss-cpp", version = "0.0.0")
+bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
 # Local override for repository-local validation only.
 local_path_override(
     module_name = "fluss-cpp",
+    # Repository root path (the directory containing `bindings/cpp`).
     path = "../../../../../",
 )
 

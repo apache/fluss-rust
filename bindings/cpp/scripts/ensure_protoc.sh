@@ -26,9 +26,38 @@ elif [[ -n "${HOME:-}" ]]; then
 else
   _PROTOC_DEFAULT_CACHE_BASE="/tmp"
 fi
+
+_PROTOC_UNAME_S="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "${_PROTOC_UNAME_S}" in
+  linux*)
+    _PROTOC_DEFAULT_OS="linux"
+    ;;
+  darwin*)
+    _PROTOC_DEFAULT_OS="osx"
+    ;;
+  *)
+    echo "ERROR: unsupported host OS '${_PROTOC_UNAME_S}'. Please set PROTOC_OS explicitly." >&2
+    exit 1
+    ;;
+esac
+
+_PROTOC_UNAME_M="$(uname -m)"
+case "${_PROTOC_UNAME_M}" in
+  x86_64|amd64)
+    _PROTOC_DEFAULT_ARCH="x86_64"
+    ;;
+  aarch64|arm64)
+    _PROTOC_DEFAULT_ARCH="aarch_64"
+    ;;
+  *)
+    echo "ERROR: unsupported host arch '${_PROTOC_UNAME_M}'. Please set PROTOC_ARCH explicitly." >&2
+    exit 1
+    ;;
+esac
+
 PROTOC_INSTALL_ROOT="${PROTOC_INSTALL_ROOT:-${_PROTOC_DEFAULT_CACHE_BASE}/fluss-cpp-tools}"
-PROTOC_OS="${PROTOC_OS:-linux}"
-PROTOC_ARCH="${PROTOC_ARCH:-x86_64}"
+PROTOC_OS="${PROTOC_OS:-${_PROTOC_DEFAULT_OS}}"
+PROTOC_ARCH="${PROTOC_ARCH:-${_PROTOC_DEFAULT_ARCH}}"
 PROTOC_FORCE_INSTALL="${PROTOC_FORCE_INSTALL:-0}"
 PROTOC_PRINT_PATH_ONLY="${PROTOC_PRINT_PATH_ONLY:-0}"
 PROTOC_ALLOW_INSECURE_DOWNLOAD="${PROTOC_ALLOW_INSECURE_DOWNLOAD:-0}"
@@ -46,8 +75,8 @@ the protoc path on stdout.
 Env vars:
   PROTOBUF_BASELINE_VERSION  Baseline protobuf version (default: 3.25.5)
   PROTOC_INSTALL_ROOT        Local cache root (default: XDG/HOME cache dir)
-  PROTOC_OS                 protoc package OS (default: linux)
-  PROTOC_ARCH               protoc package arch (default: x86_64)
+  PROTOC_OS                 protoc package OS (default: auto-detect host: linux/osx)
+  PROTOC_ARCH               protoc package arch (default: auto-detect host: x86_64/aarch_64)
   PROTOC_FORCE_INSTALL      1 to force re-download
   PROTOC_ALLOW_INSECURE_DOWNLOAD
                             1 to disable TLS verification (not recommended)
@@ -112,8 +141,17 @@ lookup_protoc_archive_sha256() {
   local os="$2"
   local arch="$3"
   case "${release_version}:${os}:${arch}" in
+    25.5:linux:aarch_64)
+      echo "dc715bb5aab2ebf9653d7d3efbe55e01a035e45c26f391ff6d9b7923e22914b7"
+      ;;
     25.5:linux:x86_64)
       echo "e1ed237a17b2e851cf9662cb5ad02b46e70ff8e060e05984725bc4b4228c6b28"
+      ;;
+    25.5:osx:aarch_64)
+      echo "781a6fc4c265034872cadc65e63dd3c0fc49245b70917821b60e2d457a6876ab"
+      ;;
+    25.5:osx:x86_64)
+      echo "c5447e4f0d5caffb18d9ff21eae7bc7faf2bb2000083d6f49e5b6000b30fceae"
       ;;
     *)
       return 1
