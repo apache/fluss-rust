@@ -331,7 +331,7 @@ cc_library(
     }),
     deps = [
         ":rust_lib",
-        "//bazel/cpp:arrow_cpp_dep",
+        "//bindings/cpp/bazel/cpp:arrow_cpp_dep",
     ],
     visibility = ["//visibility:public"],
 )

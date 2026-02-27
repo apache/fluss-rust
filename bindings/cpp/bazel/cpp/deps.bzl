@@ -61,7 +61,7 @@ cmake(
 """
 
 _ARROW_PATCH_CMDS = [
-    "sed -i 's|#define ARROW_CXX_COMPILER_FLAGS \"@CMAKE_CXX_FLAGS@\"|#define ARROW_CXX_COMPILER_FLAGS \"\"|' cpp/src/arrow/util/config.h.cmake",
+    "sed -i.bak 's|#define ARROW_CXX_COMPILER_FLAGS \"@CMAKE_CXX_FLAGS@\"|#define ARROW_CXX_COMPILER_FLAGS \"\"|' cpp/src/arrow/util/config.h.cmake && rm -f cpp/src/arrow/util/config.h.cmake.bak",
 ]
 
 _SYSTEM_ARROW_BUILD_FILE_TEMPLATE = """
@@ -96,6 +96,7 @@ _ARROW_BUILD_VERSIONS = {
     "19.0.1": {
         "urls": ["https://github.com/apache/arrow/archive/refs/tags/apache-arrow-19.0.1.tar.gz"],
         "strip_prefix": "arrow-apache-arrow-19.0.1",
+        "integrity": "sha256-TImFBJWIQcyGtvhxDsspGflrXhD6iYmsEKxPyoNi2Go=",
     },
 }
 
@@ -277,7 +278,7 @@ def _cpp_sdk_impl(ctx):
         name = "apache_arrow_cpp",
         urls = arrow_version["urls"],
         strip_prefix = arrow_version["strip_prefix"],
-        # TODO: Pin sha256/integrity once release packaging is finalized.
+        integrity = arrow_version["integrity"],
         patch_cmds = _ARROW_PATCH_CMDS,
         build_file_content = _render_arrow_build_file(tag),
     )

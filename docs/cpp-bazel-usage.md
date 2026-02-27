@@ -58,7 +58,7 @@ module(name = "my_cpp_app")
 bazel_dep(name = "rules_cc", version = "0.2.14")
 bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
-fluss_cpp = use_extension("@fluss-cpp//bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "system",
     protobuf_version = "3.25.5",
@@ -112,7 +112,7 @@ module(name = "my_cpp_app")
 bazel_dep(name = "rules_cc", version = "0.2.14")
 bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
-fluss_cpp = use_extension("@fluss-cpp//bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "build",
     protobuf_version = "3.25.5",
@@ -184,7 +184,7 @@ If your environment requires a proxy for Bazel external downloads, export it
 before running:
 
 ```bash
-export BAZEL_PROXY_URL="${BAZEL_PROXY_URL:-http://10.7.4.2:3128}"
+export BAZEL_PROXY_URL="http://proxy.example.com:3128"
 export http_proxy="$BAZEL_PROXY_URL"
 export https_proxy="$BAZEL_PROXY_URL"
 export HTTP_PROXY="$http_proxy"
@@ -257,6 +257,8 @@ bazel --ignore_all_rc_files run \
   --action_env=PATH="$(dirname "$CARGO_BIN"):$PATH" \
   //:consumer_system
 ```
+
+On macOS (BSD `sed`), replace `sed -i` with `sed -i ''` in the patch step above.
 
 ## Upgrade Procedure
 

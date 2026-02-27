@@ -36,6 +36,10 @@ set(FLUSS_CPP_ARROW_SOURCE_URL
     "https://github.com/apache/arrow/archive/refs/tags/apache-arrow-19.0.1.tar.gz"
     CACHE STRING
     "Arrow source archive URL used in build mode")
+set(FLUSS_CPP_ARROW_SOURCE_SHA256
+    "4c898504958841cc86b6f8710ecb2919f96b5e10fa8989ac10ac4fca8362d86a"
+    CACHE STRING
+    "SHA256 for the Arrow source archive used in build mode")
 
 find_package(Threads REQUIRED)
 
@@ -138,6 +142,7 @@ else()
     FetchContent_Declare(
         apache_arrow_src
         URL ${FLUSS_CPP_ARROW_SOURCE_URL}
+        URL_HASH SHA256=${FLUSS_CPP_ARROW_SOURCE_SHA256}
         SOURCE_SUBDIR cpp
     )
     FetchContent_MakeAvailable(apache_arrow_src)
@@ -155,14 +160,16 @@ endif()
 
 # Get cargo target dir
 execute_process(COMMAND ${FLUSS_CARGO_EXECUTABLE} locate-project --workspace --message-format plain
-    OUTPUT_VARIABLE CARGO_TARGET_DIR
+    OUTPUT_VARIABLE CARGO_MANIFEST_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-if (NOT CARGO_TARGET_DIR)
+if (NOT CARGO_MANIFEST_PATH)
     message(FATAL_ERROR
         "Failed to resolve Cargo workspace target dir via '${FLUSS_CARGO_EXECUTABLE} locate-project'. "
         "Check Rust toolchain installation and PATH/CARGO.")
 endif()
-string(REGEX REPLACE "/Cargo.toml\n$" "/target" CARGO_TARGET_DIR "${CARGO_TARGET_DIR}")
+get_filename_component(CARGO_WORKSPACE_DIR "${CARGO_MANIFEST_PATH}" DIRECTORY)
+set(CARGO_TARGET_DIR "${CARGO_WORKSPACE_DIR}/target")
 
 set(CARGO_MANIFEST ${PROJECT_SOURCE_DIR}/Cargo.toml)
 set(RUST_SOURCE_FILE ${PROJECT_SOURCE_DIR}/src/lib.rs)

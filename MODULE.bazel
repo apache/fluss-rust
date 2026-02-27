@@ -51,7 +51,7 @@ register_toolchains(
     "@rules_foreign_cc//toolchains:all",
 )
 
-cpp_sdk = use_extension("//bazel/cpp:deps.bzl", "cpp_sdk")
+cpp_sdk = use_extension("//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 # Phase 1 keeps build mode behavior while moving Arrow build details out of
 # MODULE.bazel. Registry/system modes will reuse the same extension entrypoint.
 cpp_sdk.config(

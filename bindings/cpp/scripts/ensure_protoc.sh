@@ -19,26 +19,40 @@
 set -euo pipefail
 
 PROTOBUF_BASELINE_VERSION="${PROTOBUF_BASELINE_VERSION:-3.25.5}"
-PROTOC_INSTALL_ROOT="${PROTOC_INSTALL_ROOT:-/tmp/fluss-cpp-tools}"
+if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+  _PROTOC_DEFAULT_CACHE_BASE="${XDG_CACHE_HOME}"
+elif [[ -n "${HOME:-}" ]]; then
+  _PROTOC_DEFAULT_CACHE_BASE="${HOME}/.cache"
+else
+  _PROTOC_DEFAULT_CACHE_BASE="/tmp"
+fi
+PROTOC_INSTALL_ROOT="${PROTOC_INSTALL_ROOT:-${_PROTOC_DEFAULT_CACHE_BASE}/fluss-cpp-tools}"
 PROTOC_OS="${PROTOC_OS:-linux}"
 PROTOC_ARCH="${PROTOC_ARCH:-x86_64}"
 PROTOC_FORCE_INSTALL="${PROTOC_FORCE_INSTALL:-0}"
 PROTOC_PRINT_PATH_ONLY="${PROTOC_PRINT_PATH_ONLY:-0}"
+PROTOC_ALLOW_INSECURE_DOWNLOAD="${PROTOC_ALLOW_INSECURE_DOWNLOAD:-0}"
+PROTOC_SKIP_CHECKSUM_VERIFY="${PROTOC_SKIP_CHECKSUM_VERIFY:-0}"
 
 usage() {
   cat <<'EOF'
 Usage: bindings/cpp/scripts/ensure_protoc.sh [--print-path]
 
 Ensures a protoc binary matching the configured protobuf baseline is available.
-Installs into a local cache directory (default: /tmp/fluss-cpp-tools) and prints
+Installs into a local cache directory (default: \$XDG_CACHE_HOME/fluss-cpp-tools or
+\$HOME/.cache/fluss-cpp-tools) and prints
 the protoc path on stdout.
 
 Env vars:
   PROTOBUF_BASELINE_VERSION  Baseline protobuf version (default: 3.25.5)
-  PROTOC_INSTALL_ROOT        Local cache root (default: /tmp/fluss-cpp-tools)
+  PROTOC_INSTALL_ROOT        Local cache root (default: XDG/HOME cache dir)
   PROTOC_OS                 protoc package OS (default: linux)
   PROTOC_ARCH               protoc package arch (default: x86_64)
   PROTOC_FORCE_INSTALL      1 to force re-download
+  PROTOC_ALLOW_INSECURE_DOWNLOAD
+                            1 to disable TLS verification (not recommended)
+  PROTOC_SKIP_CHECKSUM_VERIFY
+                            1 to skip pinned archive checksum verification
   BAZEL_PROXY_URL           Optional proxy (sets curl/wget proxy envs if present)
 EOF
 }
@@ -93,29 +107,66 @@ version_matches_baseline() {
   [[ "$actual" == "$baseline" || "$actual_norm" == "$baseline_norm" ]]
 }
 
+lookup_protoc_archive_sha256() {
+  local release_version="$1"
+  local os="$2"
+  local arch="$3"
+  case "${release_version}:${os}:${arch}" in
+    25.5:linux:x86_64)
+      echo "e1ed237a17b2e851cf9662cb5ad02b46e70ff8e060e05984725bc4b4228c6b28"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+verify_download_sha256() {
+  local file="$1"
+  local expected="$2"
+  local actual=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  else
+    echo "ERROR: neither sha256sum nor shasum is available for checksum verification." >&2
+    return 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ERROR: protoc archive checksum mismatch." >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    return 1
+  fi
+}
+
 download_file() {
   local url="$1"
   local out="$2"
 
   if command -v curl >/dev/null 2>&1; then
-    if [[ -n "${https_proxy:-}" || -n "${http_proxy:-}" ]]; then
-      curl -fLk "$url" -o "$out"
-    else
-      curl -fL "$url" -o "$out"
+    local curl_args=(-fL)
+    if [[ "${PROTOC_ALLOW_INSECURE_DOWNLOAD}" == "1" ]]; then
+      curl_args+=(-k)
     fi
+    curl "${curl_args[@]}" "$url" -o "$out"
     return 0
   fi
 
   if command -v wget >/dev/null 2>&1; then
     local wget_args=()
     if [[ -n "${https_proxy:-}" || -n "${http_proxy:-}" ]]; then
-      wget_args+=(--no-check-certificate -e use_proxy=yes)
+      wget_args+=(-e use_proxy=yes)
       if [[ -n "${https_proxy:-}" ]]; then
         wget_args+=(-e "https_proxy=${https_proxy}")
       fi
       if [[ -n "${http_proxy:-}" ]]; then
         wget_args+=(-e "http_proxy=${http_proxy}")
       fi
+    fi
+    if [[ "${PROTOC_ALLOW_INSECURE_DOWNLOAD}" == "1" ]]; then
+      wget_args+=(--no-check-certificate)
     fi
     wget "${wget_args[@]}" -O "$out" "$url"
     return 0
@@ -167,6 +218,14 @@ trap 'rm -rf "${tmpdir}"' EXIT
 
 archive_path="${tmpdir}/${PROTOC_ARCHIVE}"
 download_file "${PROTOC_URL}" "${archive_path}"
+if [[ "${PROTOC_SKIP_CHECKSUM_VERIFY}" != "1" ]]; then
+  if expected_sha256="$(lookup_protoc_archive_sha256 "${PROTOC_RELEASE_VERSION}" "${PROTOC_OS}" "${PROTOC_ARCH}")"; then
+    verify_download_sha256 "${archive_path}" "${expected_sha256}"
+  else
+    echo "ERROR: no pinned checksum for protoc archive ${PROTOC_ARCHIVE}. Set PROTOC_SKIP_CHECKSUM_VERIFY=1 to bypass." >&2
+    exit 1
+  fi
+fi
 
 extract_dir="${tmpdir}/extract"
 mkdir -p "${extract_dir}"

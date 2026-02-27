@@ -26,7 +26,7 @@ local_path_override(
 )
 
 # Intended interface for preinstalled protoc + Arrow C++ environments.
-fluss_cpp = use_extension("@fluss-cpp//bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "system",
     protobuf_version = "3.25.5",
