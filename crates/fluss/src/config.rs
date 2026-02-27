@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_BOOTSTRAP_SERVER: &str = "127.0.0.1:9123";
@@ -66,7 +66,13 @@ pub struct Config {
     pub remote_file_download_thread_num: usize,
 
     /// Whether to use opendal streaming reader path for remote log downloads.
-    #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ)]
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ,
+        action = ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
     #[serde(default = "default_scanner_remote_log_streaming_read")]
     pub scanner_remote_log_streaming_read: bool,
 
@@ -93,5 +99,29 @@ impl Default for Config {
             scanner_remote_log_streaming_read_concurrency:
                 DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use clap::Parser;
+
+    #[test]
+    fn parse_streaming_read_defaults_to_true() {
+        let config = Config::parse_from(["prog"]);
+        assert!(config.scanner_remote_log_streaming_read);
+    }
+
+    #[test]
+    fn parse_streaming_read_accepts_false() {
+        let config = Config::parse_from(["prog", "--scanner-remote-log-streaming-read", "false"]);
+        assert!(!config.scanner_remote_log_streaming_read);
+    }
+
+    #[test]
+    fn parse_streaming_read_flag_without_value_means_true() {
+        let config = Config::parse_from(["prog", "--scanner-remote-log-streaming-read"]);
+        assert!(config.scanner_remote_log_streaming_read);
     }
 }
