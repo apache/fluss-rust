@@ -228,9 +228,10 @@ patch `MODULE.bazel` before running:
 
 ```bash
 tmp_dir="$(mktemp -d /tmp/fluss-bazel-system-doc.XXXXXX)"
+FLUSS_RUST_ROOT="$(pwd)"
 cp -a bindings/cpp/examples/bazel-consumer/system/. "$tmp_dir/"
 sed -i \
-  -e 's|path = "/path/to/fluss-rust"|path = "/home/admin/mh/fluss-r2/fluss-rust"|' \
+  -e "s|path = \"/path/to/fluss-rust\"|path = \"$FLUSS_RUST_ROOT\"|" \
   -e 's|system_arrow_prefix = "/usr"|system_arrow_prefix = "/tmp/fluss-system-arrow-19.0.1"|' \
   -e 's|system_arrow_shared_library = "lib/x86_64-linux-gnu/libarrow.so"|system_arrow_shared_library = "lib/libarrow.so"|' \
   -e 's|system_arrow_runtime_glob = "lib/x86_64-linux-gnu/libarrow.so\\*"|system_arrow_runtime_glob = "lib/libarrow.so*"|' \
