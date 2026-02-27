@@ -20,7 +20,6 @@ Current simplification scope:
 - Dependency model: **root module mode**
 - Consumer dependency target: `@fluss-cpp//bindings/cpp:fluss_cpp`
 - Root `MODULE.bazel` is required for root module mode.
-- Root `BUILD.bazel` is optional when consumers use the direct target label above.
 - Build systems covered by this document: **Bazel**
 - Dependency modes covered by this document: **system/build**
 
@@ -56,7 +55,7 @@ Use this mode when your environment already provides:
 module(name = "my_cpp_app")
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "fluss-cpp", version = "0.1.0")
+bazel_dep(name = "fluss-cpp", version = "<released-version>")
 
 fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
@@ -110,7 +109,7 @@ provision it from source.
 module(name = "my_cpp_app")
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "fluss-cpp", version = "0.1.0")
+bazel_dep(name = "fluss-cpp", version = "<released-version>")
 
 fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
@@ -177,11 +176,15 @@ local_path_override(
 
 Do not keep local overrides in long-lived branches.
 
+Repository-local examples in this repo use `version = "0.0.0"` together with
+`local_path_override(...)` because the root `MODULE.bazel` in this branch is not
+a published release module.
+
 ## Repository-local Validation (Direct Commands)
 
 These commands validate the repository examples directly.
 If your environment requires a proxy for Bazel external downloads, export it
-before running:
+before running (replace the placeholder URL with your actual proxy):
 
 ```bash
 export BAZEL_PROXY_URL="http://proxy.example.com:3128"

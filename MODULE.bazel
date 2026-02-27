@@ -15,19 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Required for root module mode (`bazel_dep(name = "fluss-cpp", ...)`).
+# Required at repository root for root module mode (`bazel_dep(name = "fluss-cpp", ...)`).
+# Consumer examples use `local_path_override(..., path = "/path/to/fluss-rust")`, so
+# Bazel resolves the module from the repository root. This also matches the Rust
+# workspace layout used by `bindings/cpp` during cargo-based Bazel/CMake builds.
+# `0.0.0` is a local-development placeholder in this repository branch.
+# Consumers should depend on a published release version.
 module(
     name = "fluss-cpp",
     version = "0.0.0",
 )
 
-# NOTE: Keep this dependency block in sync with bindings/cpp/MODULE.bazel.
-# SYNC_START bindings/cpp/MODULE.bazel
 bazel_dep(name = "rules_cc", version = "0.0.17")
 bazel_dep(name = "platforms", version = "0.0.10")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 bazel_dep(name = "rules_python", version = "1.2.0")
-# SYNC_END bindings/cpp/MODULE.bazel
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.12")
@@ -52,8 +54,6 @@ register_toolchains(
 )
 
 cpp_sdk = use_extension("//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
-# Phase 1 keeps build mode behavior while moving Arrow build details out of
-# MODULE.bazel. Registry/system modes will reuse the same extension entrypoint.
 cpp_sdk.config(
     mode = "build",
     arrow_cpp_version = "19.0.1",
