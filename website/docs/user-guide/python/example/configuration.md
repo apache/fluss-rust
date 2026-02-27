@@ -31,6 +31,7 @@ with await fluss.FlussConnection.create(config) as conn:
 | `writer.bucket.no-key-assigner`   | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin`  | `sticky`           |
 | `scanner.remote-log.prefetch-num` | Number of remote log segments to prefetch                                             | `4`                |
 | `remote-file.download-thread-num` | Number of threads for remote log downloads                                            | `3`                |
+| `scanner.remote-log.read-concurrency` | Streaming read concurrency within a remote log file                              | `4`                |
 | `scanner.log.max-poll-records`    | Max records returned in a single poll()                                               | `500`              |
 
 Remember to close the connection when done:

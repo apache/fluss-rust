@@ -46,8 +46,7 @@ mod ffi {
         writer_bucket_no_key_assigner: String,
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
-        scanner_remote_log_streaming_read: bool,
-        scanner_remote_log_streaming_read_concurrency: usize,
+        scanner_remote_log_read_concurrency: usize,
         scanner_log_max_poll_records: usize,
     }
 
@@ -628,9 +627,7 @@ fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
         writer_bucket_no_key_assigner: assigner_type,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
-        scanner_remote_log_streaming_read: config.scanner_remote_log_streaming_read,
-        scanner_remote_log_streaming_read_concurrency: config
-            .scanner_remote_log_streaming_read_concurrency,
+        scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
     };
 

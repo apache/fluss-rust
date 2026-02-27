@@ -33,4 +33,6 @@ config.writer_batch_size = 2 * 1024 * 1024;     // Batch size (2 MB)
 config.writer_bucket_no_key_assigner = "sticky"; // "sticky" or "round_robin"
 config.scanner_remote_log_prefetch_num = 4;      // Remote log prefetch count
 config.remote_file_download_thread_num = 3;  // Download threads
+config.scanner_remote_log_read_concurrency = 4;   // In-file remote log read concurrency
+config.scanner_log_max_poll_records = 500;        // Max records returned per poll()
 ```

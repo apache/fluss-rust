@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::{ArgAction, Parser, ValueEnum};
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -25,18 +25,13 @@ const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
-const DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ: bool = true;
-const DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY: usize = 4;
+const DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY: usize = 4;
 const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 
 const DEFAULT_ACKS: &str = "all";
 
-fn default_scanner_remote_log_streaming_read() -> bool {
-    DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ
-}
-
-fn default_scanner_remote_log_streaming_read_concurrency() -> usize {
-    DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY
+fn default_scanner_remote_log_read_concurrency() -> usize {
+    DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY
 }
 
 /// Bucket assigner strategy for tables without bucket keys.
@@ -90,24 +85,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
     pub remote_file_download_thread_num: usize,
 
-    /// Whether to use opendal streaming reader path for remote log downloads.
-    #[arg(
-        long,
-        default_value_t = DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ,
-        action = ArgAction::Set,
-        num_args = 0..=1,
-        default_missing_value = "true"
-    )]
-    #[serde(default = "default_scanner_remote_log_streaming_read")]
-    pub scanner_remote_log_streaming_read: bool,
-
-    /// Intra-file streaming read concurrency for each remote segment download.
-    #[arg(
-        long,
-        default_value_t = DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY
-    )]
-    #[serde(default = "default_scanner_remote_log_streaming_read_concurrency")]
-    pub scanner_remote_log_streaming_read_concurrency: usize,
+    /// Intra-file remote log read concurrency for each remote segment download.
+    /// Download path always uses streaming reader.
+    #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
+    #[serde(default = "default_scanner_remote_log_read_concurrency")]
+    pub scanner_remote_log_read_concurrency: usize,
 
     /// Maximum number of records returned in a single call to poll() for LogScanner.
     /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
@@ -126,9 +108,7 @@ impl Default for Config {
             writer_bucket_no_key_assigner: NoKeyAssigner::Sticky,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
-            scanner_remote_log_streaming_read: DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ,
-            scanner_remote_log_streaming_read_concurrency:
-                DEFAULT_SCANNER_REMOTE_LOG_STREAMING_READ_CONCURRENCY,
+            scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
         }
     }
@@ -140,20 +120,14 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn parse_streaming_read_defaults_to_true() {
+    fn parse_remote_log_read_concurrency_defaults_to_four() {
         let config = Config::parse_from(["prog"]);
-        assert!(config.scanner_remote_log_streaming_read);
+        assert_eq!(config.scanner_remote_log_read_concurrency, 4);
     }
 
     #[test]
-    fn parse_streaming_read_accepts_false() {
-        let config = Config::parse_from(["prog", "--scanner-remote-log-streaming-read", "false"]);
-        assert!(!config.scanner_remote_log_streaming_read);
-    }
-
-    #[test]
-    fn parse_streaming_read_flag_without_value_means_true() {
-        let config = Config::parse_from(["prog", "--scanner-remote-log-streaming-read"]);
-        assert!(config.scanner_remote_log_streaming_read);
+    fn parse_remote_log_read_concurrency() {
+        let config = Config::parse_from(["prog", "--scanner-remote-log-read-concurrency", "8"]);
+        assert_eq!(config.scanner_remote_log_read_concurrency, 8);
     }
 }
