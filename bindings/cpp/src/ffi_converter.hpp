@@ -136,6 +136,10 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_batch_size = config.writer_batch_size;
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
+    ffi_config.scanner_remote_log_streaming_read =
+        config.scanner_remote_log_streaming_read;
+    ffi_config.scanner_remote_log_streaming_read_concurrency =
+        config.scanner_remote_log_streaming_read_concurrency;
     return ffi_config;
 }
 
