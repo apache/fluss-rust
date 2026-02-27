@@ -859,7 +859,7 @@ impl Drop for RemoteLogDownloader {
 }
 
 impl RemoteLogDownloader {
-    /// Download a file from remote storage to local using streaming read/write
+    /// Download a file from remote storage to local using either streaming or range read/write.
     async fn download_file(
         remote_log_tablet_dir: &str,
         remote_path: &str,
@@ -908,7 +908,7 @@ impl RemoteLogDownloader {
                 remote_path,
                 local_path,
                 CHUNK_SIZE,
-                streaming_read_concurrency.max(1),
+                streaming_read_concurrency,
                 REMOTE_OP_TIMEOUT,
             )
             .await?;
