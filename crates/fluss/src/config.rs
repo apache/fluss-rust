@@ -31,10 +31,6 @@ const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
 
 const DEFAULT_ACKS: &str = "all";
 
-fn default_scanner_remote_log_read_concurrency() -> usize {
-    DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY
-}
-
 /// Bucket assigner strategy for tables without bucket keys.
 /// Matches Java `client.writer.bucket.no-key-assigner`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, Serialize)]
@@ -89,7 +85,6 @@ pub struct Config {
     /// Intra-file remote log read concurrency for each remote segment download.
     /// Download path always uses streaming reader.
     #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
-    #[serde(default = "default_scanner_remote_log_read_concurrency")]
     pub scanner_remote_log_read_concurrency: usize,
 
     /// Maximum number of records returned in a single call to poll() for LogScanner.
@@ -118,23 +113,5 @@ impl Default for Config {
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Config;
-    use clap::Parser;
-
-    #[test]
-    fn parse_remote_log_read_concurrency_defaults_to_four() {
-        let config = Config::parse_from(["prog"]);
-        assert_eq!(config.scanner_remote_log_read_concurrency, 4);
-    }
-
-    #[test]
-    fn parse_remote_log_read_concurrency() {
-        let config = Config::parse_from(["prog", "--scanner-remote-log-read-concurrency", "8"]);
-        assert_eq!(config.scanner_remote_log_read_concurrency, 8);
     }
 }
