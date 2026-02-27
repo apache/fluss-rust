@@ -24,6 +24,7 @@ let conn = FlussConnection::new(config).await?;
 | `writer_acks`                   | Acknowledgment setting (`all` waits for all replicas)                                | `all`            |
 | `writer_retries`                | Number of retries on failure                                                         | `i32::MAX`       |
 | `writer_batch_size`             | Batch size for writes                                                                | 2 MB             |
+| `writer_batch_timeout_ms`       | The maximum time to wait for a writer batch to fill up before sending.               | `100`            |
 | `writer_bucket_no_key_assigner` | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin` | `sticky`         |
 | `scanner_remote_log_prefetch_num` | Number of remote log segments to prefetch                                           | `4`              |
 | `remote_file_download_thread_num` | Number of concurrent remote log file downloads                                      | `3`              |
