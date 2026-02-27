@@ -18,15 +18,15 @@
 module(name = "fluss_cpp_consumer_build")
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "red-fluss-rust", version = "0.1.0")
+bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
 # Local override for repository-local validation only.
 local_path_override(
-    module_name = "red-fluss-rust",
+    module_name = "fluss-cpp",
     path = "../../../../../",
 )
 
-fluss_cpp = use_extension("@red-fluss-rust//bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp = use_extension("@fluss-cpp//bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "build",
     protobuf_version = "3.25.5",

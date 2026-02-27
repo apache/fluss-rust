@@ -15,8 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Required for root module mode (`bazel_dep(name = "fluss-cpp", ...)`).
+# A root `BUILD.bazel` file is optional if consumers depend on
+# `@fluss-cpp//bindings/cpp:fluss_cpp` directly.
 module(
-    name = "red-fluss-rust",
+    name = "fluss-cpp",
     version = "0.0.0",
 )
 

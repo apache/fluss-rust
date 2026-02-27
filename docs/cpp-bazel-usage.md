@@ -18,7 +18,9 @@ Current simplification scope:
 ## Scope
 
 - Dependency model: **root module mode**
-- Consumer dependency target: `@red-fluss-rust//:fluss_cpp`
+- Consumer dependency target: `@fluss-cpp//bindings/cpp:fluss_cpp`
+- Root `MODULE.bazel` is required for root module mode.
+- Root `BUILD.bazel` is optional when consumers use the direct target label above.
 - Build systems covered by this document: **Bazel**
 - Dependency modes covered by this document: **system/build**
 
@@ -37,7 +39,7 @@ load("@rules_cc//cc:defs.bzl", "cc_binary")
 cc_binary(
     name = "fluss_reader",
     srcs = ["reader.cc"],
-    deps = ["@red-fluss-rust//:fluss_cpp"],
+    deps = ["@fluss-cpp//bindings/cpp:fluss_cpp"],
 )
 ```
 
@@ -54,9 +56,9 @@ Use this mode when your environment already provides:
 module(name = "my_cpp_app")
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "red-fluss-rust", version = "0.1.0")
+bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
-fluss_cpp = use_extension("@red-fluss-rust//bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp = use_extension("@fluss-cpp//bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "system",
     protobuf_version = "3.25.5",
@@ -108,9 +110,9 @@ provision it from source.
 module(name = "my_cpp_app")
 
 bazel_dep(name = "rules_cc", version = "0.2.14")
-bazel_dep(name = "red-fluss-rust", version = "0.1.0")
+bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
-fluss_cpp = use_extension("@red-fluss-rust//bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp = use_extension("@fluss-cpp//bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "build",
     protobuf_version = "3.25.5",
@@ -168,7 +170,7 @@ For repository-local validation only:
 
 ```starlark
 local_path_override(
-    module_name = "red-fluss-rust",
+    module_name = "fluss-cpp",
     path = "/path/to/fluss-rust",
 )
 ```
@@ -228,7 +230,7 @@ patch `MODULE.bazel` before running:
 tmp_dir="$(mktemp -d /tmp/fluss-bazel-system-doc.XXXXXX)"
 cp -a bindings/cpp/examples/bazel-consumer/system/. "$tmp_dir/"
 sed -i \
-  -e 's|path = "../../../../../"|path = "/home/admin/mh/fluss-r2/fluss-rust"|' \
+  -e 's|path = "/path/to/fluss-rust"|path = "/home/admin/mh/fluss-r2/fluss-rust"|' \
   -e 's|system_arrow_prefix = "/usr"|system_arrow_prefix = "/tmp/fluss-system-arrow-19.0.1"|' \
   -e 's|system_arrow_shared_library = "lib/x86_64-linux-gnu/libarrow.so"|system_arrow_shared_library = "lib/libarrow.so"|' \
   -e 's|system_arrow_runtime_glob = "lib/x86_64-linux-gnu/libarrow.so\\*"|system_arrow_runtime_glob = "lib/libarrow.so*"|' \
@@ -257,7 +259,7 @@ bazel --ignore_all_rc_files run \
 
 ## Upgrade Procedure
 
-1. Update `bazel_dep(name = "red-fluss-rust", version = "...")`
+1. Update `bazel_dep(name = "fluss-cpp", version = "...")`
 2. Update mode version settings if needed (`protobuf_version`, `arrow_cpp_version`)
 3. Run `bazel mod tidy`
 4. Commit `MODULE.bazel` and `MODULE.bazel.lock`
@@ -265,7 +267,7 @@ bazel --ignore_all_rc_files run \
 6. Verify dependency graph:
 
 ```bash
-bazel mod graph | rg "red-fluss-rust@"
+bazel mod graph | rg "fluss-cpp@"
 ```
 
 ## Examples and Non-Mainline References

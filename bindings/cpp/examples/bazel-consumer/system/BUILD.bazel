@@ -21,5 +21,5 @@ cc_binary(
     name = "consumer_system",
     srcs = ["main.cc"],
     copts = ["-std=c++17"],
-    deps = ["@red-fluss-rust//:fluss_cpp"],
+    deps = ["@fluss-cpp//bindings/cpp:fluss_cpp"],
 )
