@@ -25,6 +25,7 @@ const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
+const DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY: usize = 4;
 const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
 
@@ -81,6 +82,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
     pub remote_file_download_thread_num: usize,
 
+    /// Intra-file remote log read concurrency for each remote segment download.
+    /// Download path always uses streaming reader.
+    #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
+    pub scanner_remote_log_read_concurrency: usize,
+
     /// Maximum number of records returned in a single call to poll() for LogScanner.
     /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
     #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
@@ -103,6 +109,7 @@ impl Default for Config {
             writer_bucket_no_key_assigner: NoKeyAssigner::Sticky,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
+            scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
         }

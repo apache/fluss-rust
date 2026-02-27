@@ -81,6 +81,14 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.remote-log.read-concurrency" => {
+                        config.scanner_remote_log_read_concurrency =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "scanner.log.max-poll-records" => {
                         config.scanner_log_max_poll_records =
                             value.parse::<usize>().map_err(|e| {
@@ -192,6 +200,18 @@ impl Config {
     #[setter]
     fn set_remote_file_download_thread_num(&mut self, num: usize) {
         self.inner.remote_file_download_thread_num = num;
+    }
+
+    /// Get the scanner remote log read concurrency
+    #[getter]
+    fn scanner_remote_log_read_concurrency(&self) -> usize {
+        self.inner.scanner_remote_log_read_concurrency
+    }
+
+    /// Set the scanner remote log read concurrency
+    #[setter]
+    fn set_scanner_remote_log_read_concurrency(&mut self, num: usize) {
+        self.inner.scanner_remote_log_read_concurrency = num;
     }
 
     /// Get the scanner log max poll records

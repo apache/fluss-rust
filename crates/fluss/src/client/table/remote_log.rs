@@ -19,9 +19,10 @@ use crate::error::{Error, Result};
 use crate::io::{FileIO, Storage};
 use crate::metadata::TableBucket;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
+use futures::TryStreamExt;
 use parking_lot::Mutex;
 use std::{
-    cmp::{Ordering, Reverse, min},
+    cmp::{Ordering, Reverse},
     collections::{BinaryHeap, HashMap},
     future::Future,
     io, mem,
@@ -293,6 +294,7 @@ enum DownloadResult {
 struct ProductionFetcher {
     credentials_rx: CredentialsReceiver,
     local_log_dir: Arc<TempDir>,
+    remote_log_read_concurrency: usize,
 }
 
 impl RemoteLogFetcher for ProductionFetcher {
@@ -302,6 +304,7 @@ impl RemoteLogFetcher for ProductionFetcher {
     ) -> Pin<Box<dyn Future<Output = Result<FetchResult>> + Send>> {
         let mut credentials_rx = self.credentials_rx.clone();
         let local_log_dir = self.local_log_dir.clone();
+        let remote_log_read_concurrency = self.remote_log_read_concurrency;
 
         // Clone data needed for async operation to avoid lifetime issues
         let segment = request.segment.clone();
@@ -361,6 +364,7 @@ impl RemoteLogFetcher for ProductionFetcher {
                 &remote_path,
                 &local_file_path,
                 &remote_fs_props,
+                remote_log_read_concurrency,
             )
             .await?;
 
@@ -768,11 +772,13 @@ impl RemoteLogDownloader {
         local_log_dir: TempDir,
         max_prefetch_segments: usize,
         max_concurrent_downloads: usize,
+        remote_log_read_concurrency: usize,
         credentials_rx: CredentialsReceiver,
     ) -> Result<Self> {
         let fetcher = Arc::new(ProductionFetcher {
             credentials_rx,
             local_log_dir: Arc::new(local_log_dir),
+            remote_log_read_concurrency: remote_log_read_concurrency.max(1),
         });
 
         Self::new_with_fetcher(fetcher, max_prefetch_segments, max_concurrent_downloads)
@@ -848,12 +854,13 @@ impl Drop for RemoteLogDownloader {
 }
 
 impl RemoteLogDownloader {
-    /// Download a file from remote storage to local using streaming read/write
+    /// Download a file from remote storage to local using streaming read/write.
     async fn download_file(
         remote_log_tablet_dir: &str,
         remote_path: &str,
         local_path: &Path,
         remote_fs_props: &HashMap<String, String>,
+        remote_log_read_concurrency: usize,
     ) -> Result<PathBuf> {
         // Handle both URL (e.g., "s3://bucket/path") and local file paths
         // If the path doesn't contain "://", treat it as a local file path
@@ -886,56 +893,70 @@ impl RemoteLogDownloader {
 
         // Timeout for remote storage operations (30 seconds)
         const REMOTE_OP_TIMEOUT: Duration = Duration::from_secs(30);
+        const CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8MiB
 
-        // Get file metadata to know the size with timeout
-        let meta = op.stat(relative_path).await?;
-        let file_size = meta.content_length();
-
-        // Create local file for writing
-        let mut local_file = tokio::fs::File::create(local_path).await?;
-
-        // Stream data from remote to local file in chunks
-        // opendal::Reader::read accepts a range, so we read in chunks
-        const CHUNK_SIZE: u64 = 8 * 1024 * 1024; // 8MB chunks for efficient reading
-        let mut offset = 0u64;
-        let mut chunk_count = 0u64;
-        let total_chunks = file_size.div_ceil(CHUNK_SIZE);
-
-        while offset < file_size {
-            let end = min(offset + CHUNK_SIZE, file_size);
-            let range = offset..end;
-            chunk_count += 1;
-
-            if chunk_count <= 3 || chunk_count % 10 == 0 {
-                log::debug!(
-                    "Remote log download: reading chunk {chunk_count}/{total_chunks} (offset {offset})"
-                );
-            }
-
-            // Read chunk from remote storage with timeout
-            let read_future = op.read_with(relative_path).range(range.clone());
-            let chunk = tokio::time::timeout(REMOTE_OP_TIMEOUT, read_future)
-                .await
-                .map_err(|e| {
-                    Error::IoUnexpectedError {
-                        message: format!(
-                            "Timeout reading chunk from remote storage: {remote_path} at offset {offset}, exception: {e}."
-                        ),
-                        source: io::ErrorKind::TimedOut.into(),
-                    }
-                })??;
-            let bytes = chunk.to_bytes();
-
-            // Write chunk to local file
-            local_file.write_all(&bytes).await?;
-
-            offset = end;
-        }
-
-        // Ensure all data is flushed to disk
-        local_file.sync_all().await?;
+        Self::download_file_streaming(
+            &op,
+            relative_path,
+            remote_path,
+            local_path,
+            CHUNK_SIZE,
+            remote_log_read_concurrency,
+            REMOTE_OP_TIMEOUT,
+        )
+        .await?;
 
         Ok(local_path.to_path_buf())
+    }
+
+    async fn download_file_streaming(
+        op: &opendal::Operator,
+        relative_path: &str,
+        remote_path: &str,
+        local_path: &Path,
+        chunk_size: usize,
+        streaming_read_concurrency: usize,
+        remote_op_timeout: Duration,
+    ) -> Result<()> {
+        let mut local_file = tokio::fs::File::create(local_path).await?;
+
+        let reader_future = op
+            .reader_with(relative_path)
+            .chunk(chunk_size)
+            .concurrent(streaming_read_concurrency);
+        let reader = tokio::time::timeout(remote_op_timeout, reader_future)
+            .await
+            .map_err(|e| Error::IoUnexpectedError {
+                message: format!("Timeout creating streaming reader for {remote_path}: {e}."),
+                source: io::ErrorKind::TimedOut.into(),
+            })??;
+
+        let mut stream = tokio::time::timeout(remote_op_timeout, reader.into_bytes_stream(..))
+            .await
+            .map_err(|e| Error::IoUnexpectedError {
+                message: format!("Timeout creating streaming bytes stream for {remote_path}: {e}."),
+                source: io::ErrorKind::TimedOut.into(),
+            })??;
+
+        let mut chunk_count = 0u64;
+        while let Some(chunk) = tokio::time::timeout(remote_op_timeout, stream.try_next())
+            .await
+            .map_err(|e| Error::IoUnexpectedError {
+                message: format!(
+                    "Timeout streaming chunk from remote storage: {remote_path}, exception: {e}."
+                ),
+                source: io::ErrorKind::TimedOut.into(),
+            })??
+        {
+            chunk_count += 1;
+            if chunk_count <= 3 || chunk_count % 10 == 0 {
+                log::debug!("Remote log streaming download: chunk #{chunk_count} ({remote_path})");
+            }
+            local_file.write_all(&chunk).await?;
+        }
+
+        local_file.sync_all().await?;
+        Ok(())
     }
 }
 
