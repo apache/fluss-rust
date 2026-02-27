@@ -58,6 +58,10 @@ cmake(
         "ARROW_JSON": "OFF",
         "ARROW_PARQUET": "OFF",
         "ARROW_IPC": "ON",
+        "ARROW_JEMALLOC": "OFF",
+        "ARROW_MIMALLOC": "OFF",
+        "ARROW_SIMD_LEVEL": "NONE",
+        "ARROW_RUNTIME_SIMD_LEVEL": "NONE",
         "ARROW_DEPENDENCY_SOURCE": "BUNDLED",
         # Temporary workarounds for older images / Bazel sandbox toolchain detection.
         "EP_CMAKE_RANLIB": "__EP_CMAKE_RANLIB__",
@@ -186,7 +190,10 @@ def _system_arrow_repo_impl(repo_ctx):
     if copy_res.return_code != 0:
         fail("failed to copy system arrow prefix %s: %s" % (prefix, copy_res.stderr))
 
-    header_root = prefix + "/" + include_dir
+    include_dir_for_scan = include_dir
+    if include_dir_for_scan.endswith("/"):
+        include_dir_for_scan = include_dir_for_scan[:-1]
+    header_root = prefix + "/" + include_dir_for_scan + "/arrow"
     headers = _list_files(repo_ctx, header_root, [".h", ".hpp"])
     header_srcs = []
     for h in headers:

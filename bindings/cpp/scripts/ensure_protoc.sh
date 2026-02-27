@@ -236,8 +236,4 @@ mkdir -p "${PROTOC_PREFIX}"
 cp -a "${extract_dir}/." "${PROTOC_PREFIX}/"
 chmod +x "${PROTOC_BIN}"
 
-if [[ "${PROTOC_PRINT_PATH_ONLY}" == "1" ]]; then
-  echo "${PROTOC_BIN}"
-else
-  echo "${PROTOC_BIN}"
-fi
+echo "${PROTOC_BIN}"

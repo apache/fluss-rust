@@ -34,21 +34,21 @@ config_setting(
     values = {"compilation_mode": "opt"},
 )
 
-genrule(
-    name = "cargo_build_debug",
-    srcs = glob([
-        "src/**/*.rs",
-        "Cargo.toml",
-    ]),
-    outs = [
-        "rust_lib_debug.a",
-        "rust_bridge_cc_debug.cc",
-        "rust_bridge_h_debug.h",
-        "src/lib.rs_debug.h",
-        "cxxbridge/rust/cxx_debug.h",
-    ],
-    cmd = """
+_PROTOC_SETUP_SNIPPET = """
         set -e
+        if [ -n "$${CARGO:-}" ]; then
+            if [ ! -x "$$CARGO" ]; then
+                echo "Error: CARGO is set but not executable: $$CARGO" >&2
+                exit 1
+            fi
+            CARGO_BIN="$$CARGO"
+        else
+            CARGO_BIN=$$(command -v cargo || true)
+            if [ -z "$$CARGO_BIN" ]; then
+                echo "Error: cargo not found in PATH and CARGO is not set" >&2
+                exit 1
+            fi
+        fi
         if [ -n "$${PROTOC:-}" ]; then
             if [ ! -x "$$PROTOC" ]; then
                 echo "Error: PROTOC is set but not executable: $$PROTOC" >&2
@@ -63,6 +63,22 @@ genrule(
             fi
             export PROTOC="$$PROTOC_BIN"
         fi
+"""
+
+genrule(
+    name = "cargo_build_debug",
+    srcs = glob([
+        "src/**/*.rs",
+        "Cargo.toml",
+    ]),
+    outs = [
+        "rust_lib_debug.a",
+        "rust_bridge_cc_debug.cc",
+        "rust_bridge_h_debug.h",
+        "src/lib.rs_debug.h",
+        "cxxbridge/rust/cxx_debug.h",
+    ],
+    cmd = _PROTOC_SETUP_SNIPPET + """
         EXECROOT=$$(pwd)
         OUTPUT_LIB=$(location rust_lib_debug.a)
         OUTPUT_CC=$(location rust_bridge_cc_debug.cc)
@@ -80,7 +96,7 @@ genrule(
             exit 1
         fi
         cd $$WORKSPACE_ROOT
-        cargo build --manifest-path $$CARGO_DIR/Cargo.toml
+        "$$CARGO_BIN" build --manifest-path $$CARGO_DIR/Cargo.toml
         CARGO_TARGET_DIR=$$WORKSPACE_ROOT/target
         # cxxbridge uses the Cargo package name (with hyphen): fluss-cpp
         RUST_BRIDGE_DIR=$$CARGO_TARGET_DIR/cxxbridge/fluss-cpp/src
@@ -128,22 +144,7 @@ genrule(
         "src/lib.rs_release.h",
         "cxxbridge/rust/cxx_release.h",
     ],
-    cmd = """
-        set -e
-        if [ -n "$${PROTOC:-}" ]; then
-            if [ ! -x "$$PROTOC" ]; then
-                echo "Error: PROTOC is set but not executable: $$PROTOC" >&2
-                exit 1
-            fi
-            export PROTOC
-        else
-            PROTOC_BIN=$$(command -v protoc || true)
-            if [ -z "$$PROTOC_BIN" ]; then
-                echo "Error: protoc not found in PATH and PROTOC is not set" >&2
-                exit 1
-            fi
-            export PROTOC="$$PROTOC_BIN"
-        fi
+    cmd = _PROTOC_SETUP_SNIPPET + """
         EXECROOT=$$(pwd)
         OUTPUT_LIB=$(location rust_lib_release.a)
         OUTPUT_CC=$(location rust_bridge_cc_release.cc)
@@ -161,7 +162,7 @@ genrule(
             exit 1
         fi
         cd $$WORKSPACE_ROOT
-        cargo build --release --manifest-path $$CARGO_DIR/Cargo.toml
+        "$$CARGO_BIN" build --release --manifest-path $$CARGO_DIR/Cargo.toml
         CARGO_TARGET_DIR=$$WORKSPACE_ROOT/target
         # cxxbridge uses the Cargo package name (with hyphen): fluss-cpp
         RUST_BRIDGE_DIR=$$CARGO_TARGET_DIR/cxxbridge/fluss-cpp/src
@@ -280,7 +281,6 @@ cc_library(
         "src/admin.cpp",
         "src/connection.cpp",
         "src/table.cpp",
-        ":rust_bridge_cc_unified",
     ],
     hdrs = [
         "include/fluss.hpp",
