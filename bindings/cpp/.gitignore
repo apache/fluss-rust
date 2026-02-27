@@ -15,3 +15,10 @@ bazel-testlogs
 bazel-cpp
 bazel-*
 MODULE.bazel.lock
+
+# Keep versioned Bazel consumer examples (name starts with bazel-).
+!examples/bazel-consumer/
+!examples/bazel-consumer/**
+examples/bazel-consumer/**/MODULE.bazel.lock
+examples/bazel-consumer/**/bazel-*
+examples/bazel-consumer/**/tmp.log

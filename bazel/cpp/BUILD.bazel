@@ -1,0 +1,9 @@
+package(default_visibility = ["//visibility:public"])
+
+# Stable indirection target for the Arrow C++ dependency. The implementation
+# repo name can change across modes (registry/build/system) without touching
+# bindings/cpp/BUILD.bazel.
+alias(
+    name = "arrow_cpp_dep",
+    actual = "@apache_arrow_cpp//:arrow_cpp",
+)

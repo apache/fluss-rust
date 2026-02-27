@@ -17,7 +17,7 @@
 
 licenses(["notice"])
 
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import", "cc_library")
 
 config_setting(
     name = "debug_mode",
@@ -49,6 +49,20 @@ genrule(
     ],
     cmd = """
         set -e
+        if [ -n "$${PROTOC:-}" ]; then
+            if [ ! -x "$$PROTOC" ]; then
+                echo "Error: PROTOC is set but not executable: $$PROTOC" >&2
+                exit 1
+            fi
+            export PROTOC
+        else
+            PROTOC_BIN=$$(command -v protoc || true)
+            if [ -z "$$PROTOC_BIN" ]; then
+                echo "Error: protoc not found in PATH and PROTOC is not set" >&2
+                exit 1
+            fi
+            export PROTOC="$$PROTOC_BIN"
+        fi
         EXECROOT=$$(pwd)
         OUTPUT_LIB=$(location rust_lib_debug.a)
         OUTPUT_CC=$(location rust_bridge_cc_debug.cc)
@@ -116,6 +130,20 @@ genrule(
     ],
     cmd = """
         set -e
+        if [ -n "$${PROTOC:-}" ]; then
+            if [ ! -x "$$PROTOC" ]; then
+                echo "Error: PROTOC is set but not executable: $$PROTOC" >&2
+                exit 1
+            fi
+            export PROTOC
+        else
+            PROTOC_BIN=$$(command -v protoc || true)
+            if [ -z "$$PROTOC_BIN" ]; then
+                echo "Error: protoc not found in PATH and PROTOC is not set" >&2
+                exit 1
+            fi
+            export PROTOC="$$PROTOC_BIN"
+        fi
         EXECROOT=$$(pwd)
         OUTPUT_LIB=$(location rust_lib_release.a)
         OUTPUT_CC=$(location rust_bridge_cc_release.cc)
@@ -303,6 +331,7 @@ cc_library(
     }),
     deps = [
         ":rust_lib",
+        "//bazel/cpp:arrow_cpp_dep",
     ],
     visibility = ["//visibility:public"],
 )
@@ -405,4 +434,3 @@ cc_binary(
     }),
     visibility = ["//visibility:public"],
 )
-

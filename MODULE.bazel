@@ -16,13 +16,17 @@
 # under the License.
 
 module(
-    name = "fluss_cpp",
+    name = "red-fluss-rust",
+    version = "0.0.0",
 )
 
+# NOTE: Keep this dependency block in sync with bindings/cpp/MODULE.bazel.
+# SYNC_START bindings/cpp/MODULE.bazel
 bazel_dep(name = "rules_cc", version = "0.0.17")
 bazel_dep(name = "platforms", version = "0.0.10")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 bazel_dep(name = "rules_python", version = "1.2.0")
+# SYNC_END bindings/cpp/MODULE.bazel
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.12")
