@@ -988,7 +988,7 @@ struct Configuration {
     // Whether to use streaming reads for remote log download
     bool scanner_remote_log_streaming_read{true};
     // Streaming read concurrency within one remote log file
-    size_t scanner_remote_log_streaming_read_concurrency{4};
+    size_t scanner_remote_log_read_concurrency{4};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
 };
