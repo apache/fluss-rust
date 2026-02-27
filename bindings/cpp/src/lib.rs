@@ -47,6 +47,7 @@ mod ffi {
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
         scanner_log_max_poll_records: usize,
+        writer_batch_timeout_ms: i64,
     }
 
     struct FfiResult {
@@ -623,6 +624,7 @@ fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
         writer_acks: config.writer_acks.to_string(),
         writer_retries: config.writer_retries,
         writer_batch_size: config.writer_batch_size,
+        writer_batch_timeout_ms: config.writer_batch_timeout_ms,
         writer_bucket_no_key_assigner: assigner_type,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,

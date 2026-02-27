@@ -60,6 +60,11 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "writer.batch-timeout-ms" => {
+                        config.writer_batch_timeout_ms = value.parse::<i64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "scanner.remote-log.prefetch-num" => {
                         config.scanner_remote_log_prefetch_num =
                             value.parse::<usize>().map_err(|e| {
@@ -199,6 +204,18 @@ impl Config {
     #[setter]
     fn set_scanner_log_max_poll_records(&mut self, num: usize) {
         self.inner.scanner_log_max_poll_records = num;
+    }
+
+    /// Get the writer batch timeout in milliseconds
+    #[getter]
+    fn writer_batch_timeout_ms(&self) -> i64 {
+        self.inner.writer_batch_timeout_ms
+    }
+
+    /// Set the writer batch timeout in milliseconds
+    #[setter]
+    fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
+        self.inner.writer_batch_timeout_ms = timeout;
     }
 }
 

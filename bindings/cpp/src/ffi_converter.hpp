@@ -55,6 +55,7 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
     ffi_config.scanner_log_max_poll_records = config.scanner_log_max_poll_records;
+    ffi_config.writer_batch_timeout_ms = config.writer_batch_timeout_ms;
     return ffi_config;
 }
 

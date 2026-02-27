@@ -26,6 +26,7 @@ const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
 const DEFAULT_MAX_POLL_RECORDS: usize = 500;
+const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
 
 const DEFAULT_ACKS: &str = "all";
 
@@ -84,6 +85,11 @@ pub struct Config {
     /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
     #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
     pub scanner_log_max_poll_records: usize,
+
+    /// The maximum time to wait for a batch to be completed in milliseconds.
+    /// Default: 100 (matching Java CLIENT_WRITER_BATCH_TIMEOUT)
+    #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_TIMEOUT_MS)]
+    pub writer_batch_timeout_ms: i64,
 }
 
 impl Default for Config {
@@ -98,6 +104,7 @@ impl Default for Config {
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
+            writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
         }
     }
 }

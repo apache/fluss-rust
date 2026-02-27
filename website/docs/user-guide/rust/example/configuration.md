@@ -25,3 +25,4 @@ let conn = FlussConnection::new(config).await?;
 | `writer_retries`                | Number of retries on failure                                                         | `i32::MAX`       |
 | `writer_batch_size`             | Batch size for writes                                                                | 2 MB             |
 | `writer_bucket_no_key_assigner` | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin` | `sticky`         |
+| `writer_batch_timeout_ms`       | The maximum time to wait for a writer batch to fill up before sending.               | `100`            |

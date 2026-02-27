@@ -50,11 +50,12 @@ pub struct RecordAccumulator {
 
 impl RecordAccumulator {
     pub fn new(config: Config) -> Self {
+        let batch_timeout_ms = config.writer_batch_timeout_ms;
         RecordAccumulator {
             config,
             write_batches: Default::default(),
             incomplete_batches: Default::default(),
-            batch_timeout_ms: 500,
+            batch_timeout_ms,
             closed: Default::default(),
             flushes_in_progress: Default::default(),
             appends_in_progress: Default::default(),
