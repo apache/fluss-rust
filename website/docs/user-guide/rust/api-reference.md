@@ -71,6 +71,22 @@ Complete API reference for the Fluss Rust client.
 |--------------------------------------------------------------------------------------------|------------------------------|
 | `async fn get_latest_lake_snapshot(&self, table_path: &TablePath) -> Result<LakeSnapshot>` | Get the latest lake snapshot |
 
+### Cluster Operations
+
+| Method                                                        | Description                                         |
+|---------------------------------------------------------------|-----------------------------------------------------|
+| `async fn get_server_nodes(&self) -> Result<Vec<ServerNode>>` | Get all alive server nodes (coordinator + tablets)  |
+
+## `ServerNode`
+
+| Method                            | Description                                          |
+|-----------------------------------|------------------------------------------------------|
+| `fn id(&self) -> i32`            | Server node ID                                       |
+| `fn host(&self) -> &str`         | Hostname of the server                               |
+| `fn port(&self) -> u32`          | Port number                                          |
+| `fn server_type(&self) -> &ServerType` | Server type (`CoordinatorServer` or `TabletServer`) |
+| `fn uid(&self) -> &str`          | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)         |
+
 ## `FlussTable<'a>`
 
 | Method                                        | Description                             |

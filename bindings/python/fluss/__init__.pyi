@@ -185,6 +185,31 @@ class FlussConnection:
     ) -> bool: ...
     def __repr__(self) -> str: ...
 
+class ServerNode:
+    """Information about a server node in the Fluss cluster."""
+
+    @property
+    def id(self) -> int:
+        """The server node ID."""
+        ...
+    @property
+    def host(self) -> str:
+        """The hostname of the server."""
+        ...
+    @property
+    def port(self) -> int:
+        """The port number of the server."""
+        ...
+    @property
+    def server_type(self) -> str:
+        """The type of server ('CoordinatorServer' or 'TabletServer')."""
+        ...
+    @property
+    def uid(self) -> str:
+        """The unique identifier of the server (e.g. 'cs-0', 'ts-1')."""
+        ...
+    def __repr__(self) -> str: ...
+
 class FlussAdmin:
     async def create_database(
         self,
@@ -305,6 +330,13 @@ class FlussAdmin:
 
         Returns:
             List of PartitionInfo objects
+        """
+        ...
+    async def get_server_nodes(self) -> List[ServerNode]:
+        """Get all alive server nodes in the cluster.
+
+        Returns:
+            List of ServerNode objects (coordinator and tablet servers)
         """
         ...
     def __repr__(self) -> str: ...

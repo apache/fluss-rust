@@ -881,6 +881,14 @@ struct PartitionInfo {
     std::string partition_name;
 };
 
+struct ServerNode {
+    int32_t id;
+    std::string host;
+    uint32_t port;
+    std::string server_type;
+    std::string uid;
+};
+
 /// Descriptor for create_database (optional). Leave comment and properties empty for default.
 struct DatabaseDescriptor {
     std::string comment;
@@ -1072,6 +1080,8 @@ class Admin {
     Result ListTables(const std::string& database_name, std::vector<std::string>& out);
 
     Result TableExists(const TablePath& table_path, bool& out);
+
+    Result GetServerNodes(std::vector<ServerNode>& out);
 
    private:
     Result DoListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,

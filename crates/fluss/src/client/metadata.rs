@@ -89,7 +89,7 @@ impl Metadata {
         Cluster::from_metadata_response(response, None)
     }
 
-    async fn reinit_cluster(&self) -> Result<()> {
+    pub(crate) async fn reinit_cluster(&self) -> Result<()> {
         let cluster = Self::init_cluster(&self.bootstrap, self.connections.clone()).await?;
         *self.cluster.write() = cluster.into();
         Ok(())

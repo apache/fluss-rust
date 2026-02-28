@@ -520,6 +520,49 @@ mod admin_test {
     }
 
     #[tokio::test]
+    async fn test_get_server_nodes() {
+        let cluster = get_fluss_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.unwrap();
+
+        let nodes = admin
+            .get_server_nodes()
+            .await
+            .expect("should get server nodes");
+
+        assert!(
+            !nodes.is_empty(),
+            "Expected at least one server node in the cluster"
+        );
+
+        let has_coordinator = nodes
+            .iter()
+            .any(|n| *n.server_type() == fluss::ServerType::CoordinatorServer);
+        assert!(has_coordinator, "Expected a coordinator server node");
+
+        let tablet_count = nodes
+            .iter()
+            .filter(|n| *n.server_type() == fluss::ServerType::TabletServer)
+            .count();
+        assert!(
+            tablet_count >= 1,
+            "Expected at least one tablet server node"
+        );
+
+        for node in &nodes {
+            assert!(
+                !node.host().is_empty(),
+                "Server node host should not be empty"
+            );
+            assert!(node.port() > 0, "Server node port should be > 0");
+            assert!(
+                !node.uid().is_empty(),
+                "Server node uid should not be empty"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_error_table_not_partitioned() {
         let cluster = get_fluss_cluster();
         let connection = cluster.get_fluss_connection().await;

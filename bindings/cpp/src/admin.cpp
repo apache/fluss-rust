@@ -346,4 +346,22 @@ Result Admin::TableExists(const TablePath& table_path, bool& out) {
     return result;
 }
 
+Result Admin::GetServerNodes(std::vector<ServerNode>& out) {
+    if (!Available()) {
+        return utils::make_client_error("Admin not available");
+    }
+
+    auto ffi_result = admin_->get_server_nodes();
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.clear();
+        out.reserve(ffi_result.server_nodes.size());
+        for (const auto& node : ffi_result.server_nodes) {
+            out.push_back({node.node_id, std::string(node.host), node.port,
+                           std::string(node.server_type), std::string(node.uid)});
+        }
+    }
+    return result;
+}
+
 }  // namespace fluss

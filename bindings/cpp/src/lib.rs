@@ -229,6 +229,19 @@ mod ffi {
         value: bool,
     }
 
+    struct FfiServerNode {
+        node_id: i32,
+        host: String,
+        port: u32,
+        server_type: String,
+        uid: String,
+    }
+
+    struct FfiServerNodesResult {
+        result: FfiResult,
+        server_nodes: Vec<FfiServerNode>,
+    }
+
     extern "Rust" {
         type Connection;
         type Admin;
@@ -319,6 +332,7 @@ mod ffi {
         fn get_database_info(self: &Admin, database_name: &str) -> FfiDatabaseInfoResult;
         fn list_tables(self: &Admin, database_name: &str) -> FfiListTablesResult;
         fn table_exists(self: &Admin, table_path: &FfiTablePath) -> FfiBoolResult;
+        fn get_server_nodes(self: &Admin) -> FfiServerNodesResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
@@ -1101,6 +1115,33 @@ impl Admin {
             Err(e) => ffi::FfiListPartitionInfosResult {
                 result: err_from_core_error(&e),
                 partition_infos: vec![],
+            },
+        }
+    }
+
+    fn get_server_nodes(&self) -> ffi::FfiServerNodesResult {
+        let result = RUNTIME.block_on(async { self.inner.get_server_nodes().await });
+
+        match result {
+            Ok(nodes) => {
+                let server_nodes: Vec<ffi::FfiServerNode> = nodes
+                    .into_iter()
+                    .map(|node| ffi::FfiServerNode {
+                        node_id: node.id(),
+                        host: node.host().to_string(),
+                        port: node.port(),
+                        server_type: node.server_type().to_string(),
+                        uid: node.uid().to_string(),
+                    })
+                    .collect();
+                ffi::FfiServerNodesResult {
+                    result: ok_result(),
+                    server_nodes,
+                }
+            }
+            Err(e) => ffi::FfiServerNodesResult {
+                result: err_from_core_error(&e),
+                server_nodes: vec![],
             },
         }
     }
