@@ -489,7 +489,7 @@ mod admin_test {
 
     #[tokio::test]
     async fn test_get_server_nodes() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.unwrap();
 
