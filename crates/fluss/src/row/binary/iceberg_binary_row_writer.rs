@@ -17,7 +17,7 @@
 
 use bytes::{Bytes, BytesMut};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::DataType;
 use crate::row::Decimal;
 use crate::row::binary::{BinaryWriter, ValueWriter};
@@ -60,7 +60,20 @@ impl IcebergBinaryRowWriter {
         }
     }
 
+    // TODO: Once IcebergKeyEncoder lands (see #308), add end-to-end tests via
+    // IcebergKeyEncoder to verify correctness of this writer (similar to
+    // CompactedKeyEncoder tests for CompactedKeyWriter).
     pub fn create_value_writer(field_type: &DataType) -> Result<ValueWriter> {
+        // Iceberg does not support TinyInt or SmallInt — reject them to match
+        // Java IcebergBinaryRowWriter.createFieldWriter() behavior.
+        if matches!(field_type, DataType::TinyInt(_) | DataType::SmallInt(_)) {
+            return Err(Error::UnsupportedOperation {
+                message: format!(
+                    "Unsupported type for Iceberg binary row writer: {:?}",
+                    field_type
+                ),
+            });
+        }
         ValueWriter::create_value_writer(field_type, None)
     }
 
@@ -191,6 +204,7 @@ impl BinaryWriter for IcebergBinaryRowWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::{SmallIntType, TinyIntType};
     use crate::row::datum::{TimestampLtz, TimestampNtz};
     use bigdecimal::{BigDecimal, num_bigint::BigInt};
 
@@ -386,6 +400,32 @@ mod tests {
         let large = vec![0xAAu8; 128];
         w.write_bytes(&large);
         assert_eq!(w.buffer(), large.as_slice());
+    }
+
+    #[test]
+    fn test_create_value_writer_rejects_tinyint() {
+        let dt = DataType::TinyInt(TinyIntType::new());
+        match IcebergBinaryRowWriter::create_value_writer(&dt) {
+            Err(e) => assert!(
+                e.to_string()
+                    .contains("Unsupported type for Iceberg binary row writer"),
+                "unexpected error: {e}",
+            ),
+            Ok(_) => panic!("expected error for TinyInt, got Ok"),
+        }
+    }
+
+    #[test]
+    fn test_create_value_writer_rejects_smallint() {
+        let dt = DataType::SmallInt(SmallIntType::new());
+        match IcebergBinaryRowWriter::create_value_writer(&dt) {
+            Err(e) => assert!(
+                e.to_string()
+                    .contains("Unsupported type for Iceberg binary row writer"),
+                "unexpected error: {e}",
+            ),
+            Ok(_) => panic!("expected error for SmallInt, got Ok"),
+        }
     }
 
     #[test]
