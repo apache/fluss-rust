@@ -884,7 +884,6 @@ class ErrorCode:
     """
 
     CLIENT_ERROR: int
-    NONE: int
     UNKNOWN_SERVER_ERROR: int
     NETWORK_EXCEPTION: int
     UNSUPPORTED_VERSION: int
