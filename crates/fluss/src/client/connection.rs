@@ -41,6 +41,7 @@ impl FlussConnection {
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
 
         let timeout = Duration::from_millis(arg.connect_timeout_ms);
+        let request_timeout = Duration::from_millis(arg.request_timeout_ms);
         let connections = if arg.is_sasl_enabled() {
             Arc::new(
                 RpcClient::new()
@@ -48,10 +49,15 @@ impl FlussConnection {
                         arg.security_sasl_username.clone(),
                         arg.security_sasl_password.clone(),
                     )
-                    .with_timeout(timeout),
+                    .with_timeout(timeout)
+                    .with_request_timeout(request_timeout),
             )
         } else {
-            Arc::new(RpcClient::new().with_timeout(timeout))
+            Arc::new(
+                RpcClient::new()
+                    .with_timeout(timeout)
+                    .with_request_timeout(request_timeout),
+            )
         };
         let metadata = Metadata::new(arg.bootstrap_servers.as_str(), connections.clone()).await?;
 

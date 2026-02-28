@@ -71,6 +71,7 @@ pub struct RpcClient {
     connections: RwLock<HashMap<String, ServerConnection>>,
     client_id: Arc<str>,
     timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
     max_message_size: usize,
     sasl_config: Option<SaslConfig>,
 }
@@ -81,6 +82,7 @@ impl RpcClient {
             connections: Default::default(),
             client_id: Arc::from(""),
             timeout: None,
+            request_timeout: None,
             max_message_size: usize::MAX,
             sasl_config: None,
         }
@@ -88,6 +90,11 @@ impl RpcClient {
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
         self
     }
 
@@ -133,6 +140,7 @@ impl RpcClient {
             BufStream::new(transport),
             self.max_message_size,
             self.client_id.clone(),
+            self.request_timeout,
         );
         let connection = ServerConnection::new(messenger);
 
@@ -266,6 +274,8 @@ pub struct ServerConnectionInner<RW> {
 
     state: Arc<Mutex<ConnectionState>>,
 
+    request_timeout: Option<Duration>,
+
     join_handle: JoinHandle<()>,
 }
 
@@ -273,7 +283,12 @@ impl<RW> ServerConnectionInner<RW>
 where
     RW: AsyncRead + AsyncWrite + Send + 'static,
 {
-    pub fn new(stream: RW, max_message_size: usize, client_id: Arc<str>) -> Self {
+    pub fn new(
+        stream: RW,
+        max_message_size: usize,
+        client_id: Arc<str>,
+        request_timeout: Option<Duration>,
+    ) -> Self {
         let (stream_read, stream_write) = tokio::io::split(stream);
         let state = Arc::new(Mutex::new(ConnectionState::RequestMap(HashMap::default())));
         let state_captured = Arc::clone(&state);
@@ -337,6 +352,7 @@ where
             client_id,
             request_id: AtomicI32::new(0),
             state,
+            request_timeout,
             join_handle,
         }
     }
@@ -388,10 +404,28 @@ where
 
         self.send_message(buf).await?;
         _cleanup_on_cancel.message_sent();
-        let mut response = rx.await.map_err(|e| Error::UnexpectedError {
-            message: "Got recvError, some one close the channel".to_string(),
-            source: Some(Box::new(e)),
-        })??;
+        let mut response = match self.request_timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, rx).await {
+                Ok(result) => result.map_err(|e| Error::UnexpectedError {
+                    message: "Got recvError, some one close the channel".to_string(),
+                    source: Some(Box::new(e)),
+                })??,
+                Err(_elapsed) => {
+                    if let ConnectionState::RequestMap(map) = self.state.lock().deref_mut() {
+                        map.remove(&request_id);
+                    }
+                    return Err(RpcError::RequestTimeout {
+                        timeout,
+                        api_key: R::API_KEY,
+                    }
+                    .into());
+                }
+            },
+            None => rx.await.map_err(|e| Error::UnexpectedError {
+                message: "Got recvError, some one close the channel".to_string(),
+                source: Some(Box::new(e)),
+            })??,
+        };
 
         if let Some(error_response) = response.header.error_response {
             return Err(Error::FlussAPIError {
@@ -559,5 +593,52 @@ impl Drop for CleanupRequestStateOnCancel {
                 map.remove(&self.request_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::TablePath;
+    use crate::rpc::message::TableExistsRequest;
+
+    #[tokio::test]
+    async fn test_request_timeout() {
+        // Create a duplex stream where the "server" side never responds.
+        let (client_stream, _server_stream) = tokio::io::duplex(1024);
+
+        let conn = ServerConnectionInner::new(
+            BufStream::new(client_stream),
+            usize::MAX,
+            Arc::from("test"),
+            Some(Duration::from_millis(50)),
+        );
+
+        let table_path = TablePath::new("db", "table");
+        let request = TableExistsRequest::new(&table_path);
+        let result = conn.request(request).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("timed out"),
+            "expected timeout error, got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_no_timeout() {
+        // With None timeout, verify a connection can still be constructed without panics.
+        let (client_stream, _server_stream) = tokio::io::duplex(1024);
+
+        let conn = ServerConnectionInner::new(
+            BufStream::new(client_stream),
+            usize::MAX,
+            Arc::from("test"),
+            None,
+        );
+
+        assert!(!conn.is_poisoned());
     }
 }

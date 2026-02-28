@@ -113,6 +113,11 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "request-timeout-ms" => {
+                        config.request_timeout_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "security.protocol" => {
                         config.security_protocol = value;
                     }
@@ -265,6 +270,18 @@ impl Config {
     #[setter]
     fn set_connect_timeout_ms(&mut self, timeout: u64) {
         self.inner.connect_timeout_ms = timeout;
+    }
+
+    /// Get the request timeout in milliseconds
+    #[getter]
+    fn request_timeout_ms(&self) -> u64 {
+        self.inner.request_timeout_ms
+    }
+
+    /// Set the request timeout in milliseconds
+    #[setter]
+    fn set_request_timeout_ms(&mut self, timeout: u64) {
+        self.inner.request_timeout_ms = timeout;
     }
 
     /// Get the security protocol
