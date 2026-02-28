@@ -17,6 +17,7 @@
 
 mod accumulator;
 mod batch;
+mod idempotence;
 
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
@@ -38,6 +39,7 @@ mod sender;
 mod write_format;
 mod writer_client;
 
+pub(crate) use idempotence::IdempotenceManager;
 pub use write_format::WriteFormat;
 pub use writer_client::WriterClient;
 

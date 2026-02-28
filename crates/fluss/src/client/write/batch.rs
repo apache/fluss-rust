@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 use crate::metadata::{KvFormat, PhysicalTablePath, RowType};
 use crate::record::MemoryLogRecordsArrowBuilder;
 use crate::record::kv::KvRecordBatchBuilder;
+use crate::record::{NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use bytes::Bytes;
 use std::cmp::max;
 use std::sync::Arc;
@@ -35,6 +36,8 @@ pub struct InnerWriteBatch {
     completed: AtomicBool,
     attempts: AtomicI32,
     drained_ms: i64,
+    batch_sequence: i32,
+    writer_id: i64,
 }
 
 impl InnerWriteBatch {
@@ -47,7 +50,21 @@ impl InnerWriteBatch {
             completed: AtomicBool::new(false),
             attempts: AtomicI32::new(0),
             drained_ms: -1,
+            batch_sequence: NO_BATCH_SEQUENCE,
+            writer_id: NO_WRITER_ID,
         }
+    }
+
+    pub fn batch_sequence(&self) -> i32 {
+        self.batch_sequence
+    }
+
+    pub fn writer_id(&self) -> i64 {
+        self.writer_id
+    }
+
+    pub fn has_batch_sequence(&self) -> bool {
+        self.batch_sequence != NO_BATCH_SEQUENCE
     }
 
     fn waited_time_ms(&self, now: i64) -> i64 {
@@ -176,6 +193,25 @@ impl WriteBatch {
     pub fn is_done(&self) -> bool {
         self.inner_batch().is_done()
     }
+
+    pub fn batch_sequence(&self) -> i32 {
+        self.inner_batch().batch_sequence()
+    }
+
+    pub fn writer_id(&self) -> i64 {
+        self.inner_batch().writer_id()
+    }
+
+    pub fn has_batch_sequence(&self) -> bool {
+        self.inner_batch().has_batch_sequence()
+    }
+
+    pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {
+        match self {
+            WriteBatch::ArrowLog(batch) => batch.set_writer_state(writer_id, batch_base_sequence),
+            WriteBatch::Kv(batch) => batch.set_writer_state(writer_id, batch_base_sequence),
+        }
+    }
 }
 
 pub struct ArrowLogWriteBatch {
@@ -224,6 +260,14 @@ impl ArrowLogWriteBatch {
                 Ok(None)
             }
         }
+    }
+
+    pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {
+        self.arrow_builder
+            .set_writer_state(writer_id, batch_base_sequence);
+        self.write_batch.batch_sequence = batch_base_sequence;
+        self.write_batch.writer_id = writer_id;
+        self.built_records = None;
     }
 
     pub fn build(&mut self) -> Result<Bytes> {
@@ -343,6 +387,13 @@ impl KvWriteBatch {
 
     pub fn close(&mut self) -> Result<()> {
         self.kv_batch_builder.close()
+    }
+
+    pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {
+        self.kv_batch_builder
+            .set_writer_state(writer_id, batch_base_sequence);
+        self.write_batch.batch_sequence = batch_base_sequence;
+        self.write_batch.writer_id = writer_id;
     }
 
     pub fn target_columns(&self) -> Option<&Arc<Vec<usize>>> {
