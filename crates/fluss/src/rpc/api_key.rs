@@ -41,6 +41,7 @@ pub enum ApiKey {
     CreatePartition,
     DropPartition,
     Authenticate,
+    InitWriter,
     Unknown(i16),
 }
 
@@ -68,6 +69,7 @@ impl From<i16> for ApiKey {
             1035 => ApiKey::GetDatabaseInfo,
             1036 => ApiKey::CreatePartition,
             1037 => ApiKey::DropPartition,
+            1026 => ApiKey::InitWriter,
             1038 => ApiKey::Authenticate,
             _ => Unknown(key),
         }
@@ -98,6 +100,7 @@ impl From<ApiKey> for i16 {
             ApiKey::GetDatabaseInfo => 1035,
             ApiKey::CreatePartition => 1036,
             ApiKey::DropPartition => 1037,
+            ApiKey::InitWriter => 1026,
             ApiKey::Authenticate => 1038,
             Unknown(x) => x,
         }
@@ -132,6 +135,7 @@ mod tests {
             (1035, ApiKey::GetDatabaseInfo),
             (1036, ApiKey::CreatePartition),
             (1037, ApiKey::DropPartition),
+            (1026, ApiKey::InitWriter),
             (1038, ApiKey::Authenticate),
         ];
 
