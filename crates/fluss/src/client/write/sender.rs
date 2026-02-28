@@ -17,26 +17,36 @@
 
 use crate::client::broadcast;
 use crate::client::metadata::Metadata;
+use crate::client::write::IdempotenceManager;
 use crate::client::write::batch::WriteBatch;
 use crate::client::{ReadyWriteBatch, RecordAccumulator};
 use crate::error::Error::UnexpectedError;
 use crate::error::{FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::{
-    PbProduceLogRespForBucket, PbPutKvRespForBucket, ProduceLogResponse, PutKvResponse,
+    PbProduceLogRespForBucket, PbPutKvRespForBucket, PbTablePath, ProduceLogResponse, PutKvResponse,
 };
+use crate::record::{NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::rpc::ServerConnection;
-use crate::rpc::message::{ProduceLogRequest, PutKvRequest};
+use crate::rpc::message::{InitWriterRequest, ProduceLogRequest, PutKvRequest};
 use crate::{PartitionId, TableId};
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use log::{debug, warn};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::sync::mpsc;
+
+type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
 #[allow(dead_code)]
 pub struct Sender {
-    running: bool,
+    running: AtomicBool,
     metadata: Arc<Metadata>,
     accumulator: Arc<RecordAccumulator>,
     in_flight_batches: Mutex<HashMap<TableBucket, Vec<i64>>>,
@@ -44,6 +54,7 @@ pub struct Sender {
     ack: i16,
     max_request_timeout_ms: i32,
     retries: i32,
+    idempotence_manager: Arc<IdempotenceManager>,
 }
 
 impl Sender {
@@ -54,9 +65,10 @@ impl Sender {
         max_request_timeout_ms: i32,
         ack: i16,
         retries: i32,
+        idempotence_manager: Arc<IdempotenceManager>,
     ) -> Self {
         Self {
-            running: true,
+            running: AtomicBool::new(true),
             metadata,
             accumulator,
             in_flight_batches: Default::default(),
@@ -64,19 +76,126 @@ impl Sender {
             ack,
             max_request_timeout_ms,
             retries,
+            idempotence_manager,
         }
     }
 
+    #[allow(dead_code)]
     pub async fn run(&self) -> Result<()> {
         loop {
-            if !self.running {
+            if !self.running.load(Ordering::Relaxed) {
                 return Ok(());
             }
             self.run_once().await?;
         }
     }
 
-    async fn run_once(&self) -> Result<()> {
+    const WRITER_ID_RETRY_TIMES: u32 = 3;
+    const WRITER_ID_RETRY_INTERVAL_MS: u64 = 100;
+
+    async fn maybe_wait_for_writer_id(&self) -> Result<()> {
+        if !self.idempotence_manager.is_enabled() || self.idempotence_manager.has_writer_id() {
+            return Ok(());
+        }
+        let mut retry_count = 0u32;
+        loop {
+            match self.try_init_writer_id().await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    // Authorization errors are not transient — fail immediately.
+                    if e.api_error() == Some(FlussError::AuthorizationException) {
+                        return Err(e);
+                    }
+                    if retry_count >= Self::WRITER_ID_RETRY_TIMES {
+                        return Err(e);
+                    }
+                    if e.api_error().is_some_and(Self::is_invalid_metadata_error) {
+                        let physical_paths = self.accumulator.get_physical_table_paths_in_batches();
+                        let physical_refs: HashSet<&Arc<PhysicalTablePath>> =
+                            physical_paths.iter().collect();
+                        if let Err(meta_err) = self
+                            .metadata
+                            .update_tables_metadata(&HashSet::new(), &physical_refs, vec![])
+                            .await
+                        {
+                            warn!("Failed to refresh metadata after writer ID error: {meta_err}");
+                        }
+                    }
+                    retry_count += 1;
+                    let delay_ms = Self::WRITER_ID_RETRY_INTERVAL_MS * 2u64.pow(retry_count);
+                    warn!(
+                        "Failed to allocate writer ID (attempt {retry_count}/{}), retrying in {delay_ms}ms: {e}",
+                        Self::WRITER_ID_RETRY_TIMES,
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+    }
+
+    async fn try_init_writer_id(&self) -> Result<()> {
+        // Deduplicate by (database, table) since multiple physical paths (partitions)
+        // may share the same table. Matches Java's Set<TablePath> dedup.
+        let mut seen = HashSet::new();
+        let table_paths: Vec<PbTablePath> = self
+            .accumulator
+            .get_physical_table_paths_in_batches()
+            .iter()
+            .filter_map(|path| {
+                let key = (
+                    path.get_database_name().to_string(),
+                    path.get_table_name().to_string(),
+                );
+                if seen.insert(key.clone()) {
+                    Some(PbTablePath {
+                        database_name: key.0,
+                        table_name: key.1,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if table_paths.is_empty() {
+            debug!("No table paths in batches, skipping writer ID allocation");
+            return Ok(());
+        }
+        let cluster = self.metadata.get_cluster();
+        let server = cluster.get_one_available_server().ok_or(UnexpectedError {
+            message: "No tablet server available to allocate writer ID".to_string(),
+            source: None,
+        })?;
+        let connection = self.metadata.get_connection(server).await?;
+        let response = connection
+            .request(InitWriterRequest::new(table_paths))
+            .await?;
+        self.idempotence_manager.set_writer_id(response.writer_id);
+        debug!(
+            "Allocated writer ID {} for idempotent writes",
+            response.writer_id
+        );
+        Ok(())
+    }
+
+    fn maybe_abort_batches(&self, error: &crate::error::Error) {
+        if self.accumulator.has_incomplete() {
+            warn!("Aborting write batches due to fatal error: {error}");
+            self.accumulator.abort_batches(broadcast::Error::Client {
+                message: format!("Writer ID allocation failed: {error}"),
+            });
+        }
+    }
+
+    /// Drain batches and return per-leader send futures without awaiting them.
+    /// Returns `(send_futures, next_check_delay)` where `next_check_delay` is
+    /// `Some(ms)` when no nodes were ready (caller should sleep).
+    async fn prepare_sends(&self) -> Result<(Vec<SendFuture<'_>>, Option<u64>)> {
+        if let Err(e) = self.maybe_wait_for_writer_id().await {
+            warn!("Failed to allocate writer ID after retries: {e}");
+            self.maybe_abort_batches(&e);
+            return Ok((vec![], None));
+        }
+
         let cluster = self.metadata.get_cluster();
         let ready_check_result = self.accumulator.ready(&cluster)?;
 
@@ -113,11 +232,10 @@ impl Sender {
         }
 
         if ready_check_result.ready_nodes.is_empty() {
-            tokio::time::sleep(Duration::from_millis(
-                ready_check_result.next_ready_check_delay_ms as u64,
-            ))
-            .await;
-            return Ok(());
+            return Ok((
+                vec![],
+                Some(ready_check_result.next_ready_check_delay_ms as u64),
+            ));
         }
 
         let batches = self.accumulator.drain(
@@ -126,11 +244,30 @@ impl Sender {
             self.max_request_size,
         )?;
 
+        let mut futures = Vec::new();
         if !batches.is_empty() {
             self.add_to_inflight_batches(&batches);
-            self.send_write_requests(batches).await?;
+            for (leader_id, leader_batches) in batches {
+                futures.push(
+                    Box::pin(self.send_write_request(leader_id, self.ack, leader_batches))
+                        as SendFuture<'_>,
+                );
+            }
         }
 
+        Ok((futures, None))
+    }
+
+    /// Blocking version of drain + send, used during shutdown drain.
+    async fn run_once(&self) -> Result<()> {
+        let (futures, delay) = self.prepare_sends().await?;
+        if let Some(ms) = delay {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            return Ok(());
+        }
+        for result in futures::future::join_all(futures).await {
+            result?;
+        }
         Ok(())
     }
 
@@ -144,17 +281,6 @@ impl Sender {
                     .push(batch.write_batch.batch_id());
             }
         }
-    }
-
-    async fn send_write_requests(
-        &self,
-        collated: HashMap<i32, Vec<ReadyWriteBatch>>,
-    ) -> Result<()> {
-        for (leader_id, batches) in collated {
-            self.send_write_request(leader_id, self.ack, batches)
-                .await?;
-        }
-        Ok(())
     }
 
     async fn send_write_request(
@@ -399,11 +525,40 @@ impl Sender {
         Ok(())
     }
 
+    // TODO: Java has a second overload `completeBatch(batch, bucket, logEndOffset)` used for
+    // KV responses. When callers need write offset info, change BatchWriteResult to carry
+    // optional offset metadata and plumb it through BroadcastOnce → ResultHandle → WriteResultFuture.
     fn complete_batch(&self, ready_write_batch: ReadyWriteBatch) {
+        if self.idempotence_manager.is_enabled()
+            && ready_write_batch.write_batch.batch_sequence() != NO_BATCH_SEQUENCE
+        {
+            self.idempotence_manager.handle_completed_batch(
+                &ready_write_batch.table_bucket,
+                ready_write_batch.write_batch.batch_id(),
+                ready_write_batch.write_batch.writer_id(),
+            );
+        }
         self.finish_batch(ready_write_batch, Ok(()));
     }
 
-    fn fail_batch(&self, ready_write_batch: ReadyWriteBatch, error: broadcast::Error) {
+    fn fail_batch(
+        &self,
+        ready_write_batch: ReadyWriteBatch,
+        error: broadcast::Error,
+        fluss_error: Option<FlussError>,
+        adjust_sequences: bool,
+    ) {
+        if self.idempotence_manager.is_enabled()
+            && ready_write_batch.write_batch.batch_sequence() != NO_BATCH_SEQUENCE
+        {
+            self.idempotence_manager.handle_failed_batch(
+                &ready_write_batch.table_bucket,
+                ready_write_batch.write_batch.batch_id(),
+                ready_write_batch.write_batch.writer_id(),
+                fluss_error,
+                adjust_sequences,
+            );
+        }
         self.finish_batch(ready_write_batch, Err(error));
     }
 
@@ -444,11 +599,15 @@ impl Sender {
         message: String,
     ) -> Result<()> {
         for batch in batches {
+            // Local errors (e.g. build failure) — server never saw the batch,
+            // so it's always safe to adjust sequences.
             self.fail_batch(
                 batch,
                 broadcast::Error::Client {
                     message: message.clone(),
                 },
+                None,
+                true,
             );
         }
         Ok(())
@@ -467,6 +626,39 @@ impl Sender {
                 physical_table_path.as_ref(),
                 ready_write_batch.table_bucket.bucket_id()
             );
+
+            // If idempotence is enabled, only retry if the current writer ID still matches
+            // the batch's writer ID. If the writer ID was reset (e.g., by another bucket's
+            // error), fail the batch instead of retrying with stale state.
+            if self.idempotence_manager.is_enabled() {
+                let batch_writer_id = ready_write_batch.write_batch.writer_id();
+                if batch_writer_id != NO_WRITER_ID
+                    && self.idempotence_manager.writer_id() != batch_writer_id
+                {
+                    warn!(
+                        "Writer ID changed from {} to {} since batch was sent, failing instead of retrying",
+                        batch_writer_id,
+                        self.idempotence_manager.writer_id()
+                    );
+                    self.fail_batch(
+                        ready_write_batch,
+                        broadcast::Error::WriteFailed {
+                            code: FlussError::UnknownWriterIdException.code(),
+                            message: format!(
+                                "Attempted to retry sending a batch but the writer id has changed from {} to {}. This batch will be dropped.",
+                                batch_writer_id,
+                                self.idempotence_manager.writer_id()
+                            ),
+                        },
+                        Some(FlussError::UnknownWriterIdException),
+                        false,
+                    );
+                    return Ok(
+                        Self::is_invalid_metadata_error(error).then_some(physical_table_path)
+                    );
+                }
+            }
+
             self.re_enqueue_batch(ready_write_batch);
             return Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path));
         }
@@ -481,18 +673,25 @@ impl Sender {
             return Ok(None);
         }
 
+        // Generic error path. handle_failed_batch will detect OutOfOrderSequence /
+        // UnknownWriterId and reset all writer state internally (matching Java).
+        // For other errors, only adjust sequences if the batch didn't exhaust its retries.
+        let can_adjust = ready_write_batch.write_batch.attempts() < self.retries;
         self.fail_batch(
             ready_write_batch,
             broadcast::Error::WriteFailed {
                 code: error.code(),
                 message,
             },
+            Some(error),
+            can_adjust,
         );
         Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path))
     }
 
     fn re_enqueue_batch(&self, ready_write_batch: ReadyWriteBatch) {
         self.remove_from_inflight_batches(&ready_write_batch);
+        // TODO: add retry metrics (Java: writerMetricGroup.recordsRetryTotal().inc(recordCount))
         self.accumulator.re_enqueue(ready_write_batch);
     }
 
@@ -508,9 +707,25 @@ impl Sender {
     }
 
     fn can_retry(&self, ready_write_batch: &ReadyWriteBatch, error: FlussError) -> bool {
-        ready_write_batch.write_batch.attempts() < self.retries
-            && !ready_write_batch.write_batch.is_done()
-            && Self::is_retriable_error(error)
+        if ready_write_batch.write_batch.attempts() >= self.retries
+            || ready_write_batch.write_batch.is_done()
+        {
+            return false;
+        }
+        if Self::is_retriable_error(error) {
+            return true;
+        }
+        // Idempotent-specific retry logic
+        let seq = ready_write_batch.write_batch.batch_sequence();
+        if self.idempotence_manager.is_enabled() && seq != NO_BATCH_SEQUENCE {
+            return self.idempotence_manager.can_retry_for_error(
+                &ready_write_batch.table_bucket,
+                seq,
+                ready_write_batch.write_batch.batch_id(),
+                error,
+            );
+        }
+        false
     }
 
     async fn update_metadata_if_needed(
@@ -561,8 +776,96 @@ impl Sender {
         )
     }
 
-    pub async fn close(&mut self) {
-        self.running = false;
+    /// Event-loop sender: drain batches and fire RPCs into a `FuturesUnordered`,
+    /// then process responses as they arrive. This interleaves drain cycles with
+    /// response handling — when a fast leader responds, we immediately drain and
+    /// send more batches for its buckets while slow leaders are still in-flight.
+    ///
+    /// Better than Java's fire-and-forget + Netty callback threads: same I/O
+    /// overlap, but single-task cooperative multitasking — no cross-thread
+    /// synchronization needed for response handling.
+    pub async fn run_with_shutdown(&self, mut shutdown_rx: mpsc::Receiver<()>) -> Result<()> {
+        let mut pending: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
+
+        loop {
+            if pending.is_empty() {
+                // Nothing in-flight: run a full drain cycle. This may briefly
+                // block on writer ID init or metadata refresh — acceptable here
+                // because there are no pending responses to starve.
+                tokio::select! {
+                    result = self.prepare_sends() => {
+                        match result {
+                            Ok((futures, delay)) => {
+                                if futures.is_empty() {
+                                    // Nothing to drain. Sleep for the ready-check
+                                    // delay to avoid busy-spinning.
+                                    // TODO: add a Notify that append() signals so we
+                                    // wake immediately on new batches instead of
+                                    // polling on a timer (same as Kafka's wakeup()).
+                                    let sleep_ms = delay.unwrap_or(1);
+                                    tokio::select! {
+                                        _ = shutdown_rx.recv() => break,
+                                        _ = tokio::time::sleep(Duration::from_millis(sleep_ms)) => continue,
+                                    }
+                                }
+                                for f in futures {
+                                    pending.push(f);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Uncaught error in sender drain, continuing: {e}");
+                                tokio::select! {
+                                    _ = shutdown_rx.recv() => break,
+                                    _ = tokio::time::sleep(Duration::from_millis(1)) => continue,
+                                }
+                            }
+                        }
+                    }
+                    _ = shutdown_rx.recv() => break,
+                }
+            } else {
+                // Sends are in-flight: process responses as they arrive,
+                // then try to drain and send more batches. The prepare_sends
+                // call may briefly await on writer ID init or metadata refresh
+                // in rare cases (writer ID reset, leader change); this is
+                // acceptable because the alternative (skipping the drain)
+                // would delay recovery.
+                tokio::select! {
+                    Some(result) = pending.next() => {
+                        if let Err(e) = result {
+                            warn!("Uncaught error in send request, continuing: {e}");
+                        }
+                        // Drain: fire new sends if batches are ready.
+                        // Completed responses may have freed in-flight slots.
+                        if let Ok((futures, _)) = self.prepare_sends().await {
+                            for f in futures {
+                                pending.push(f);
+                            }
+                        }
+                    }
+                    _ = shutdown_rx.recv() => break,
+                }
+            }
+        }
+
+        // Graceful shutdown: drain remaining batches, then wait for all
+        // in-flight sends to complete.
+        while self.accumulator.has_undrained() {
+            if let Err(e) = self.run_once().await {
+                warn!("Error during shutdown drain, continuing: {e}");
+            }
+        }
+        while let Some(result) = pending.next().await {
+            if let Err(e) = result {
+                warn!("Error in send during shutdown, continuing: {e}");
+            }
+        }
+        self.close();
+        Ok(())
+    }
+
+    pub fn close(&self) {
+        self.running.store(false, Ordering::Relaxed);
     }
 }
 
@@ -643,6 +946,14 @@ mod tests {
     use crate::test_utils::{build_cluster_arc, build_table_info};
     use std::collections::{HashMap, HashSet};
 
+    fn disabled_idempotence() -> Arc<IdempotenceManager> {
+        Arc::new(IdempotenceManager::new(false, 5))
+    }
+
+    fn enabled_idempotence() -> Arc<IdempotenceManager> {
+        Arc::new(IdempotenceManager::new(true, 5))
+    }
+
     fn build_ready_batch(
         accumulator: &RecordAccumulator,
         cluster: Arc<Cluster>,
@@ -669,8 +980,20 @@ mod tests {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
         let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
-        let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 1);
+        let idempotence = disabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            1,
+            1,
+            idempotence,
+        );
 
         let (batch, _handle) =
             build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone())?;
@@ -699,8 +1022,20 @@ mod tests {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
         let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
-        let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
+        let idempotence = disabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            1,
+            0,
+            idempotence,
+        );
 
         let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
         sender.handle_write_batch_error(
@@ -723,8 +1058,20 @@ mod tests {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
         let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
-        let accumulator = Arc::new(RecordAccumulator::new(Config::default()));
-        let sender = Sender::new(metadata, accumulator.clone(), 1024 * 1024, 1000, 1, 0);
+        let idempotence = disabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            1,
+            0,
+            idempotence,
+        );
 
         let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster, table_path)?;
         let request_buckets = vec![batch.table_bucket.clone()];
@@ -746,6 +1093,223 @@ mod tests {
 
         let batch_result = handle.wait().await?;
         assert!(matches!(batch_result, Ok(())));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unknown_writer_id_resets() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let idempotence = enabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        idempotence.set_writer_id(42);
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            -1,
+            i32::MAX,
+            Arc::clone(&idempotence),
+        );
+
+        // build_ready_batch drains the batch, which assigns seq=0 and adds in-flight
+        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+        assert_eq!(batch.write_batch.writer_id(), 42);
+
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::UnknownWriterIdException,
+            "unknown writer".to_string(),
+        )?;
+
+        // Writer ID should be reset
+        assert!(!idempotence.has_writer_id());
+
+        // Batch should be failed (not retried)
+        let batch_result = handle.wait().await?;
+        assert!(matches!(
+            batch_result,
+            Err(broadcast::Error::WriteFailed { code, .. })
+                if code == FlussError::UnknownWriterIdException.code()
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_out_of_order_sequence_non_retriable_resets() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let idempotence = enabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        idempotence.set_writer_id(42);
+        // retries=0 means can_retry returns false immediately (attempts >= retries)
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            -1,
+            0,
+            Arc::clone(&idempotence),
+        );
+
+        // build_ready_batch drains the batch, which assigns seq=0 and adds in-flight
+        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+
+        // OutOfOrderSequence with retries exhausted → non-retriable → resets writer ID
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::OutOfOrderSequenceException,
+            "out of order".to_string(),
+        )?;
+
+        // Writer ID should be reset (matching Java behavior)
+        assert!(!idempotence.has_writer_id());
+
+        // Batch should be failed
+        let batch_result = handle.wait().await?;
+        assert!(matches!(
+            batch_result,
+            Err(broadcast::Error::WriteFailed { code, .. })
+                if code == FlussError::OutOfOrderSequenceException.code()
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stale_writer_id_prevents_retry() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+        let idempotence = enabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        idempotence.set_writer_id(42);
+        let sender = Sender::new(
+            metadata,
+            accumulator.clone(),
+            1024 * 1024,
+            1000,
+            -1,
+            i32::MAX,
+            Arc::clone(&idempotence),
+        );
+
+        // build_ready_batch drains the batch, which assigns seq=0 and adds in-flight
+        let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+        assert_eq!(batch.write_batch.writer_id(), 42);
+        let mut inflight = HashMap::new();
+        inflight.insert(1, vec![batch]);
+        sender.add_to_inflight_batches(&inflight);
+        let batch = inflight.remove(&1).unwrap().pop().unwrap();
+
+        // Simulate writer ID reset (e.g., another bucket got UnknownWriterIdException)
+        idempotence.reset_writer_id();
+        idempotence.set_writer_id(99); // new writer ID allocated
+
+        // NetworkException is normally retriable, but writer ID changed
+        sender.handle_write_batch_error(
+            batch,
+            FlussError::NetworkException,
+            "connection reset".to_string(),
+        )?;
+
+        // Batch should be failed (not retried) because writer ID is stale
+        let batch_result = handle.wait().await?;
+        assert!(matches!(
+            batch_result,
+            Err(broadcast::Error::WriteFailed { code, .. })
+                if code == FlussError::UnknownWriterIdException.code()
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_writer_state_assigned_on_drain() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let idempotence = enabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        idempotence.set_writer_id(99);
+
+        // Append a record to the accumulator
+        let table_info = Arc::new(build_table_info(table_path.as_ref().clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
+        let row = GenericRow {
+            values: vec![Datum::Int32(42)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+        accumulator.append(&record, 0, &cluster, false)?;
+
+        // Drain the batches — accumulator now assigns writer state during drain
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+
+        // Verify the batch got writer state assigned by the accumulator
+        let batch_list = batches.values().next().unwrap();
+        let batch = &batch_list[0];
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+        assert_eq!(batch.write_batch.writer_id(), 99);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reenqueued_batch_keeps_sequence_on_redrain() -> Result<()> {
+        let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+        let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+        let idempotence = enabled_idempotence();
+        let accumulator = Arc::new(RecordAccumulator::new(
+            Config::default(),
+            Arc::clone(&idempotence),
+        ));
+        idempotence.set_writer_id(99);
+
+        // build_ready_batch drains the batch, which now assigns writer state
+        // (seq=0) during drain since idempotence is enabled.
+        let (batch, _handle) =
+            build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+
+        let writer_id = idempotence.writer_id();
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+        assert!(batch.write_batch.has_batch_sequence());
+        assert_eq!(batch.write_batch.writer_id(), writer_id);
+
+        // Re-enqueue the batch (simulating a retriable error)
+        accumulator.re_enqueue(batch);
+
+        // Drain again
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+        let batch_list = batches.values_mut().next().unwrap();
+        let ready_batch = &mut batch_list[0];
+
+        // Re-enqueued batch keeps its original sequence
+        assert!(ready_batch.write_batch.has_batch_sequence());
+        assert_eq!(ready_batch.write_batch.writer_id(), writer_id);
+        assert_eq!(ready_batch.write_batch.batch_sequence(), 0);
+        // Only one sequence was allocated (during the first drain)
+        assert_eq!(
+            idempotence.next_sequence_and_increment(&ready_batch.table_bucket),
+            1
+        );
         Ok(())
     }
 }

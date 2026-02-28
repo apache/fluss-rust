@@ -28,7 +28,11 @@ const DEFAULT_DOWNLOAD_THREADS: usize = 3;
 const DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY: usize = 4;
 const DEFAULT_MAX_POLL_RECORDS: usize = 500;
 const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
+const DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET: usize = 5;
+const DEFAULT_WRITER_BUFFER_MEMORY_SIZE: usize = 64 * 1024 * 1024; // 64MB, matching Java
+const DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS: u64 = 60_000; // 60s
 
+const MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE: usize = 5;
 const DEFAULT_ACKS: &str = "all";
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
@@ -100,6 +104,31 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_TIMEOUT_MS)]
     pub writer_batch_timeout_ms: i64,
 
+    /// Whether to enable idempotent writes. When enabled, each batch is tagged with
+    /// a server-allocated writer ID and per-bucket sequence number so the server can
+    /// detect and deduplicate retried batches.
+    /// Default: true (matching Java CLIENT_WRITER_ENABLE_IDEMPOTENCE)
+    #[arg(long, default_value_t = true)]
+    pub writer_enable_idempotence: bool,
+
+    /// Maximum number of in-flight requests per bucket for idempotent writes.
+    /// Default: 5 (matching Java client.writer.max-inflight-requests-per-bucket)
+    #[arg(long, default_value_t = DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET)]
+    pub writer_max_inflight_requests_per_bucket: usize,
+
+    /// Total memory available for buffering write batches across all buckets.
+    /// When this limit is reached, `upsert()`/`append()` will block until
+    /// in-flight batches complete and free memory.
+    /// Default: 64MB (matching Java's LazyMemorySegmentPool: 512 pages x 128KB)
+    #[arg(long, default_value_t = DEFAULT_WRITER_BUFFER_MEMORY_SIZE)]
+    pub writer_buffer_memory_size: usize,
+
+    /// Maximum time in milliseconds to block waiting for buffer memory.
+    /// If the timeout is exceeded, the write call returns an error.
+    /// Default: 60000ms (60 seconds)
+    #[arg(long, default_value_t = DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS)]
+    pub writer_buffer_wait_timeout_ms: u64,
+
     /// Connect timeout in milliseconds for TCP transport connect.
     /// Default: 120000 (120 seconds).
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
@@ -144,6 +173,16 @@ impl std::fmt::Debug for Config {
                 &self.scanner_log_max_poll_records,
             )
             .field("writer_batch_timeout_ms", &self.writer_batch_timeout_ms)
+            .field("writer_enable_idempotence", &self.writer_enable_idempotence)
+            .field(
+                "writer_max_inflight_requests_per_bucket",
+                &self.writer_max_inflight_requests_per_bucket,
+            )
+            .field("writer_buffer_memory_size", &self.writer_buffer_memory_size)
+            .field(
+                "writer_buffer_wait_timeout_ms",
+                &self.writer_buffer_wait_timeout_ms,
+            )
             .field("connect_timeout_ms", &self.connect_timeout_ms)
             .field("security_protocol", &self.security_protocol)
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
@@ -167,6 +206,11 @@ impl Default for Config {
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
+            writer_enable_idempotence: true,
+            writer_max_inflight_requests_per_bucket:
+                DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET,
+            writer_buffer_memory_size: DEFAULT_WRITER_BUFFER_MEMORY_SIZE,
+            writer_buffer_wait_timeout_ms: DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
@@ -182,6 +226,38 @@ impl Config {
     /// registers as `"sasl"` (case-insensitive).
     pub fn is_sasl_enabled(&self) -> bool {
         self.security_protocol.eq_ignore_ascii_case("sasl")
+    }
+
+    /// Validates idempotence configuration. Returns `Ok(())` when the config is
+    /// consistent, or an error message when idempotence is enabled but other
+    /// settings are incompatible.
+    pub fn validate_idempotence(&self) -> Result<(), String> {
+        if !self.writer_enable_idempotence {
+            return Ok(());
+        }
+        let acks_is_all = self.writer_acks.eq_ignore_ascii_case("all") || self.writer_acks == "-1";
+        if !acks_is_all {
+            return Err(format!(
+                "Idempotent writes require acks='all' (-1), but got acks='{}'",
+                self.writer_acks
+            ));
+        }
+        if self.writer_retries <= 0 {
+            return Err(format!(
+                "Idempotent writes require retries > 0, but got retries={}",
+                self.writer_retries
+            ));
+        }
+        if self.writer_max_inflight_requests_per_bucket
+            > MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE
+        {
+            return Err(format!(
+                "Idempotent writes require max-inflight-requests-per-bucket <= {}, but got {}",
+                MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE,
+                self.writer_max_inflight_requests_per_bucket
+            ));
+        }
+        Ok(())
     }
 
     /// Validates security configuration. Returns `Ok(())` when the config is
@@ -277,5 +353,53 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_idempotence_default_is_valid() {
+        let config = Config::default();
+        assert!(config.validate_idempotence().is_ok());
+    }
+
+    #[test]
+    fn test_idempotence_disabled_skips_validation() {
+        let config = Config {
+            writer_enable_idempotence: false,
+            writer_acks: "0".to_string(),
+            writer_retries: 0,
+            writer_max_inflight_requests_per_bucket: 100,
+            ..Config::default()
+        };
+        assert!(config.validate_idempotence().is_ok());
+    }
+
+    #[test]
+    fn test_idempotence_requires_acks_all() {
+        let config = Config {
+            writer_enable_idempotence: true,
+            writer_acks: "1".to_string(),
+            ..Config::default()
+        };
+        assert!(config.validate_idempotence().is_err());
+    }
+
+    #[test]
+    fn test_idempotence_requires_retries() {
+        let config = Config {
+            writer_enable_idempotence: true,
+            writer_retries: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_idempotence().is_err());
+    }
+
+    #[test]
+    fn test_idempotence_requires_bounded_inflight() {
+        let config = Config {
+            writer_enable_idempotence: true,
+            writer_max_inflight_requests_per_bucket: 10,
+            ..Config::default()
+        };
+        assert!(config.validate_idempotence().is_err());
     }
 }

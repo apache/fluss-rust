@@ -97,6 +97,38 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "writer.enable-idempotence" => {
+                        config.writer_enable_idempotence = match value.as_str() {
+                            "true" => true,
+                            "false" => false,
+                            other => {
+                                return Err(FlussError::new_err(format!(
+                                    "Invalid value '{other}' for '{key}', expected 'true' or 'false'"
+                                )));
+                            }
+                        };
+                    }
+                    "writer.max-inflight-requests-per-bucket" => {
+                        config.writer_max_inflight_requests_per_bucket =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "writer.buffer.memory-size" => {
+                        config.writer_buffer_memory_size = value.parse::<usize>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "writer.buffer.wait-timeout-ms" => {
+                        config.writer_buffer_wait_timeout_ms =
+                            value.parse::<u64>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner = match value.as_str() {
                             "round_robin" => fcore::config::NoKeyAssigner::RoundRobin,
@@ -253,6 +285,54 @@ impl Config {
     #[setter]
     fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
         self.inner.writer_batch_timeout_ms = timeout;
+    }
+
+    /// Get whether idempotent writes are enabled
+    #[getter]
+    fn writer_enable_idempotence(&self) -> bool {
+        self.inner.writer_enable_idempotence
+    }
+
+    /// Set whether idempotent writes are enabled
+    #[setter]
+    fn set_writer_enable_idempotence(&mut self, enabled: bool) {
+        self.inner.writer_enable_idempotence = enabled;
+    }
+
+    /// Get the max in-flight requests per bucket
+    #[getter]
+    fn writer_max_inflight_requests_per_bucket(&self) -> usize {
+        self.inner.writer_max_inflight_requests_per_bucket
+    }
+
+    /// Set the max in-flight requests per bucket
+    #[setter]
+    fn set_writer_max_inflight_requests_per_bucket(&mut self, num: usize) {
+        self.inner.writer_max_inflight_requests_per_bucket = num;
+    }
+
+    /// Get the writer buffer memory size
+    #[getter]
+    fn writer_buffer_memory_size(&self) -> usize {
+        self.inner.writer_buffer_memory_size
+    }
+
+    /// Set the writer buffer memory size
+    #[setter]
+    fn set_writer_buffer_memory_size(&mut self, size: usize) {
+        self.inner.writer_buffer_memory_size = size;
+    }
+
+    /// Get the writer buffer wait timeout in milliseconds
+    #[getter]
+    fn writer_buffer_wait_timeout_ms(&self) -> u64 {
+        self.inner.writer_buffer_wait_timeout_ms
+    }
+
+    /// Set the writer buffer wait timeout in milliseconds
+    #[setter]
+    fn set_writer_buffer_wait_timeout_ms(&mut self, timeout: u64) {
+        self.inner.writer_buffer_wait_timeout_ms = timeout;
     }
 
     /// Get the connect timeout in milliseconds

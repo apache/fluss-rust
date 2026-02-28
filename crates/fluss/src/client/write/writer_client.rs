@@ -18,6 +18,8 @@
 use crate::BucketId;
 use crate::bucketing::BucketingFunction;
 use crate::client::metadata::Metadata;
+use crate::client::write::IdempotenceManager;
+use crate::client::write::broadcast;
 use crate::client::write::bucket_assigner::{
     BucketAssigner, HashBucketAssigner, RoundRobinBucketAssigner, StickyBucketAssigner,
 };
@@ -29,7 +31,10 @@ use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo};
 use bytes::Bytes;
 use dashmap::DashMap;
+use log::warn;
+use parking_lot::Mutex;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -38,46 +43,58 @@ pub struct WriterClient {
     config: Config,
     max_request_size: i32,
     accumulate: Arc<RecordAccumulator>,
-    shutdown_tx: mpsc::Sender<()>,
-    sender_join_handle: JoinHandle<()>,
+    shutdown_tx: Mutex<Option<mpsc::Sender<()>>>,
+    sender_join_handle: Mutex<Option<JoinHandle<()>>>,
     metadata: Arc<Metadata>,
     bucket_assigners: DashMap<Arc<PhysicalTablePath>, Arc<dyn BucketAssigner>>,
+    idempotence_manager: Arc<IdempotenceManager>,
 }
 
 impl WriterClient {
     pub fn new(config: Config, metadata: Arc<Metadata>) -> Result<Self> {
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+        let ack = Self::get_ack(&config)?;
 
-        let accumulator = Arc::new(RecordAccumulator::new(config.clone()));
+        config
+            .validate_idempotence()
+            .map_err(|message| Error::IllegalArgument { message })?;
 
-        let mut sender = Sender::new(
+        let idempotence_manager = Arc::new(IdempotenceManager::new(
+            config.writer_enable_idempotence,
+            config.writer_max_inflight_requests_per_bucket,
+        ));
+
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+
+        let accumulator = Arc::new(RecordAccumulator::new(
+            config.clone(),
+            Arc::clone(&idempotence_manager),
+        ));
+
+        let sender = Arc::new(Sender::new(
             metadata.clone(),
             accumulator.clone(),
             config.writer_request_max_size,
             30_000,
-            Self::get_ack(&config)?,
+            ack,
             config.writer_retries,
-        );
+            Arc::clone(&idempotence_manager),
+        ));
 
         let join_handle = tokio::spawn(async move {
-            tokio::select! {
-                _ = sender.run() => {
-                    // do-nothing
-                },
-                _ = shutdown_rx.recv() => {
-                    sender.close().await
-                }
+            if let Err(e) = sender.run_with_shutdown(shutdown_rx).await {
+                warn!("Sender loop exited with error: {e}");
             }
         });
 
         Ok(Self {
             max_request_size: config.writer_request_max_size,
             config,
-            shutdown_tx,
-            sender_join_handle: join_handle,
+            shutdown_tx: Mutex::new(Some(shutdown_tx)),
+            sender_join_handle: Mutex::new(Some(join_handle)),
             accumulate: accumulator,
             metadata,
             bucket_assigners: Default::default(),
+            idempotence_manager,
         })
     }
 
@@ -146,21 +163,48 @@ impl WriterClient {
         Ok((bucket_assigner, bucket_id))
     }
 
-    pub async fn close(self) -> Result<()> {
-        self.shutdown_tx
-            .send(())
-            .await
-            .map_err(|e| Error::UnexpectedError {
-                message: format!("Failed to close write client: {e:?}"),
-                source: None,
-            })?;
+    /// Close the writer with a timeout. Matches Java's two-phase shutdown:
+    ///
+    /// 1. **Graceful**: Signal the sender to drain all remaining batches.
+    ///    `accumulator.close()` makes all batches immediately ready (no need
+    ///    to wait for `batch_timeout_ms`).
+    /// 2. **Force** (if timeout exceeded): Abort the sender task and fail
+    ///    all remaining batches with an error.
+    ///
+    /// Idempotent: calling `close` a second time returns `Ok(())` immediately.
+    pub async fn close(&self, timeout: Duration) -> Result<()> {
+        // Take shutdown_tx and join_handle out of their Mutexes.
+        // Second call sees None and returns early.
+        let shutdown_tx = self.shutdown_tx.lock().take();
+        let join_handle = self.sender_join_handle.lock().take();
 
-        self.sender_join_handle
-            .await
-            .map_err(|e| Error::UnexpectedError {
-                message: format!("Failed to close write client: {e:?}"),
-                source: None,
-            })?;
+        let Some(mut join_handle) = join_handle else {
+            return Ok(());
+        };
+
+        // Phase 1: Signal graceful shutdown.
+        // Mark accumulator closed so all batches become immediately sendable.
+        self.accumulate.close();
+        // Drop the shutdown sender — recv() returns None, breaking the sender loop.
+        drop(shutdown_tx);
+
+        // Phase 2: Wait for graceful drain, bounded by timeout.
+        tokio::select! {
+            result = &mut join_handle => {
+                if let Err(e) = result {
+                    warn!("Sender task panicked during shutdown: {e}");
+                }
+            }
+            _ = tokio::time::sleep(timeout) => {
+                // Phase 3: Force close — timeout exceeded.
+                warn!("Graceful shutdown timed out after {timeout:?}, force closing");
+                join_handle.abort();
+                let _ = join_handle.await; // Wait for cancellation to complete
+                self.accumulate.abort_batches(broadcast::Error::Client {
+                    message: "Writer force closed (shutdown timeout exceeded)".to_string(),
+                });
+            }
+        }
         Ok(())
     }
 

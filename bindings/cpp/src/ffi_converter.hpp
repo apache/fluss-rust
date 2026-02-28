@@ -57,6 +57,11 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.scanner_remote_log_read_concurrency = config.scanner_remote_log_read_concurrency;
     ffi_config.scanner_log_max_poll_records = config.scanner_log_max_poll_records;
     ffi_config.writer_batch_timeout_ms = config.writer_batch_timeout_ms;
+    ffi_config.writer_enable_idempotence = config.writer_enable_idempotence;
+    ffi_config.writer_max_inflight_requests_per_bucket =
+        config.writer_max_inflight_requests_per_bucket;
+    ffi_config.writer_buffer_memory_size = config.writer_buffer_memory_size;
+    ffi_config.writer_buffer_wait_timeout_ms = config.writer_buffer_wait_timeout_ms;
     ffi_config.connect_timeout_ms = config.connect_timeout_ms;
     ffi_config.security_protocol = rust::String(config.security_protocol);
     ffi_config.security_sasl_mechanism = rust::String(config.security_sasl_mechanism);
