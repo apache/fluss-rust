@@ -53,6 +53,7 @@ except fluss.FlussError as e:
 | `ErrorCode.PARTITION_ALREADY_EXISTS`         | 42   | Partition already exists            |
 | `ErrorCode.PARTITION_SPEC_INVALID_EXCEPTION` | 43   | Invalid partition spec              |
 | `ErrorCode.LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for partition   |
+| `ErrorCode.AUTHENTICATE_EXCEPTION`           | 46   | Authentication failed (bad credentials) |
 
 See `fluss.ErrorCode` for the full list of named constants.
 
@@ -93,6 +94,24 @@ try:
 except fluss.FlussError as e:
     if e.error_code == fluss.ErrorCode.PARTITION_NOT_EXISTS:
         print("Partition does not exist, create it first")
+```
+
+### Authentication Failed
+
+SASL credentials are incorrect or the user does not exist.
+
+```python
+try:
+    config = fluss.Config({
+        "bootstrap.servers": "127.0.0.1:9123",
+        "client.security.protocol": "sasl",
+        "client.security.sasl.username": "admin",
+        "client.security.sasl.password": "wrong-password",
+    })
+    conn = await fluss.FlussConnection.create(config)
+except fluss.FlussError as e:
+    if e.error_code == fluss.ErrorCode.AUTHENTICATE_EXCEPTION:
+        print(f"Authentication failed: {e.message}")
 ```
 
 ### Schema Mismatch

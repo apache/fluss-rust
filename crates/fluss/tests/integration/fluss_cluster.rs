@@ -25,7 +25,8 @@ use testcontainers::core::ContainerPort;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
-const FLUSS_VERSION: &str = "0.7.0";
+const FLUSS_VERSION: &str = "0.8.0-incubating";
+const FLUSS_IMAGE: &str = "apache/fluss";
 
 pub struct FlussTestingClusterBuilder {
     number_of_tablet_servers: i32,
@@ -33,9 +34,20 @@ pub struct FlussTestingClusterBuilder {
     cluster_conf: HashMap<String, String>,
     testing_name: String,
     remote_data_dir: Option<std::path::PathBuf>,
+    sasl_enabled: bool,
+    sasl_users: Vec<(String, String)>,
+    /// Host port for the coordinator server (default 9123).
+    coordinator_host_port: u16,
+    /// Host port for the plaintext (PLAIN_CLIENT) listener.
+    /// When set together with `sasl_enabled`, the cluster exposes two listeners:
+    /// CLIENT (SASL) on `coordinator_host_port` and PLAIN_CLIENT on this port.
+    plain_client_port: Option<u16>,
+    image: String,
+    image_tag: String,
 }
 
 impl FlussTestingClusterBuilder {
+    #[allow(dead_code)]
     pub fn new(testing_name: impl Into<String>) -> Self {
         Self::new_with_cluster_conf(testing_name.into(), &HashMap::default())
     }
@@ -44,6 +56,18 @@ impl FlussTestingClusterBuilder {
         // Ensure the directory exists before mounting
         std::fs::create_dir_all(&dir).expect("Failed to create remote data directory");
         self.remote_data_dir = Some(dir);
+        self
+    }
+
+    /// Enable SASL/PLAIN authentication on the cluster with dual listeners.
+    /// Users are specified as `(username, password)` pairs.
+    /// This automatically configures a PLAIN_CLIENT (plaintext) listener in addition
+    /// to the CLIENT (SASL) listener, allowing both authenticated and unauthenticated
+    /// connections on the same cluster.
+    pub fn with_sasl(mut self, users: Vec<(String, String)>) -> Self {
+        self.sasl_enabled = true;
+        self.sasl_users = users;
+        self.plain_client_port = Some(self.coordinator_host_port + 100);
         self
     }
 
@@ -68,6 +92,12 @@ impl FlussTestingClusterBuilder {
             network: "fluss-cluster-network",
             testing_name: testing_name.into(),
             remote_data_dir: None,
+            sasl_enabled: false,
+            sasl_users: Vec::new(),
+            coordinator_host_port: 9123,
+            plain_client_port: None,
+            image: FLUSS_IMAGE.to_string(),
+            image_tag: FLUSS_VERSION.to_string(),
         }
     }
 
@@ -84,6 +114,43 @@ impl FlussTestingClusterBuilder {
     }
 
     pub async fn build(&mut self) -> FlussTestingCluster {
+        // Remove stale containers from previous runs (if any) so we can reuse names.
+        let stale_containers: Vec<String> = std::iter::once(self.zookeeper_container_name())
+            .chain(std::iter::once(self.coordinator_server_container_name()))
+            .chain(
+                (0..self.number_of_tablet_servers).map(|id| self.tablet_server_container_name(id)),
+            )
+            .collect();
+        for name in &stale_containers {
+            let _ = std::process::Command::new("docker")
+                .args(["rm", "-f", name])
+                .output();
+        }
+
+        // Inject SASL server-side configuration into cluster_conf
+        if self.sasl_enabled && !self.sasl_users.is_empty() {
+            self.cluster_conf.insert(
+                "security.protocol.map".to_string(),
+                "CLIENT:sasl".to_string(),
+            );
+            self.cluster_conf.insert(
+                "security.sasl.enabled.mechanisms".to_string(),
+                "plain".to_string(),
+            );
+            // Build JAAS config: user_<name>="<password>" for each user
+            let user_entries: Vec<String> = self
+                .sasl_users
+                .iter()
+                .map(|(u, p)| format!("user_{}=\"{}\"", u, p))
+                .collect();
+            let jaas_config = format!(
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required {};",
+                user_entries.join(" ")
+            );
+            self.cluster_conf
+                .insert("security.sasl.plain.jaas.config".to_string(), jaas_config);
+        }
+
         let zookeeper = Arc::new(
             GenericImage::new("zookeeper", "3.9.2")
                 .with_network(self.network)
@@ -103,64 +170,122 @@ impl FlussTestingClusterBuilder {
             );
         }
 
+        // When dual listeners are configured, bootstrap_servers points to the plaintext
+        // listener and sasl_bootstrap_servers points to the SASL listener.
+        let (bootstrap_servers, sasl_bootstrap_servers) =
+            if let Some(plain_port) = self.plain_client_port {
+                (
+                    format!("127.0.0.1:{}", plain_port),
+                    Some(format!("127.0.0.1:{}", self.coordinator_host_port)),
+                )
+            } else {
+                (format!("127.0.0.1:{}", self.coordinator_host_port), None)
+            };
+
         FlussTestingCluster {
             zookeeper,
             coordinator_server,
             tablet_servers,
-            bootstrap_servers: "127.0.0.1:9123".to_string(),
+            bootstrap_servers,
+            sasl_bootstrap_servers,
             remote_data_dir: self.remote_data_dir.clone(),
+            sasl_users: self.sasl_users.clone(),
+            container_names: stale_containers,
         }
     }
 
     async fn start_coordinator_server(&mut self) -> ContainerAsync<GenericImage> {
+        let port = self.coordinator_host_port;
+        let container_name = self.coordinator_server_container_name();
         let mut coordinator_confs = HashMap::new();
         coordinator_confs.insert(
             "zookeeper.address",
             format!("{}:2181", self.zookeeper_container_name()),
         );
-        coordinator_confs.insert(
-            "bind.listeners",
-            format!(
-                "INTERNAL://{}:0, CLIENT://{}:9123",
-                self.coordinator_server_container_name(),
-                self.coordinator_server_container_name()
-            ),
-        );
-        coordinator_confs.insert(
-            "advertised.listeners",
-            "CLIENT://localhost:9123".to_string(),
-        );
+
+        if let Some(plain_port) = self.plain_client_port {
+            // Dual listeners: CLIENT (SASL) + PLAIN_CLIENT (plaintext)
+            coordinator_confs.insert(
+                "bind.listeners",
+                format!(
+                    "INTERNAL://{}:0, CLIENT://{}:{}, PLAIN_CLIENT://{}:{}",
+                    container_name, container_name, port, container_name, plain_port
+                ),
+            );
+            coordinator_confs.insert(
+                "advertised.listeners",
+                format!(
+                    "CLIENT://localhost:{}, PLAIN_CLIENT://localhost:{}",
+                    port, plain_port
+                ),
+            );
+        } else {
+            coordinator_confs.insert(
+                "bind.listeners",
+                format!(
+                    "INTERNAL://{}:0, CLIENT://{}:{}",
+                    container_name, container_name, port
+                ),
+            );
+            coordinator_confs.insert(
+                "advertised.listeners",
+                format!("CLIENT://localhost:{}", port),
+            );
+        }
+
         coordinator_confs.insert("internal.listener.name", "INTERNAL".to_string());
-        GenericImage::new("fluss/fluss", FLUSS_VERSION)
+
+        let mut image = GenericImage::new(&self.image, &self.image_tag)
             .with_container_name(self.coordinator_server_container_name())
-            .with_mapped_port(9123, ContainerPort::Tcp(9123))
+            .with_mapped_port(port, ContainerPort::Tcp(port))
             .with_network(self.network)
             .with_cmd(vec!["coordinatorServer"])
             .with_env_var(
                 "FLUSS_PROPERTIES",
                 self.to_fluss_properties_with(coordinator_confs),
-            )
-            .start()
-            .await
-            .unwrap()
+            );
+
+        if let Some(plain_port) = self.plain_client_port {
+            image = image.with_mapped_port(plain_port, ContainerPort::Tcp(plain_port));
+        }
+
+        image.start().await.unwrap()
     }
 
     async fn start_tablet_server(&self, server_id: i32) -> ContainerAsync<GenericImage> {
+        let port = self.coordinator_host_port;
+        let container_name = self.tablet_server_container_name(server_id);
         let mut tablet_server_confs = HashMap::new();
-        let bind_listeners = format!(
-            "INTERNAL://{}:0, CLIENT://{}:9123",
-            self.tablet_server_container_name(server_id),
-            self.tablet_server_container_name(server_id),
-        );
-        let expose_host_port = 9124 + server_id;
-        let advertised_listeners = format!("CLIENT://localhost:{}", expose_host_port);
+        let expose_host_port = (port as i32) + 1 + server_id;
         let tablet_server_id = format!("{}", server_id);
+
+        if let Some(plain_port) = self.plain_client_port {
+            // Dual listeners: CLIENT (SASL) + PLAIN_CLIENT (plaintext)
+            let bind_listeners = format!(
+                "INTERNAL://{}:0, CLIENT://{}:{}, PLAIN_CLIENT://{}:{}",
+                container_name, container_name, port, container_name, plain_port,
+            );
+            let plain_expose_host_port = (plain_port as i32) + 1 + server_id;
+            let advertised_listeners = format!(
+                "CLIENT://localhost:{}, PLAIN_CLIENT://localhost:{}",
+                expose_host_port, plain_expose_host_port
+            );
+            tablet_server_confs.insert("bind.listeners", bind_listeners);
+            tablet_server_confs.insert("advertised.listeners", advertised_listeners);
+        } else {
+            let bind_listeners = format!(
+                "INTERNAL://{}:0, CLIENT://{}:{}",
+                container_name, container_name, port,
+            );
+            let advertised_listeners = format!("CLIENT://localhost:{}", expose_host_port);
+            tablet_server_confs.insert("bind.listeners", bind_listeners);
+            tablet_server_confs.insert("advertised.listeners", advertised_listeners);
+        }
+
         tablet_server_confs.insert(
             "zookeeper.address",
             format!("{}:2181", self.zookeeper_container_name()),
         );
-        tablet_server_confs.insert("bind.listeners", bind_listeners);
-        tablet_server_confs.insert("advertised.listeners", advertised_listeners);
         tablet_server_confs.insert("internal.listener.name", "INTERNAL".to_string());
         tablet_server_confs.insert("tablet-server.id", tablet_server_id);
 
@@ -172,15 +297,24 @@ impl FlussTestingClusterBuilder {
                 remote_data_dir.to_string_lossy().to_string(),
             );
         }
-        let mut image = GenericImage::new("fluss/fluss", FLUSS_VERSION)
+        let mut image = GenericImage::new(&self.image, &self.image_tag)
             .with_cmd(vec!["tabletServer"])
-            .with_mapped_port(expose_host_port as u16, ContainerPort::Tcp(9123))
+            .with_mapped_port(expose_host_port as u16, ContainerPort::Tcp(port))
             .with_network(self.network)
             .with_container_name(self.tablet_server_container_name(server_id))
             .with_env_var(
                 "FLUSS_PROPERTIES",
                 self.to_fluss_properties_with(tablet_server_confs),
             );
+
+        // Add port mapping for plaintext listener
+        if let Some(plain_port) = self.plain_client_port {
+            let plain_expose_host_port = (plain_port as i32) + 1 + server_id;
+            image = image.with_mapped_port(
+                plain_expose_host_port as u16,
+                ContainerPort::Tcp(plain_port),
+            );
+        }
 
         // Add volume mount if remote_data_dir is provided
         if let Some(ref remote_data_dir) = self.remote_data_dir {
@@ -210,33 +344,43 @@ impl FlussTestingClusterBuilder {
 
 /// Provides an easy way to launch a Fluss cluster with coordinator and tablet servers.
 #[derive(Clone)]
+#[allow(dead_code)] // Fields held for RAII (keeping Docker containers alive).
 pub struct FlussTestingCluster {
     zookeeper: Arc<ContainerAsync<GenericImage>>,
     coordinator_server: Arc<ContainerAsync<GenericImage>>,
     tablet_servers: HashMap<i32, Arc<ContainerAsync<GenericImage>>>,
+    /// Bootstrap servers for plaintext connections.
+    /// When dual listeners are configured, this points to the PLAIN_CLIENT listener.
     bootstrap_servers: String,
+    /// Bootstrap servers for SASL connections (only set when dual listeners are configured).
+    sasl_bootstrap_servers: Option<String>,
     remote_data_dir: Option<std::path::PathBuf>,
+    sasl_users: Vec<(String, String)>,
+    container_names: Vec<String>,
 }
 
 impl FlussTestingCluster {
-    pub async fn stop(&self) {
-        for tablet_server in self.tablet_servers.values() {
-            tablet_server.stop().await.unwrap()
+    /// Synchronously stops and removes all Docker containers and cleans up the
+    /// remote data directory. Safe to call from non-async contexts (e.g. atexit).
+    #[allow(dead_code)]
+    pub fn stop(&self) {
+        for name in &self.container_names {
+            let _ = std::process::Command::new("docker")
+                .args(["rm", "-f", name])
+                .output();
         }
-        self.coordinator_server.stop().await.unwrap();
-        self.zookeeper.stop().await.unwrap();
-        if let Some(remote_data_dir) = &self.remote_data_dir {
-            // Try to clean up the remote data directory, but don't fail if it can't be deleted.
-            // This can happen in CI environments or if Docker containers are still using the directory.
-            // The directory will be cleaned up by the CI system or OS eventually.
-            if let Err(e) = tokio::fs::remove_dir_all(remote_data_dir).await {
-                eprintln!(
-                    "Warning: Failed to delete remote data directory: {:?}, error: {:?}. \
-                     This is non-fatal and the directory may be cleaned up later.",
-                    remote_data_dir, e
-                );
-            }
+        if let Some(ref dir) = self.remote_data_dir {
+            let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    pub fn sasl_users(&self) -> &[(String, String)] {
+        &self.sasl_users
+    }
+
+    /// Returns the plaintext (non-SASL) bootstrap servers address.
+    pub fn plaintext_bootstrap_servers(&self) -> &str {
+        &self.bootstrap_servers
     }
 
     pub async fn get_fluss_connection(&self) -> FlussConnection {
@@ -246,6 +390,58 @@ impl FlussTestingCluster {
             ..Default::default()
         };
 
+        self.connect_with_retry(config).await
+    }
+
+    /// Connect with SASL/PLAIN credentials.
+    /// Uses `sasl_bootstrap_servers` when dual listeners are configured.
+    pub async fn get_fluss_connection_with_sasl(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> FlussConnection {
+        let bootstrap = self
+            .sasl_bootstrap_servers
+            .clone()
+            .unwrap_or_else(|| self.bootstrap_servers.clone());
+        let config = Config {
+            writer_acks: "all".to_string(),
+            bootstrap_servers: bootstrap,
+            security_protocol: "sasl".to_string(),
+            security_sasl_mechanism: "PLAIN".to_string(),
+            security_sasl_username: username.to_string(),
+            security_sasl_password: password.to_string(),
+            ..Default::default()
+        };
+
+        self.connect_with_retry(config).await
+    }
+
+    /// Try to connect with SASL/PLAIN credentials, returning the error on failure.
+    /// Uses `sasl_bootstrap_servers` when dual listeners are configured.
+    pub async fn try_fluss_connection_with_sasl(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> fluss::error::Result<FlussConnection> {
+        let bootstrap = self
+            .sasl_bootstrap_servers
+            .clone()
+            .unwrap_or_else(|| self.bootstrap_servers.clone());
+        let config = Config {
+            writer_acks: "all".to_string(),
+            bootstrap_servers: bootstrap,
+            security_protocol: "sasl".to_string(),
+            security_sasl_mechanism: "PLAIN".to_string(),
+            security_sasl_username: username.to_string(),
+            security_sasl_password: password.to_string(),
+            ..Default::default()
+        };
+
+        FlussConnection::new(config).await
+    }
+
+    async fn connect_with_retry(&self, config: Config) -> FlussConnection {
         // Retry mechanism: retry for up to 1 minute
         let max_retries = 60; // 60 retry attempts
         let retry_interval = Duration::from_secs(1); // 1 second interval between retries

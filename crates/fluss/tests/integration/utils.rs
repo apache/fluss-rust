@@ -18,20 +18,97 @@
 use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
 use fluss::client::FlussAdmin;
 use fluss::metadata::{PartitionSpec, TableDescriptor, TablePath};
-use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
-/// Polls the cluster until CoordinatorEventProcessor is initialized and tablet server is available.
-/// Times out after 20 seconds.
-pub async fn wait_for_cluster_ready(cluster: &FlussTestingCluster) {
-    let timeout = Duration::from_secs(20);
+extern "C" fn cleanup_on_exit() {
+    SHARED_CLUSTER.stop();
+}
+
+/// Shared cluster with dual listeners: PLAIN_CLIENT (plaintext) on port 9223
+/// and CLIENT (SASL) on port 9123. Includes remote storage config so
+/// table_remote_scan can also use this cluster.
+static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        rt.block_on(async {
+            let temp_dir = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("target")
+                .join(format!("test-remote-data-{}", uuid::Uuid::new_v4()));
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            std::fs::create_dir_all(&temp_dir)
+                .expect("Failed to create temporary directory for remote data");
+            let temp_dir = temp_dir
+                .canonicalize()
+                .expect("Failed to canonicalize remote data directory path");
+
+            let mut cluster_conf = HashMap::new();
+            cluster_conf.insert("log.segment.file-size".to_string(), "120b".to_string());
+            cluster_conf.insert(
+                "remote.log.task-interval-duration".to_string(),
+                "1s".to_string(),
+            );
+
+            let cluster =
+                FlussTestingClusterBuilder::new_with_cluster_conf("shared-test", &cluster_conf)
+                    .with_sasl(vec![
+                        ("admin".to_string(), "admin-secret".to_string()),
+                        ("alice".to_string(), "alice-secret".to_string()),
+                    ])
+                    .with_remote_data_dir(temp_dir)
+                    .build()
+                    .await;
+            wait_for_cluster_ready_with_sasl(&cluster).await;
+
+            // Register cleanup so containers are removed on process exit.
+            unsafe {
+                unsafe extern "C" {
+                    fn atexit(f: extern "C" fn()) -> std::os::raw::c_int;
+                }
+                atexit(cleanup_on_exit);
+            }
+
+            cluster
+        })
+    })
+    .join()
+    .expect("Failed to initialize shared cluster")
+});
+
+/// Returns an `Arc` to the shared test cluster.
+pub fn get_shared_cluster() -> Arc<FlussTestingCluster> {
+    Arc::new(SHARED_CLUSTER.clone())
+}
+
+pub async fn create_table(
+    admin: &FlussAdmin,
+    table_path: &TablePath,
+    table_descriptor: &TableDescriptor,
+) {
+    admin
+        .create_table(table_path, table_descriptor, false)
+        .await
+        .expect("Failed to create table");
+}
+
+/// Similar to wait_for_cluster_ready but connects with SASL credentials.
+pub async fn wait_for_cluster_ready_with_sasl(cluster: &FlussTestingCluster) {
+    let timeout = Duration::from_secs(30);
     let poll_interval = Duration::from_millis(500);
     let start = std::time::Instant::now();
 
+    let (username, password) = cluster
+        .sasl_users()
+        .first()
+        .expect("SASL cluster must have at least one user");
+
     loop {
-        let connection = cluster.get_fluss_connection().await;
+        let connection = cluster
+            .get_fluss_connection_with_sasl(username, password)
+            .await;
         if connection.get_admin().await.is_ok()
             && connection
                 .get_metadata()
@@ -44,7 +121,7 @@ pub async fn wait_for_cluster_ready(cluster: &FlussTestingCluster) {
 
         if start.elapsed() >= timeout {
             panic!(
-                "Server readiness check timed out after {} seconds. \
+                "SASL server readiness check timed out after {} seconds. \
                  CoordinatorEventProcessor may not be initialized or TabletServer may not be available.",
                 timeout.as_secs()
             );
@@ -52,56 +129,6 @@ pub async fn wait_for_cluster_ready(cluster: &FlussTestingCluster) {
 
         tokio::time::sleep(poll_interval).await;
     }
-}
-
-pub async fn create_table(
-    admin: &FlussAdmin,
-    table_path: &TablePath,
-    table_descriptor: &TableDescriptor,
-) {
-    admin
-        .create_table(&table_path, &table_descriptor, false)
-        .await
-        .expect("Failed to create table");
-}
-
-pub fn start_cluster(name: &str, cluster_lock: Arc<RwLock<Option<FlussTestingCluster>>>) {
-    let name = name.to_string();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-        rt.block_on(async {
-            let cluster = FlussTestingClusterBuilder::new(&name).build().await;
-            wait_for_cluster_ready(&cluster).await;
-            let mut guard = cluster_lock.write();
-            *guard = Some(cluster);
-        });
-    })
-    .join()
-    .expect("Failed to create cluster");
-}
-
-pub fn stop_cluster(cluster_lock: Arc<RwLock<Option<FlussTestingCluster>>>) {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-        rt.block_on(async {
-            let mut guard = cluster_lock.write();
-            if let Some(cluster) = guard.take() {
-                cluster.stop().await;
-            }
-        });
-    })
-    .join()
-    .expect("Failed to cleanup cluster");
-}
-
-pub fn get_cluster(cluster_lock: &RwLock<Option<FlussTestingCluster>>) -> Arc<FlussTestingCluster> {
-    let guard = cluster_lock.read();
-    Arc::new(
-        guard
-            .as_ref()
-            .expect("Fluss cluster not initialized. Make sure before_all() was called.")
-            .clone(),
-    )
 }
 
 /// Creates partitions for a partitioned table.

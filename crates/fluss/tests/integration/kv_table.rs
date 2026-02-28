@@ -16,42 +16,11 @@
  * limitations under the License.
  */
 
-use parking_lot::RwLock;
-use std::sync::Arc;
-use std::sync::LazyLock;
-
-use crate::integration::fluss_cluster::FlussTestingCluster;
 #[cfg(test)]
-use test_env_helpers::*;
-
-// Module-level shared cluster instance (only for this test file)
-static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> =
-    LazyLock::new(|| Arc::new(RwLock::new(None)));
-
-#[cfg(test)]
-#[before_all]
-#[after_all]
 mod kv_table_test {
-    use super::SHARED_FLUSS_CLUSTER;
-    use crate::integration::fluss_cluster::FlussTestingCluster;
-    use crate::integration::utils::{
-        create_partitions, create_table, get_cluster, start_cluster, stop_cluster,
-    };
+    use crate::integration::utils::{create_partitions, create_table, get_shared_cluster};
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::{GenericRow, InternalRow};
-    use std::sync::Arc;
-
-    fn before_all() {
-        start_cluster("test_kv_table", SHARED_FLUSS_CLUSTER.clone());
-    }
-
-    fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
-        get_cluster(&SHARED_FLUSS_CLUSTER)
-    }
-
-    fn after_all() {
-        stop_cluster(SHARED_FLUSS_CLUSTER.clone());
-    }
 
     fn make_key(id: i32) -> GenericRow<'static> {
         let mut row = GenericRow::new(3);
@@ -61,7 +30,7 @@ mod kv_table_test {
 
     #[tokio::test]
     async fn upsert_delete_and_lookup() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.unwrap();
@@ -200,7 +169,7 @@ mod kv_table_test {
 
     #[tokio::test]
     async fn composite_primary_keys() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.unwrap();
@@ -310,7 +279,7 @@ mod kv_table_test {
     async fn partial_update() {
         use fluss::row::Datum;
 
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -431,7 +400,7 @@ mod kv_table_test {
 
     #[tokio::test]
     async fn partitioned_table_upsert_and_lookup() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -601,7 +570,7 @@ mod kv_table_test {
     async fn all_supported_datatypes() {
         use fluss::row::{Date, Datum, Decimal, Time, TimestampLtz, TimestampNtz};
 
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
