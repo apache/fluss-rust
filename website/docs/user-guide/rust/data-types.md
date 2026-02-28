@@ -67,14 +67,14 @@ use fluss::row::InternalRow;
 for record in scan_records {
     let row = record.row();
 
-    if row.is_null_at(0) {
+    if row.is_null_at(0)? {
         // field is null
     }
-    let id: i32 = row.get_int(0);
-    let name: &str = row.get_string(1);
-    let score: f32 = row.get_float(2);
-    let date: Date = row.get_date(3);
-    let ts: TimestampNtz = row.get_timestamp_ntz(4, 6);
-    let decimal: Decimal = row.get_decimal(5, 10, 2);
+    let id: i32 = row.get_int(0)?;
+    let name: &str = row.get_string(1)?;
+    let score: f32 = row.get_float(2)?;
+    let date: Date = row.get_date(3)?;
+    let ts: TimestampNtz = row.get_timestamp_ntz(4, 6)?;
+    let decimal: Decimal = row.get_decimal(5, 10, 2)?;
 }
 ```

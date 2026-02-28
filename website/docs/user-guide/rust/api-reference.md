@@ -375,24 +375,25 @@ Implements the `InternalRow` trait (see below).
 
 ## `InternalRow` trait
 
-| Method                                                                         |  Description                            |
-|--------------------------------------------------------------------------------|-----------------------------------------|
-| `fn get_boolean(&self, idx: usize) -> bool`                                    | Get boolean value                       |
-| `fn get_byte(&self, idx: usize) -> i8`                                         | Get tinyint value                       |
-| `fn get_short(&self, idx: usize) -> i16`                                       | Get smallint value                      |
-| `fn get_int(&self, idx: usize) -> i32`                                         | Get int value                           |
-| `fn get_long(&self, idx: usize) -> i64`                                        | Get bigint value                        |
-| `fn get_float(&self, idx: usize) -> f32`                                       | Get float value                         |
-| `fn get_double(&self, idx: usize) -> f64`                                      | Get double value                        |
-| `fn get_string(&self, idx: usize) -> &str`                                     | Get string value                        |
-| `fn get_decimal(&self, idx: usize, precision: usize, scale: usize) -> Decimal` | Get decimal value                       |
-| `fn get_date(&self, idx: usize) -> Date`                                       | Get date value                          |
-| `fn get_time(&self, idx: usize) -> Time`                                       | Get time value                          |
-| `fn get_timestamp_ntz(&self, idx: usize, precision: u32) -> TimestampNtz`      | Get timestamp value                     |
-| `fn get_timestamp_ltz(&self, idx: usize, precision: u32) -> TimestampLtz`      | Get timestamp with local timezone value |
-| `fn get_bytes(&self, idx: usize) -> &[u8]`                                     | Get bytes value                         |
-| `fn get_binary(&self, idx: usize, length: usize) -> &[u8]`                     | Get fixed-length binary value           |
-| `fn get_char(&self, idx: usize, length: usize) -> &str`                        | Get fixed-length char value             |
+| Method                                                                                 | Description                             |
+|----------------------------------------------------------------------------------------|-----------------------------------------|
+| `fn is_null_at(&self, idx: usize) -> Result<bool>`                                     | Check if a field is null                |
+| `fn get_boolean(&self, idx: usize) -> Result<bool>`                                    | Get boolean value                       |
+| `fn get_byte(&self, idx: usize) -> Result<i8>`                                         | Get tinyint value                       |
+| `fn get_short(&self, idx: usize) -> Result<i16>`                                       | Get smallint value                      |
+| `fn get_int(&self, idx: usize) -> Result<i32>`                                         | Get int value                           |
+| `fn get_long(&self, idx: usize) -> Result<i64>`                                        | Get bigint value                        |
+| `fn get_float(&self, idx: usize) -> Result<f32>`                                       | Get float value                         |
+| `fn get_double(&self, idx: usize) -> Result<f64>`                                      | Get double value                        |
+| `fn get_string(&self, idx: usize) -> Result<&str>`                                     | Get string value                        |
+| `fn get_decimal(&self, idx: usize, precision: usize, scale: usize) -> Result<Decimal>` | Get decimal value                       |
+| `fn get_date(&self, idx: usize) -> Result<Date>`                                       | Get date value                          |
+| `fn get_time(&self, idx: usize) -> Result<Time>`                                       | Get time value                          |
+| `fn get_timestamp_ntz(&self, idx: usize, precision: u32) -> Result<TimestampNtz>`      | Get timestamp value                     |
+| `fn get_timestamp_ltz(&self, idx: usize, precision: u32) -> Result<TimestampLtz>`      | Get timestamp with local timezone value |
+| `fn get_bytes(&self, idx: usize) -> Result<&[u8]>`                                     | Get bytes value                         |
+| `fn get_binary(&self, idx: usize, length: usize) -> Result<&[u8]>`                     | Get fixed-length binary value           |
+| `fn get_char(&self, idx: usize, length: usize) -> Result<&str>`                        | Get fixed-length char value             |
 
 ## `ChangeType`
 
