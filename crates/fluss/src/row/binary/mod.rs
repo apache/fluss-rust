@@ -16,8 +16,10 @@
 // under the License.
 
 mod binary_writer;
+mod iceberg_binary_row_writer;
 
 pub use binary_writer::*;
+pub use iceberg_binary_row_writer::IcebergBinaryRowWriter;
 
 /// The binary row format types, it indicates the generated [`BinaryRow`] type by the [`BinaryWriter`]
 #[allow(dead_code)]
