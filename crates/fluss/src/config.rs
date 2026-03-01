@@ -31,6 +31,7 @@ const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
 
 const DEFAULT_ACKS: &str = "all";
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
@@ -105,6 +106,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
 
+    /// Request timeout in milliseconds for individual RPC calls.
+    /// Default: 30000 (30 seconds).
+    #[arg(long, default_value_t = DEFAULT_REQUEST_TIMEOUT_MS)]
+    pub request_timeout_ms: u64,
+
     #[arg(long, default_value_t = String::from(DEFAULT_SECURITY_PROTOCOL))]
     pub security_protocol: String,
 
@@ -145,6 +151,7 @@ impl std::fmt::Debug for Config {
             )
             .field("writer_batch_timeout_ms", &self.writer_batch_timeout_ms)
             .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("request_timeout_ms", &self.request_timeout_ms)
             .field("security_protocol", &self.security_protocol)
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
             .field("security_sasl_username", &self.security_sasl_username)
@@ -168,6 +175,7 @@ impl Default for Config {
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
+            request_timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
             security_sasl_username: String::new(),

@@ -19,6 +19,7 @@ use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use prost::DecodeError;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -51,4 +52,7 @@ pub enum RpcError {
         api_key: ApiKey,
         api_version: ApiVersion,
     },
+
+    #[error("Request timed out after {timeout:?} for api_key={api_key:?}")]
+    RequestTimeout { timeout: Duration, api_key: ApiKey },
 }

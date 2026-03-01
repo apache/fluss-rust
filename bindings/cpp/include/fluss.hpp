@@ -1000,6 +1000,8 @@ struct Configuration {
     int64_t writer_batch_timeout_ms{100};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{120000};
+    // Request timeout in milliseconds for individual RPC calls
+    uint64_t request_timeout_ms{30000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)
