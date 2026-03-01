@@ -15,21 +15,142 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::broadcast;
+use crate::client::write::IdempotenceManager;
 use crate::client::write::batch::WriteBatch::{ArrowLog, Kv};
 use crate::client::write::batch::{ArrowLogWriteBatch, KvWriteBatch, WriteBatch};
 use crate::client::{LogWriteRecord, Record, ResultHandle, WriteRecord};
 use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket};
+use crate::record::{NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
 use dashmap::DashMap;
-use parking_lot::Mutex;
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+/// Byte-counting semaphore that blocks producers when total buffered memory
+/// exceeds the configured limit. Matches Java's `LazyMemorySegmentPool` behavior.
+///
+/// TODO: Replace `notify_all()` with per-waiter FIFO signaling (Java uses per-request
+/// Condition objects in a Deque) to avoid thundering herd under high contention.
+///
+/// TODO: Track actual batch memory usage instead of reserving a fixed `writer_batch_size`
+/// per batch. This over-counts when batches don't fill completely, reducing effective
+/// throughput. Requires tighter coupling with batch internals.
+pub(crate) struct MemoryLimiter {
+    state: Mutex<usize>,
+    cond: Condvar,
+    max_memory: usize,
+    wait_timeout: Duration,
+    closed: AtomicBool,
+    waiting_count: AtomicUsize,
+}
+
+impl MemoryLimiter {
+    pub fn new(max_memory: usize, wait_timeout: Duration) -> Self {
+        Self {
+            state: Mutex::new(0),
+            cond: Condvar::new(),
+            max_memory,
+            wait_timeout,
+            closed: AtomicBool::new(false),
+            waiting_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// Try to acquire `size` bytes. Blocks until memory is available,
+    /// the timeout expires, or the limiter is closed.
+    /// Returns a `MemoryPermit` on success.
+    pub fn acquire(self: &Arc<Self>, size: usize) -> Result<MemoryPermit> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::IllegalArgument {
+                message: "Memory limiter is closed".to_string(),
+            });
+        }
+
+        if size > self.max_memory {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Batch size {} exceeds total buffer memory limit {}",
+                    size, self.max_memory
+                ),
+            });
+        }
+
+        let mut used = self.state.lock();
+        let deadline = Instant::now() + self.wait_timeout;
+        while *used + size > self.max_memory {
+            self.waiting_count.fetch_add(1, Ordering::Relaxed);
+            let result = self.cond.wait_until(&mut used, deadline);
+            self.waiting_count.fetch_sub(1, Ordering::Relaxed);
+
+            if self.closed.load(Ordering::Acquire) {
+                return Err(Error::IllegalArgument {
+                    message: "Memory limiter is closed".to_string(),
+                });
+            }
+            if result.timed_out() && *used + size > self.max_memory {
+                return Err(Error::IllegalArgument {
+                    message: format!(
+                        "Failed to allocate {} bytes for write batch within {}ms. \
+                         {} of {} bytes in use, {} threads waiting.",
+                        size,
+                        self.wait_timeout.as_millis(),
+                        *used,
+                        self.max_memory,
+                        self.waiting_count.load(Ordering::Relaxed),
+                    ),
+                });
+            }
+        }
+
+        *used += size;
+        Ok(MemoryPermit {
+            limiter: Arc::clone(self),
+            size,
+        })
+    }
+
+    fn release(&self, size: usize) {
+        let mut used = self.state.lock();
+        *used = used.saturating_sub(size);
+        self.cond.notify_all();
+    }
+
+    /// Mark the limiter as closed and wake all blocked producers.
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.cond.notify_all();
+    }
+}
+
+/// RAII guard that releases memory back to the `MemoryLimiter` on drop.
+pub(crate) struct MemoryPermit {
+    limiter: Arc<MemoryLimiter>,
+    size: usize,
+}
+
+impl std::fmt::Debug for MemoryPermit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryPermit")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for MemoryPermit {
+    fn drop(&mut self) {
+        if self.size > 0 {
+            self.limiter.release(self.size);
+        }
+    }
+}
 
 // Type alias to simplify complex nested types
 type BucketBatches = Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>;
@@ -38,19 +159,25 @@ type BucketBatches = Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>;
 pub struct RecordAccumulator {
     config: Config,
     write_batches: DashMap<Arc<PhysicalTablePath>, BucketAndWriteBatches>,
-    // batch_id -> complete callback
-    incomplete_batches: RwLock<HashMap<i64, ResultHandle>>,
+    // batch_id -> (complete callback, memory permit)
+    incomplete_batches: RwLock<HashMap<i64, (ResultHandle, MemoryPermit)>>,
     batch_timeout_ms: i64,
-    closed: bool,
+    closed: AtomicBool,
     flushes_in_progress: AtomicI32,
     appends_in_progress: i32,
     nodes_drain_index: Mutex<HashMap<i32, usize>>,
     batch_id: AtomicI64,
+    idempotence_manager: Arc<IdempotenceManager>,
+    memory_limiter: Arc<MemoryLimiter>,
 }
 
 impl RecordAccumulator {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, idempotence_manager: Arc<IdempotenceManager>) -> Self {
         let batch_timeout_ms = config.writer_batch_timeout_ms;
+        let memory_limiter = Arc::new(MemoryLimiter::new(
+            config.writer_buffer_memory_size,
+            Duration::from_millis(config.writer_buffer_wait_timeout_ms),
+        ));
         RecordAccumulator {
             config,
             write_batches: Default::default(),
@@ -61,6 +188,8 @@ impl RecordAccumulator {
             appends_in_progress: Default::default(),
             nodes_drain_index: Default::default(),
             batch_id: Default::default(),
+            idempotence_manager,
+            memory_limiter,
         }
     }
 
@@ -90,11 +219,8 @@ impl RecordAccumulator {
         cluster: &Cluster,
         record: &WriteRecord,
         dq: &mut VecDeque<WriteBatch>,
+        permit: MemoryPermit,
     ) -> Result<RecordAppendResult> {
-        if let Some(append_result) = self.try_append(record, dq)? {
-            return Ok(append_result);
-        }
-
         let physical_table_path = &record.physical_table_path;
         let table_path = physical_table_path.get_table_path();
         let table_info = cluster.get_table(table_path)?;
@@ -136,7 +262,7 @@ impl RecordAccumulator {
 
         self.incomplete_batches
             .write()
-            .insert(batch_id, result_handle.clone());
+            .insert(batch_id, (result_handle.clone(), permit));
         Ok(RecordAppendResult::new(
             result_handle,
             dq.len() > 1 || batch_is_closed,
@@ -191,7 +317,22 @@ impl RecordAccumulator {
                 true, false, true,
             ));
         }
-        self.append_new_batch(cluster, record, &mut dq_guard)
+
+        // Drop dq lock before blocking on memory to prevent deadlock:
+        // producer holds dq + blocks on memory, while sender needs dq to drain.
+        drop(dq_guard);
+
+        let batch_size = self.config.writer_batch_size as usize;
+        let permit = self.memory_limiter.acquire(batch_size)?;
+
+        // Re-acquire dq lock after memory is available
+        let mut dq_guard = dq.lock();
+        // Re-try: another thread may have created a batch while we waited
+        if let Some(append_result) = self.try_append(record, &mut dq_guard)? {
+            return Ok(append_result); // permit drops here, memory released
+        }
+
+        self.append_new_batch(cluster, record, &mut dq_guard, permit)
     }
 
     pub fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
@@ -303,7 +444,8 @@ impl RecordAccumulator {
     ) -> i64 {
         if !ready_nodes.contains(leader) {
             let expired = waited_time_ms >= self.batch_timeout_ms;
-            let sendable = full || expired || self.closed || self.flush_in_progress();
+            let sendable =
+                full || expired || self.closed.load(Ordering::Acquire) || self.flush_in_progress();
 
             if sendable {
                 ready_nodes.insert(leader.clone());
@@ -333,6 +475,46 @@ impl RecordAccumulator {
         }
 
         Ok(batches)
+    }
+
+    /// Matches Java's `shouldStopDrainBatchesForBucket`. Returns true if
+    /// this bucket should be skipped during drain.
+    fn should_stop_drain_batches_for_bucket(
+        &self,
+        first: &WriteBatch,
+        table_bucket: &TableBucket,
+    ) -> bool {
+        if !self.idempotence_manager.is_enabled() {
+            return false;
+        }
+        if !self.idempotence_manager.is_writer_id_valid() {
+            return true;
+        }
+
+        // Use batch_id comparison instead of sequence comparison. After
+        // handle_failed_batch adjusts InFlightBatch sequences, the WriteBatch's
+        // stored sequence may be stale (re_enqueue syncs it, but this is more
+        // robust). Java can compare sequences because resetWriterState mutates
+        // the batch directly; Rust uses lightweight InFlightBatch proxies.
+        let is_first_in_flight = self.idempotence_manager.in_flight_count(table_bucket) == 0
+            || (first.has_batch_sequence()
+                && self
+                    .idempotence_manager
+                    .is_first_in_flight_batch(table_bucket, first.batch_id()));
+
+        if is_first_in_flight {
+            return false;
+        }
+
+        if !first.has_batch_sequence() {
+            // Fresh batch: respect max in-flight limit
+            !self
+                .idempotence_manager
+                .can_send_more_requests(table_bucket)
+        } else {
+            // Re-enqueued batch that's NOT first in-flight: stop
+            true
+        }
     }
 
     fn drain_batches_for_one_node(
@@ -391,7 +573,38 @@ impl RecordAccumulator {
                             break;
                         }
 
+                        // Improvement: `continue` instead of `break` to skip
+                        // only this bucket, not all buckets for the node.
+                        if self.should_stop_drain_batches_for_bucket(first_batch, &table_bucket) {
+                            if current_index == start {
+                                break;
+                            }
+                            continue;
+                        }
+
                         maybe_batch = Some(batch_lock.pop_front().unwrap());
+                    }
+                }
+
+                if let Some(ref mut batch) = maybe_batch {
+                    // Assign writer state to fresh batches (matching Java's drain loop)
+                    let writer_id = if self.idempotence_manager.is_enabled() {
+                        self.idempotence_manager.writer_id()
+                    } else {
+                        NO_WRITER_ID
+                    };
+                    if writer_id != NO_WRITER_ID && !batch.has_batch_sequence() {
+                        self.idempotence_manager
+                            .maybe_update_writer_id(&table_bucket);
+                        let seq = self
+                            .idempotence_manager
+                            .next_sequence_and_increment(&table_bucket);
+                        batch.set_writer_state(writer_id, seq);
+                        self.idempotence_manager.add_in_flight_batch(
+                            &table_bucket,
+                            seq,
+                            batch.batch_id(),
+                        );
                     }
                 }
 
@@ -425,34 +638,137 @@ impl RecordAccumulator {
         self.incomplete_batches.write().remove(&batch_id);
     }
 
-    pub fn re_enqueue(&self, ready_write_batch: ReadyWriteBatch) {
+    pub fn re_enqueue(&self, mut ready_write_batch: ReadyWriteBatch) {
         ready_write_batch.write_batch.re_enqueued();
+
+        // Sync WriteBatch sequence with IdempotenceManager's adjusted sequence.
+        // When handle_failed_batch adjusts InFlightBatch sequences (after a prior
+        // batch fails), the WriteBatch is not updated (unlike Java which calls
+        // resetWriterState on the actual batch). We must sync here so that:
+        // 1. should_stop_drain_batches_for_bucket comparisons work correctly
+        // 2. build() produces bytes with the correct (adjusted) sequence
+        if self.idempotence_manager.is_enabled()
+            && ready_write_batch.write_batch.has_batch_sequence()
+        {
+            if let Some(adjusted_seq) = self.idempotence_manager.take_adjusted_sequence(
+                &ready_write_batch.table_bucket,
+                ready_write_batch.write_batch.batch_id(),
+            ) {
+                if adjusted_seq != ready_write_batch.write_batch.batch_sequence() {
+                    let writer_id = ready_write_batch.write_batch.writer_id();
+                    ready_write_batch
+                        .write_batch
+                        .set_writer_state(writer_id, adjusted_seq);
+                }
+            }
+        }
+
+        let dq = self.get_or_create_deque(&ready_write_batch);
+        let mut dq_guard = dq.lock();
+        if self.idempotence_manager.is_enabled() {
+            self.insert_in_sequence_order(&mut dq_guard, ready_write_batch);
+        } else {
+            dq_guard.push_front(ready_write_batch.write_batch);
+        }
+    }
+
+    /// Insert a re-enqueued batch in sequence order. Matches Java's
+    /// `insertInSequenceOrder`. If the batch is the next expected in-flight,
+    /// push to front; otherwise, find the correct sorted position.
+    fn insert_in_sequence_order(
+        &self,
+        dq: &mut VecDeque<WriteBatch>,
+        ready_write_batch: ReadyWriteBatch,
+    ) {
+        debug_assert!(
+            ready_write_batch.write_batch.batch_sequence() != NO_BATCH_SEQUENCE,
+            "Re-enqueuing a batch without a sequence (batch_id={})",
+            ready_write_batch.write_batch.batch_id()
+        );
+        debug_assert!(
+            self.idempotence_manager
+                .in_flight_count(&ready_write_batch.table_bucket)
+                > 0,
+            "Re-enqueuing a batch not tracked in in-flight (batch_id={}, bucket={})",
+            ready_write_batch.write_batch.batch_id(),
+            ready_write_batch.table_bucket
+        );
+
+        if dq.is_empty() {
+            dq.push_front(ready_write_batch.write_batch);
+            return;
+        }
+
+        // If it's the first in-flight batch for its bucket, push to front
+        if self.idempotence_manager.is_first_in_flight_batch(
+            &ready_write_batch.table_bucket,
+            ready_write_batch.write_batch.batch_id(),
+        ) {
+            dq.push_front(ready_write_batch.write_batch);
+            return;
+        }
+
+        // Find the correct position sorted by batch_sequence
+        let batch_seq = ready_write_batch.write_batch.batch_sequence();
+        let mut insert_pos = dq.len();
+        for (i, existing) in dq.iter().enumerate() {
+            if existing.has_batch_sequence() && existing.batch_sequence() > batch_seq {
+                insert_pos = i;
+                break;
+            }
+        }
+        dq.insert(insert_pos, ready_write_batch.write_batch);
+    }
+
+    fn get_or_create_deque(
+        &self,
+        ready_write_batch: &ReadyWriteBatch,
+    ) -> Arc<Mutex<VecDeque<WriteBatch>>> {
         let physical_table_path = ready_write_batch.write_batch.physical_table_path();
         let bucket_id = ready_write_batch.table_bucket.bucket_id();
         let table_id = ready_write_batch.table_bucket.table_id();
         let partition_id = ready_write_batch.table_bucket.partition_id();
         let is_partitioned_table = partition_id.is_some();
 
-        let dq = {
-            let mut binding = self
-                .write_batches
-                .entry(Arc::clone(physical_table_path))
-                .or_insert_with(|| BucketAndWriteBatches {
-                    table_id,
-                    is_partitioned_table,
-                    partition_id,
-                    batches: Default::default(),
-                });
-            let bucket_and_batches = binding.value_mut();
-            bucket_and_batches
-                .batches
-                .entry(bucket_id)
-                .or_insert_with(|| Arc::new(Mutex::new(VecDeque::new())))
-                .clone()
-        };
+        let mut binding = self
+            .write_batches
+            .entry(Arc::clone(physical_table_path))
+            .or_insert_with(|| BucketAndWriteBatches {
+                table_id,
+                is_partitioned_table,
+                partition_id,
+                batches: Default::default(),
+            });
+        let bucket_and_batches = binding.value_mut();
+        bucket_and_batches
+            .batches
+            .entry(bucket_id)
+            .or_insert_with(|| Arc::new(Mutex::new(VecDeque::new())))
+            .clone()
+    }
 
-        let mut dq_guard = dq.lock();
-        dq_guard.push_front(ready_write_batch.write_batch);
+    /// Mark the accumulator as closed. All batches become immediately ready
+    /// (sendable) in `batch_ready`, triggering a full drain without waiting
+    /// for `batch_timeout_ms`. Matches Java's `RecordAccumulator.close()`.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+
+    pub fn abort_batches(&self, error: broadcast::Error) {
+        self.memory_limiter.close();
+        for mut entry in self.write_batches.iter_mut() {
+            for (_bucket_id, deque) in entry.value_mut().batches.iter_mut() {
+                let mut dq = deque.lock();
+                while let Some(batch) = dq.pop_front() {
+                    batch.complete(Err(error.clone()));
+                }
+            }
+        }
+        self.incomplete_batches.write().clear();
+    }
+
+    pub fn has_incomplete(&self) -> bool {
+        !self.incomplete_batches.read().is_empty()
     }
 
     fn get_all_buckets_in_current_node(
@@ -473,6 +789,24 @@ impl RecordAccumulator {
         buckets
     }
 
+    pub fn has_undrained(&self) -> bool {
+        for entry in self.write_batches.iter() {
+            for (_, batch_deque) in entry.value().batches.iter() {
+                if !batch_deque.lock().is_empty() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn get_physical_table_paths_in_batches(&self) -> Vec<Arc<PhysicalTablePath>> {
+        self.write_batches
+            .iter()
+            .map(|entry| Arc::clone(entry.key()))
+            .collect()
+    }
+
     fn flush_in_progress(&self) -> bool {
         self.flushes_in_progress.load(Ordering::SeqCst) > 0
     }
@@ -484,7 +818,12 @@ impl RecordAccumulator {
     #[allow(unused_must_use)]
     pub async fn await_flush_completion(&self) -> Result<()> {
         // Clone handles before awaiting to avoid holding RwLock read guard across await points
-        let handles: Vec<_> = self.incomplete_batches.read().values().cloned().collect();
+        let handles: Vec<_> = self
+            .incomplete_batches
+            .read()
+            .values()
+            .map(|(h, _)| h.clone())
+            .collect();
 
         // Await on all handles
         let result = async {
@@ -586,10 +925,18 @@ mod tests {
     use crate::test_utils::{build_cluster, build_table_info};
     use std::sync::Arc;
 
+    fn disabled_idempotence() -> Arc<IdempotenceManager> {
+        Arc::new(IdempotenceManager::new(false, 5))
+    }
+
+    fn enabled_idempotence() -> Arc<IdempotenceManager> {
+        Arc::new(IdempotenceManager::new(true, 5))
+    }
+
     #[tokio::test]
     async fn re_enqueue_increments_attempts() -> Result<()> {
         let config = Config::default();
-        let accumulator = RecordAccumulator::new(config);
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
         let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
@@ -623,7 +970,7 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let config = Config::default();
-        let accumulator = RecordAccumulator::new(config);
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
 
         accumulator.begin_flush();
         assert_eq!(accumulator.flushes_in_progress.load(Ordering::SeqCst), 1);
@@ -633,7 +980,11 @@ mod tests {
             let broadcast = BroadcastOnce::default();
             let receiver = broadcast.receiver();
             let handle = ResultHandle::new(receiver);
-            accumulator.incomplete_batches.write().insert(1, handle);
+            let permit = accumulator.memory_limiter.acquire(1024).unwrap();
+            accumulator
+                .incomplete_batches
+                .write()
+                .insert(1, (handle, permit));
             // broadcast is dropped here, causing an error
         }
 
@@ -646,5 +997,403 @@ mod tests {
         assert!(!accumulator.flush_in_progress());
 
         Ok(())
+    }
+
+    fn append_and_drain(
+        accumulator: &RecordAccumulator,
+        cluster: &Arc<crate::cluster::Cluster>,
+        table_path: &TablePath,
+        bucket_id: i32,
+    ) -> Result<ReadyWriteBatch> {
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 2));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+        accumulator.append(&record, bucket_id, cluster, false)?;
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+        let mut drained = batches.remove(&1).expect("drained batches");
+        Ok(drained.pop().expect("batch"))
+    }
+
+    #[test]
+    fn test_should_stop_drain_for_fresh_batch_over_limit() {
+        let idempotence = Arc::new(IdempotenceManager::new(true, 2));
+        idempotence.set_writer_id(42);
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+        accumulator
+            .append(&record, 0, &cluster, false)
+            .expect("append");
+
+        let table_bucket = TableBucket::new(1, 0);
+
+        // Add 2 in-flight batches (reaching the max_in_flight=2)
+        idempotence.add_in_flight_batch(&table_bucket, 0, 100);
+        idempotence.add_in_flight_batch(&table_bucket, 1, 101);
+
+        // Get the front batch from the deque
+        let entry = accumulator
+            .write_batches
+            .get(&PhysicalTablePath::of(Arc::new(table_path)))
+            .unwrap();
+        let dq = entry.batches.get(&0).unwrap();
+        let dq_guard = dq.lock();
+        let first_batch = dq_guard.front().unwrap();
+
+        // Fresh batch (no batch_sequence) with in-flight at limit → should stop
+        assert!(!first_batch.has_batch_sequence());
+        assert!(accumulator.should_stop_drain_batches_for_bucket(first_batch, &table_bucket));
+
+        // Remove one in-flight → under limit → should not stop
+        drop(dq_guard);
+        idempotence.remove_in_flight_batch(&table_bucket, 101);
+        let dq_guard = entry.batches.get(&0).unwrap().lock();
+        let first_batch = dq_guard.front().unwrap();
+        assert!(!accumulator.should_stop_drain_batches_for_bucket(first_batch, &table_bucket));
+    }
+
+    #[test]
+    fn test_should_stop_drain_for_retry_not_first_inflight() {
+        let idempotence = enabled_idempotence();
+        idempotence.set_writer_id(42);
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+
+        // Drain two separate batches to get batch0(seq=0) and batch1(seq=1)
+        let batch0 =
+            append_and_drain(&accumulator, &cluster, &table_path, 0).expect("drain batch0");
+        let batch1 =
+            append_and_drain(&accumulator, &cluster, &table_path, 0).expect("drain batch1");
+
+        assert_eq!(batch0.write_batch.batch_sequence(), 0);
+        assert_eq!(batch1.write_batch.batch_sequence(), 1);
+
+        let batch1_id = batch1.write_batch.batch_id();
+        let table_bucket = batch0.table_bucket.clone();
+
+        // Re-enqueue only batch1 (simulating batch0 still in-flight, batch1 got error)
+        accumulator.re_enqueue(batch1);
+
+        let entry = accumulator
+            .write_batches
+            .get(&PhysicalTablePath::of(Arc::new(table_path)))
+            .unwrap();
+        let dq = entry.batches.get(&0).unwrap();
+        let dq_guard = dq.lock();
+        let first_batch = dq_guard.front().unwrap();
+
+        // Batch1 is re-enqueued with seq=1, but batch0 (seq=0) is the first in-flight.
+        // batch1's batch_id != first in-flight batch_id → should stop.
+        assert!(first_batch.has_batch_sequence());
+        assert_eq!(first_batch.batch_id(), batch1_id);
+        assert!(accumulator.should_stop_drain_batches_for_bucket(first_batch, &table_bucket));
+    }
+
+    #[tokio::test]
+    async fn test_insert_in_sequence_order() -> Result<()> {
+        let idempotence = enabled_idempotence();
+        idempotence.set_writer_id(42);
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 2));
+
+        // Create and drain 3 batches to get them with sequences 0, 1, 2
+        let batch0 = append_and_drain(&accumulator, &cluster, &table_path, 0)?;
+        let batch1 = append_and_drain(&accumulator, &cluster, &table_path, 0)?;
+        let batch2 = append_and_drain(&accumulator, &cluster, &table_path, 0)?;
+
+        assert_eq!(batch0.write_batch.batch_sequence(), 0);
+        assert_eq!(batch1.write_batch.batch_sequence(), 1);
+        assert_eq!(batch2.write_batch.batch_sequence(), 2);
+
+        let batch0_id = batch0.write_batch.batch_id();
+        let batch1_id = batch1.write_batch.batch_id();
+        let batch2_id = batch2.write_batch.batch_id();
+        let table_bucket = batch0.table_bucket.clone();
+
+        // Re-enqueue in reverse order: 2, 0, 1
+        // insert_in_sequence_order should sort them as: 0, 1, 2
+        accumulator.re_enqueue(batch2);
+        accumulator.re_enqueue(batch0);
+        accumulator.re_enqueue(batch1);
+
+        // Verify the deque order directly
+        let entry = accumulator
+            .write_batches
+            .get(&PhysicalTablePath::of(Arc::new(table_path)))
+            .unwrap();
+        let dq = entry.batches.get(&0).unwrap();
+        let dq_guard = dq.lock();
+        assert_eq!(dq_guard.len(), 3);
+        // batch0 (seq=0) is the first in-flight, so it should be at front
+        assert_eq!(dq_guard[0].batch_id(), batch0_id);
+        assert_eq!(dq_guard[0].batch_sequence(), 0);
+        assert_eq!(dq_guard[1].batch_id(), batch1_id);
+        assert_eq!(dq_guard[1].batch_sequence(), 1);
+        assert_eq!(dq_guard[2].batch_id(), batch2_id);
+        assert_eq!(dq_guard[2].batch_sequence(), 2);
+        drop(dq_guard);
+
+        // Drain: first in-flight is seq=0, so batch0 passes should_stop check
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+        let drained = batches.remove(&1).expect("drained batches");
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].write_batch.batch_sequence(), 0);
+
+        // Complete batch0 so batch1 becomes first in-flight
+        idempotence.handle_completed_batch(&table_bucket, batch0_id, 42);
+
+        let mut batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+        let drained = batches.remove(&1).expect("drained");
+        assert_eq!(drained[0].write_batch.batch_sequence(), 1);
+
+        idempotence.handle_completed_batch(&table_bucket, batch1_id, 42);
+
+        let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+        let drained = batches.remove(&1).expect("drained");
+        assert_eq!(drained[0].write_batch.batch_sequence(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_abort_batches() -> Result<()> {
+        let idempotence = disabled_idempotence();
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+
+        let result = accumulator.append(&record, 0, &cluster, false)?;
+        let handle = result.result_handle.expect("handle");
+        assert!(accumulator.has_incomplete());
+
+        accumulator.abort_batches(broadcast::Error::Client {
+            message: "test abort".to_string(),
+        });
+
+        assert!(!accumulator.has_incomplete());
+        assert!(!accumulator.has_undrained());
+
+        // The handle should receive the error
+        let batch_result = handle.wait().await?;
+        assert!(matches!(
+            batch_result,
+            Err(broadcast::Error::Client { message }) if message == "test abort"
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drain_skips_blocked_bucket_continues_others() -> Result<()> {
+        // Use max_in_flight=1 so that one in-flight batch blocks further draining
+        let idempotence = Arc::new(IdempotenceManager::new(true, 1));
+        idempotence.set_writer_id(42);
+        let config = Config::default();
+        let accumulator = RecordAccumulator::new(config, Arc::clone(&idempotence));
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let cluster = Arc::new(build_cluster(&table_path, 1, 2));
+
+        // Append to both buckets
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 2));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+
+        // Append to bucket 0
+        let record =
+            WriteRecord::for_append(table_info.clone(), physical_table_path.clone(), 1, &row);
+        accumulator.append(&record, 0, &cluster, false)?;
+
+        // Append to bucket 1
+        let record =
+            WriteRecord::for_append(table_info.clone(), physical_table_path.clone(), 1, &row);
+        accumulator.append(&record, 1, &cluster, false)?;
+
+        // Drain once — both buckets get batches assigned with sequences
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let batches = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+        let drained = batches.get(&1).expect("drained");
+        // Both buckets should produce batches
+        assert_eq!(drained.len(), 2);
+
+        // Now: both buckets have 1 in-flight each (added during drain).
+        // Append another record to each bucket.
+        let record =
+            WriteRecord::for_append(table_info.clone(), physical_table_path.clone(), 1, &row);
+        accumulator.append(&record, 0, &cluster, false)?;
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+        accumulator.append(&record, 1, &cluster, false)?;
+
+        // With max_in_flight=1, both buckets are at limit → should_stop returns true
+        // for fresh batches. The drain should skip both (continue, not break).
+        let batches2 = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
+        // No batches should be drained (both blocked)
+        assert!(
+            batches2.is_empty() || batches2.get(&1).is_none_or(|b| b.is_empty()),
+            "Expected no batches when all buckets are blocked"
+        );
+
+        // Complete the in-flight for bucket 0
+        let bucket0_batch = &drained[0];
+        idempotence.handle_completed_batch(
+            &bucket0_batch.table_bucket,
+            bucket0_batch.write_batch.batch_id(),
+            42,
+        );
+
+        // Now bucket 0 is unblocked but bucket 1 is still blocked
+        let batches3 = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
+        let drained3 = batches3.get(&1).expect("some drained");
+        // Only bucket 0 should produce a batch (continue skipped bucket 1)
+        assert_eq!(drained3.len(), 1);
+        assert_eq!(drained3[0].table_bucket.bucket_id(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_memory_limiter_acquire_release() {
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(1)));
+
+        let permit1 = limiter.acquire(512).unwrap();
+        let permit2 = limiter.acquire(512).unwrap();
+
+        // At capacity — verify used is 1024
+        assert_eq!(*limiter.state.lock(), 1024);
+
+        // Release one permit, verify used drops
+        drop(permit1);
+        assert_eq!(*limiter.state.lock(), 512);
+
+        drop(permit2);
+        assert_eq!(*limiter.state.lock(), 0);
+    }
+
+    #[test]
+    fn test_memory_limiter_oversized_batch_fails_immediately() {
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(60)));
+
+        let result = limiter.acquire(2048);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_memory_limiter_blocks_then_unblocks() {
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(5)));
+
+        let permit = limiter.acquire(1024).unwrap();
+        assert_eq!(*limiter.state.lock(), 1024);
+
+        // Spawn a thread that tries to acquire — it should block
+        let limiter2 = Arc::clone(&limiter);
+        let handle = std::thread::spawn(move || limiter2.acquire(512));
+
+        // Give the thread time to block
+        std::thread::sleep(Duration::from_millis(50));
+        // Still at capacity (thread is blocked)
+        assert_eq!(*limiter.state.lock(), 1024);
+
+        // Release the permit — thread should unblock
+        drop(permit);
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+        let _permit2 = result.unwrap();
+        assert_eq!(*limiter.state.lock(), 512);
+    }
+
+    #[test]
+    fn test_memory_limiter_timeout() {
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_millis(100)));
+
+        let _permit = limiter.acquire(1024).unwrap();
+
+        // This should timeout
+        let start = Instant::now();
+        let result = limiter.acquire(512);
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        assert!(elapsed >= Duration::from_millis(80)); // allow some timing slack
+    }
+
+    #[test]
+    fn test_memory_limiter_close_fails_immediately() {
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(60)));
+
+        let _permit = limiter.acquire(512).unwrap();
+
+        limiter.close();
+
+        // New acquire should fail immediately, not block for 60s
+        let start = Instant::now();
+        let result = limiter.acquire(256);
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        assert!(elapsed < Duration::from_millis(50));
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("closed"),
+            "error should mention closed: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_memory_limiter_close_unblocks_waiting_threads() {
+        let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(60)));
+
+        // Fill the limiter completely
+        let _permit = limiter.acquire(1024).unwrap();
+
+        // Spawn a thread that blocks waiting for memory
+        let limiter2 = Arc::clone(&limiter);
+        let handle = std::thread::spawn(move || {
+            let start = Instant::now();
+            let result = limiter2.acquire(512);
+            (result, start.elapsed())
+        });
+
+        // Give the thread time to block
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(limiter.waiting_count.load(Ordering::Relaxed), 1);
+
+        // Close the limiter — should unblock the waiting thread
+        limiter.close();
+
+        let (result, elapsed) = handle.join().unwrap();
+        assert!(result.is_err());
+        assert!(elapsed < Duration::from_secs(5)); // should not wait the full 60s
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("closed"),
+            "error should mention closed: {err_msg}"
+        );
     }
 }

@@ -418,3 +418,12 @@ message AuthenticateRequest {
 message AuthenticateResponse {
   optional bytes challenge = 1;
 }
+
+// init writer request and response
+message InitWriterRequest {
+  repeated PbTablePath table_path = 1;
+}
+
+message InitWriterResponse {
+  required int64 writer_id = 1;
+}

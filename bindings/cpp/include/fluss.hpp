@@ -998,6 +998,14 @@ struct Configuration {
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
     int64_t writer_batch_timeout_ms{100};
+    // Whether to enable idempotent writes
+    bool writer_enable_idempotence{true};
+    // Maximum number of in-flight requests per bucket for idempotent writes
+    size_t writer_max_inflight_requests_per_bucket{5};
+    // Total memory available for buffering write batches (default 64MB)
+    size_t writer_buffer_memory_size{64 * 1024 * 1024};
+    // Maximum time in milliseconds to block waiting for buffer memory
+    uint64_t writer_buffer_wait_timeout_ms{60000};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{120000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)

@@ -518,6 +518,11 @@ impl MemoryLogRecordsArrowBuilder {
         Ok(())
     }
 
+    pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {
+        self.writer_id = writer_id;
+        self.batch_sequence = batch_base_sequence;
+    }
+
     /// Get an estimate of the number of bytes written to the underlying buffer.
     /// This includes the batch header size plus the estimated arrow data size.
     pub fn estimated_size_in_bytes(&self) -> usize {
