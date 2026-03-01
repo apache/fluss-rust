@@ -1255,7 +1255,7 @@ mod tests {
         let batches2 = accumulator.drain(cluster.clone(), &nodes, 1024 * 1024)?;
         // No batches should be drained (both blocked)
         assert!(
-            batches2.is_empty() || batches2.get(&1).map_or(true, |b| b.is_empty()),
+            batches2.is_empty() || batches2.get(&1).is_none_or(|b| b.is_empty()),
             "Expected no batches when all buckets are blocked"
         );
 
