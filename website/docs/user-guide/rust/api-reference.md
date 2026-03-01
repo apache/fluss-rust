@@ -7,16 +7,24 @@ Complete API reference for the Fluss Rust client.
 
 ## `Config`
 
-| Field                             | Type     | Default            | Description                                             |
-|-----------------------------------|----------|--------------------|---------------------------------------------------------|
-| `bootstrap_servers`               | `String` | `"127.0.0.1:9123"` | Coordinator server address                              |
-| `writer_request_max_size`         | `i32`    | `10485760` (10 MB) | Maximum request size in bytes                           |
-| `writer_acks`                     | `String` | `"all"`            | Acknowledgment setting (`"all"` waits for all replicas) |
-| `writer_retries`                  | `i32`    | `i32::MAX`         | Number of retries on failure                            |
-| `writer_batch_size`               | `i32`    | `2097152` (2 MB)   | Batch size for writes in bytes                          |
-| `scanner_remote_log_prefetch_num` | `usize`  | `4`                | Number of remote log segments to prefetch               |
-| `remote_file_download_thread_num` | `usize`  | `3`                | Number of threads for remote log downloads              |
-| `scanner_log_max_poll_records`    | `usize`  | `500`              | Maximum number of records returned in a single poll()   |
+| Field                                 | Type            | Default            | Description                                                                          |
+|---------------------------------------|-----------------|--------------------|--------------------------------------------------------------------------------------|
+| `bootstrap_servers`                   | `String`        | `"127.0.0.1:9123"` | Coordinator server address                                                           |
+| `writer_request_max_size`             | `i32`           | `10485760` (10 MB) | Maximum request size in bytes                                                        |
+| `writer_acks`                         | `String`        | `"all"`            | Acknowledgment setting (`"all"` waits for all replicas)                              |
+| `writer_retries`                      | `i32`           | `i32::MAX`         | Number of retries on failure                                                         |
+| `writer_batch_size`                   | `i32`           | `2097152` (2 MB)   | Batch size for writes in bytes                                                       |
+| `writer_batch_timeout_ms`             | `i64`           | `100`              | Maximum time in ms to wait for a writer batch to fill up before sending              |
+| `writer_bucket_no_key_assigner`       | `NoKeyAssigner` | `sticky`           | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin` |
+| `scanner_remote_log_prefetch_num`     | `usize`         | `4`                | Number of remote log segments to prefetch                                            |
+| `remote_file_download_thread_num`     | `usize`         | `3`                | Number of threads for remote log downloads                                           |
+| `scanner_remote_log_read_concurrency` | `usize`         | `4`                | Streaming read concurrency within a remote log file                                  |
+| `scanner_log_max_poll_records`        | `usize`         | `500`              | Maximum number of records returned in a single poll()                                |
+| `connect_timeout_ms`                  | `u64`           | `120000`           | TCP connect timeout in milliseconds                                                  |
+| `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
+| `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
+| `security_sasl_username`              | `String`        | (empty)            | SASL username (required when protocol is `sasl`)                                     |
+| `security_sasl_password`              | `String`        | (empty)            | SASL password (required when protocol is `sasl`)                                     |
 
 ## `FlussConnection`
 

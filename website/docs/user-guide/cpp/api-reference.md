@@ -15,16 +15,24 @@ Complete API reference for the Fluss C++ client.
 
 ## `Configuration`
 
-| Field                             | Type          | Default              | Description                                                     |
-|-----------------------------------|---------------|----------------------|-----------------------------------------------------------------|
-| `bootstrap_servers`               | `std::string` | `"127.0.0.1:9123"`   | Coordinator server address                                      |
-| `writer_request_max_size`         | `int32_t`     | `10485760` (10 MB)   | Maximum request size in bytes                                   |
-| `writer_acks`                     | `std::string` | `"all"`              | Acknowledgment setting (`"all"`, `"0"`, `"1"`, or `"-1"`)       |
-| `writer_retries`                  | `int32_t`     | `INT32_MAX`          | Number of retries on failure                                    |
-| `writer_batch_size`               | `int32_t`     | `2097152` (2 MB)     | Batch size for writes in bytes                                  |
-| `scanner_remote_log_prefetch_num` | `size_t`      | `4`                  | Number of remote log segments to prefetch                       |
-| `remote_file_download_thread_num` | `size_t`      | `3`                  | Number of threads for remote log downloads                      |
-| `scanner_log_max_poll_records`    | `size_t`      | `500`                | Maximum number of records returned in a single Poll()           |
+| Field                                 | Type          | Default              | Description                                                                              |
+|---------------------------------------|---------------|----------------------|------------------------------------------------------------------------------------------|
+| `bootstrap_servers`                   | `std::string` | `"127.0.0.1:9123"`   | Coordinator server address                                                               |
+| `writer_request_max_size`             | `int32_t`     | `10485760` (10 MB)   | Maximum request size in bytes                                                            |
+| `writer_acks`                         | `std::string` | `"all"`              | Acknowledgment setting (`"all"`, `"0"`, `"1"`, or `"-1"`)                                |
+| `writer_retries`                      | `int32_t`     | `INT32_MAX`          | Number of retries on failure                                                             |
+| `writer_batch_size`                   | `int32_t`     | `2097152` (2 MB)     | Batch size for writes in bytes                                                           |
+| `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
+| `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
+| `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
+| `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |
+| `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |
+| `scanner_log_max_poll_records`        | `size_t`      | `500`                | Maximum number of records returned in a single Poll()                                    |
+| `connect_timeout_ms`                  | `uint64_t`    | `120000`             | TCP connect timeout in milliseconds                                                      |
+| `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
+| `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |
+| `security_sasl_username`              | `std::string` | (empty)              | SASL username (required when protocol is `"sasl"`)                                       |
+| `security_sasl_password`              | `std::string` | (empty)              | SASL password (required when protocol is `"sasl"`)                                       |
 
 ## `Connection`
 
