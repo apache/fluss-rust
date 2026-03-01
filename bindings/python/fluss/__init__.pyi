@@ -861,10 +861,6 @@ class TableBucket:
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
-class TableDistribution:
-    def bucket_keys(self) -> List[str]: ...
-    def bucket_count(self) -> Optional[int]: ...
-
 class PartitionInfo:
     """Information about a partition."""
 
@@ -888,6 +884,7 @@ class ErrorCode:
     """
 
     CLIENT_ERROR: int
+    NONE: int
     UNKNOWN_SERVER_ERROR: int
     NETWORK_EXCEPTION: int
     UNSUPPORTED_VERSION: int
