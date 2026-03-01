@@ -351,6 +351,31 @@ where
         R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
         R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
     {
+        let api_label = crate::metrics::api_key_label(R::API_KEY);
+        let start = std::time::Instant::now();
+        let record_completion_metrics = |label: &'static str, response_bytes: u64| {
+            metrics::counter!(
+                crate::metrics::CLIENT_RESPONSES_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(1);
+            metrics::counter!(
+                crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(response_bytes);
+            metrics::gauge!(
+                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .decrement(1.0);
+            metrics::histogram!(
+                crate::metrics::CLIENT_REQUEST_LATENCY_MS,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .record(start.elapsed().as_secs_f64() * 1000.0);
+        };
+
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
@@ -386,12 +411,76 @@ where
             ConnectionState::Poison(e) => return Err(RpcError::Poisoned(Arc::clone(e)).into()),
         }
 
-        self.send_message(buf).await?;
+        // Guard to decrement in-flight on cancellation, panic, or any exit without
+        // explicitly calling record_completion_metrics. Prevents gauge drift when
+        // the request future is dropped (e.g. tokio::select! timeout).
+        let mut in_flight_guard = if let Some(label) = api_label {
+            metrics::counter!(
+                crate::metrics::CLIENT_REQUESTS_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(1);
+            metrics::counter!(
+                crate::metrics::CLIENT_BYTES_SENT_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(buf.len() as u64);
+            metrics::gauge!(
+                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(1.0);
+            Some(scopeguard::guard(label, |l| {
+                metrics::gauge!(
+                    crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+                    crate::metrics::LABEL_API_KEY => l
+                )
+                .decrement(1.0);
+            }))
+        } else {
+            None
+        };
+
+        let mut disarm_in_flight_guard = || {
+            if let Some(guard) = in_flight_guard.take() {
+                let _ = scopeguard::ScopeGuard::into_inner(guard);
+            }
+        };
+
+        if let Err(e) = self.send_message(buf).await {
+            if let Some(label) = api_label {
+                disarm_in_flight_guard();
+                record_completion_metrics(label, 0);
+            }
+            return Err(e.into());
+        }
         _cleanup_on_cancel.message_sent();
-        let mut response = rx.await.map_err(|e| Error::UnexpectedError {
-            message: "Got recvError, some one close the channel".to_string(),
-            source: Some(Box::new(e)),
-        })??;
+        let mut response = match rx.await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => {
+                if let Some(label) = api_label {
+                    disarm_in_flight_guard();
+                    record_completion_metrics(label, 0);
+                }
+                return Err(e.into());
+            }
+            Err(e) => {
+                if let Some(label) = api_label {
+                    disarm_in_flight_guard();
+                    record_completion_metrics(label, 0);
+                }
+                return Err(Error::UnexpectedError {
+                    message: "Got recvError, some one close the channel".to_string(),
+                    source: Some(Box::new(e)),
+                });
+            }
+        };
+
+        let response_bytes = response.data.get_ref().len() as u64;
+        if let Some(label) = api_label {
+            disarm_in_flight_guard();
+            record_completion_metrics(label, response_bytes);
+        }
 
         if let Some(error_response) = response.header.error_response {
             return Err(Error::FlussAPIError {
@@ -559,5 +648,596 @@ impl Drop for CleanupRequestStateOnCancel {
                 map.remove(&self.request_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::rpc::ApiKey;
+    use crate::rpc::api_version::ApiVersion;
+    use crate::rpc::frame::{ReadError, WriteError};
+    use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+    use metrics_util::debugging::DebuggingRecorder;
+    use std::sync::OnceLock;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
+    use tokio::sync::Mutex as AsyncMutex;
+
+    // -- Test-only request/response types --------------------------------
+
+    struct TestProduceRequest;
+    struct TestProduceResponse;
+
+    impl RequestBody for TestProduceRequest {
+        type ResponseBody = TestProduceResponse;
+        const API_KEY: ApiKey = ApiKey::ProduceLog;
+        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
+    }
+
+    impl WriteVersionedType<Vec<u8>> for TestProduceRequest {
+        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+            Ok(())
+        }
+    }
+
+    impl ReadVersionedType<Cursor<Vec<u8>>> for TestProduceResponse {
+        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+            Ok(TestProduceResponse)
+        }
+    }
+
+    struct TestMetadataRequest;
+    struct TestMetadataResponse;
+
+    impl RequestBody for TestMetadataRequest {
+        type ResponseBody = TestMetadataResponse;
+        const API_KEY: ApiKey = ApiKey::MetaData;
+        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
+    }
+
+    impl WriteVersionedType<Vec<u8>> for TestMetadataRequest {
+        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+            Ok(())
+        }
+    }
+
+    impl ReadVersionedType<Cursor<Vec<u8>>> for TestMetadataResponse {
+        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+            Ok(TestMetadataResponse)
+        }
+    }
+
+    // -- Mock server -----------------------------------------------------
+
+    /// Reads framed requests and echoes back minimal success responses.
+    async fn mock_echo_server(mut stream: tokio::io::DuplexStream) {
+        loop {
+            let mut len_buf = [0u8; 4];
+            if stream.read_exact(&mut len_buf).await.is_err() {
+                return;
+            }
+            let len = i32::from_be_bytes(len_buf) as usize;
+
+            let mut payload = vec![0u8; len];
+            if stream.read_exact(&mut payload).await.is_err() {
+                return;
+            }
+
+            // Header layout: api_key(2) + api_version(2) + request_id(4)
+            let request_id = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+
+            // Response: resp_type(1, 0=success) + request_id(4)
+            let mut resp = Vec::with_capacity(5);
+            resp.push(0u8);
+            resp.extend_from_slice(&request_id.to_be_bytes());
+
+            let resp_len = (resp.len() as i32).to_be_bytes();
+            if stream.write_all(&resp_len).await.is_err()
+                || stream.write_all(&resp).await.is_err()
+                || stream.flush().await.is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    /// Reads framed requests and echoes back error responses (resp_type=1).
+    async fn mock_error_server(mut stream: tokio::io::DuplexStream) {
+        use prost::Message;
+
+        loop {
+            let mut len_buf = [0u8; 4];
+            if stream.read_exact(&mut len_buf).await.is_err() {
+                return;
+            }
+            let len = i32::from_be_bytes(len_buf) as usize;
+
+            let mut payload = vec![0u8; len];
+            if stream.read_exact(&mut payload).await.is_err() {
+                return;
+            }
+
+            let request_id = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+
+            let err = crate::proto::ErrorResponse {
+                error_code: 1,
+                error_message: Some("test error".to_string()),
+            };
+            let mut err_buf = Vec::new();
+            err.encode(&mut err_buf).expect("ErrorResponse encode");
+
+            let mut resp = Vec::with_capacity(5 + err_buf.len());
+            resp.push(1u8); // ERROR_RESPONSE
+            resp.extend_from_slice(&request_id.to_be_bytes());
+            resp.extend(err_buf);
+
+            let resp_len = (resp.len() as i32).to_be_bytes();
+            if stream.write_all(&resp_len).await.is_err()
+                || stream.write_all(&resp).await.is_err()
+                || stream.flush().await.is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    // -- Recorder setup --------------------------------------------------
+
+    /// Shared test recorder (installed once per test binary).
+    static TEST_SNAPSHOTTER: OnceLock<metrics_util::debugging::Snapshotter> = OnceLock::new();
+    static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+
+    fn test_snapshotter() -> &'static metrics_util::debugging::Snapshotter {
+        TEST_SNAPSHOTTER.get_or_init(|| {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            recorder
+                .install()
+                .expect("debugging recorder install should succeed in this test binary");
+            snapshotter
+        })
+    }
+
+    fn test_lock() -> &'static AsyncMutex<()> {
+        TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
+    }
+
+    // -- Tests -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn request_records_metrics_for_reportable_api_key() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(mock_echo_server(server));
+
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_before = before
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let response_before = before
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+
+        conn.request(TestProduceRequest).await.unwrap();
+
+        let after: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let response_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            request_after - request_before,
+            1,
+            "produce_log request counter should increment by 1"
+        );
+        assert_eq!(
+            response_after - response_before,
+            1,
+            "produce_log completion counter should increment by 1"
+        );
+
+        let has_latency_sample = after.iter().any(|(key, _, _, value)| {
+            key.key().name() == crate::metrics::CLIENT_REQUEST_LATENCY_MS
+                && key
+                    .key()
+                    .labels()
+                    .any(|l| l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log")
+                && matches!(value, metrics_util::debugging::DebugValue::Histogram(_))
+        });
+        assert!(
+            has_latency_sample,
+            "request latency histogram should be recorded for produce_log"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_skips_metrics_for_non_reportable_api_key() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(mock_echo_server(server));
+
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_sum_before: u64 = before
+            .iter()
+            .filter_map(|(key, _, _, value)| {
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .sum();
+        let response_sum_before: u64 = before
+            .iter()
+            .filter_map(|(key, _, _, value)| {
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .sum();
+
+        conn.request(TestMetadataRequest).await.unwrap();
+
+        let snapshot: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_sum_after: u64 = snapshot
+            .iter()
+            .filter_map(|(key, _, _, value)| {
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .sum();
+        let response_sum_after: u64 = snapshot
+            .iter()
+            .filter_map(|(key, _, _, value)| {
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .sum();
+        assert_eq!(
+            request_sum_after, request_sum_before,
+            "non-reportable API keys must not change request counters"
+        );
+        assert_eq!(
+            response_sum_after, response_sum_before,
+            "non-reportable API keys must not change response counters"
+        );
+
+        // No metric entry should carry a non-reportable API key label.
+        let non_reportable = snapshot.iter().any(|(key, _, _, _)| {
+            key.key()
+                .labels()
+                .any(|l| l.key() == crate::metrics::LABEL_API_KEY && l.value() == "metadata")
+        });
+        assert!(
+            !non_reportable,
+            "non-reportable API keys must not appear in metrics"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_records_completion_metrics_when_send_fails() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(64);
+        drop(server); // force write failure on request path
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_before = before
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let response_before = before
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let bytes_received_before = before
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let result = conn.request(TestProduceRequest).await;
+        assert!(
+            result.is_err(),
+            "request should fail when transport is closed"
+        );
+        let after: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let response_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let bytes_received_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let inflight_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_IN_FLIGHT || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Gauge(v) => Some(v.into_inner()),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0.0);
+
+        assert_eq!(
+            request_after - request_before,
+            1,
+            "failed request should still count as request"
+        );
+        assert_eq!(
+            response_after - response_before,
+            1,
+            "failed request should still count as a completion like Java ConnectionMetrics"
+        );
+        assert_eq!(
+            bytes_received_after - bytes_received_before,
+            0,
+            "failed send should record zero received bytes"
+        );
+        assert_eq!(
+            inflight_after, 0.0,
+            "in-flight gauge must return to zero after failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_records_completion_metrics_when_server_returns_api_error() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(mock_error_server(server));
+
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let response_before = before
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let bytes_received_before = before
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+
+        let result = conn.request(TestProduceRequest).await;
+        assert!(
+            matches!(result, Err(Error::FlussAPIError { .. })),
+            "request should fail with FlussAPIError when server returns error_response"
+        );
+
+        let after: Vec<_> = snapshotter.snapshot().into_vec();
+        let response_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let bytes_received_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0);
+        let inflight_after = after
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                let has_label = key.key().labels().any(|l| {
+                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
+                });
+                if key.key().name() != crate::metrics::CLIENT_REQUESTS_IN_FLIGHT || !has_label {
+                    return None;
+                }
+                match value {
+                    metrics_util::debugging::DebugValue::Gauge(v) => Some(v.into_inner()),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0.0);
+
+        assert_eq!(
+            response_after - response_before,
+            1,
+            "API error response should count as completion like Java"
+        );
+        assert!(
+            bytes_received_after > bytes_received_before,
+            "API error response should record received bytes (error body)"
+        );
+        assert_eq!(
+            inflight_after, 0.0,
+            "in-flight gauge must return to zero after API error"
+        );
     }
 }

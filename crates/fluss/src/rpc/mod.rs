@@ -16,6 +16,7 @@
 // under the License.
 
 mod api_key;
+pub(crate) use api_key::ApiKey;
 mod api_version;
 pub mod error;
 mod fluss_api_error;
