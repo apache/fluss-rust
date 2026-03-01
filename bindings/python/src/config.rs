@@ -113,7 +113,7 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
-                    "request-timeout-ms" => {
+                    "request-timeout" | "request-timeout-ms" => {
                         config.request_timeout_ms = value.parse::<u64>().map_err(|e| {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;

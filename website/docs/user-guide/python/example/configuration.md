@@ -35,6 +35,7 @@ with await fluss.FlussConnection.create(config) as conn:
 | `scanner.remote-log.read-concurrency` | Streaming read concurrency within a remote log file                                   | `4`                |
 | `scanner.log.max-poll-records`        | Max records returned in a single poll()                                               | `500`              |
 | `connect-timeout`                     | TCP connect timeout in milliseconds                                                   | `120000`           |
+| `request-timeout`                     | Per-request RPC timeout in milliseconds (also accepts `request-timeout-ms`)           | `30000`            |
 | `security.protocol`                   | `PLAINTEXT` (default) or `sasl` for SASL auth                                        | `PLAINTEXT`        |
 | `security.sasl.mechanism`             | SASL mechanism (only `PLAIN` is supported)                                            | `PLAIN`            |
 | `security.sasl.username`              | SASL username (required when protocol is `sasl`)                                      | (empty)            |

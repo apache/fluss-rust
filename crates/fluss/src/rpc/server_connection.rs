@@ -274,6 +274,10 @@ pub struct ServerConnectionInner<RW> {
 
     state: Arc<Mutex<ConnectionState>>,
 
+    /// Per-request timeout applied to the response-wait phase only.
+    /// The send (write) phase is not covered; a stalled `send_message` can
+    /// exceed this duration. 
+    /// TODO: Full RPC deadline semantics are a potential future enhancement.
     request_timeout: Option<Duration>,
 
     join_handle: JoinHandle<()>,
@@ -316,9 +320,9 @@ where
                                 match map.remove(&header.request_id) {
                                     Some(active_request) => active_request,
                                     _ => {
-                                        log::warn!(
+                                        log::debug!(
                                             request_id:% = header.request_id;
-                                            "Got response for unknown request",
+                                            "Ignoring response for unknown request (likely timed out or cancelled)",
                                         );
                                         continue;
                                     }
@@ -407,7 +411,11 @@ where
         let mut response = match self.request_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, rx).await {
                 Ok(result) => result.map_err(|e| Error::UnexpectedError {
-                    message: "Got recvError, some one close the channel".to_string(),
+                    message: format!(
+                        "Response channel closed for request_id={request_id} api_key={:?}; \
+                         connection may be closed or poisoned",
+                        R::API_KEY
+                    ),
                     source: Some(Box::new(e)),
                 })??,
                 Err(_elapsed) => {
@@ -422,7 +430,11 @@ where
                 }
             },
             None => rx.await.map_err(|e| Error::UnexpectedError {
-                message: "Got recvError, some one close the channel".to_string(),
+                message: format!(
+                    "Response channel closed for request_id={request_id} api_key={:?}; \
+                     connection may be closed or poisoned",
+                    R::API_KEY
+                ),
                 source: Some(Box::new(e)),
             })??,
         };
@@ -620,16 +632,32 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let err_msg = err.to_string();
         assert!(
-            err_msg.contains("timed out"),
-            "expected timeout error, got: {err_msg}"
+            matches!(
+                err,
+                Error::RpcError {
+                    source: RpcError::RequestTimeout { .. },
+                    ..
+                }
+            ),
+            "expected RequestTimeout, got: {err}"
         );
+
+        // Timeout must not poison the connection — other requests should still work.
+        assert!(!conn.is_poisoned());
+
+        // The timed-out request must be removed from the request map (no state leak).
+        if let ConnectionState::RequestMap(map) = conn.state.lock().deref_mut() {
+            assert!(map.is_empty(), "request map should be empty after timeout");
+        } else {
+            panic!("connection should not be poisoned after a timeout");
+        }
     }
 
     #[tokio::test]
     async fn test_request_no_timeout() {
-        // With None timeout, verify a connection can still be constructed without panics.
+        // With no request timeout configured, request should remain pending
+        // when the server does not respond.
         let (client_stream, _server_stream) = tokio::io::duplex(1024);
 
         let conn = ServerConnectionInner::new(
@@ -639,6 +667,12 @@ mod tests {
             None,
         );
 
-        assert!(!conn.is_poisoned());
+        let table_path = TablePath::new("db", "table");
+        let request = TableExistsRequest::new(&table_path);
+        let pending = tokio::time::timeout(Duration::from_millis(50), conn.request(request)).await;
+        assert!(
+            pending.is_err(),
+            "expected request to remain pending without per-request timeout"
+        );
     }
 }
