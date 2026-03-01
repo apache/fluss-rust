@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
     let records = scanner.poll(Duration::from_secs(5)).await?;
     for record in records {
         let row = record.row();
-        println!("id={}, name={}", row.get_int(0), row.get_string(1));
+        println!("id={}, name={}", row.get_int(0)?, row.get_string(1)?);
     }
 
     Ok(())
