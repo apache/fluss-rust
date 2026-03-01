@@ -255,6 +255,27 @@ impl Config {
         self.inner.writer_batch_timeout_ms = timeout;
     }
 
+    /// Get the bucket assignment strategy for tables without bucket keys
+    #[getter]
+    fn writer_bucket_no_key_assigner(&self) -> String {
+        self.inner.writer_bucket_no_key_assigner.to_string()
+    }
+
+    /// Set the bucket assignment strategy for tables without bucket keys
+    #[setter]
+    fn set_writer_bucket_no_key_assigner(&mut self, value: String) -> PyResult<()> {
+        self.inner.writer_bucket_no_key_assigner = match value.as_str() {
+            "round_robin" => fcore::config::NoKeyAssigner::RoundRobin,
+            "sticky" => fcore::config::NoKeyAssigner::Sticky,
+            other => {
+                return Err(FlussError::new_err(format!(
+                    "Unknown bucket assigner type: {other}, expected 'sticky' or 'round_robin'"
+                )));
+            }
+        };
+        Ok(())
+    }
+
     /// Get the connect timeout in milliseconds
     #[getter]
     fn connect_timeout_ms(&self) -> u64 {
