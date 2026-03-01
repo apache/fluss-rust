@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::WriterClient;
+use crate::client::{WriterClient, admin};
 use crate::client::admin::FlussAdmin;
 use crate::client::metadata::Metadata;
 use crate::client::table::FlussTable;
@@ -33,6 +33,7 @@ pub struct FlussConnection {
     network_connects: Arc<RpcClient>,
     args: Config,
     writer_client: RwLock<Option<Arc<WriterClient>>>,
+    admin_client: RwLock<Option<Arc<FlussAdmin>>>,
 }
 
 impl FlussConnection {
@@ -60,6 +61,7 @@ impl FlussConnection {
             network_connects: connections.clone(),
             args: arg.clone(),
             writer_client: Default::default(),
+            admin_client: Default::default(),
         })
     }
 
@@ -76,7 +78,27 @@ impl FlussConnection {
     }
 
     pub async fn get_admin(&self) -> Result<FlussAdmin> {
-        FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()).await
+        // 1. Fast path: Attempt to acquire a read lock to check if the admin already exists.
+        if let Some(admin) = self.admin_client.read().as_ref() {
+            return Ok(admin.as_ref().clone());
+        }
+
+        // 2. Initialize the admin outside the guard lock 
+        let new_admin = Arc::new(admin::FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()).await?);
+        
+        // 3. Slow path: Acquire the write lock.
+        let mut admin_guard = self.admin_client.write();
+
+        // 4. Double-check: Another thread might have initialized the admin
+        // while this thread was waiting for the write lock.
+        if let Some(admin) = admin_guard.as_ref() {
+            return Ok(admin.as_ref().clone());
+        }
+
+        // 5. Store and return the newly created admin.
+        let result = new_admin.as_ref().clone();
+        *admin_guard = Some(new_admin);
+        Ok(result)
     }
 
     pub fn get_or_create_writer_client(&self) -> Result<Arc<WriterClient>> {

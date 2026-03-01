@@ -37,6 +37,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
+#[derive(Clone)]
 pub struct FlussAdmin {
     admin_gateway: ServerConnection,
     #[allow(dead_code)]
