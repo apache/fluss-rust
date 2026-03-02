@@ -249,7 +249,7 @@ mod ffi {
 
     struct FfiPtrResult {
         result: FfiResult,
-        ptr: i64,
+        ptr: usize,
     }
 
     extern "Rust" {
@@ -626,7 +626,7 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
     }
 }
 
-fn ok_ptr(ptr: i64) -> ffi::FfiPtrResult {
+fn ok_ptr(ptr: usize) -> ffi::FfiPtrResult {
     ffi::FfiPtrResult {
         result: ok_result(),
         ptr,
@@ -636,14 +636,14 @@ fn ok_ptr(ptr: i64) -> ffi::FfiPtrResult {
 fn client_err_ptr(msg: String) -> ffi::FfiPtrResult {
     ffi::FfiPtrResult {
         result: client_err(msg),
-        ptr: 0,
+        ptr: 0usize,
     }
 }
 
 fn err_ptr_from_core(e: &fcore::error::Error) -> ffi::FfiPtrResult {
     ffi::FfiPtrResult {
         result: err_from_core_error(e),
-        ptr: 0,
+        ptr: 0usize,
     }
 }
 
@@ -682,7 +682,7 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
     match conn {
         Ok(c) => {
             let ptr = Box::into_raw(Box::new(Connection { inner: Arc::new(c) }));
-            ok_ptr(ptr as i64)
+            ok_ptr(ptr as usize)
         }
         Err(e) => err_ptr_from_core(&e),
     }
@@ -703,7 +703,7 @@ impl Connection {
         match admin_result {
             Ok(admin) => {
                 let ptr = Box::into_raw(Box::new(Admin { inner: admin }));
-                ok_ptr(ptr as i64)
+                ok_ptr(ptr as usize)
             }
             Err(e) => err_ptr_from_core(&e),
         }
@@ -726,7 +726,7 @@ impl Connection {
                     table_path: t.table_path().clone(),
                     has_pk: t.has_primary_key(),
                 }));
-                ok_ptr(ptr as i64)
+                ok_ptr(ptr as usize)
             }
             Err(e) => err_ptr_from_core(&e),
         }
@@ -1230,7 +1230,7 @@ impl Table {
             inner: writer,
             table_info: self.table_info.clone(),
         }));
-        ok_ptr(ptr as i64)
+        ok_ptr(ptr as usize)
     }
 
     fn create_scanner(&self, column_indices: Vec<usize>, batch: bool) -> ffi::FfiPtrResult {
@@ -1268,7 +1268,7 @@ impl Table {
                 scanner,
                 projected_columns,
             }));
-            ok_ptr(ptr as i64)
+            ok_ptr(ptr as usize)
         })
     }
 
@@ -1313,7 +1313,7 @@ impl Table {
             inner: writer,
             table_info: self.table_info.clone(),
         }));
-        ok_ptr(ptr as i64)
+        ok_ptr(ptr as usize)
     }
 
     fn new_lookuper(&self) -> ffi::FfiPtrResult {
@@ -1333,7 +1333,7 @@ impl Table {
             inner: lookuper,
             table_info: self.table_info.clone(),
         }));
-        ok_ptr(ptr as i64)
+        ok_ptr(ptr as usize)
     }
 }
 
@@ -1362,7 +1362,7 @@ impl AppendWriter {
         let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
         }));
-        ok_ptr(ptr as i64)
+        ok_ptr(ptr as usize)
     }
 
     fn append_arrow_batch(&mut self, array_ptr: usize, schema_ptr: usize) -> ffi::FfiPtrResult {
@@ -1394,7 +1394,7 @@ impl AppendWriter {
         let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
         }));
-        ok_ptr(ptr as i64)
+        ok_ptr(ptr as usize)
     }
 
     fn flush(&mut self) -> ffi::FfiResult {
@@ -1465,7 +1465,7 @@ impl UpsertWriter {
         let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
         }));
-        ok_ptr(ptr as i64)
+        ok_ptr(ptr as usize)
     }
 
     fn delete_row(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
@@ -1484,7 +1484,7 @@ impl UpsertWriter {
         let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
         }));
-        ok_ptr(ptr as i64)
+        ok_ptr(ptr as usize)
     }
 
     fn upsert_flush(&mut self) -> ffi::FfiResult {
