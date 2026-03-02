@@ -578,14 +578,12 @@ Result TableAppend::CreateWriter(AppendWriter& out) {
         return utils::make_client_error("Table not available");
     }
 
-    try {
-        out = AppendWriter(table_->new_append_writer());
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(e.what());
-    } catch (const std::exception& e) {
-        return utils::make_client_error(e.what());
+    auto ffi_result = table_->new_append_writer();
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = AppendWriter(utils::ptr_from_ffi<ffi::AppendWriter>(ffi_result));
     }
+    return result;
 }
 
 // ============================================================================
@@ -645,11 +643,14 @@ Result TableUpsert::CreateWriter(UpsertWriter& out) {
         for (size_t idx : resolved_indices) {
             rust_indices.push_back(idx);
         }
-        out = UpsertWriter(table_->create_upsert_writer(std::move(rust_indices)));
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(e.what());
+        auto ffi_result = table_->create_upsert_writer(std::move(rust_indices));
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (result.Ok()) {
+            out = UpsertWriter(utils::ptr_from_ffi<ffi::UpsertWriter>(ffi_result));
+        }
+        return result;
     } catch (const std::exception& e) {
+        // ResolveNameProjection() may throw
         return utils::make_client_error(e.what());
     }
 }
@@ -665,14 +666,12 @@ Result TableLookup::CreateLookuper(Lookuper& out) {
         return utils::make_client_error("Table not available");
     }
 
-    try {
-        out = Lookuper(table_->new_lookuper());
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(e.what());
-    } catch (const std::exception& e) {
-        return utils::make_client_error(e.what());
+    auto ffi_result = table_->new_lookuper();
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = Lookuper(utils::ptr_from_ffi<ffi::Lookuper>(ffi_result));
     }
+    return result;
 }
 
 // ============================================================================
@@ -731,11 +730,14 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
         for (size_t idx : resolved_indices) {
             rust_indices.push_back(idx);
         }
-        out.scanner_ = table_->create_scanner(std::move(rust_indices), is_record_batch);
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(e.what());
+        auto ffi_result = table_->create_scanner(std::move(rust_indices), is_record_batch);
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (result.Ok()) {
+            out.scanner_ = utils::ptr_from_ffi<ffi::LogScanner>(ffi_result);
+        }
+        return result;
     } catch (const std::exception& e) {
+        // ResolveNameProjection() may throw
         return utils::make_client_error(e.what());
     }
 }
@@ -752,8 +754,7 @@ WriteResult::~WriteResult() noexcept { Destroy(); }
 
 void WriteResult::Destroy() noexcept {
     if (inner_) {
-        // Reconstruct the rust::Box to let Rust drop the value
-        rust::Box<ffi::WriteResult>::from_raw(inner_);
+        ffi::delete_write_result(inner_);
         inner_ = nullptr;
     }
 }
@@ -827,15 +828,12 @@ Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
         return utils::make_client_error("GenericRow not available");
     }
 
-    try {
-        auto rust_box = writer_->append(*row.inner_);
-        out = WriteResult(rust_box.into_raw());
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(e.what());
-    } catch (const std::exception& e) {
-        return utils::make_client_error(e.what());
+    auto ffi_result = writer_->append(*row.inner_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = WriteResult(utils::ptr_from_ffi<ffi::WriteResult>(ffi_result));
     }
+    return result;
 }
 
 Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch) {
@@ -864,19 +862,16 @@ Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>&
     auto* array_heap = new ArrowArray(std::move(c_array));
     auto* schema_heap = new ArrowSchema(std::move(c_schema));
 
-    try {
-        // Rust takes ownership of both pointers immediately via Box::from_raw(),
-        // so after this call (success or exception) C++ must NOT free them.
-        auto result_box = writer_->append_arrow_batch(reinterpret_cast<size_t>(array_heap),
-                                                      reinterpret_cast<size_t>(schema_heap));
+    // Rust takes ownership of both pointers immediately via Box::from_raw(),
+    // so after this call C++ must NOT free them.
+    auto ffi_result = writer_->append_arrow_batch(reinterpret_cast<size_t>(array_heap),
+                                                  reinterpret_cast<size_t>(schema_heap));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
         out.Destroy();
-        out.inner_ = result_box.into_raw();
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(std::string(e.what()));
-    } catch (const std::exception& e) {
-        return utils::make_client_error(std::string(e.what()));
+        out.inner_ = utils::ptr_from_ffi<ffi::WriteResult>(ffi_result);
     }
+    return result;
 }
 
 Result AppendWriter::Flush() {
@@ -933,15 +928,12 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
         return utils::make_client_error("GenericRow not available");
     }
 
-    try {
-        auto rust_box = writer_->upsert(*row.inner_);
-        out = WriteResult(rust_box.into_raw());
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(e.what());
-    } catch (const std::exception& e) {
-        return utils::make_client_error(e.what());
+    auto ffi_result = writer_->upsert(*row.inner_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = WriteResult(utils::ptr_from_ffi<ffi::WriteResult>(ffi_result));
     }
+    return result;
 }
 
 Result UpsertWriter::Delete(const GenericRow& row) {
@@ -957,15 +949,12 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
         return utils::make_client_error("GenericRow not available");
     }
 
-    try {
-        auto rust_box = writer_->delete_row(*row.inner_);
-        out = WriteResult(rust_box.into_raw());
-        return utils::make_ok();
-    } catch (const rust::Error& e) {
-        return utils::make_client_error(e.what());
-    } catch (const std::exception& e) {
-        return utils::make_client_error(e.what());
+    auto ffi_result = writer_->delete_row(*row.inner_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = WriteResult(utils::ptr_from_ffi<ffi::WriteResult>(ffi_result));
     }
+    return result;
 }
 
 Result UpsertWriter::Flush() {
