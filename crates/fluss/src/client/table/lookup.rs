@@ -20,6 +20,8 @@ use crate::client::metadata::Metadata;
 use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
+use crate::record::ArrowRecordBatchInnerBuilder;
+use crate::record::RowAppendRecordBatchBuilder;
 use crate::record::kv::SCHEMA_ID_LENGTH;
 use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
@@ -27,6 +29,7 @@ use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
 use crate::rpc::ApiError;
 use crate::rpc::RpcClient;
 use crate::rpc::message::LookupRequest;
+use arrow::array::RecordBatch;
 use std::sync::Arc;
 
 /// The result of a lookup operation.
@@ -84,6 +87,24 @@ impl LookupResult {
             // TODO Add schema id check and fetch when implementing prefix lookup
             .map(|bytes| CompactedRow::from_bytes(&self.row_type, &bytes[SCHEMA_ID_LENGTH..]))
             .collect()
+    }
+    /// Converts all rows in this result into an Arrow [`RecordBatch`].
+    ///
+    /// This is useful for integration with DataFusion or other Arrow-based tools.
+    ///
+    /// # Returns
+    /// - `Ok(RecordBatch)` - All rows in columnar Arrow format. Returns an empty
+    ///   batch (with the correct schema) if the result set is empty.
+    /// - `Err(Error)` - If the conversion fails.
+    pub fn to_record_batch(&self) -> Result<RecordBatch> {
+        let mut builder = RowAppendRecordBatchBuilder::new(&self.row_type)?;
+        for bytes in &self.rows {
+            let row = CompactedRow::from_bytes(&self.row_type, &bytes[SCHEMA_ID_LENGTH..]);
+            builder.append(&row)?;
+        }
+        let arc_batch = builder.build_arrow_record_batch()?;
+        // Unwrap the Arc — if we're the only owner, take it directly; otherwise clone.
+        Ok(Arc::try_unwrap(arc_batch).unwrap_or_else(|arc: Arc<RecordBatch>| (*arc).clone()))
     }
 }
 
