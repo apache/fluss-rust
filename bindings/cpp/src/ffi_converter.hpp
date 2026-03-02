@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <cassert>
+
 #include "fluss.hpp"
 #include "lib.rs.h"
 
@@ -39,6 +41,7 @@ inline Result from_ffi_result(const ffi::FfiResult& ffi_result) {
 
 template <typename T>
 inline T* ptr_from_ffi(const ffi::FfiPtrResult& r) {
+    assert(r.ptr != 0 && "ptr_from_ffi: null pointer in FfiPtrResult");
     return reinterpret_cast<T*>(r.ptr);
 }
 
