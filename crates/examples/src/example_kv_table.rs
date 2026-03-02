@@ -75,8 +75,8 @@ pub async fn main() -> Result<()> {
         let row = result.get_single_row()?.unwrap();
         println!(
             "Found id={id}: name={}, age={}",
-            row.get_string(1),
-            row.get_long(2)
+            row.get_string(1)?,
+            row.get_long(2)?
         );
     }
 
@@ -92,8 +92,8 @@ pub async fn main() -> Result<()> {
     let row = result.get_single_row()?.unwrap();
     println!(
         "Verified update: name={}, age={}",
-        row.get_string(1),
-        row.get_long(2)
+        row.get_string(1)?,
+        row.get_long(2)?
     );
 
     println!("\n=== Deleting ===");

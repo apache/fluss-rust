@@ -43,9 +43,17 @@ mod ffi {
         writer_acks: String,
         writer_retries: i32,
         writer_batch_size: i32,
+        writer_bucket_no_key_assigner: String,
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
+        scanner_remote_log_read_concurrency: usize,
         scanner_log_max_poll_records: usize,
+        writer_batch_timeout_ms: i64,
+        connect_timeout_ms: u64,
+        security_protocol: String,
+        security_sasl_mechanism: String,
+        security_sasl_username: String,
+        security_sasl_password: String,
     }
 
     struct FfiResult {
@@ -226,6 +234,19 @@ mod ffi {
         value: bool,
     }
 
+    struct FfiServerNode {
+        node_id: i32,
+        host: String,
+        port: u32,
+        server_type: String,
+        uid: String,
+    }
+
+    struct FfiServerNodesResult {
+        result: FfiResult,
+        server_nodes: Vec<FfiServerNode>,
+    }
+
     extern "Rust" {
         type Connection;
         type Admin;
@@ -242,6 +263,9 @@ mod ffi {
         type LookupResultInner;
 
         // Connection
+        // TODO: all Result<*mut T> methods lose server error codes (mapped to CLIENT_ERROR).
+        // Fix by introducing  some struct like { result: FfiResult, ptr: i64 } to preserve error
+        // codes from the server, matching how Rust and Python bindings handle errors.
         fn new_connection(config: &FfiConfig) -> Result<*mut Connection>;
         unsafe fn delete_connection(conn: *mut Connection);
         fn get_admin(self: &Connection) -> Result<*mut Admin>;
@@ -316,6 +340,7 @@ mod ffi {
         fn get_database_info(self: &Admin, database_name: &str) -> FfiDatabaseInfoResult;
         fn list_tables(self: &Admin, database_name: &str) -> FfiListTablesResult;
         fn table_exists(self: &Admin, table_path: &FfiTablePath) -> FfiBoolResult;
+        fn get_server_nodes(self: &Admin) -> FfiServerNodesResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
@@ -607,18 +632,35 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
 
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
-    let config = fluss::config::Config {
+    let assigner_type = match config.writer_bucket_no_key_assigner.as_str() {
+        "round_robin" => fluss::config::NoKeyAssigner::RoundRobin,
+        "sticky" => fluss::config::NoKeyAssigner::Sticky,
+        other => {
+            return Err(format!(
+                "Unknown bucket assigner type: '{other}', expected 'sticky' or 'round_robin'"
+            ));
+        }
+    };
+    let config_core = fluss::config::Config {
         bootstrap_servers: config.bootstrap_servers.to_string(),
         writer_request_max_size: config.writer_request_max_size,
         writer_acks: config.writer_acks.to_string(),
         writer_retries: config.writer_retries,
         writer_batch_size: config.writer_batch_size,
+        writer_batch_timeout_ms: config.writer_batch_timeout_ms,
+        writer_bucket_no_key_assigner: assigner_type,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
+        scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
+        connect_timeout_ms: config.connect_timeout_ms,
+        security_protocol: config.security_protocol.to_string(),
+        security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
+        security_sasl_username: config.security_sasl_username.to_string(),
+        security_sasl_password: config.security_sasl_password.to_string(),
     };
 
-    let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config).await });
+    let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });
 
     match conn {
         Ok(c) => {
@@ -1086,6 +1128,33 @@ impl Admin {
             Err(e) => ffi::FfiListPartitionInfosResult {
                 result: err_from_core_error(&e),
                 partition_infos: vec![],
+            },
+        }
+    }
+
+    fn get_server_nodes(&self) -> ffi::FfiServerNodesResult {
+        let result = RUNTIME.block_on(async { self.inner.get_server_nodes().await });
+
+        match result {
+            Ok(nodes) => {
+                let server_nodes: Vec<ffi::FfiServerNode> = nodes
+                    .into_iter()
+                    .map(|node| ffi::FfiServerNode {
+                        node_id: node.id(),
+                        host: node.host().to_string(),
+                        port: node.port(),
+                        server_type: node.server_type().to_string(),
+                        uid: node.uid().to_string(),
+                    })
+                    .collect();
+                ffi::FfiServerNodesResult {
+                    result: ok_result(),
+                    server_nodes,
+                }
+            }
+            Err(e) => ffi::FfiServerNodesResult {
+                result: err_from_core_error(&e),
+                server_nodes: vec![],
             },
         }
     }
@@ -1773,7 +1842,7 @@ mod row_reader {
         allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
     ) -> Result<&'a fcore::metadata::DataType, String> {
         let col = get_column(columns, field)?;
-        if row.is_null_at(field) {
+        if row.is_null_at(field).map_err(|e| e.to_string())? {
             return Err(format!("field {field} is null"));
         }
         let dt = col.data_type();
@@ -1801,7 +1870,7 @@ mod row_reader {
         field: usize,
     ) -> Result<bool, String> {
         get_column(columns, field)?;
-        Ok(row.is_null_at(field))
+        row.is_null_at(field).map_err(|e| e.to_string())
     }
 
     pub fn get_bool(
@@ -1812,7 +1881,7 @@ mod row_reader {
         validate(row, columns, field, "get_bool", |dt| {
             matches!(dt, fcore::metadata::DataType::Boolean(_))
         })?;
-        Ok(row.get_boolean(field))
+        row.get_boolean(field).map_err(|e| e.to_string())
     }
 
     pub fn get_i32(
@@ -1828,11 +1897,17 @@ mod row_reader {
                     | fcore::metadata::DataType::Int(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::TinyInt(_) => row.get_byte(field) as i32,
-            fcore::metadata::DataType::SmallInt(_) => row.get_short(field) as i32,
-            _ => row.get_int(field),
-        })
+        match dt {
+            fcore::metadata::DataType::TinyInt(_) => row
+                .get_byte(field)
+                .map(|v| v as i32)
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::SmallInt(_) => row
+                .get_short(field)
+                .map(|v| v as i32)
+                .map_err(|e| e.to_string()),
+            _ => row.get_int(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_i64(
@@ -1843,7 +1918,7 @@ mod row_reader {
         validate(row, columns, field, "get_i64", |dt| {
             matches!(dt, fcore::metadata::DataType::BigInt(_))
         })?;
-        Ok(row.get_long(field))
+        row.get_long(field).map_err(|e| e.to_string())
     }
 
     pub fn get_f32(
@@ -1854,7 +1929,7 @@ mod row_reader {
         validate(row, columns, field, "get_f32", |dt| {
             matches!(dt, fcore::metadata::DataType::Float(_))
         })?;
-        Ok(row.get_float(field))
+        row.get_float(field).map_err(|e| e.to_string())
     }
 
     pub fn get_f64(
@@ -1865,7 +1940,7 @@ mod row_reader {
         validate(row, columns, field, "get_f64", |dt| {
             matches!(dt, fcore::metadata::DataType::Double(_))
         })?;
-        Ok(row.get_double(field))
+        row.get_double(field).map_err(|e| e.to_string())
     }
 
     pub fn get_str<'a>(
@@ -1879,10 +1954,12 @@ mod row_reader {
                 fcore::metadata::DataType::Char(_) | fcore::metadata::DataType::String(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::Char(ct) => row.get_char(field, ct.length() as usize),
-            _ => row.get_string(field),
-        })
+        match dt {
+            fcore::metadata::DataType::Char(ct) => row
+                .get_char(field, ct.length() as usize)
+                .map_err(|e| e.to_string()),
+            _ => row.get_string(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_bytes<'a>(
@@ -1896,10 +1973,12 @@ mod row_reader {
                 fcore::metadata::DataType::Binary(_) | fcore::metadata::DataType::Bytes(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::Binary(bt) => row.get_binary(field, bt.length()),
-            _ => row.get_bytes(field),
-        })
+        match dt {
+            fcore::metadata::DataType::Binary(bt) => row
+                .get_binary(field, bt.length())
+                .map_err(|e| e.to_string()),
+            _ => row.get_bytes(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_date_days(
@@ -1910,7 +1989,9 @@ mod row_reader {
         validate(row, columns, field, "get_date_days", |dt| {
             matches!(dt, fcore::metadata::DataType::Date(_))
         })?;
-        Ok(row.get_date(field).get_inner())
+        row.get_date(field)
+            .map(|d| d.get_inner())
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_time_millis(
@@ -1921,7 +2002,9 @@ mod row_reader {
         validate(row, columns, field, "get_time_millis", |dt| {
             matches!(dt, fcore::metadata::DataType::Time(_))
         })?;
-        Ok(row.get_time(field).get_inner())
+        row.get_time(field)
+            .map(|t| t.get_inner())
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_ts_millis(
@@ -1937,12 +2020,14 @@ mod row_reader {
             )
         })?;
         match dt {
-            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+            fcore::metadata::DataType::TimestampLTz(ts) => row
                 .get_timestamp_ltz(field, ts.precision())
-                .get_epoch_millisecond()),
-            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .map(|v| v.get_epoch_millisecond())
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::Timestamp(ts) => row
                 .get_timestamp_ntz(field, ts.precision())
-                .get_millisecond()),
+                .map(|v| v.get_millisecond())
+                .map_err(|e| e.to_string()),
             dt => Err(format!("get_ts_millis: unexpected type {dt}")),
         }
     }
@@ -1960,12 +2045,14 @@ mod row_reader {
             )
         })?;
         match dt {
-            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+            fcore::metadata::DataType::TimestampLTz(ts) => row
                 .get_timestamp_ltz(field, ts.precision())
-                .get_nano_of_millisecond()),
-            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .map(|v| v.get_nano_of_millisecond())
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::Timestamp(ts) => row
                 .get_timestamp_ntz(field, ts.precision())
-                .get_nano_of_millisecond()),
+                .map(|v| v.get_nano_of_millisecond())
+                .map_err(|e| e.to_string()),
             dt => Err(format!("get_ts_nanos: unexpected type {dt}")),
         }
     }
@@ -1987,7 +2074,9 @@ mod row_reader {
         })?;
         match dt {
             fcore::metadata::DataType::Decimal(dd) => {
-                let decimal = row.get_decimal(field, dd.precision() as usize, dd.scale() as usize);
+                let decimal = row
+                    .get_decimal(field, dd.precision() as usize, dd.scale() as usize)
+                    .map_err(|e| e.to_string())?;
                 Ok(decimal.to_big_decimal().to_string())
             }
             dt => Err(format!("get_decimal_str: unexpected type {dt}")),
@@ -2061,7 +2150,7 @@ impl ScanResultInner {
         self.columns.len()
     }
 
-    // Field accessors — C++ validates bounds in BucketView/RecordAt, validate() checks field.
+    // Field accessors — C++ validates bounds in BucketRecords/RecordAt, validate() checks field.
     fn sv_is_null(&self, bucket: usize, rec: usize, field: usize) -> Result<bool, String> {
         row_reader::is_null(self.resolve(bucket, rec).row(), &self.columns, field)
     }

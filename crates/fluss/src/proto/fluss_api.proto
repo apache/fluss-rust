@@ -409,3 +409,12 @@ message DropPartitionRequest {
 }
 
 message DropPartitionResponse {}
+
+message AuthenticateRequest {
+  required string protocol = 1;
+  required bytes token = 2;
+}
+
+message AuthenticateResponse {
+  optional bytes challenge = 1;
+}

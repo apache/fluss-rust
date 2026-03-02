@@ -19,11 +19,12 @@ use crate::BucketId;
 use crate::bucketing::BucketingFunction;
 use crate::client::metadata::Metadata;
 use crate::client::write::bucket_assigner::{
-    BucketAssigner, HashBucketAssigner, StickyBucketAssigner,
+    BucketAssigner, HashBucketAssigner, RoundRobinBucketAssigner, StickyBucketAssigner,
 };
 use crate::client::write::sender::Sender;
 use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
 use crate::config::Config;
+use crate::config::NoKeyAssigner;
 use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo};
 use bytes::Bytes;
@@ -99,7 +100,12 @@ impl WriterClient {
         let (bucket_assigner, bucket_id) =
             self.assign_bucket(&record.table_info, bucket_key, physical_table_path)?;
 
-        let mut result = self.accumulate.append(record, bucket_id, &cluster, true)?;
+        let mut result = self.accumulate.append(
+            record,
+            bucket_id,
+            &cluster,
+            bucket_assigner.abort_if_batch_full(),
+        )?;
 
         if result.abort_record_for_new_batch {
             let prev_bucket_id = bucket_id;
@@ -125,10 +131,14 @@ impl WriterClient {
             if let Some(assigner) = self.bucket_assigners.get(table_path) {
                 assigner.clone()
             } else {
-                let assigner =
-                    Self::create_bucket_assigner(table_info, Arc::clone(table_path), bucket_key)?;
+                let assigner = Self::create_bucket_assigner(
+                    table_info,
+                    Arc::clone(table_path),
+                    bucket_key,
+                    &self.config,
+                )?;
                 self.bucket_assigners
-                    .insert(Arc::clone(table_path), Arc::clone(&assigner.clone()));
+                    .insert(Arc::clone(table_path), Arc::clone(&assigner));
                 assigner
             }
         };
@@ -164,6 +174,7 @@ impl WriterClient {
         table_info: &Arc<TableInfo>,
         table_path: Arc<PhysicalTablePath>,
         bucket_key: Option<&Bytes>,
+        config: &Config,
     ) -> Result<Arc<dyn BucketAssigner>> {
         if bucket_key.is_some() {
             let datalake_format = table_info.get_table_config().get_datalake_format()?;
@@ -173,8 +184,13 @@ impl WriterClient {
                 function,
             )))
         } else {
-            // TODO: Wire up toi use round robin/sticky according to ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER
-            Ok(Arc::new(StickyBucketAssigner::new(table_path)))
+            match config.writer_bucket_no_key_assigner {
+                NoKeyAssigner::Sticky => Ok(Arc::new(StickyBucketAssigner::new(table_path))),
+                NoKeyAssigner::RoundRobin => Ok(Arc::new(RoundRobinBucketAssigner::new(
+                    table_path,
+                    table_info.num_buckets,
+                ))),
+            }
         }
     }
 }

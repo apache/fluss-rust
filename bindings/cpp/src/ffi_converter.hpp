@@ -51,9 +51,17 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_acks = rust::String(config.writer_acks);
     ffi_config.writer_retries = config.writer_retries;
     ffi_config.writer_batch_size = config.writer_batch_size;
+    ffi_config.writer_bucket_no_key_assigner = rust::String(config.writer_bucket_no_key_assigner);
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
+    ffi_config.scanner_remote_log_read_concurrency = config.scanner_remote_log_read_concurrency;
     ffi_config.scanner_log_max_poll_records = config.scanner_log_max_poll_records;
+    ffi_config.writer_batch_timeout_ms = config.writer_batch_timeout_ms;
+    ffi_config.connect_timeout_ms = config.connect_timeout_ms;
+    ffi_config.security_protocol = rust::String(config.security_protocol);
+    ffi_config.security_sasl_mechanism = rust::String(config.security_sasl_mechanism);
+    ffi_config.security_sasl_username = rust::String(config.security_sasl_username);
+    ffi_config.security_sasl_password = rust::String(config.security_sasl_password);
     return ffi_config;
 }
 

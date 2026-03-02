@@ -60,6 +60,11 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "writer.batch-timeout-ms" => {
+                        config.writer_batch_timeout_ms = value.parse::<i64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "scanner.remote-log.prefetch-num" => {
                         config.scanner_remote_log_prefetch_num =
                             value.parse::<usize>().map_err(|e| {
@@ -76,6 +81,14 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.remote-log.read-concurrency" => {
+                        config.scanner_remote_log_read_concurrency =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "scanner.log.max-poll-records" => {
                         config.scanner_log_max_poll_records =
                             value.parse::<usize>().map_err(|e| {
@@ -83,6 +96,34 @@ impl Config {
                                     "Invalid value '{value}' for '{key}': {e}"
                                 ))
                             })?;
+                    }
+                    "writer.bucket.no-key-assigner" => {
+                        config.writer_bucket_no_key_assigner = match value.as_str() {
+                            "round_robin" => fcore::config::NoKeyAssigner::RoundRobin,
+                            "sticky" => fcore::config::NoKeyAssigner::Sticky,
+                            other => {
+                                return Err(FlussError::new_err(format!(
+                                    "Unknown bucket assigner type: {other}, expected 'sticky' or 'round_robin'"
+                                )));
+                            }
+                        };
+                    }
+                    "connect-timeout" => {
+                        config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "security.protocol" => {
+                        config.security_protocol = value;
+                    }
+                    "security.sasl.mechanism" => {
+                        config.security_sasl_mechanism = value;
+                    }
+                    "security.sasl.username" => {
+                        config.security_sasl_username = value;
+                    }
+                    "security.sasl.password" => {
+                        config.security_sasl_password = value;
                     }
                     _ => {
                         return Err(FlussError::new_err(format!("Unknown property: {key}")));
@@ -178,6 +219,18 @@ impl Config {
         self.inner.remote_file_download_thread_num = num;
     }
 
+    /// Get the scanner remote log read concurrency
+    #[getter]
+    fn scanner_remote_log_read_concurrency(&self) -> usize {
+        self.inner.scanner_remote_log_read_concurrency
+    }
+
+    /// Set the scanner remote log read concurrency
+    #[setter]
+    fn set_scanner_remote_log_read_concurrency(&mut self, num: usize) {
+        self.inner.scanner_remote_log_read_concurrency = num;
+    }
+
     /// Get the scanner log max poll records
     #[getter]
     fn scanner_log_max_poll_records(&self) -> usize {
@@ -188,6 +241,78 @@ impl Config {
     #[setter]
     fn set_scanner_log_max_poll_records(&mut self, num: usize) {
         self.inner.scanner_log_max_poll_records = num;
+    }
+
+    /// Get the writer batch timeout in milliseconds
+    #[getter]
+    fn writer_batch_timeout_ms(&self) -> i64 {
+        self.inner.writer_batch_timeout_ms
+    }
+
+    /// Set the writer batch timeout in milliseconds
+    #[setter]
+    fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
+        self.inner.writer_batch_timeout_ms = timeout;
+    }
+
+    /// Get the connect timeout in milliseconds
+    #[getter]
+    fn connect_timeout_ms(&self) -> u64 {
+        self.inner.connect_timeout_ms
+    }
+
+    /// Set the connect timeout in milliseconds
+    #[setter]
+    fn set_connect_timeout_ms(&mut self, timeout: u64) {
+        self.inner.connect_timeout_ms = timeout;
+    }
+
+    /// Get the security protocol
+    #[getter]
+    fn security_protocol(&self) -> String {
+        self.inner.security_protocol.clone()
+    }
+
+    /// Set the security protocol
+    #[setter]
+    fn set_security_protocol(&mut self, protocol: String) {
+        self.inner.security_protocol = protocol;
+    }
+
+    /// Get the SASL mechanism
+    #[getter]
+    fn security_sasl_mechanism(&self) -> String {
+        self.inner.security_sasl_mechanism.clone()
+    }
+
+    /// Set the SASL mechanism
+    #[setter]
+    fn set_security_sasl_mechanism(&mut self, mechanism: String) {
+        self.inner.security_sasl_mechanism = mechanism;
+    }
+
+    /// Get the SASL username
+    #[getter]
+    fn security_sasl_username(&self) -> String {
+        self.inner.security_sasl_username.clone()
+    }
+
+    /// Set the SASL username
+    #[setter]
+    fn set_security_sasl_username(&mut self, username: String) {
+        self.inner.security_sasl_username = username;
+    }
+
+    /// Get the SASL password
+    #[getter]
+    fn security_sasl_password(&self) -> String {
+        self.inner.security_sasl_password.clone()
+    }
+
+    /// Set the SASL password
+    #[setter]
+    fn set_security_sasl_password(&mut self, password: String) {
+        self.inner.security_sasl_password = password;
     }
 }
 

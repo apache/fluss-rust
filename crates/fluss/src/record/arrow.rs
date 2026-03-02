@@ -355,7 +355,7 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
 
     fn append(&mut self, row: &dyn InternalRow) -> Result<bool> {
         for (idx, getter) in self.field_getters.iter().enumerate() {
-            let datum = getter.get_field(row);
+            let datum = getter.get_field(row)?;
             let field_type = self.table_schema.field(idx).data_type();
             let builder =
                 self.arrow_column_builders

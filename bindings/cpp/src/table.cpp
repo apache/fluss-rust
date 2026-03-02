@@ -334,21 +334,21 @@ std::vector<TableBucket> ScanRecords::Buckets() const {
     return result;
 }
 
-BucketView ScanRecords::Records(const TableBucket& bucket) const {
+BucketRecords ScanRecords::Records(const TableBucket& bucket) const {
     if (!data_) {
-        return BucketView({}, bucket, 0, 0);
+        return BucketRecords({}, bucket, 0, 0);
     }
     const auto& infos = data_->raw->sv_bucket_infos();
     for (size_t i = 0; i < infos.size(); ++i) {
         TableBucket tb = to_table_bucket(infos[i]);
         if (tb == bucket) {
-            return BucketView(data_, std::move(tb), i, infos[i].record_count);
+            return BucketRecords(data_, std::move(tb), i, infos[i].record_count);
         }
     }
-    return BucketView({}, bucket, 0, 0);
+    return BucketRecords({}, bucket, 0, 0);
 }
 
-BucketView ScanRecords::BucketAt(size_t idx) const {
+BucketRecords ScanRecords::BucketAt(size_t idx) const {
     if (!data_) {
         throw std::logic_error("ScanRecords: not available (moved-from or null)");
     }
@@ -357,12 +357,12 @@ BucketView ScanRecords::BucketAt(size_t idx) const {
         throw std::out_of_range("ScanRecords::BucketAt: index " + std::to_string(idx) +
                                 " out of range (" + std::to_string(infos.size()) + " buckets)");
     }
-    return BucketView(data_, to_table_bucket(infos[idx]), idx, infos[idx].record_count);
+    return BucketRecords(data_, to_table_bucket(infos[idx]), idx, infos[idx].record_count);
 }
 
-ScanRecord BucketView::operator[](size_t idx) const {
+ScanRecord BucketRecords::operator[](size_t idx) const {
     if (idx >= count_) {
-        throw std::out_of_range("BucketView: index " + std::to_string(idx) + " out of range (" +
+        throw std::out_of_range("BucketRecords: index " + std::to_string(idx) + " out of range (" +
                                 std::to_string(count_) + " records)");
     }
     return ScanRecord{data_->raw->sv_offset(bucket_idx_, idx),
@@ -371,7 +371,7 @@ ScanRecord BucketView::operator[](size_t idx) const {
                       RowView(data_, bucket_idx_, idx)};
 }
 
-ScanRecord BucketView::Iterator::operator*() const { return owner_->operator[](idx_); }
+ScanRecord BucketRecords::Iterator::operator*() const { return owner_->operator[](idx_); }
 
 // ============================================================================
 // LookupResult — backed by opaque Rust LookupResultInner
@@ -1146,7 +1146,7 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
 
     // Wrap raw pointer in ScanData immediately so it's never leaked on exception.
     auto data = std::make_shared<detail::ScanData>(result_box.into_raw(), detail::ColumnMap{});
-    // Build column map eagerly — shared by all RowViews/BucketViews.
+    // Build column map eagerly — shared by all RowViews/BucketRecords.
     auto col_count = data->raw->sv_column_count();
     for (size_t i = 0; i < col_count; ++i) {
         auto name = data->raw->sv_column_name(i);

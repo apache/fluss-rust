@@ -328,7 +328,7 @@ impl UpsertWriter {
         })?;
         encoder.start_new_row()?;
         for (pos, field_getter) in self.field_getters.iter().enumerate() {
-            let datum = field_getter.get_field(row);
+            let datum = field_getter.get_field(row)?;
             encoder.encode_field(pos, datum)?;
         }
         encoder.finish_row()

@@ -54,67 +54,69 @@ impl<'a> BinaryRow<'a> {
     }
 }
 
-// TODO make functions return Result<?> for better error handling
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
+
 pub trait InternalRow: Send + Sync {
     /// Returns the number of fields in this row
     fn get_field_count(&self) -> usize;
 
     /// Returns true if the element is null at the given position
-    fn is_null_at(&self, pos: usize) -> bool;
+    fn is_null_at(&self, pos: usize) -> Result<bool>;
 
     /// Returns the boolean value at the given position
-    fn get_boolean(&self, pos: usize) -> bool;
+    fn get_boolean(&self, pos: usize) -> Result<bool>;
 
     /// Returns the byte value at the given position
-    fn get_byte(&self, pos: usize) -> i8;
+    fn get_byte(&self, pos: usize) -> Result<i8>;
 
     /// Returns the short value at the given position
-    fn get_short(&self, pos: usize) -> i16;
+    fn get_short(&self, pos: usize) -> Result<i16>;
 
     /// Returns the integer value at the given position
-    fn get_int(&self, pos: usize) -> i32;
+    fn get_int(&self, pos: usize) -> Result<i32>;
 
     /// Returns the long value at the given position
-    fn get_long(&self, pos: usize) -> i64;
+    fn get_long(&self, pos: usize) -> Result<i64>;
 
     /// Returns the float value at the given position
-    fn get_float(&self, pos: usize) -> f32;
+    fn get_float(&self, pos: usize) -> Result<f32>;
 
     /// Returns the double value at the given position
-    fn get_double(&self, pos: usize) -> f64;
+    fn get_double(&self, pos: usize) -> Result<f64>;
 
     /// Returns the string value at the given position with fixed length
-    fn get_char(&self, pos: usize, length: usize) -> &str;
+    fn get_char(&self, pos: usize, length: usize) -> Result<&str>;
 
     /// Returns the string value at the given position
-    fn get_string(&self, pos: usize) -> &str;
+    fn get_string(&self, pos: usize) -> Result<&str>;
 
     /// Returns the decimal value at the given position
-    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Decimal;
+    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Result<Decimal>;
 
     /// Returns the date value at the given position (date as days since epoch)
-    fn get_date(&self, pos: usize) -> datum::Date;
+    fn get_date(&self, pos: usize) -> Result<Date>;
 
     /// Returns the time value at the given position (time as milliseconds since midnight)
-    fn get_time(&self, pos: usize) -> datum::Time;
+    fn get_time(&self, pos: usize) -> Result<Time>;
 
     /// Returns the timestamp value at the given position (timestamp without timezone)
     ///
     /// The precision is required to determine whether the timestamp value was stored
     /// in a compact representation (precision <= 3) or with nanosecond precision.
-    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> datum::TimestampNtz;
+    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz>;
 
     /// Returns the timestamp value at the given position (timestamp with local timezone)
     ///
     /// The precision is required to determine whether the timestamp value was stored
     /// in a compact representation (precision <= 3) or with nanosecond precision.
-    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> datum::TimestampLtz;
+    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz>;
 
     /// Returns the binary value at the given position with fixed length
-    fn get_binary(&self, pos: usize, length: usize) -> &[u8];
+    fn get_binary(&self, pos: usize, length: usize) -> Result<&[u8]>;
 
     /// Returns the binary value at the given position
-    fn get_bytes(&self, pos: usize) -> &[u8];
+    fn get_bytes(&self, pos: usize) -> Result<&[u8]>;
 
     /// Returns encoded bytes if already encoded
     fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
@@ -127,98 +129,149 @@ pub struct GenericRow<'a> {
     pub values: Vec<Datum<'a>>,
 }
 
+impl<'a> GenericRow<'a> {
+    fn get_value(&self, pos: usize) -> Result<&Datum<'a>> {
+        self.values.get(pos).ok_or_else(|| IllegalArgument {
+            message: format!(
+                "position {pos} out of bounds (row has {} fields)",
+                self.values.len()
+            ),
+        })
+    }
+
+    fn try_convert<T: TryFrom<&'a Datum<'a>>>(
+        &'a self,
+        pos: usize,
+        expected_type: &str,
+    ) -> Result<T> {
+        let datum = self.get_value(pos)?;
+        T::try_from(datum).map_err(|_| IllegalArgument {
+            message: format!(
+                "type mismatch at position {pos}: expected {expected_type}, got {datum:?}"
+            ),
+        })
+    }
+}
+
 impl<'a> InternalRow for GenericRow<'a> {
     fn get_field_count(&self) -> usize {
         self.values.len()
     }
 
-    fn is_null_at(&self, pos: usize) -> bool {
-        self.values
-            .get(pos)
-            .expect("position out of bounds")
-            .is_null()
+    fn is_null_at(&self, pos: usize) -> Result<bool> {
+        Ok(self.get_value(pos)?.is_null())
     }
 
-    fn get_boolean(&self, pos: usize) -> bool {
-        self.values.get(pos).unwrap().try_into().unwrap()
+    fn get_boolean(&self, pos: usize) -> Result<bool> {
+        self.try_convert(pos, "Boolean")
     }
 
-    fn get_byte(&self, pos: usize) -> i8 {
-        self.values.get(pos).unwrap().try_into().unwrap()
+    fn get_byte(&self, pos: usize) -> Result<i8> {
+        self.try_convert(pos, "TinyInt")
     }
 
-    fn get_short(&self, pos: usize) -> i16 {
-        self.values.get(pos).unwrap().try_into().unwrap()
+    fn get_short(&self, pos: usize) -> Result<i16> {
+        self.try_convert(pos, "SmallInt")
     }
 
-    fn get_int(&self, pos: usize) -> i32 {
-        self.values.get(pos).unwrap().try_into().unwrap()
+    fn get_int(&self, pos: usize) -> Result<i32> {
+        self.try_convert(pos, "Int")
     }
 
-    fn get_long(&self, _pos: usize) -> i64 {
-        self.values.get(_pos).unwrap().try_into().unwrap()
+    fn get_long(&self, pos: usize) -> Result<i64> {
+        self.try_convert(pos, "BigInt")
     }
 
-    fn get_float(&self, pos: usize) -> f32 {
-        self.values.get(pos).unwrap().try_into().unwrap()
+    fn get_float(&self, pos: usize) -> Result<f32> {
+        self.try_convert(pos, "Float")
     }
 
-    fn get_double(&self, pos: usize) -> f64 {
-        self.values.get(pos).unwrap().try_into().unwrap()
+    fn get_double(&self, pos: usize) -> Result<f64> {
+        self.try_convert(pos, "Double")
     }
 
-    fn get_char(&self, pos: usize, _length: usize) -> &str {
+    fn get_char(&self, pos: usize, _length: usize) -> Result<&str> {
         // don't check length, following java client
         self.get_string(pos)
     }
 
-    fn get_string(&self, pos: usize) -> &str {
-        self.values.get(pos).unwrap().try_into().unwrap()
+    fn get_string(&self, pos: usize) -> Result<&str> {
+        self.try_convert(pos, "String")
     }
 
-    fn get_decimal(&self, pos: usize, _precision: usize, _scale: usize) -> Decimal {
-        match self.values.get(pos).unwrap() {
-            Datum::Decimal(d) => d.clone(),
-            other => panic!("Expected Decimal at pos {pos:?}, got {other:?}"),
+    fn get_decimal(&self, pos: usize, _precision: usize, _scale: usize) -> Result<Decimal> {
+        match self.get_value(pos)? {
+            Datum::Decimal(d) => Ok(d.clone()),
+            other => Err(IllegalArgument {
+                message: format!(
+                    "type mismatch at position {pos}: expected Decimal, got {other:?}"
+                ),
+            }),
         }
     }
 
-    fn get_date(&self, pos: usize) -> datum::Date {
-        match self.values.get(pos).unwrap() {
-            Datum::Date(d) => *d,
-            Datum::Int32(i) => datum::Date::new(*i),
-            other => panic!("Expected Date or Int32 at pos {pos:?}, got {other:?}"),
+    fn get_date(&self, pos: usize) -> Result<Date> {
+        match self.get_value(pos)? {
+            Datum::Date(d) => Ok(*d),
+            Datum::Int32(i) => Ok(Date::new(*i)),
+            other => Err(IllegalArgument {
+                message: format!(
+                    "type mismatch at position {pos}: expected Date or Int32, got {other:?}"
+                ),
+            }),
         }
     }
 
-    fn get_time(&self, pos: usize) -> datum::Time {
-        match self.values.get(pos).unwrap() {
-            Datum::Time(t) => *t,
-            Datum::Int32(i) => datum::Time::new(*i),
-            other => panic!("Expected Time or Int32 at pos {pos:?}, got {other:?}"),
+    fn get_time(&self, pos: usize) -> Result<Time> {
+        match self.get_value(pos)? {
+            Datum::Time(t) => Ok(*t),
+            Datum::Int32(i) => Ok(Time::new(*i)),
+            other => Err(IllegalArgument {
+                message: format!(
+                    "type mismatch at position {pos}: expected Time or Int32, got {other:?}"
+                ),
+            }),
         }
     }
 
-    fn get_timestamp_ntz(&self, pos: usize, _precision: u32) -> datum::TimestampNtz {
-        match self.values.get(pos).unwrap() {
-            Datum::TimestampNtz(t) => *t,
-            other => panic!("Expected TimestampNtz at pos {pos:?}, got {other:?}"),
+    fn get_timestamp_ntz(&self, pos: usize, _precision: u32) -> Result<TimestampNtz> {
+        match self.get_value(pos)? {
+            Datum::TimestampNtz(t) => Ok(*t),
+            other => Err(IllegalArgument {
+                message: format!(
+                    "type mismatch at position {pos}: expected TimestampNtz, got {other:?}"
+                ),
+            }),
         }
     }
 
-    fn get_timestamp_ltz(&self, pos: usize, _precision: u32) -> datum::TimestampLtz {
-        match self.values.get(pos).unwrap() {
-            Datum::TimestampLtz(t) => *t,
-            other => panic!("Expected TimestampLtz at pos {pos:?}, got {other:?}"),
+    fn get_timestamp_ltz(&self, pos: usize, _precision: u32) -> Result<TimestampLtz> {
+        match self.get_value(pos)? {
+            Datum::TimestampLtz(t) => Ok(*t),
+            other => Err(IllegalArgument {
+                message: format!(
+                    "type mismatch at position {pos}: expected TimestampLtz, got {other:?}"
+                ),
+            }),
         }
     }
 
-    fn get_binary(&self, pos: usize, _length: usize) -> &[u8] {
-        self.values.get(pos).unwrap().as_blob()
+    fn get_binary(&self, pos: usize, _length: usize) -> Result<&[u8]> {
+        match self.get_value(pos)? {
+            Datum::Blob(b) => Ok(b.as_ref()),
+            other => Err(IllegalArgument {
+                message: format!("type mismatch at position {pos}: expected Binary, got {other:?}"),
+            }),
+        }
     }
 
-    fn get_bytes(&self, pos: usize) -> &[u8] {
-        self.values.get(pos).unwrap().as_blob()
+    fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
+        match self.get_value(pos)? {
+            Datum::Blob(b) => Ok(b.as_ref()),
+            other => Err(IllegalArgument {
+                message: format!("type mismatch at position {pos}: expected Bytes, got {other:?}"),
+            }),
+        }
     }
 }
 
@@ -268,17 +321,27 @@ mod tests {
         row.set_field(0, Datum::Null);
         row.set_field(1, 42_i32);
 
-        assert!(row.is_null_at(0));
-        assert!(!row.is_null_at(1));
+        assert!(row.is_null_at(0).unwrap());
+        assert!(!row.is_null_at(1).unwrap());
+    }
+
+    #[test]
+    fn is_null_at_out_of_bounds_returns_error() {
+        let row = GenericRow::from_data(vec![42_i32]);
+        let err = row.is_null_at(5).unwrap_err();
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "Expected out of bounds error, got: {err}"
+        );
     }
 
     #[test]
     fn new_initializes_nulls() {
         let row = GenericRow::new(3);
         assert_eq!(row.get_field_count(), 3);
-        assert!(row.is_null_at(0));
-        assert!(row.is_null_at(1));
-        assert!(row.is_null_at(2));
+        assert!(row.is_null_at(0).unwrap());
+        assert!(row.is_null_at(1).unwrap());
+        assert!(row.is_null_at(2).unwrap());
     }
 
     #[test]
@@ -288,8 +351,28 @@ mod tests {
         row.set_field(0, 123_i32);
         // Fields 1 and 2 remain null
         assert_eq!(row.get_field_count(), 3);
-        assert_eq!(row.get_int(0), 123);
-        assert!(row.is_null_at(1));
-        assert!(row.is_null_at(2));
+        assert_eq!(row.get_int(0).unwrap(), 123);
+        assert!(row.is_null_at(1).unwrap());
+        assert!(row.is_null_at(2).unwrap());
+    }
+
+    #[test]
+    fn type_mismatch_returns_error() {
+        let row = GenericRow::from_data(vec![Datum::Int64(999)]);
+        let err = row.get_string(0).unwrap_err();
+        assert!(
+            err.to_string().contains("type mismatch"),
+            "Expected type mismatch error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_returns_error() {
+        let row = GenericRow::from_data(vec![42_i32]);
+        let err = row.get_int(5).unwrap_err();
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "Expected out of bounds error, got: {err}"
+        );
     }
 }

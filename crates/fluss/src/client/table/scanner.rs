@@ -114,9 +114,9 @@ impl<'a> TableScan<'a> {
     ///         let row = record.row();
     ///         println!(
     ///             "{{{}, {}, {}}}@{}",
-    ///             row.get_int(0),
-    ///             row.get_string(2),
-    ///             row.get_string(3),
+    ///             row.get_int(0)?,
+    ///             row.get_string(2)?,
+    ///             row.get_string(3)?,
     ///             record.offset()
     ///         );
     ///     }
@@ -188,8 +188,8 @@ impl<'a> TableScan<'a> {
     ///         let row = record.row();
     ///         println!(
     ///             "{{{}, {}}}@{}",
-    ///             row.get_int(0),
-    ///             row.get_string(1),
+    ///             row.get_int(0)?,
+    ///             row.get_string(1)?,
     ///             record.offset()
     ///         );
     ///     }
@@ -677,6 +677,7 @@ impl LogFetcher {
             tmp_dir,
             config.scanner_remote_log_prefetch_num,
             config.remote_file_download_thread_num,
+            config.scanner_remote_log_read_concurrency,
             credentials_rx,
         )?);
 

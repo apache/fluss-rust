@@ -501,6 +501,30 @@ impl FlussAdmin {
         })
     }
 
+    /// Get all alive server nodes in the cluster.
+    ///
+    /// Returns:
+    ///     List[ServerNode]: List of server nodes (coordinator and tablet servers)
+    pub fn get_server_nodes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+
+        future_into_py(py, async move {
+            let nodes = admin
+                .get_server_nodes()
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
+
+            Python::attach(|py| {
+                let py_list = pyo3::types::PyList::empty(py);
+                for node in nodes {
+                    let py_node = ServerNode::from_core(node);
+                    py_list.append(Py::new(py, py_node)?)?;
+                }
+                Ok(py_list.unbind())
+            })
+        })
+    }
+
     fn __repr__(&self) -> String {
         "FlussAdmin()".to_string()
     }
@@ -549,6 +573,63 @@ impl PartitionInfo {
         Self {
             partition_id: info.get_partition_id(),
             partition_name: info.get_partition_name(),
+        }
+    }
+}
+
+/// Information about a server node in the Fluss cluster
+#[pyclass]
+pub struct ServerNode {
+    id: i32,
+    host: String,
+    port: u32,
+    server_type: String,
+    uid: String,
+}
+
+#[pymethods]
+impl ServerNode {
+    #[getter]
+    fn id(&self) -> i32 {
+        self.id
+    }
+
+    #[getter]
+    fn host(&self) -> &str {
+        &self.host
+    }
+
+    #[getter]
+    fn port(&self) -> u32 {
+        self.port
+    }
+
+    #[getter]
+    fn server_type(&self) -> &str {
+        &self.server_type
+    }
+
+    #[getter]
+    fn uid(&self) -> &str {
+        &self.uid
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ServerNode(id={}, host='{}', port={}, server_type='{}')",
+            self.id, self.host, self.port, self.server_type
+        )
+    }
+}
+
+impl ServerNode {
+    pub fn from_core(node: fcore::ServerNode) -> Self {
+        Self {
+            id: node.id(),
+            host: node.host().to_string(),
+            port: node.port(),
+            server_type: node.server_type().to_string(),
+            uid: node.uid().to_string(),
         }
     }
 }

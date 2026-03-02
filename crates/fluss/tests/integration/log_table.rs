@@ -16,55 +16,21 @@
  * limitations under the License.
  */
 
-use parking_lot::RwLock;
-use std::sync::Arc;
-use std::sync::LazyLock;
-
-use crate::integration::fluss_cluster::FlussTestingCluster;
 #[cfg(test)]
-use test_env_helpers::*;
-
-// Module-level shared cluster instance (only for this test file)
-static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> =
-    LazyLock::new(|| Arc::new(RwLock::new(None)));
-
-#[cfg(test)]
-#[before_all]
-#[after_all]
 mod table_test {
-    use super::SHARED_FLUSS_CLUSTER;
-    use crate::integration::fluss_cluster::FlussTestingCluster;
-    use crate::integration::utils::{
-        create_partitions, create_table, get_cluster, start_cluster, stop_cluster,
-    };
+    use crate::integration::utils::{create_partitions, create_table, get_shared_cluster};
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::record::ScanRecord;
     use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
-    use jiff::Timestamp;
     use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
     use std::time::Duration;
-
-    fn before_all() {
-        start_cluster("test_table", SHARED_FLUSS_CLUSTER.clone());
-    }
-
-    fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
-        get_cluster(&SHARED_FLUSS_CLUSTER)
-    }
-
-    fn after_all() {
-        stop_cluster(SHARED_FLUSS_CLUSTER.clone());
-    }
 
     #[tokio::test]
     async fn append_record_batch_and_scan() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -138,7 +104,10 @@ mod table_test {
                 .expect("Failed to poll records");
             for rec in scan_records {
                 let row = rec.row();
-                collected.push((row.get_int(0), row.get_string(1).to_string()));
+                collected.push((
+                    row.get_int(0).unwrap(),
+                    row.get_string(1).unwrap().to_string(),
+                ));
             }
         }
 
@@ -171,7 +140,7 @@ mod table_test {
 
     #[tokio::test]
     async fn list_offsets() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -218,8 +187,6 @@ mod table_test {
             "Latest offset should be 0 for empty table"
         );
 
-        let before_append_ms = Timestamp::now().as_millisecond();
-
         // Append some records
         let append_writer = connection
             .get_table(&table_path)
@@ -243,8 +210,6 @@ mod table_test {
         append_writer.flush().await.expect("Failed to flush");
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-        let after_append_ms = Timestamp::now().as_millisecond();
 
         // Test latest offset after appending (should be 3)
         let latest_offsets_after = admin
@@ -270,34 +235,65 @@ mod table_test {
             "Earliest offset should still be 0"
         );
 
-        // Test list_offsets_by_timestamp
-
-        let timestamp_offsets = admin
-            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(before_append_ms))
+        // Scan records back to get server-assigned timestamps (avoids host/container
+        // clock skew issues that make host-based timestamps unreliable).
+        let table = connection
+            .get_table(&table_path)
             .await
-            .expect("Failed to list offsets by timestamp");
+            .expect("Failed to get table");
+        let log_scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let mut record_timestamps: Vec<i64> = Vec::new();
+        let scan_start = std::time::Instant::now();
+        while record_timestamps.len() < 3 && scan_start.elapsed() < Duration::from_secs(10) {
+            let scan_records = log_scanner
+                .poll(Duration::from_millis(500))
+                .await
+                .expect("Failed to poll records");
+            for rec in scan_records {
+                record_timestamps.push(rec.timestamp());
+            }
+        }
+        assert_eq!(record_timestamps.len(), 3, "Expected 3 record timestamps");
+
+        let min_ts = *record_timestamps.iter().min().unwrap();
+        let max_ts = *record_timestamps.iter().max().unwrap();
+
+        // Timestamp before all records should resolve to offset 0
+        let before_offsets = admin
+            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(min_ts - 1))
+            .await
+            .expect("Failed to list offsets by timestamp (before)");
 
         assert_eq!(
-            timestamp_offsets.get(&0),
+            before_offsets.get(&0),
             Some(&0),
-            "Timestamp before append should resolve to offset 0 (start of new data)"
+            "Timestamp before first record should resolve to offset 0"
         );
 
-        let timestamp_offsets = admin
-            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(after_append_ms))
+        // Timestamp after all records should resolve to offset 3
+        let after_offsets = admin
+            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(max_ts + 1))
             .await
-            .expect("Failed to list offsets by timestamp");
+            .expect("Failed to list offsets by timestamp (after)");
 
         assert_eq!(
-            timestamp_offsets.get(&0),
+            after_offsets.get(&0),
             Some(&3),
-            "Timestamp after append should resolve to offset 0 (no newer records)"
+            "Timestamp after last record should resolve to offset 3"
         );
     }
 
     #[tokio::test]
     async fn test_project() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -362,13 +358,13 @@ mod table_test {
             let row = record.row();
             // col_b is now at index 0, col_c is at index 1
             assert_eq!(
-                row.get_string(0),
+                row.get_string(0).unwrap(),
                 expected_col_b[i],
                 "col_b mismatch at index {}",
                 i
             );
             assert_eq!(
-                row.get_int(1),
+                row.get_int(1).unwrap(),
                 expected_col_c[i],
                 "col_c mismatch at index {}",
                 i
@@ -394,13 +390,13 @@ mod table_test {
             let row = record.row();
             // col_b is now at index 0, col_c is at index 1
             assert_eq!(
-                row.get_string(0),
+                row.get_string(0).unwrap(),
                 expected_col_b[i],
                 "col_b mismatch at index {}",
                 i
             );
             assert_eq!(
-                row.get_int(1),
+                row.get_int(1).unwrap(),
                 expected_col_a[i],
                 "col_c mismatch at index {}",
                 i
@@ -453,7 +449,7 @@ mod table_test {
 
     #[tokio::test]
     async fn test_poll_batches() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
@@ -585,7 +581,7 @@ mod table_test {
     async fn all_supported_datatypes() {
         use fluss::row::{Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz};
 
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -777,81 +773,103 @@ mod table_test {
         assert_eq!(records.len(), 2, "Expected 2 records");
 
         let found_row = records[0].row();
-        assert_eq!(found_row.get_byte(0), col_tinyint, "col_tinyint mismatch");
         assert_eq!(
-            found_row.get_short(1),
+            found_row.get_byte(0).unwrap(),
+            col_tinyint,
+            "col_tinyint mismatch"
+        );
+        assert_eq!(
+            found_row.get_short(1).unwrap(),
             col_smallint,
             "col_smallint mismatch"
         );
-        assert_eq!(found_row.get_int(2), col_int, "col_int mismatch");
-        assert_eq!(found_row.get_long(3), col_bigint, "col_bigint mismatch");
+        assert_eq!(found_row.get_int(2).unwrap(), col_int, "col_int mismatch");
+        assert_eq!(
+            found_row.get_long(3).unwrap(),
+            col_bigint,
+            "col_bigint mismatch"
+        );
         assert!(
-            (found_row.get_float(4) - col_float).abs() < f32::EPSILON,
+            (found_row.get_float(4).unwrap() - col_float).abs() < f32::EPSILON,
             "col_float mismatch: expected {}, got {}",
             col_float,
-            found_row.get_float(4)
+            found_row.get_float(4).unwrap()
         );
         assert!(
-            (found_row.get_double(5) - col_double).abs() < f64::EPSILON,
+            (found_row.get_double(5).unwrap() - col_double).abs() < f64::EPSILON,
             "col_double mismatch: expected {}, got {}",
             col_double,
-            found_row.get_double(5)
+            found_row.get_double(5).unwrap()
         );
         assert_eq!(
-            found_row.get_boolean(6),
+            found_row.get_boolean(6).unwrap(),
             col_boolean,
             "col_boolean mismatch"
         );
-        assert_eq!(found_row.get_char(7, 10), col_char, "col_char mismatch");
-        assert_eq!(found_row.get_string(8), col_string, "col_string mismatch");
         assert_eq!(
-            found_row.get_decimal(9, 10, 2),
+            found_row.get_char(7, 10).unwrap(),
+            col_char,
+            "col_char mismatch"
+        );
+        assert_eq!(
+            found_row.get_string(8).unwrap(),
+            col_string,
+            "col_string mismatch"
+        );
+        assert_eq!(
+            found_row.get_decimal(9, 10, 2).unwrap(),
             col_decimal,
             "col_decimal mismatch"
         );
         assert_eq!(
-            found_row.get_date(10).get_inner(),
+            found_row.get_date(10).unwrap().get_inner(),
             col_date.get_inner(),
             "col_date mismatch"
         );
 
         assert_eq!(
-            found_row.get_time(11).get_inner(),
+            found_row.get_time(11).unwrap().get_inner(),
             col_time_s.get_inner(),
             "col_time_s mismatch"
         );
 
         assert_eq!(
-            found_row.get_time(12).get_inner(),
+            found_row.get_time(12).unwrap().get_inner(),
             col_time_ms.get_inner(),
             "col_time_ms mismatch"
         );
 
         assert_eq!(
-            found_row.get_time(13).get_inner(),
+            found_row.get_time(13).unwrap().get_inner(),
             col_time_us.get_inner(),
             "col_time_us mismatch"
         );
 
         assert_eq!(
-            found_row.get_time(14).get_inner(),
+            found_row.get_time(14).unwrap().get_inner(),
             col_time_ns.get_inner(),
             "col_time_ns mismatch"
         );
 
         assert_eq!(
-            found_row.get_timestamp_ntz(15, 0).get_millisecond(),
+            found_row
+                .get_timestamp_ntz(15, 0)
+                .unwrap()
+                .get_millisecond(),
             col_timestamp_s.get_millisecond(),
             "col_timestamp_s mismatch"
         );
 
         assert_eq!(
-            found_row.get_timestamp_ntz(16, 3).get_millisecond(),
+            found_row
+                .get_timestamp_ntz(16, 3)
+                .unwrap()
+                .get_millisecond(),
             col_timestamp_ms.get_millisecond(),
             "col_timestamp_ms mismatch"
         );
 
-        let read_ts_us = found_row.get_timestamp_ntz(17, 6);
+        let read_ts_us = found_row.get_timestamp_ntz(17, 6).unwrap();
         assert_eq!(
             read_ts_us.get_millisecond(),
             col_timestamp_us.get_millisecond(),
@@ -863,7 +881,7 @@ mod table_test {
             "col_timestamp_us nanos mismatch"
         );
 
-        let read_ts_ns = found_row.get_timestamp_ntz(18, 9);
+        let read_ts_ns = found_row.get_timestamp_ntz(18, 9).unwrap();
         assert_eq!(
             read_ts_ns.get_millisecond(),
             col_timestamp_ns.get_millisecond(),
@@ -876,18 +894,24 @@ mod table_test {
         );
 
         assert_eq!(
-            found_row.get_timestamp_ltz(19, 0).get_epoch_millisecond(),
+            found_row
+                .get_timestamp_ltz(19, 0)
+                .unwrap()
+                .get_epoch_millisecond(),
             col_timestamp_ltz_s.get_epoch_millisecond(),
             "col_timestamp_ltz_s mismatch"
         );
 
         assert_eq!(
-            found_row.get_timestamp_ltz(20, 3).get_epoch_millisecond(),
+            found_row
+                .get_timestamp_ltz(20, 3)
+                .unwrap()
+                .get_epoch_millisecond(),
             col_timestamp_ltz_ms.get_epoch_millisecond(),
             "col_timestamp_ltz_ms mismatch"
         );
 
-        let read_ts_ltz_us = found_row.get_timestamp_ltz(21, 6);
+        let read_ts_ltz_us = found_row.get_timestamp_ltz(21, 6).unwrap();
         assert_eq!(
             read_ts_ltz_us.get_epoch_millisecond(),
             col_timestamp_ltz_us.get_epoch_millisecond(),
@@ -899,7 +923,7 @@ mod table_test {
             "col_timestamp_ltz_us nanos mismatch"
         );
 
-        let read_ts_ltz_ns = found_row.get_timestamp_ltz(22, 9);
+        let read_ts_ltz_ns = found_row.get_timestamp_ltz(22, 9).unwrap();
         assert_eq!(
             read_ts_ltz_ns.get_epoch_millisecond(),
             col_timestamp_ltz_ns.get_epoch_millisecond(),
@@ -910,15 +934,19 @@ mod table_test {
             col_timestamp_ltz_ns.get_nano_of_millisecond(),
             "col_timestamp_ltz_ns nanos mismatch"
         );
-        assert_eq!(found_row.get_bytes(23), col_bytes, "col_bytes mismatch");
         assert_eq!(
-            found_row.get_binary(24, 4),
+            found_row.get_bytes(23).unwrap(),
+            col_bytes,
+            "col_bytes mismatch"
+        );
+        assert_eq!(
+            found_row.get_binary(24, 4).unwrap(),
             col_binary,
             "col_binary mismatch"
         );
 
         // Verify timestamps before Unix epoch (negative timestamps)
-        let read_ts_us_neg = found_row.get_timestamp_ntz(25, 6);
+        let read_ts_us_neg = found_row.get_timestamp_ntz(25, 6).unwrap();
         assert_eq!(
             read_ts_us_neg.get_millisecond(),
             col_timestamp_us_neg.get_millisecond(),
@@ -930,7 +958,7 @@ mod table_test {
             "col_timestamp_us_neg nanos mismatch"
         );
 
-        let read_ts_ns_neg = found_row.get_timestamp_ntz(26, 9);
+        let read_ts_ns_neg = found_row.get_timestamp_ntz(26, 9).unwrap();
         assert_eq!(
             read_ts_ns_neg.get_millisecond(),
             col_timestamp_ns_neg.get_millisecond(),
@@ -942,7 +970,7 @@ mod table_test {
             "col_timestamp_ns_neg nanos mismatch"
         );
 
-        let read_ts_ltz_us_neg = found_row.get_timestamp_ltz(27, 6);
+        let read_ts_ltz_us_neg = found_row.get_timestamp_ltz(27, 6).unwrap();
         assert_eq!(
             read_ts_ltz_us_neg.get_epoch_millisecond(),
             col_timestamp_ltz_us_neg.get_epoch_millisecond(),
@@ -954,7 +982,7 @@ mod table_test {
             "col_timestamp_ltz_us_neg nanos mismatch"
         );
 
-        let read_ts_ltz_ns_neg = found_row.get_timestamp_ltz(28, 9);
+        let read_ts_ltz_ns_neg = found_row.get_timestamp_ltz(28, 9).unwrap();
         assert_eq!(
             read_ts_ltz_ns_neg.get_epoch_millisecond(),
             col_timestamp_ltz_ns_neg.get_epoch_millisecond(),
@@ -969,7 +997,11 @@ mod table_test {
         // Verify row with all nulls (record index 1)
         let found_row_nulls = records[1].row();
         for i in 0..field_count {
-            assert!(found_row_nulls.is_null_at(i), "column {} should be null", i);
+            assert!(
+                found_row_nulls.is_null_at(i).unwrap(),
+                "column {} should be null",
+                i
+            );
         }
 
         admin
@@ -980,7 +1012,7 @@ mod table_test {
 
     #[tokio::test]
     async fn partitioned_table_append_scan() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -1140,9 +1172,9 @@ mod table_test {
             for rec in records {
                 let row = rec.row();
                 collected_records.push((
-                    row.get_int(0),
-                    row.get_string(1).to_string(),
-                    row.get_long(2),
+                    row.get_int(0).unwrap(),
+                    row.get_string(1).unwrap().to_string(),
+                    row.get_long(2).unwrap(),
                 ));
             }
         }
@@ -1196,9 +1228,9 @@ mod table_test {
             for rec in records {
                 let row = rec.row();
                 records_after_unsubscribe.push((
-                    row.get_int(0),
-                    row.get_string(1).to_string(),
-                    row.get_long(2),
+                    row.get_int(0).unwrap(),
+                    row.get_string(1).unwrap().to_string(),
+                    row.get_long(2).unwrap(),
                 ));
             }
         }
@@ -1248,9 +1280,9 @@ mod table_test {
             for rec in records {
                 let row = rec.row();
                 batch_collected.push((
-                    row.get_int(0),
-                    row.get_string(1).to_string(),
-                    row.get_long(2),
+                    row.get_int(0).unwrap(),
+                    row.get_string(1).unwrap().to_string(),
+                    row.get_long(2).unwrap(),
                 ));
             }
         }
@@ -1265,6 +1297,75 @@ mod table_test {
         assert_eq!(
             batch_collected, expected_records,
             "subscribe_partition_buckets should receive the same records as subscribe_partition loop"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn undersized_row_returns_error() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().await.expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_log_undersized_row");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("col_bool", DataTypes::boolean())
+                    .column("col_int", DataTypes::int())
+                    .column("col_string", DataTypes::string())
+                    .column("col_bigint", DataTypes::bigint())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create table append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Scenario 1b: GenericRow with only 2 fields for a 4-column table
+        let mut row = fluss::row::GenericRow::new(2);
+        row.set_field(0, true);
+        row.set_field(1, 42_i32);
+
+        let result = append_writer.append(&row);
+        assert!(result.is_err(), "Undersized row should be rejected");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Expected: 4") && err_msg.contains("Actual: 2"),
+            "Error should mention field count mismatch, got: {err_msg}"
+        );
+
+        // Correct column count but wrong types:
+        // Schema is (Boolean, Int, String, BigInt) but we put Int64 where String is expected.
+        // This should return an error, not panic.
+        let row_wrong_types = fluss::row::GenericRow::from_data(vec![
+            fluss::row::Datum::Bool(true),
+            fluss::row::Datum::Int32(42),
+            fluss::row::Datum::Int64(999), // wrong: String column
+            fluss::row::Datum::Int64(100),
+        ]);
+
+        let result = append_writer.append(&row_wrong_types);
+        assert!(
+            result.is_err(),
+            "Row with mismatched types should be rejected, not panic"
         );
 
         admin

@@ -28,4 +28,5 @@ header:
     - 'bindings/python/fluss/py.typed'
     - 'website/**'
     - '**/*.md'
+    - '**/DEPENDENCIES.*.tsv'
   comment: on-failure

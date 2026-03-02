@@ -22,6 +22,7 @@ pub mod row;
 pub mod rpc;
 
 mod cluster;
+pub use cluster::{ServerNode, ServerType};
 
 pub mod config;
 pub mod error;

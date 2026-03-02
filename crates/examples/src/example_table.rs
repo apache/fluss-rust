@@ -83,9 +83,9 @@ pub async fn main() -> Result<()> {
             let row = record.row();
             println!(
                 "{{{}, {}, {}}}@{}",
-                row.get_int(0),
-                row.get_string(1),
-                row.get_long(2),
+                row.get_int(0)?,
+                row.get_string(1)?,
+                row.get_long(2)?,
                 record.offset()
             );
         }

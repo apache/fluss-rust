@@ -24,10 +24,10 @@ If your cluster does not fulfill these software requirements you will need to in
 Fluss requires the JAVA_HOME environment variable to be set on all nodes and point to the directory of your Java installation.
 
 #### Fluss Setup
-Go to the [downloads](https://fluss.apache.org/downloads/) page and download the Fluss-0.6.0. Make sure to pick the Fluss package matching your Java version. After downloading the latest release, extract it:
+Go to the [downloads](https://fluss.apache.org/downloads/) page and download the latest Fluss release (currently 0.8.0). Make sure to pick the Fluss package matching your Java version. After downloading the latest release, extract it:
 ```shell
-tar -xzf fluss-0.7-SNAPSHOT-bin.tgz
-cd fluss-0.7-SNAPSHOT/
+tar -xzf fluss-0.8.0-incubating-bin.tgz
+cd fluss-0.8.0-incubating/
 ```
 You can start Fluss local cluster by running the following command:
 ```shell
@@ -118,7 +118,7 @@ Then, stop your Fluss cluster. Go to your Fluss home, stop it via the following 
 ## Documentation
 
 - [Development Guide](DEVELOPMENT.md) – Build, test, and contribute to fluss-rust.
-- [Release Guide](docs/creating-a-release.md) – How to build, release, and sign official Fluss client packages (Rust, Python, C++).
+- [Release Guide](website/docs/release/create-release.md) – How to build, release, and sign official Fluss client packages (Rust, Python, C++).
 
 ## License
 
