@@ -71,7 +71,10 @@ cmake(
     out_include_dir = "include",
     out_lib_dir = "lib",
     out_shared_libs = select({
-        "@platforms//os:macos": ["libarrow.dylib"],
+        "@platforms//os:macos": [
+            "libarrow.dylib",
+            "libarrow.1900.dylib",
+        ],
         "//conditions:default": [
             "libarrow.so",
             "libarrow.so.1900",
