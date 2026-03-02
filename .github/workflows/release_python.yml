@@ -84,7 +84,7 @@ jobs:
       - name: Generate Python README
         run: python3 bindings/python/generate_readme.py
 
-      - name: Install protoc (Linux)
+      - name: Install protoc (Linux host)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
@@ -94,9 +94,9 @@ jobs:
 
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
-        run: choco install protobuf -y
-        shell: pwsh
+        run: choco install protoc -y
 
+      # Install protoc in manylinux container (x86_64/aarch64); script shared via YAML anchor
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -104,6 +104,21 @@ jobs:
           command: build
           args: --release -o dist -i python3.9
           manylinux: ${{ matrix.manylinux || 'auto' }}
+          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
+          before-script-linux: &protoc-install |
+            set -e
+            ARCH=$(uname -m)
+            case "$ARCH" in
+              x86_64)  ZIP=protoc-27.1-linux-x86_64.zip ;;
+              aarch64) ZIP=protoc-27.1-linux-aarch_64.zip ;;
+              *) echo "Unsupported arch $ARCH"; exit 1 ;;
+            esac
+            curl -sLO "https://github.com/protocolbuffers/protobuf/releases/download/v27.1/${ZIP}"
+            python3 -c "import zipfile; zipfile.ZipFile('${ZIP}').extractall('/tmp/protoc_install')"
+            chmod +x /tmp/protoc_install/bin/protoc
+            rm -f "${ZIP}"
+            export PATH="/tmp/protoc_install/bin:$PATH"
+            export PROTOC=/tmp/protoc_install/bin/protoc
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -111,6 +126,8 @@ jobs:
           command: build
           args: --release -o dist -i python3.10
           manylinux: ${{ matrix.manylinux || 'auto' }}
+          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
+          before-script-linux: *protoc-install
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -118,6 +135,8 @@ jobs:
           command: build
           args: --release -o dist -i python3.11
           manylinux: ${{ matrix.manylinux || 'auto' }}
+          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
+          before-script-linux: *protoc-install
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -125,6 +144,8 @@ jobs:
           command: build
           args: --release -o dist -i python3.12
           manylinux: ${{ matrix.manylinux || 'auto' }}
+          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
+          before-script-linux: *protoc-install
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4

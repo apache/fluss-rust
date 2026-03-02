@@ -27,7 +27,7 @@ name = "fluss"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.26.0", features = ["extension-module"] }
+pyo3 = { version = "0.26.0", features = ["extension-module", "generate-import-lib"] }
 fluss = { workspace = true, features = ["storage-all"] }
 tokio = { workspace = true }
 arrow = { workspace = true }
