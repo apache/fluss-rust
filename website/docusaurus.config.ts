@@ -7,8 +7,8 @@ const config: Config = {
   tagline: 'Rust, Python, and C++ clients for Apache Fluss',
   favicon: 'img/logo/fluss_favicon.svg',
 
-  url: 'https://fluss.apache.org/',
-  baseUrl: '/fluss-rust/',
+  url: 'https://clients.fluss.apache.org',
+  baseUrl: '/',
 
   organizationName: 'apache',
   projectName: 'fluss-rust',
@@ -19,6 +19,25 @@ const config: Config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
+
+  plugins: [
+    [
+      '@docusaurus/plugin-pwa',
+      {
+        debug: true,
+        offlineModeActivationStrategies: [
+          'appInstalled',
+          'standalone',
+          'queryString',
+        ],
+        pwaHead: [
+          { tagName: 'link', rel: 'icon', href: '/img/logo/fluss_favicon.svg' },
+          { tagName: 'link', rel: 'manifest', href: '/manifest.json' },
+          { tagName: 'meta', name: 'theme-color', content: '#0071e3' },
+        ],
+      },
+    ],
+  ],
 
   presets: [
     [
