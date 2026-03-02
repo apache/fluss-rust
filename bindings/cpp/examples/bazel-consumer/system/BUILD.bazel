@@ -15,9 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-module(
-    name = "fluss_cpp",
-)
+load("@rules_cc//cc:defs.bzl", "cc_binary")
 
-bazel_dep(name = "rules_cc", version = "0.0.17")
-bazel_dep(name = "platforms", version = "0.0.10")
+cc_binary(
+    name = "consumer_system",
+    srcs = ["main.cc"],
+    copts = ["-std=c++17"],
+    deps = ["@fluss-cpp//bindings/cpp:fluss_cpp"],
+)
