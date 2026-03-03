@@ -67,6 +67,7 @@ jobs:
 
           # Replace contents with the new build
           git rm -rf . || true
+          git clean -fdx
           cp -r "$TMPDIR"/* .
           rm -rf "$TMPDIR"
 
