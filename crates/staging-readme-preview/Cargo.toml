@@ -1,0 +1,21 @@
+# Minimal crate to publish to staging.crates.io and preview the fluss-rs README.
+# No dependencies — copy README from ../fluss/README.md and publish.
+# Reuses workspace metadata so package info stays in sync with fluss-rs.
+
+[package]
+name = "fluss-rs-readme-preview"
+edition = { workspace = true }
+license.workspace = true
+rust-version = { workspace = true }
+version = "0.1.4"
+authors = { workspace = true }
+description = "The offical rust client of Apache Fluss (Incubating)"
+homepage = "https://clients.fluss.apache.org/"
+repository = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
+documentation = "https://docs.rs/fluss-rs"
+publish = ["staging"]
+
+[lib]
+path = "src/lib.rs"
