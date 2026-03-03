@@ -70,8 +70,8 @@ for (bucket, bucket_records) in records.records_by_buckets() {
         let row = record.row();
         println!(
             "  event_id={}, event_type={} @ offset={}",
-            row.get_int(0),
-            row.get_string(1),
+            row.get_int(0)?,
+            row.get_string(1)?,
             record.offset()
         );
     }
@@ -82,9 +82,9 @@ for record in records {
     let row = record.row();
     println!(
         "event_id={}, event_type={}, timestamp={} @ offset={}",
-        row.get_int(0),
-        row.get_string(1),
-        row.get_long(2),
+        row.get_int(0)?,
+        row.get_string(1)?,
+        row.get_long(2)?,
         record.offset()
     );
 }

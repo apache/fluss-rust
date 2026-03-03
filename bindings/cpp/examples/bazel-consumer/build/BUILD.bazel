@@ -15,26 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-license = { workspace = true }
-name = "fluss-examples"
-rust-version = { workspace = true }
-version = { workspace = true }
+load("@rules_cc//cc:defs.bzl", "cc_binary")
 
-
-[dependencies]
-fluss = { workspace = true, features = ["storage-all"] }
-tokio = { workspace = true }
-clap = { workspace = true }
-[[example]]
-name = "example-table"
-path = "src/example_table.rs"
-
-[[example]]
-name = "example-upsert-lookup"
-path = "src/example_kv_table.rs"
-
-[[example]]
-name = "example-partitioned-upsert-lookup"
-path = "src/example_partitioned_kv_table.rs"
+cc_binary(
+    name = "consumer_build",
+    srcs = ["main.cc"],
+    copts = ["-std=c++17"],
+    deps = ["@fluss-cpp//bindings/cpp:fluss_cpp"],
+)

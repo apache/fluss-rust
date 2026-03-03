@@ -208,7 +208,7 @@ key.set_field(2, 1i64);    // zone (partition column)
 
 let result = lookuper.lookup(&key).await?;
 if let Some(row) = result.get_single_row()? {
-    println!("Found: score={}", row.get_long(3));
+    println!("Found: score={}", row.get_long(3)?);
 }
 ```
 

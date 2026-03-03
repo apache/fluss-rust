@@ -89,8 +89,7 @@ TEST_F(SaslAuthTest, SaslConnectWithWrongPassword) {
     fluss::Connection conn;
     auto result = fluss::Connection::Create(config, conn);
     ASSERT_FALSE(result.Ok());
-    // TODO: error_code is CLIENT_ERROR (-2) because CXX Result<*mut T> loses the server
-    // error code. Should be AUTHENTICATE_EXCEPTION (46) once fixed
+    EXPECT_EQ(result.error_code, fluss::ErrorCode::AUTHENTICATE_EXCEPTION);
     EXPECT_NE(result.error_message.find("Authentication failed"), std::string::npos)
         << "Expected 'Authentication failed' in: " << result.error_message;
 }
@@ -106,7 +105,7 @@ TEST_F(SaslAuthTest, SaslConnectWithUnknownUser) {
     fluss::Connection conn;
     auto result = fluss::Connection::Create(config, conn);
     ASSERT_FALSE(result.Ok());
-    // TODO: same as above — should check error_code == AUTHENTICATE_EXCEPTION once fixed.
+    EXPECT_EQ(result.error_code, fluss::ErrorCode::AUTHENTICATE_EXCEPTION);
     EXPECT_NE(result.error_message.find("Authentication failed"), std::string::npos)
         << "Expected 'Authentication failed' in: " << result.error_message;
 }

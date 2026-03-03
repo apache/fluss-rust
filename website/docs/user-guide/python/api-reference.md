@@ -7,17 +7,25 @@ Complete API reference for the Fluss Python client.
 
 ## `Config`
 
-| Method / Property                  | Description                                               |
-|------------------------------------|-----------------------------------------------------------|
-| `Config(properties: dict = None)`  | Create config from a dict of key-value pairs              |
-| `bootstrap_servers`                | Get/set coordinator server address                        |
-| `writer_request_max_size`          | Get/set max request size in bytes                         |
-| `writer_acks`                      | Get/set acknowledgment setting (`"all"` for all replicas) |
-| `writer_retries`                   | Get/set number of retries on failure                      |
-| `writer_batch_size`                | Get/set write batch size in bytes                         |
-| `scanner_remote_log_prefetch_num`  | Get/set number of remote log segments to prefetch         |
-| `remote_file_download_thread_num`  | Get/set number of threads for remote log downloads        |
-| `scanner_log_max_poll_records`     | Get/set max number of records returned in a single poll() |
+| Method / Property                     | Description                                                                             |
+|---------------------------------------|-----------------------------------------------------------------------------------------|
+| `Config(properties: dict = None)`     | Create config from a dict of key-value pairs                                            |
+| `bootstrap_servers`                   | Get/set coordinator server address                                                      |
+| `writer_request_max_size`             | Get/set max request size in bytes                                                       |
+| `writer_acks`                         | Get/set acknowledgment setting (`"all"` for all replicas)                               |
+| `writer_retries`                      | Get/set number of retries on failure                                                    |
+| `writer_batch_size`                   | Get/set write batch size in bytes                                                       |
+| `writer_batch_timeout_ms`             | Get/set max time in ms to wait for a writer batch to fill up before sending             |
+| `writer.bucket.no-key-assigner`       | Bucket assignment strategy (`"sticky"` or `"round_robin"`); set via `Config(dict)` only |
+| `scanner_remote_log_prefetch_num`     | Get/set number of remote log segments to prefetch                                       |
+| `remote_file_download_thread_num`     | Get/set number of threads for remote log downloads                                      |
+| `scanner_remote_log_read_concurrency` | Get/set streaming read concurrency within a remote log file                             |
+| `scanner_log_max_poll_records`        | Get/set max number of records returned in a single poll()                               |
+| `connect_timeout_ms`                  | Get/set TCP connect timeout in milliseconds                                             |
+| `security_protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
+| `security_sasl_mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
+| `security_sasl_username`              | Get/set SASL username (required when protocol is `"sasl"`)                              |
+| `security_sasl_password`              | Get/set SASL password (required when protocol is `"sasl"`)                              |
 
 ## `FlussConnection`
 
