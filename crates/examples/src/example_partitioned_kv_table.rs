@@ -22,6 +22,7 @@ use fluss::error::Result;
 use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableDescriptor, TablePath};
 use fluss::row::{GenericRow, InternalRow};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[tokio::main]
 #[allow(dead_code)]
@@ -46,7 +47,7 @@ pub async fn main() -> Result<()> {
 
     let table_path = TablePath::new("fluss", "partitioned_kv_example");
 
-    let mut admin = conn.get_admin().await?;
+    let admin = conn.get_admin().await?;
     admin
         .create_table(&table_path, &table_descriptor, true)
         .await?;
@@ -55,9 +56,9 @@ pub async fn main() -> Result<()> {
         admin.get_table_info(&table_path).await?
     );
 
-    create_partition(&table_path, &mut admin, "APAC", 1).await;
-    create_partition(&table_path, &mut admin, "EMEA", 2).await;
-    create_partition(&table_path, &mut admin, "US", 3).await;
+    create_partition(&table_path, &admin, "APAC", 1).await;
+    create_partition(&table_path, &admin, "EMEA", 2).await;
+    create_partition(&table_path, &admin, "US", 3).await;
 
     let table = conn.get_table(&table_path).await?;
     let table_upsert = table.new_upsert()?;
@@ -129,7 +130,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn create_partition(table_path: &TablePath, admin: &mut FlussAdmin, region: &str, zone: i64) {
+async fn create_partition(table_path: &TablePath, admin: &Arc<FlussAdmin>, region: &str, zone: i64) {
     let mut partition_values = HashMap::new();
     partition_values.insert("region".to_string(), region.to_string());
     partition_values.insert("zone".to_string(), zone.to_string());

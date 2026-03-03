@@ -552,7 +552,7 @@ pub struct Connection {
 }
 
 pub struct Admin {
-    inner: fcore::client::FlussAdmin,
+    inner: Arc<fcore::client::FlussAdmin>,
 }
 
 pub struct Table {

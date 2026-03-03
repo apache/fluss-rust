@@ -23,9 +23,7 @@ use crate::config::Config;
 use crate::rpc::RpcClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
 use std::time::Duration;
-
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::TablePath;
 
@@ -34,7 +32,7 @@ pub struct FlussConnection {
     network_connects: Arc<RpcClient>,
     args: Config,
     writer_client: RwLock<Option<Arc<WriterClient>>>,
-    admin_client: OnceCell<FlussAdmin>,
+    admin_client: RwLock<Option<Arc<FlussAdmin>>>,
 }
 
 impl FlussConnection {
@@ -62,7 +60,7 @@ impl FlussConnection {
             network_connects: connections.clone(),
             args: arg.clone(),
             writer_client: Default::default(),
-            admin_client: OnceCell::new(),
+            admin_client: RwLock::new(None),
         })
     }
 
@@ -78,17 +76,24 @@ impl FlussConnection {
         &self.args
     }
 
-    pub async fn get_admin(&self) -> Result<FlussAdmin> {
-        // Lazily initialize and cache the FlussAdmin instance. The cached FlussAdmin
-        // holds a reference to RpcClient, which manages connection reuse and re-acquisition
-        // when a cached connection becomes poisoned. Subsequent calls clone cheaply —
-        // all internal fields (ServerConnection, Arc<Metadata>, Arc<RpcClient>) are
-        // Arc-backed so cloning is just a reference-count bump.
-        let admin = self
-            .admin_client
-            .get_or_try_init(|| FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()))
-            .await?;
-        Ok(admin.clone())
+    pub async fn get_admin(&self) -> Result<Arc<FlussAdmin>> {
+        // 1. Fast path: return cached instance if already initialized.
+        if let Some(admin) = self.admin_client.read().as_ref() {
+            return Ok(admin.clone());
+        }
+
+        // 2. Slow path: acquire write lock.
+        let mut admin_guard = self.admin_client.write();
+
+        // 3. Double-check: another thread may have initialized while we waited.
+        if let Some(admin) = admin_guard.as_ref() {
+            return Ok(admin.clone());
+        }
+
+        // 4. Initialize and cache.
+        let admin = Arc::new(FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()));
+        *admin_guard = Some(admin.clone());
+        Ok(admin)
     }
 
     pub fn get_or_create_writer_client(&self) -> Result<Arc<WriterClient>> {

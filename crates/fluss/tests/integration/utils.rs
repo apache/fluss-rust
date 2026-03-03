@@ -109,7 +109,8 @@ pub async fn wait_for_cluster_ready_with_sasl(cluster: &FlussTestingCluster) {
         let connection = cluster
             .get_fluss_connection_with_sasl(username, password)
             .await;
-        if connection.get_admin().await.is_ok()
+        let admin = connection.get_admin().await.expect("get_admin should not fail");
+        if admin.list_databases().await.is_ok()
             && connection
                 .get_metadata()
                 .get_cluster()
