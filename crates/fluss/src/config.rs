@@ -27,6 +27,9 @@ const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
 const DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY: usize = 4;
 const DEFAULT_MAX_POLL_RECORDS: usize = 500;
+const DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
+const DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES: i32 = 1;
+const DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS: i32 = 500;
 const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
 
 const DEFAULT_ACKS: &str = "all";
@@ -95,6 +98,21 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
     pub scanner_log_max_poll_records: usize,
 
+    /// Maximum bytes per fetch response for LogScanner.
+    /// Default: 16777216 (16MB)
+    #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES)]
+    pub scanner_log_fetch_max_bytes: i32,
+
+    /// Minimum bytes to accumulate before returning a fetch response.
+    /// Default: 1
+    #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES)]
+    pub scanner_log_fetch_min_bytes: i32,
+
+    /// Maximum time the server may wait (ms) to satisfy min-bytes.
+    /// Default: 500
+    #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS)]
+    pub scanner_log_fetch_wait_max_time_ms: i32,
+
     /// The maximum time to wait for a batch to be completed in milliseconds.
     /// Default: 100 (matching Java CLIENT_WRITER_BATCH_TIMEOUT)
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_TIMEOUT_MS)]
@@ -143,6 +161,18 @@ impl std::fmt::Debug for Config {
                 "scanner_log_max_poll_records",
                 &self.scanner_log_max_poll_records,
             )
+            .field(
+                "scanner_log_fetch_max_bytes",
+                &self.scanner_log_fetch_max_bytes,
+            )
+            .field(
+                "scanner_log_fetch_min_bytes",
+                &self.scanner_log_fetch_min_bytes,
+            )
+            .field(
+                "scanner_log_fetch_wait_max_time_ms",
+                &self.scanner_log_fetch_wait_max_time_ms,
+            )
             .field("writer_batch_timeout_ms", &self.writer_batch_timeout_ms)
             .field("connect_timeout_ms", &self.connect_timeout_ms)
             .field("security_protocol", &self.security_protocol)
@@ -166,6 +196,9 @@ impl Default for Config {
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
+            scanner_log_fetch_max_bytes: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES,
+            scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
+            scanner_log_fetch_wait_max_time_ms: DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
@@ -206,6 +239,23 @@ impl Config {
             return Err(
                 "security_sasl_password must be set when security_protocol is 'sasl'".to_string(),
             );
+        }
+        Ok(())
+    }
+    pub fn validate_scanner_fetch(&self) -> Result<(), String> {
+        if self.scanner_log_fetch_min_bytes <= 0 {
+            return Err("scanner_log_fetch_min_bytes must be > 0".to_string());
+        }
+        if self.scanner_log_fetch_max_bytes <= 0 {
+            return Err("scanner_log_fetch_max_bytes must be > 0".to_string());
+        }
+        if self.scanner_log_fetch_max_bytes < self.scanner_log_fetch_min_bytes {
+            return Err(
+                "scanner_log_fetch_max_bytes must be >= scanner_log_fetch_min_bytes".to_string(),
+            );
+        }
+        if self.scanner_log_fetch_wait_max_time_ms < 0 {
+            return Err("scanner_log_fetch_wait_max_time_ms must be >= 0".to_string());
         }
         Ok(())
     }
@@ -277,5 +327,32 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_security().is_err());
+    }
+    #[test]
+    fn test_scanner_fetch_defaults_valid() {
+        let config = Config::default();
+        assert!(config.validate_scanner_fetch().is_ok());
+        assert_eq!(config.scanner_log_fetch_max_bytes, 16 * 1024 * 1024);
+        assert_eq!(config.scanner_log_fetch_min_bytes, 1);
+        assert_eq!(config.scanner_log_fetch_wait_max_time_ms, 500);
+    }
+
+    #[test]
+    fn test_scanner_fetch_invalid_ranges() {
+        let config = Config {
+            scanner_log_fetch_min_bytes: 2,
+            scanner_log_fetch_max_bytes: 1,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner_fetch().is_err());
+    }
+
+    #[test]
+    fn test_scanner_fetch_negative_wait() {
+        let config = Config {
+            scanner_log_fetch_wait_max_time_ms: -1,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner_fetch().is_err());
     }
 }
