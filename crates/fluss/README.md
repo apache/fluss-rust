@@ -57,11 +57,12 @@ async fn main() -> Result<()> {
 
     // ---- Log table: append and scan ----
     let log_path = TablePath::new("fluss", "events");
-    let mut log_schema_builder = Schema::builder()
+    let log_schema = Schema::builder()
         .column("ts", DataTypes::bigint())
-        .column("message", DataTypes::string());
+        .column("message", DataTypes::string())
+        .build()?;
     let log_descriptor = TableDescriptor::builder()
-        .schema(log_schema_builder.build()?)
+        .schema(log_schema)
         .build()?;
     admin.create_table(&log_path, &log_descriptor, false).await?;
 
