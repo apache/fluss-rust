@@ -84,7 +84,7 @@ jobs:
       - name: Generate Python README
         run: python3 bindings/python/generate_readme.py
 
-      - name: Install protoc (Linux host)
+      - name: Install protoc (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
@@ -95,6 +95,7 @@ jobs:
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
         run: choco install protoc -y
+        shell: pwsh
 
       # Install protoc in manylinux container (x86_64/aarch64); script shared via YAML anchor
       - uses: PyO3/maturin-action@v1
@@ -104,7 +105,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.9
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
           before-script-linux: &protoc-install |
             set -e
             ARCH=$(uname -m)
@@ -126,7 +126,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.10
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
           before-script-linux: *protoc-install
       - uses: PyO3/maturin-action@v1
         with:
@@ -135,7 +134,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.11
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
           before-script-linux: *protoc-install
       - uses: PyO3/maturin-action@v1
         with:
@@ -144,7 +142,6 @@ jobs:
           command: build
           args: --release -o dist -i python3.12
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          container: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64' && 'off' || '' }}
           before-script-linux: *protoc-install
 
       - name: Upload wheels
