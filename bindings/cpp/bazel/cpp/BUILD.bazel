@@ -15,26 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-license = { workspace = true }
-name = "fluss-examples"
-rust-version = { workspace = true }
-version = { workspace = true }
+package(default_visibility = ["//visibility:public"])
 
-
-[dependencies]
-fluss = { workspace = true, features = ["storage-all"] }
-tokio = { workspace = true }
-clap = { workspace = true }
-[[example]]
-name = "example-table"
-path = "src/example_table.rs"
-
-[[example]]
-name = "example-upsert-lookup"
-path = "src/example_kv_table.rs"
-
-[[example]]
-name = "example-partitioned-upsert-lookup"
-path = "src/example_partitioned_kv_table.rs"
+# Stable indirection target for the Arrow C++ dependency. The implementation
+# repo name can change across modes (registry/build/system) without touching
+# bindings/cpp/BUILD.bazel.
+alias(
+    name = "arrow_cpp_dep",
+    actual = "@apache_arrow_cpp//:arrow_cpp",
+)

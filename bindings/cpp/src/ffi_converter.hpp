@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <cassert>
+
 #include "fluss.hpp"
 #include "lib.rs.h"
 
@@ -35,6 +37,12 @@ inline Result make_ok() { return Result{0, {}}; }
 
 inline Result from_ffi_result(const ffi::FfiResult& ffi_result) {
     return Result{ffi_result.error_code, std::string(ffi_result.error_message)};
+}
+
+template <typename T>
+inline T* ptr_from_ffi(const ffi::FfiPtrResult& r) {
+    assert(r.ptr != 0 && "ptr_from_ffi: null pointer in FfiPtrResult");
+    return reinterpret_cast<T*>(r.ptr);
 }
 
 inline ffi::FfiTablePath to_ffi_table_path(const TablePath& path) {

@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod binary_writer;
+#include "fluss.hpp"
 
-pub use binary_writer::*;
+#include <iostream>
 
-/// The binary row format types, it indicates the generated row type by the [`BinaryWriter`]
-#[allow(dead_code)]
-pub enum BinaryRowFormat {
-    Compacted,
-    Aligned,
-    Indexed,
+int main() {
+    fluss::TablePath table_path("demo_db", "demo_table");
+    std::cout << "Bazel system-mode dependency example ready: "
+              << table_path.ToString() << std::endl;
+    return 0;
 }
