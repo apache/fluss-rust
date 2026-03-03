@@ -648,11 +648,14 @@ fn err_ptr_from_core(e: &fcore::error::Error) -> ffi::FfiPtrResult {
 }
 
 // Connection implementation
-fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
-    let assigner_type = config
+fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
+    let assigner_type = match config
         .writer_bucket_no_key_assigner
         .parse::<fluss::config::NoKeyAssigner>()
-        .map_err(|e| format!("Invalid bucket assigner type: {e}"))?;
+    {
+        Ok(v) => v,
+        Err(e) => return client_err_ptr(format!("Invalid bucket assigner type: {e}")),
+    };
     let config_core = fluss::config::Config {
         bootstrap_servers: config.bootstrap_servers.to_string(),
         writer_request_max_size: config.writer_request_max_size,
