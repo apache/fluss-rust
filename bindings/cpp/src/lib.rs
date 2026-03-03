@@ -632,15 +632,10 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
 
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
-    let assigner_type = match config.writer_bucket_no_key_assigner.as_str() {
-        "round_robin" => fluss::config::NoKeyAssigner::RoundRobin,
-        "sticky" => fluss::config::NoKeyAssigner::Sticky,
-        other => {
-            return Err(format!(
-                "Unknown bucket assigner type: '{other}', expected 'sticky' or 'round_robin'"
-            ));
-        }
-    };
+    let assigner_type = config
+        .writer_bucket_no_key_assigner
+        .parse::<fluss::config::NoKeyAssigner>()
+        .map_err(|e| format!("Invalid bucket assigner type: {e}"))?;
     let config_core = fluss::config::Config {
         bootstrap_servers: config.bootstrap_servers.to_string(),
         writer_request_max_size: config.writer_request_max_size,
