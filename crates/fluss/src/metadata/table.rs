@@ -250,10 +250,12 @@ impl SchemaBuilder {
 
         let data_fields = columns
             .iter()
-            .map(|c| DataField {
+            .enumerate()
+            .map(|(idx, c)| DataField {
                 name: c.name.clone(),
                 data_type: c.data_type.clone(),
                 description: c.comment.clone(),
+                field_id: idx as i32,
             })
             .collect();
 
