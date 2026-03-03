@@ -51,6 +51,16 @@ impl FlussError {
             format!("FlussError: {}", self.message)
         }
     }
+
+    /// Returns ``True`` if retrying the request may succeed. Client-side errors always return ``False``.
+    #[getter]
+    fn is_retriable(&self) -> bool {
+        use fluss::rpc::FlussError as CoreFlussError;
+        if self.error_code == CLIENT_ERROR_CODE {
+            return false;
+        }
+        CoreFlussError::for_code(self.error_code).is_retriable()
+    }
 }
 
 impl FlussError {
