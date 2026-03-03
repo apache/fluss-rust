@@ -33,7 +33,7 @@ pub enum Error {
     )]
     UnexpectedError {
         message: String,
-        /// see https://github.com/shepmaster/snafu/issues/446
+        /// see <https://github.com/shepmaster/snafu/issues/446>
         #[snafu(source(from(Box<dyn std::error::Error + Send + Sync + 'static>, Some)))]
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
