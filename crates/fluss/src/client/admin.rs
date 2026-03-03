@@ -39,30 +39,27 @@ use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct FlussAdmin {
-    admin_gateway: ServerConnection,
-    #[allow(dead_code)]
     metadata: Arc<Metadata>,
-    #[allow(dead_code)]
     rpc_client: Arc<RpcClient>,
 }
 
 impl FlussAdmin {
-    pub async fn new(connections: Arc<RpcClient>, metadata: Arc<Metadata>) -> Result<Self> {
-        let admin_con =
-            connections
-                .get_connection(metadata.get_cluster().get_coordinator_server().ok_or_else(
-                    || Error::UnexpectedError {
-                        message: "Coordinator server not found in cluster metadata".to_string(),
-                        source: None,
-                    },
-                )?)
-                .await?;
-
-        Ok(FlussAdmin {
-            admin_gateway: admin_con,
+    pub fn new(connections: Arc<RpcClient>, metadata: Arc<Metadata>) -> Self {
+        FlussAdmin {
             metadata,
             rpc_client: connections,
-        })
+        }
+    }
+
+    async fn admin_gateway(&self) -> Result<ServerConnection> {
+        let cluster = self.metadata.get_cluster();
+        let coordinator = cluster.get_coordinator_server().ok_or_else(|| {
+            Error::UnexpectedError {
+                message: "Coordinator server not found in cluster metadata".to_string(),
+                source: None,
+            }
+        })?;
+        self.rpc_client.get_connection(coordinator).await
     }
 
     pub async fn create_database(
@@ -72,7 +69,8 @@ impl FlussAdmin {
         ignore_if_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(CreateDatabaseRequest::new(
                 database_name,
                 database_descriptor,
@@ -89,7 +87,8 @@ impl FlussAdmin {
         ignore_if_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(CreateTableRequest::new(
                 table_path,
                 table_descriptor,
@@ -105,7 +104,8 @@ impl FlussAdmin {
         ignore_if_not_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(DropTableRequest::new(table_path, ignore_if_not_exists))
             .await?;
         Ok(())
@@ -113,7 +113,8 @@ impl FlussAdmin {
 
     pub async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {
         let response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(GetTableRequest::new(table_path))
             .await?;
 
@@ -145,7 +146,8 @@ impl FlussAdmin {
     /// List all tables in the given database
     pub async fn list_tables(&self, database_name: &str) -> Result<Vec<String>> {
         let response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(ListTablesRequest::new(database_name))
             .await?;
         Ok(response.table_name)
@@ -163,7 +165,8 @@ impl FlussAdmin {
         partial_partition_spec: Option<&PartitionSpec>,
     ) -> Result<Vec<PartitionInfo>> {
         let response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(ListPartitionInfosRequest::new(
                 table_path,
                 partial_partition_spec,
@@ -180,7 +183,8 @@ impl FlussAdmin {
         ignore_if_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(CreatePartitionRequest::new(
                 table_path,
                 partition_spec,
@@ -198,7 +202,8 @@ impl FlussAdmin {
         ignore_if_not_exists: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(DropPartitionRequest::new(
                 table_path,
                 partition_spec,
@@ -211,7 +216,8 @@ impl FlussAdmin {
     /// Check if a table exists
     pub async fn table_exists(&self, table_path: &TablePath) -> Result<bool> {
         let response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(TableExistsRequest::new(table_path))
             .await?;
         Ok(response.exists)
@@ -225,7 +231,8 @@ impl FlussAdmin {
         cascade: bool,
     ) -> Result<()> {
         let _response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(DropDatabaseRequest::new(
                 database_name,
                 ignore_if_not_exists,
@@ -238,7 +245,8 @@ impl FlussAdmin {
     /// List all databases
     pub async fn list_databases(&self) -> Result<Vec<String>> {
         let response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(ListDatabasesRequest::new())
             .await?;
         Ok(response.database_name)
@@ -247,7 +255,8 @@ impl FlussAdmin {
     /// Check if a database exists
     pub async fn database_exists(&self, database_name: &str) -> Result<bool> {
         let response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(DatabaseExistsRequest::new(database_name))
             .await?;
         Ok(response.exists)
@@ -256,7 +265,7 @@ impl FlussAdmin {
     /// Get database information
     pub async fn get_database_info(&self, database_name: &str) -> Result<DatabaseInfo> {
         let request = GetDatabaseInfoRequest::new(database_name);
-        let response = self.admin_gateway.request(request).await?;
+        let response = self.admin_gateway().await?.request(request).await?;
 
         // Convert proto response to DatabaseInfo
         let database_descriptor = DatabaseDescriptor::from_json_bytes(&response.database_json)?;
@@ -279,7 +288,8 @@ impl FlussAdmin {
     /// Get the latest lake snapshot for a table
     pub async fn get_latest_lake_snapshot(&self, table_path: &TablePath) -> Result<LakeSnapshot> {
         let response = self
-            .admin_gateway
+            .admin_gateway()
+            .await?
             .request(GetLatestLakeSnapshotRequest::new(table_path))
             .await?;
 
