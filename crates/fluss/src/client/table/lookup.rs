@@ -98,13 +98,24 @@ impl LookupResult {
     /// - `Err(Error)` - If the conversion fails.
     pub fn to_record_batch(&self) -> Result<RecordBatch> {
         let mut builder = RowAppendRecordBatchBuilder::new(&self.row_type)?;
+
         for bytes in &self.rows {
-            let row = CompactedRow::from_bytes(&self.row_type, &bytes[SCHEMA_ID_LENGTH..]);
+            let payload = bytes.get(SCHEMA_ID_LENGTH..).ok_or_else(|| {
+                Error::RowConvertError {
+                    message: format!(
+                        "LookupResult row payload too short: {} bytes, need at least {} bytes for schema id",
+                        bytes.len(),
+                        SCHEMA_ID_LENGTH
+                    ),
+                }
+            })?;
+
+            let row = CompactedRow::from_bytes(&self.row_type, payload);
             builder.append(&row)?;
         }
+
         let arc_batch = builder.build_arrow_record_batch()?;
-        // Unwrap the Arc — if we're the only owner, take it directly; otherwise clone.
-        Ok(Arc::try_unwrap(arc_batch).unwrap_or_else(|arc: Arc<RecordBatch>| (*arc).clone()))
+        Ok(Arc::unwrap_or_clone(arc_batch))
     }
 }
 
