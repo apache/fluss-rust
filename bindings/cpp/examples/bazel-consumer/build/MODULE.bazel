@@ -15,26 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-license = { workspace = true }
-name = "fluss-examples"
-rust-version = { workspace = true }
-version = { workspace = true }
+module(name = "fluss_cpp_consumer_build")
 
+bazel_dep(name = "rules_cc", version = "0.2.14")
+bazel_dep(name = "fluss-cpp", version = "0.1.0")
 
-[dependencies]
-fluss = { workspace = true, features = ["storage-all"] }
-tokio = { workspace = true }
-clap = { workspace = true }
-[[example]]
-name = "example-table"
-path = "src/example_table.rs"
+# Local override for repository-local validation only.
+local_path_override(
+    module_name = "fluss-cpp",
+    # Repository root path (the directory containing `bindings/cpp`).
+    path = "../../../../../",
+)
 
-[[example]]
-name = "example-upsert-lookup"
-path = "src/example_kv_table.rs"
-
-[[example]]
-name = "example-partitioned-upsert-lookup"
-path = "src/example_partitioned_kv_table.rs"
+fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp.config(
+    mode = "build",
+    protobuf_version = "3.25.5",
+    arrow_cpp_version = "19.0.1",
+    ep_cmake_ranlib = "/usr/bin/ranlib",
+    ep_cmake_ar = "/usr/bin/ar",
+    ep_cmake_nm = "/usr/bin/nm",
+)
+use_repo(fluss_cpp, "apache_arrow_cpp")

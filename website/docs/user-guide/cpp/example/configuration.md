@@ -37,6 +37,7 @@ config.remote_file_download_thread_num = 3;                    // Download threa
 config.scanner_remote_log_read_concurrency = 4;                // In-file remote log read concurrency
 config.scanner_log_max_poll_records = 500;                     // Max records per poll
 config.connect_timeout_ms = 120000;                            // TCP connect timeout (ms)
+config.request_timeout_ms = 30000;                             // Per-request RPC timeout (ms)
 ```
 
 ## SASL Authentication

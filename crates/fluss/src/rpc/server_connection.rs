@@ -70,7 +70,7 @@ impl fmt::Debug for SaslConfig {
 pub struct RpcClient {
     connections: RwLock<HashMap<String, ServerConnection>>,
     client_id: Arc<str>,
-    timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
     request_timeout: Option<Duration>,
     max_message_size: usize,
     sasl_config: Option<SaslConfig>,
@@ -81,15 +81,15 @@ impl RpcClient {
         RpcClient {
             connections: Default::default(),
             client_id: Arc::from(""),
-            timeout: None,
+            connect_timeout: None,
             request_timeout: None,
             max_message_size: usize::MAX,
             sasl_config: None,
         }
     }
 
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
         self
     }
 
@@ -132,7 +132,7 @@ impl RpcClient {
 
     async fn connect(&self, server_node: &ServerNode) -> Result<ServerConnection, Error> {
         let url = server_node.url();
-        let transport = Transport::connect(&url, self.timeout)
+        let transport = Transport::connect(&url, self.connect_timeout)
             .await
             .map_err(|error| ConnectionError(error.to_string()))?;
 
@@ -276,7 +276,7 @@ pub struct ServerConnectionInner<RW> {
 
     /// Per-request timeout applied to the response-wait phase only.
     /// The send (write) phase is not covered; a stalled `send_message` can
-    /// exceed this duration. 
+    /// exceed this duration.
     /// TODO: Full RPC deadline semantics are a potential future enhancement.
     request_timeout: Option<Duration>,
 
@@ -408,16 +408,9 @@ where
 
         self.send_message(buf).await?;
         _cleanup_on_cancel.message_sent();
-        let mut response = match self.request_timeout {
+        let recv_result = match self.request_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, rx).await {
-                Ok(result) => result.map_err(|e| Error::UnexpectedError {
-                    message: format!(
-                        "Response channel closed for request_id={request_id} api_key={:?}; \
-                         connection may be closed or poisoned",
-                        R::API_KEY
-                    ),
-                    source: Some(Box::new(e)),
-                })??,
+                Ok(result) => result,
                 Err(_elapsed) => {
                     if let ConnectionState::RequestMap(map) = self.state.lock().deref_mut() {
                         map.remove(&request_id);
@@ -429,15 +422,17 @@ where
                     .into());
                 }
             },
-            None => rx.await.map_err(|e| Error::UnexpectedError {
-                message: format!(
-                    "Response channel closed for request_id={request_id} api_key={:?}; \
-                     connection may be closed or poisoned",
-                    R::API_KEY
-                ),
-                source: Some(Box::new(e)),
-            })??,
+            None => rx.await,
         };
+
+        let mut response = recv_result.map_err(|e| Error::UnexpectedError {
+            message: format!(
+                "Response channel closed for request_id={request_id} api_key={:?}; \
+                 connection may be closed or poisoned",
+                R::API_KEY
+            ),
+            source: Some(Box::new(e)),
+        })??;
 
         if let Some(error_response) = response.header.error_response {
             return Err(Error::FlussAPIError {

@@ -49,13 +49,13 @@ impl FlussConnection {
                         arg.security_sasl_username.clone(),
                         arg.security_sasl_password.clone(),
                     )
-                    .with_timeout(timeout)
+                    .with_connect_timeout(timeout)
                     .with_request_timeout(request_timeout),
             )
         } else {
             Arc::new(
                 RpcClient::new()
-                    .with_timeout(timeout)
+                    .with_connect_timeout(timeout)
                     .with_request_timeout(request_timeout),
             )
         };
