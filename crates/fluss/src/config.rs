@@ -31,6 +31,7 @@ const DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
 const DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES: i32 = 1;
 const DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS: i32 = 500;
 const DEFAULT_WRITER_BATCH_TIMEOUT_MS: i64 = 100;
+const DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET: i32 = 1024 * 1024;
 
 const DEFAULT_ACKS: &str = "all";
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
@@ -114,6 +115,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_TIMEOUT_MS)]
     pub writer_batch_timeout_ms: i64,
 
+    /// Maximum bytes per fetch response **per bucket** for LogScanner.
+    /// Default: 1048576 (1MB) (or whatever DEFAULT_BUCKET_MAX_FETCH_BYTES is)
+    #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET)]
+    pub scanner_log_fetch_max_bytes_for_bucket: i32,
+
     /// Connect timeout in milliseconds for TCP transport connect.
     /// Default: 120000 (120 seconds).
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
@@ -195,6 +201,7 @@ impl Default for Config {
             scanner_log_fetch_max_bytes: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES,
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
             scanner_log_fetch_wait_max_time_ms: DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS,
+            scanner_log_fetch_max_bytes_for_bucket: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
@@ -252,6 +259,15 @@ impl Config {
         }
         if self.scanner_log_fetch_wait_max_time_ms < 0 {
             return Err("scanner_log_fetch_wait_max_time_ms must be >= 0".to_string());
+        }
+        if self.scanner_log_fetch_max_bytes_for_bucket <= 0 {
+            return Err("scanner_log_fetch_max_bytes_for_bucket must be > 0".to_string());
+        }
+        if self.scanner_log_fetch_max_bytes_for_bucket > self.scanner_log_fetch_max_bytes {
+            return Err(
+                "scanner_log_fetch_max_bytes_for_bucket must be <= scanner_log_fetch_max_bytes"
+                    .to_string(),
+            );
         }
         Ok(())
     }

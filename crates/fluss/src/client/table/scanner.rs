@@ -15,17 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::SchemaRef;
-use log::{debug, warn};
-use parking_lot::{Mutex, RwLock};
-use std::{
-    collections::{HashMap, HashSet},
-    slice::from_ref,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use tempfile::TempDir;
-
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
@@ -44,6 +33,16 @@ use crate::record::{
 use crate::rpc::{RpcClient, RpcError, message};
 use crate::util::FairBucketStatusMap;
 use crate::{PartitionId, TableId};
+use arrow_schema::SchemaRef;
+use log::{debug, warn};
+use parking_lot::{Mutex, RwLock};
+use std::{
+    collections::{HashMap, HashSet},
+    slice::from_ref,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tempfile::TempDir;
 
 pub struct TableScan<'a> {
     conn: &'a FlussConnection,
@@ -634,6 +633,7 @@ struct LogFetcher {
     fetch_max_bytes: i32,
     fetch_min_bytes: i32,
     fetch_wait_max_time_ms: i32,
+    fetch_max_bytes_for_bucket: i32,
 }
 
 struct FetchResponseContext {
@@ -645,7 +645,6 @@ struct FetchResponseContext {
     remote_log_downloader: Arc<RemoteLogDownloader>,
 }
 
-const DEFAULT_BUCKET_MAX_FETCH_BYTES: i32 = 1024 * 1024;
 impl LogFetcher {
     pub fn new(
         table_info: TableInfo,
@@ -655,9 +654,6 @@ impl LogFetcher {
         config: &crate::config::Config,
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
-        config
-            .validate_scanner_fetch()
-            .map_err(|message| Error::IllegalArgument { message })?;
         let full_arrow_schema = to_arrow_schema(table_info.get_row_type())?;
         let read_context =
             Self::create_read_context(full_arrow_schema.clone(), projected_fields.clone(), false)?;
@@ -701,6 +697,7 @@ impl LogFetcher {
             fetch_max_bytes: config.scanner_log_fetch_max_bytes,
             fetch_min_bytes: config.scanner_log_fetch_min_bytes,
             fetch_wait_max_time_ms: config.scanner_log_fetch_wait_max_time_ms,
+            fetch_max_bytes_for_bucket: config.scanner_log_fetch_max_bytes_for_bucket,
         })
     }
 
@@ -1483,9 +1480,7 @@ impl LogFetcher {
                             partition_id: bucket.partition_id(),
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
-                            max_fetch_bytes: self
-                                .fetch_max_bytes
-                                .min(DEFAULT_BUCKET_MAX_FETCH_BYTES),
+                            max_fetch_bytes: self.fetch_max_bytes_for_bucket,
                         };
 
                         fetch_log_req_for_buckets
@@ -2008,6 +2003,7 @@ mod tests {
             scanner_log_fetch_max_bytes: 1234,
             scanner_log_fetch_min_bytes: 7,
             scanner_log_fetch_wait_max_time_ms: 89,
+            scanner_log_fetch_max_bytes_for_bucket: 512,
             ..crate::config::Config::default()
         };
 
@@ -2028,8 +2024,13 @@ mod tests {
             assert_eq!(req.max_bytes, 1234);
             assert_eq!(req.min_bytes, Some(7));
             assert_eq!(req.max_wait_ms, Some(89));
-        }
 
+            for table_req in &req.tables_req {
+                for bucket_req in &table_req.buckets_req {
+                    assert_eq!(bucket_req.max_fetch_bytes, 512);
+                }
+            }
+        }
         Ok(())
     }
 }
