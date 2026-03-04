@@ -69,7 +69,7 @@ impl MemoryLimiter {
     /// Returns a `MemoryPermit` on success.
     pub fn acquire(self: &Arc<Self>, size: usize) -> Result<MemoryPermit> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(Error::IllegalArgument {
+            return Err(Error::WriterClosed {
                 message: "Memory limiter is closed".to_string(),
             });
         }
@@ -91,12 +91,12 @@ impl MemoryLimiter {
             self.waiting_count.fetch_sub(1, Ordering::Relaxed);
 
             if self.closed.load(Ordering::Acquire) {
-                return Err(Error::IllegalArgument {
+                return Err(Error::WriterClosed {
                     message: "Memory limiter is closed".to_string(),
                 });
             }
             if result.timed_out() && *used + size > self.max_memory {
-                return Err(Error::IllegalArgument {
+                return Err(Error::BufferExhausted {
                     message: format!(
                         "Failed to allocate {} bytes for write batch within {}ms. \
                          {} of {} bytes in use, {} threads waiting.",
@@ -754,6 +754,10 @@ impl RecordAccumulator {
         self.closed.store(true, Ordering::Release);
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     pub fn abort_batches(&self, error: broadcast::Error) {
         self.memory_limiter.close();
         for mut entry in self.write_batches.iter_mut() {
@@ -1300,7 +1304,7 @@ mod tests {
         let limiter = Arc::new(MemoryLimiter::new(1024, Duration::from_secs(60)));
 
         let result = limiter.acquire(2048);
-        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::IllegalArgument { .. }));
     }
 
     #[test]
@@ -1339,7 +1343,7 @@ mod tests {
         let result = limiter.acquire(512);
         let elapsed = start.elapsed();
 
-        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::BufferExhausted { .. }));
         assert!(elapsed >= Duration::from_millis(80)); // allow some timing slack
     }
 
@@ -1356,13 +1360,8 @@ mod tests {
         let result = limiter.acquire(256);
         let elapsed = start.elapsed();
 
-        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::WriterClosed { .. }));
         assert!(elapsed < Duration::from_millis(50));
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("closed"),
-            "error should mention closed: {err_msg}"
-        );
     }
 
     #[test]
@@ -1388,12 +1387,7 @@ mod tests {
         limiter.close();
 
         let (result, elapsed) = handle.join().unwrap();
-        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::WriterClosed { .. }));
         assert!(elapsed < Duration::from_secs(5)); // should not wait the full 60s
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("closed"),
-            "error should mention closed: {err_msg}"
-        );
     }
 }
