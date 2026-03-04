@@ -35,7 +35,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufStream, WriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::oneshot::{Sender, channel};
@@ -217,6 +217,89 @@ struct ActiveRequest {
     channel: Sender<Result<Response, RpcError>>,
 }
 
+/// Tracks per-request connection metrics and ensures in-flight gauge cleanup on drop.
+struct RequestMetricsLifecycle {
+    label: Option<&'static str>,
+    start: Instant,
+    completed: bool,
+}
+
+impl RequestMetricsLifecycle {
+    fn begin(api_key: crate::rpc::ApiKey, request_bytes: u64) -> Self {
+        let label = crate::metrics::api_key_label(api_key);
+        if let Some(label) = label {
+            // Match Java semantics: count request attempts before write/send.
+            metrics::counter!(
+                crate::metrics::CLIENT_REQUESTS_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(1);
+            metrics::counter!(
+                crate::metrics::CLIENT_BYTES_SENT_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(request_bytes);
+            metrics::gauge!(
+                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(1.0);
+        }
+        Self {
+            label,
+            start: Instant::now(),
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self, response_bytes: u64) {
+        let Some(label) = self.label else {
+            return;
+        };
+        if self.completed {
+            return;
+        }
+
+        metrics::counter!(
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .increment(1);
+        metrics::counter!(
+            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .increment(response_bytes);
+        metrics::gauge!(
+            crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .decrement(1.0);
+        metrics::histogram!(
+            crate::metrics::CLIENT_REQUEST_LATENCY_MS,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .record(self.start.elapsed().as_secs_f64() * 1000.0);
+        self.completed = true;
+    }
+}
+
+impl Drop for RequestMetricsLifecycle {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        if let Some(label) = self.label {
+            metrics::gauge!(
+                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .decrement(1.0);
+            self.completed = true;
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ConnectionState {
     /// Currently active requests by request ID.
@@ -351,31 +434,6 @@ where
         R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
         R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
     {
-        let api_label = crate::metrics::api_key_label(R::API_KEY);
-        let start = std::time::Instant::now();
-        let record_completion_metrics = |label: &'static str, response_bytes: u64| {
-            metrics::counter!(
-                crate::metrics::CLIENT_RESPONSES_TOTAL,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(1);
-            metrics::counter!(
-                crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(response_bytes);
-            metrics::gauge!(
-                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .decrement(1.0);
-            metrics::histogram!(
-                crate::metrics::CLIENT_REQUEST_LATENCY_MS,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .record(start.elapsed().as_secs_f64() * 1000.0);
-        };
-
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
@@ -411,64 +469,21 @@ where
             ConnectionState::Poison(e) => return Err(RpcError::Poisoned(Arc::clone(e)).into()),
         }
 
-        // Guard to decrement in-flight on cancellation, panic, or any exit without
-        // explicitly calling record_completion_metrics. Prevents gauge drift when
-        // the request future is dropped (e.g. tokio::select! timeout).
-        let mut in_flight_guard = if let Some(label) = api_label {
-            metrics::counter!(
-                crate::metrics::CLIENT_REQUESTS_TOTAL,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(1);
-            metrics::counter!(
-                crate::metrics::CLIENT_BYTES_SENT_TOTAL,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(buf.len() as u64);
-            metrics::gauge!(
-                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(1.0);
-            Some(scopeguard::guard(label, |l| {
-                metrics::gauge!(
-                    crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-                    crate::metrics::LABEL_API_KEY => l
-                )
-                .decrement(1.0);
-            }))
-        } else {
-            None
-        };
-
-        let mut disarm_in_flight_guard = || {
-            if let Some(guard) = in_flight_guard.take() {
-                let _ = scopeguard::ScopeGuard::into_inner(guard);
-            }
-        };
+        let mut request_metrics = RequestMetricsLifecycle::begin(R::API_KEY, buf.len() as u64);
 
         if let Err(e) = self.send_message(buf).await {
-            if let Some(label) = api_label {
-                disarm_in_flight_guard();
-                record_completion_metrics(label, 0);
-            }
+            request_metrics.complete(0);
             return Err(e.into());
         }
         _cleanup_on_cancel.message_sent();
         let mut response = match rx.await {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => {
-                if let Some(label) = api_label {
-                    disarm_in_flight_guard();
-                    record_completion_metrics(label, 0);
-                }
+                request_metrics.complete(0);
                 return Err(e.into());
             }
             Err(e) => {
-                if let Some(label) = api_label {
-                    disarm_in_flight_guard();
-                    record_completion_metrics(label, 0);
-                }
+                request_metrics.complete(0);
                 return Err(Error::UnexpectedError {
                     message: "Got recvError, some one close the channel".to_string(),
                     source: Some(Box::new(e)),
@@ -477,10 +492,7 @@ where
         };
 
         let response_bytes = response.data.get_ref().len() as u64;
-        if let Some(label) = api_label {
-            disarm_in_flight_guard();
-            record_completion_metrics(label, response_bytes);
-        }
+        request_metrics.complete(response_bytes);
 
         if let Some(error_response) = response.header.error_response {
             return Err(Error::FlussAPIError {
@@ -659,7 +671,9 @@ mod tests {
     use crate::rpc::api_version::ApiVersion;
     use crate::rpc::frame::{ReadError, WriteError};
     use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-    use metrics_util::debugging::DebuggingRecorder;
+    use metrics::{SharedString, Unit};
+    use metrics_util::CompositeKey;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use std::sync::OnceLock;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
     use tokio::sync::Mutex as AsyncMutex;
@@ -803,6 +817,64 @@ mod tests {
         TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
+    type SnapshotEntry = (
+        CompositeKey,
+        Option<Unit>,
+        Option<SharedString>,
+        DebugValue,
+    );
+
+    fn has_api_label(key: &CompositeKey, label: &str) -> bool {
+        key.key()
+            .labels()
+            .any(|l| l.key() == crate::metrics::LABEL_API_KEY && l.value() == label)
+    }
+
+    fn counter_for_label(entries: &[SnapshotEntry], metric_name: &str, label: &str) -> u64 {
+        entries
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                if key.key().name() != metric_name || !has_api_label(key, label) {
+                    return None;
+                }
+                match value {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    fn gauge_for_label(entries: &[SnapshotEntry], metric_name: &str, label: &str) -> f64 {
+        entries
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                if key.key().name() != metric_name || !has_api_label(key, label) {
+                    return None;
+                }
+                match value {
+                    DebugValue::Gauge(v) => Some(v.into_inner()),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0.0)
+    }
+
+    fn counter_sum(entries: &[SnapshotEntry], metric_name: &str) -> u64 {
+        entries
+            .iter()
+            .filter_map(|(key, _, _, value)| {
+                if key.key().name() != metric_name {
+                    return None;
+                }
+                match value {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+
     // -- Tests -----------------------------------------------------------
 
     #[tokio::test]
@@ -816,70 +888,18 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_before = before
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let response_before = before
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
+        let request_before =
+            counter_for_label(&before, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_before =
+            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
 
         conn.request(TestProduceRequest).await.unwrap();
 
         let after: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let response_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
+        let request_after =
+            counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_after =
+            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
         assert_eq!(
             request_after - request_before,
             1,
@@ -893,11 +913,8 @@ mod tests {
 
         let has_latency_sample = after.iter().any(|(key, _, _, value)| {
             key.key().name() == crate::metrics::CLIENT_REQUEST_LATENCY_MS
-                && key
-                    .key()
-                    .labels()
-                    .any(|l| l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log")
-                && matches!(value, metrics_util::debugging::DebugValue::Histogram(_))
+                && has_api_label(key, "produce_log")
+                && matches!(value, DebugValue::Histogram(_))
         });
         assert!(
             has_latency_sample,
@@ -915,58 +932,14 @@ mod tests {
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_sum_before: u64 = before
-            .iter()
-            .filter_map(|(key, _, _, value)| {
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .sum();
-        let response_sum_before: u64 = before
-            .iter()
-            .filter_map(|(key, _, _, value)| {
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .sum();
+        let request_sum_before = counter_sum(&before, crate::metrics::CLIENT_REQUESTS_TOTAL);
+        let response_sum_before = counter_sum(&before, crate::metrics::CLIENT_RESPONSES_TOTAL);
 
         conn.request(TestMetadataRequest).await.unwrap();
 
         let snapshot: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_sum_after: u64 = snapshot
-            .iter()
-            .filter_map(|(key, _, _, value)| {
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .sum();
-        let response_sum_after: u64 = snapshot
-            .iter()
-            .filter_map(|(key, _, _, value)| {
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .sum();
+        let request_sum_after = counter_sum(&snapshot, crate::metrics::CLIENT_REQUESTS_TOTAL);
+        let response_sum_after = counter_sum(&snapshot, crate::metrics::CLIENT_RESPONSES_TOTAL);
         assert_eq!(
             request_sum_after, request_sum_before,
             "non-reportable API keys must not change request counters"
@@ -977,11 +950,7 @@ mod tests {
         );
 
         // No metric entry should carry a non-reportable API key label.
-        let non_reportable = snapshot.iter().any(|(key, _, _, _)| {
-            key.key()
-                .labels()
-                .any(|l| l.key() == crate::metrics::LABEL_API_KEY && l.value() == "metadata")
-        });
+        let non_reportable = snapshot.iter().any(|(key, _, _, _)| has_api_label(key, "metadata"));
         assert!(
             !non_reportable,
             "non-reportable API keys must not appear in metrics"
@@ -998,117 +967,26 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_before = before
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let response_before = before
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let bytes_received_before = before
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
+        let request_before =
+            counter_for_label(&before, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_before =
+            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_before =
+            counter_for_label(&before, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
         let result = conn.request(TestProduceRequest).await;
         assert!(
             result.is_err(),
             "request should fail when transport is closed"
         );
         let after: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let response_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let bytes_received_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let inflight_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_IN_FLIGHT || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Gauge(v) => Some(v.into_inner()),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0.0);
+        let request_after =
+            counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_after =
+            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_after =
+            counter_for_label(&after, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let inflight_after =
+            gauge_for_label(&after, crate::metrics::CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
 
         assert_eq!(
             request_after - request_before,
@@ -1142,36 +1020,10 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let response_before = before
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let bytes_received_before = before
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
+        let response_before =
+            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_before =
+            counter_for_label(&before, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
 
         let result = conn.request(TestProduceRequest).await;
         assert!(
@@ -1180,51 +1032,12 @@ mod tests {
         );
 
         let after: Vec<_> = snapshotter.snapshot().into_vec();
-        let response_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_RESPONSES_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let bytes_received_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0);
-        let inflight_after = after
-            .iter()
-            .find_map(|(key, _, _, value)| {
-                let has_label = key.key().labels().any(|l| {
-                    l.key() == crate::metrics::LABEL_API_KEY && l.value() == "produce_log"
-                });
-                if key.key().name() != crate::metrics::CLIENT_REQUESTS_IN_FLIGHT || !has_label {
-                    return None;
-                }
-                match value {
-                    metrics_util::debugging::DebugValue::Gauge(v) => Some(v.into_inner()),
-                    _ => None,
-                }
-            })
-            .unwrap_or(0.0);
+        let response_after =
+            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_after =
+            counter_for_label(&after, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let inflight_after =
+            gauge_for_label(&after, crate::metrics::CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
 
         assert_eq!(
             response_after - response_before,
