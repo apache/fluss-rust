@@ -31,6 +31,7 @@ let conn = FlussConnection::new(config).await?;
 | `scanner_remote_log_read_concurrency` | Streaming read concurrency within a remote log file                                  | `4`              |
 | `scanner_log_max_poll_records`        | Maximum records returned in a single `poll()`                                        | `500`            |
 | `connect_timeout_ms`                  | TCP connect timeout in milliseconds                                                  | 120000           |
+| `request_timeout_ms`                  | Per-request RPC timeout in milliseconds                                              | 30000            |
 | `security_protocol`                   | `PLAINTEXT` (default) or `sasl` for SASL auth                                       | `PLAINTEXT`      |
 | `security_sasl_mechanism`             | SASL mechanism (only `PLAIN` is supported)                                           | `PLAIN`          |
 | `security_sasl_username`              | SASL username (required when protocol is `sasl`)                                     | (empty)          |
