@@ -77,12 +77,13 @@ cd fluss-rust
 Set these once and use them in all following commands. (Bash syntax.)
 
 ```bash
-export RELEASE_VERSION="0.1.0"
-export RELEASE_TAG="v${RELEASE_VERSION}"
-export SVN_RELEASE_DIR="fluss-rust-${RELEASE_VERSION}"
+RELEASE_VERSION="0.1.0"
+SHORT_RELEASE_VERSION="0.1"
+RELEASE_TAG="v${RELEASE_VERSION}"
+SVN_RELEASE_DIR="fluss-rust-${RELEASE_VERSION}"
 # Only set if there is a previous release (for compare link in DISCUSS / release notes)
-export LAST_VERSION="0.0.9"
-export NEXT_VERSION="0.2.0"
+LAST_VERSION="0.0.9"
+NEXT_VERSION="0.2.0"
 ```
 
 For the **first release** there is no previous version; leave `LAST_VERSION` unset or omit it when using the compare link in the DISCUSS thread and release notes.
@@ -122,8 +123,8 @@ From `main`, create a release branch. All release artifacts will be built from t
 ```bash
 git checkout main
 git pull
-git checkout -b release-${RELEASE_VERSION}
-git push origin release-${RELEASE_VERSION}
+git checkout -b release-${SHORT_RELEASE_VERSION}
+git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
 Do **not** create or push the release/RC tag yet; that happens in [Build a release candidate](#build-a-release-candidate) after the source artifacts are staged.
@@ -184,7 +185,7 @@ For a **direct release** (no RC), skip these and use `RELEASE_TAG` and `SVN_RELE
 Check out the release branch at the commit you want to release, create the signed tag, then push it. Use `RC_TAG` for a release candidate or `RELEASE_TAG` for a direct release. Pushing the tag triggers GitHub Actions (for an RC tag, fluss-python is published to TestPyPI).
 
 ```bash
-git checkout release-${RELEASE_VERSION}
+git checkout release-${SHORT_RELEASE_VERSION}
 git pull
 git tag -s $RC_TAG -m "${RC_TAG}"
 git push origin $RC_TAG
