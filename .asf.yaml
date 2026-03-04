@@ -19,7 +19,9 @@
 
 github:
   description: "Rust Client for Apache Fluss (Incubating)"
-  homepage: https://fluss.apache.org/
+  homepage: https://clients.fluss.apache.org/
+  ghp_branch: gh-pages
+  ghp_path: /
   features:
     issues: true
     projects: false
