@@ -41,7 +41,7 @@ mod writer_client;
 
 pub(crate) use idempotence::IdempotenceManager;
 pub use write_format::WriteFormat;
-pub use writer_client::WriterClient;
+pub(crate) use writer_client::WriterClient;
 
 #[allow(dead_code)]
 pub struct WriteRecord<'a> {

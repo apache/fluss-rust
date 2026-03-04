@@ -110,6 +110,11 @@ impl WriterClient {
     }
 
     pub fn send(&self, record: &WriteRecord<'_>) -> Result<ResultHandle> {
+        if self.accumulate.is_closed() {
+            return Err(Error::WriterClosed {
+                message: "Cannot send: writer is closed".to_string(),
+            });
+        }
         let physical_table_path = &record.physical_table_path;
         let cluster = self.metadata.get_cluster();
         let bucket_key = record.bucket_key.as_ref();
