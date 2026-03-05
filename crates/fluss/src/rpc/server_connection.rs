@@ -22,7 +22,8 @@ use crate::rpc::error::RpcError;
 use crate::rpc::error::RpcError::ConnectionError;
 use crate::rpc::frame::{AsyncMessageRead, AsyncMessageWrite};
 use crate::rpc::message::{
-    ReadVersionedType, RequestBody, RequestHeader, ResponseHeader, WriteVersionedType,
+    REQUEST_HEADER_LENGTH, ReadVersionedType, RequestBody, RequestHeader, ResponseHeader,
+    WriteVersionedType,
 };
 use crate::rpc::transport::Transport;
 use futures::future::BoxFuture;
@@ -469,7 +470,9 @@ where
             ConnectionState::Poison(e) => return Err(RpcError::Poisoned(Arc::clone(e)).into()),
         }
 
-        let mut request_metrics = RequestMetricsLifecycle::begin(R::API_KEY, buf.len() as u64);
+        // count only the API message body, excluding the protocol header.
+        let request_body_bytes = buf.len().saturating_sub(REQUEST_HEADER_LENGTH) as u64;
+        let mut request_metrics = RequestMetricsLifecycle::begin(R::API_KEY, request_body_bytes);
 
         if let Err(e) = self.send_message(buf).await {
             request_metrics.complete(0);
@@ -491,7 +494,9 @@ where
             }
         };
 
-        let response_bytes = response.data.get_ref().len() as u64;
+        // count only the API message body, excluding the response header.
+        let response_bytes =
+            (response.data.get_ref().len() as u64).saturating_sub(response.data.position());
         request_metrics.complete(response_bytes);
 
         if let Some(error_response) = response.header.error_response {
@@ -1044,9 +1049,10 @@ mod tests {
             1,
             "API error response should count as completion like Java"
         );
-        assert!(
-            bytes_received_after > bytes_received_before,
-            "API error response should record received bytes (error body)"
+        assert_eq!(
+            bytes_received_after - bytes_received_before,
+            0,
+            "API error response should record zero body bytes like Java onRequestFailure"
         );
         assert_eq!(
             inflight_after, 0.0,

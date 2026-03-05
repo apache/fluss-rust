@@ -35,11 +35,11 @@ pub const LABEL_API_KEY: &str = "api_key";
 //
 // Java reference: ConnectionMetrics.java, ClientMetricGroup.java, MetricNames.java
 //
-// Note on byte counting: Rust counts the full message buffer (header + body). 
-// Java uses ApiMessage.totalSize() which counts only the API message body 
-// (excluding both framing and the protocol header). 
-// Rust's byte counters will be slightly higher than Java's
-// for the same messages
+// Byte counting matches Java semantics: both sides count only the API message
+// body, excluding the protocol header and framing.
+// Java: rawRequest.totalSize() / response.totalSize() (see MessageCodec.java).
+// Rust: buf.len() - REQUEST_HEADER_LENGTH for sent bytes,
+//       buffer.len() - cursor.position() for received bytes.
 // ---------------------------------------------------------------------------
 
 pub const CLIENT_REQUESTS_TOTAL: &str = "fluss.client.requests.total";
