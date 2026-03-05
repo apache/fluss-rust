@@ -65,11 +65,11 @@ impl From<i16> for ApiKey {
             1017 => ApiKey::Lookup,
             1021 => ApiKey::ListOffsets,
             1025 => ApiKey::GetFileSystemSecurityToken,
+            1026 => ApiKey::InitWriter,
             1032 => ApiKey::GetLatestLakeSnapshot,
             1035 => ApiKey::GetDatabaseInfo,
             1036 => ApiKey::CreatePartition,
             1037 => ApiKey::DropPartition,
-            1026 => ApiKey::InitWriter,
             1038 => ApiKey::Authenticate,
             _ => Unknown(key),
         }
@@ -96,11 +96,11 @@ impl From<ApiKey> for i16 {
             ApiKey::Lookup => 1017,
             ApiKey::ListOffsets => 1021,
             ApiKey::GetFileSystemSecurityToken => 1025,
+            ApiKey::InitWriter => 1026,
             ApiKey::GetLatestLakeSnapshot => 1032,
             ApiKey::GetDatabaseInfo => 1035,
             ApiKey::CreatePartition => 1036,
             ApiKey::DropPartition => 1037,
-            ApiKey::InitWriter => 1026,
             ApiKey::Authenticate => 1038,
             Unknown(x) => x,
         }
@@ -131,11 +131,11 @@ mod tests {
             (1017, ApiKey::Lookup),
             (1021, ApiKey::ListOffsets),
             (1025, ApiKey::GetFileSystemSecurityToken),
+            (1026, ApiKey::InitWriter),
             (1032, ApiKey::GetLatestLakeSnapshot),
             (1035, ApiKey::GetDatabaseInfo),
             (1036, ApiKey::CreatePartition),
             (1037, ApiKey::DropPartition),
-            (1026, ApiKey::InitWriter),
             (1038, ApiKey::Authenticate),
         ];
 
