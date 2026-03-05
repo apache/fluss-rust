@@ -39,7 +39,7 @@ impl FlussConnection {
     pub async fn new(arg: Config) -> Result<Self> {
         arg.validate_security()
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
-        arg.validate_scanner_fetch() // ← add this
+        arg.validate_scanner_fetch()
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
 
         let timeout = Duration::from_millis(arg.connect_timeout_ms);
