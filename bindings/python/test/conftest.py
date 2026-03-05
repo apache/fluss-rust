@@ -34,7 +34,7 @@ import pytest_asyncio
 import fluss
 
 FLUSS_IMAGE = "apache/fluss"
-FLUSS_VERSION = "0.8.0-incubating"
+FLUSS_VERSION = "0.9.0-incubating"
 BOOTSTRAP_SERVERS_ENV = os.environ.get("FLUSS_BOOTSTRAP_SERVERS")
 
 

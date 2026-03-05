@@ -25,7 +25,7 @@ use testcontainers::core::ContainerPort;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
-const FLUSS_VERSION: &str = "0.8.0-incubating";
+const FLUSS_VERSION: &str = "0.9.0-incubating";
 const FLUSS_IMAGE: &str = "apache/fluss";
 
 pub struct FlussTestingClusterBuilder {
