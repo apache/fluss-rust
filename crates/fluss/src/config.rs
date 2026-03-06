@@ -120,7 +120,7 @@ pub struct Config {
     pub writer_batch_timeout_ms: i64,
 
     /// Maximum bytes per fetch response **per bucket** for LogScanner.
-    /// Default: 1048576 (1MB) (or whatever DEFAULT_BUCKET_MAX_FETCH_BYTES is)
+    /// Default: 1048576 (1MB)
     #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET)]
     pub scanner_log_fetch_max_bytes_for_bucket: i32,
 
@@ -174,6 +174,10 @@ impl std::fmt::Debug for Config {
             .field(
                 "scanner_log_fetch_min_bytes",
                 &self.scanner_log_fetch_min_bytes,
+            )
+            .field(
+                "scanner_log_fetch_max_bytes_for_bucket",
+                &self.scanner_log_fetch_max_bytes_for_bucket,
             )
             .field(
                 "scanner_log_fetch_wait_max_time_ms",
