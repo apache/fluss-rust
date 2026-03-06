@@ -34,6 +34,10 @@ with await fluss.FlussConnection.create(config) as conn:
 | `remote-file.download-thread-num`     | Number of threads for remote log downloads                                            | `3`                |
 | `scanner.remote-log.read-concurrency` | Streaming read concurrency within a remote log file                                   | `4`                |
 | `scanner.log.max-poll-records`        | Max records returned in a single poll()                                               | `500`              |
+| `scanner.log.fetch.max-bytes`         | Maximum bytes per fetch response for LogScanner                                       | `16777216` (16 MB) |
+| `scanner.log.fetch.min-bytes`         | Minimum bytes the server must accumulate before returning a fetch response            | `1`                |
+| `scanner.log.fetch.wait-max-time-ms`  | Maximum time (ms) the server may wait to satisfy min-bytes                            | `500`              |
+| `scanner.log.fetch.max-bytes-for-bucket`| Maximum bytes per fetch response per bucket for LogScanner                          | `1048576` (1 MB)   |
 | `connect-timeout`                     | TCP connect timeout in milliseconds                                                   | `120000`           |
 | `security.protocol`                   | `PLAINTEXT` (default) or `sasl` for SASL auth                                        | `PLAINTEXT`        |
 | `security.sasl.mechanism`             | SASL mechanism (only `PLAIN` is supported)                                            | `PLAIN`            |

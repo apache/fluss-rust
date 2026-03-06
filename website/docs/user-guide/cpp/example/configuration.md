@@ -36,6 +36,10 @@ config.scanner_remote_log_prefetch_num = 4;                    // Remote log pre
 config.remote_file_download_thread_num = 3;                    // Download threads
 config.scanner_remote_log_read_concurrency = 4;                // In-file remote log read concurrency
 config.scanner_log_max_poll_records = 500;                     // Max records per poll
+config.scanner_log_fetch_max_bytes = 16 * 1024 * 1024;        // Max bytes per fetch response (16 MB)
+config.scanner_log_fetch_min_bytes = 1;                        // Min bytes before server returns fetch response
+config.scanner_log_fetch_wait_max_time_ms = 500;               // Max wait (ms) to satisfy min-bytes
+config.scanner_log_fetch_max_bytes_for_bucket = 1024 * 1024;   // Max bytes per fetch response per bucket (1 MB)
 config.connect_timeout_ms = 120000;                            // TCP connect timeout (ms)
 ```
 

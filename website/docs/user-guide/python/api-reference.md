@@ -21,6 +21,10 @@ Complete API reference for the Fluss Python client.
 | `remote_file_download_thread_num`     | Get/set number of threads for remote log downloads                                      |
 | `scanner_remote_log_read_concurrency` | Get/set streaming read concurrency within a remote log file                             |
 | `scanner_log_max_poll_records`        | Get/set max number of records returned in a single poll()                               |
+| `scanner_log_fetch_max_bytes`         | Get/set maximum bytes per fetch response for LogScanner                                 |
+| `scanner_log_fetch_min_bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |
+| `scanner_log_fetch_wait_max_time_ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
+| `scanner_log_fetch_max_bytes_for_bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                   |
 | `connect_timeout_ms`                  | Get/set TCP connect timeout in milliseconds                                             |
 | `security_protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |

@@ -30,8 +30,12 @@ let conn = FlussConnection::new(config).await?;
 | `remote_file_download_thread_num`     | Number of concurrent remote log file downloads                                       | `3`              |
 | `scanner_remote_log_read_concurrency` | Streaming read concurrency within a remote log file                                  | `4`              |
 | `scanner_log_max_poll_records`        | Maximum records returned in a single `poll()`                                        | `500`            |
+| `scanner_log_fetch_max_bytes`         | Maximum bytes per fetch response for LogScanner                                      | 16 MB            |
+| `scanner_log_fetch_min_bytes`         | Minimum bytes the server must accumulate before returning a fetch response           | `1`              |
+| `scanner_log_fetch_wait_max_time_ms`  | Maximum time (ms) the server may wait to satisfy min-bytes                           | `500`            |
+| `scanner_log_fetch_max_bytes_for_bucket`| Maximum bytes per fetch response per bucket for LogScanner                         | 1 MB             |
 | `connect_timeout_ms`                  | TCP connect timeout in milliseconds                                                  | 120000           |
-| `security_protocol`                   | `PLAINTEXT` (default) or `sasl` for SASL auth                                       | `PLAINTEXT`      |
+| `security_protocol`                   | `PLAINTEXT` (default) or `sasl` for SASL auth                                        | `PLAINTEXT`      |
 | `security_sasl_mechanism`             | SASL mechanism (only `PLAIN` is supported)                                           | `PLAIN`          |
 | `security_sasl_username`              | SASL username (required when protocol is `sasl`)                                     | (empty)          |
 | `security_sasl_password`              | SASL password (required when protocol is `sasl`)                                     | (empty)          |

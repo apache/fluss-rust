@@ -97,6 +97,32 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.log.fetch.max-bytes" => {
+                        config.scanner_log_fetch_max_bytes = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "scanner.log.fetch.min-bytes" => {
+                        config.scanner_log_fetch_min_bytes = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "scanner.log.fetch.wait-max-time-ms" => {
+                        config.scanner_log_fetch_wait_max_time_ms =
+                            value.parse::<i32>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "scanner.log.fetch.max-bytes-for-bucket" => {
+                        config.scanner_log_fetch_max_bytes_for_bucket =
+                            value.parse::<i32>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner =
                             value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
@@ -328,6 +354,54 @@ impl Config {
     #[setter]
     fn set_security_sasl_password(&mut self, password: String) {
         self.inner.security_sasl_password = password;
+    }
+
+    /// Get the maximum bytes per fetch response for LogScanner
+    #[getter]
+    fn scanner_log_fetch_max_bytes(&self) -> i32 {
+        self.inner.scanner_log_fetch_max_bytes
+    }
+
+    /// Set the maximum bytes per fetch response for LogScanner
+    #[setter]
+    fn set_scanner_log_fetch_max_bytes(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_max_bytes = bytes;
+    }
+
+    /// Get the minimum bytes to accumulate before returning a fetch response
+    #[getter]
+    fn scanner_log_fetch_min_bytes(&self) -> i32 {
+        self.inner.scanner_log_fetch_min_bytes
+    }
+
+    /// Set the minimum bytes to accumulate before returning a fetch response
+    #[setter]
+    fn set_scanner_log_fetch_min_bytes(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_min_bytes = bytes;
+    }
+
+    /// Get the maximum time (ms) the server may wait to satisfy min-bytes
+    #[getter]
+    fn scanner_log_fetch_wait_max_time_ms(&self) -> i32 {
+        self.inner.scanner_log_fetch_wait_max_time_ms
+    }
+
+    /// Set the maximum time (ms) the server may wait to satisfy min-bytes
+    #[setter]
+    fn set_scanner_log_fetch_wait_max_time_ms(&mut self, ms: i32) {
+        self.inner.scanner_log_fetch_wait_max_time_ms = ms;
+    }
+
+    /// Get the maximum bytes per fetch response per bucket for LogScanner
+    #[getter]
+    fn scanner_log_fetch_max_bytes_for_bucket(&self) -> i32 {
+        self.inner.scanner_log_fetch_max_bytes_for_bucket
+    }
+
+    /// Set the maximum bytes per fetch response per bucket for LogScanner
+    #[setter]
+    fn set_scanner_log_fetch_max_bytes_for_bucket(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_max_bytes_for_bucket = bytes;
     }
 }
 
