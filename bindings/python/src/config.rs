@@ -97,17 +97,17 @@ impl Config {
                                 ))
                             })?;
                     }
-                    "scanner.log.fetch-max-bytes" => {
+                    "scanner.log.fetch.max-bytes" => {
                         config.scanner_log_fetch_max_bytes = value.parse::<i32>().map_err(|e| {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
-                    "scanner.log.fetch-min-bytes" => {
+                    "scanner.log.fetch.min-bytes" => {
                         config.scanner_log_fetch_min_bytes = value.parse::<i32>().map_err(|e| {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
-                    "scanner.log.fetch-wait-max-time-ms" => {
+                    "scanner.log.fetch.wait-max-time-ms" => {
                         config.scanner_log_fetch_wait_max_time_ms =
                             value.parse::<i32>().map_err(|e| {
                                 FlussError::new_err(format!(
@@ -115,7 +115,7 @@ impl Config {
                                 ))
                             })?;
                     }
-                    "scanner.log.fetch-max-bytes-for-bucket" => {
+                    "scanner.log.fetch.max-bytes-for-bucket" => {
                         config.scanner_log_fetch_max_bytes_for_bucket =
                             value.parse::<i32>().map_err(|e| {
                                 FlussError::new_err(format!(
