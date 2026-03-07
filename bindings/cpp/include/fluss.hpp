@@ -180,6 +180,17 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+
+    /// Returns true if retrying the request may succeed. Similar toJava's RetriableException hierarchy.
+    static constexpr bool IsRetriable(int32_t code) {
+        return code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
+               code == SCHEMA_NOT_EXIST || code == NOT_LEADER_OR_FOLLOWER ||
+               code == CORRUPT_RECORD_EXCEPTION ||
+               code == UNKNOWN_TABLE_OR_BUCKET_EXCEPTION || code == REQUEST_TIME_OUT ||
+               code == STORAGE_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION;
+    }
 };
 
 struct Date {
@@ -326,6 +337,9 @@ struct Result {
     std::string error_message;
 
     bool Ok() const { return error_code == 0; }
+
+    /// Returns true if retrying the request may succeed. Client-side errors always return false.
+    bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
 
 struct TablePath {
