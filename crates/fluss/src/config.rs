@@ -17,7 +17,7 @@
 
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use strum_macros::{Display, EnumString};
 
 const DEFAULT_BOOTSTRAP_SERVER: &str = "127.0.0.1:9123";
 const DEFAULT_REQUEST_MAX_SIZE: i32 = 10 * 1024 * 1024;
@@ -37,22 +37,18 @@ const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
 /// Bucket assigner strategy for tables without bucket keys.
 /// Matches Java `client.writer.bucket.no-key-assigner`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, Serialize, EnumString, Display,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(ascii_case_insensitive)]
 pub enum NoKeyAssigner {
     /// Sticks to one bucket until the batch is full, then switches.
+    #[strum(serialize = "sticky")]
     Sticky,
     /// Assigns each record to the next bucket in a rotating sequence.
+    #[strum(serialize = "round_robin")]
     RoundRobin,
-}
-
-impl fmt::Display for NoKeyAssigner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            NoKeyAssigner::Sticky => write!(f, "sticky"),
-            NoKeyAssigner::RoundRobin => write!(f, "round_robin"),
-        }
-    }
 }
 
 #[derive(Parser, Clone, Deserialize, Serialize)]

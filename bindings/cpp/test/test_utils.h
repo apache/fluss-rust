@@ -50,7 +50,7 @@
 namespace fluss_test {
 
 static constexpr const char* kFlussImage = "apache/fluss";
-static constexpr const char* kFlussVersion = "0.8.0-incubating";
+static constexpr const char* kFlussVersion = "0.9.0-incubating";
 static constexpr const char* kNetworkName = "fluss-cpp-test-network";
 static constexpr const char* kZookeeperName = "zookeeper-cpp-test";
 static constexpr const char* kCoordinatorName = "coordinator-server-cpp-test";

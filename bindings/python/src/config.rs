@@ -98,15 +98,12 @@ impl Config {
                             })?;
                     }
                     "writer.bucket.no-key-assigner" => {
-                        config.writer_bucket_no_key_assigner = match value.as_str() {
-                            "round_robin" => fcore::config::NoKeyAssigner::RoundRobin,
-                            "sticky" => fcore::config::NoKeyAssigner::Sticky,
-                            other => {
-                                return Err(FlussError::new_err(format!(
-                                    "Unknown bucket assigner type: {other}, expected 'sticky' or 'round_robin'"
-                                )));
-                            }
-                        };
+                        config.writer_bucket_no_key_assigner =
+                            value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
                     }
                     "connect-timeout" => {
                         config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
@@ -258,6 +255,24 @@ impl Config {
     #[setter]
     fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
         self.inner.writer_batch_timeout_ms = timeout;
+    }
+
+    /// Get the bucket assignment strategy for tables without bucket keys
+    #[getter]
+    fn writer_bucket_no_key_assigner(&self) -> String {
+        self.inner.writer_bucket_no_key_assigner.to_string()
+    }
+
+    /// Set the bucket assignment strategy for tables without bucket keys
+    #[setter]
+    fn set_writer_bucket_no_key_assigner(&mut self, value: String) -> PyResult<()> {
+        self.inner.writer_bucket_no_key_assigner =
+            value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
+                FlussError::new_err(format!(
+                    "Invalid value '{value}' for 'writer.bucket.no-key-assigner': {e}"
+                ))
+            })?;
+        Ok(())
     }
 
     /// Get the connect timeout in milliseconds
