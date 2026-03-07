@@ -29,6 +29,7 @@ Complete API reference for the Fluss C++ client.
 | `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |
 | `scanner_log_max_poll_records`        | `size_t`      | `500`                | Maximum number of records returned in a single Poll()                                    |
 | `connect_timeout_ms`                  | `uint64_t`    | `120000`             | TCP connect timeout in milliseconds                                                      |
+| `request_timeout_ms`                  | `uint64_t`    | `30000`              | Per-request RPC timeout in milliseconds                                                  |
 | `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
 | `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |
 | `security_sasl_username`              | `std::string` | (empty)              | SASL username (required when protocol is `"sasl"`)                                       |
