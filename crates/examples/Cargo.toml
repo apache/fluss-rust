@@ -27,6 +27,9 @@ version = { workspace = true }
 fluss = { workspace = true, features = ["storage-all"] }
 tokio = { workspace = true }
 clap = { workspace = true }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
 [[example]]
 name = "example-table"
 path = "src/example_table.rs"
