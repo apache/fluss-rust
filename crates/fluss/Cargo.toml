@@ -22,10 +22,12 @@ rust-version = { workspace = true }
 version = { workspace = true }
 name = "fluss-rs"
 authors = { workspace = true }
-description = { workspace = true }
-homepage = { workspace = true }
+description = "The official rust client of Apache Fluss (Incubating)"
+homepage = "https://clients.fluss.apache.org/"
 repository = { workspace = true }
 keywords = { workspace = true }
+categories = { workspace = true }
+documentation = "https://docs.rs/fluss-rs"
 
 [lib]
 name = "fluss"
@@ -80,6 +82,5 @@ jiff = { workspace = true, features = ["js"] }
 testcontainers = "0.25.0"
 test-env-helpers = "0.2.2"
 
-
 [build-dependencies]
-prost-build = { version = "0.14" }
+prost-build = "0.14"
