@@ -22,6 +22,7 @@ Complete API reference for the Fluss Python client.
 | `scanner_remote_log_read_concurrency` | `scanner.remote-log.read-concurrency` | Get/set streaming read concurrency within a remote log file                             |
 | `scanner_log_max_poll_records`        | `scanner.log.max-poll-records`        | Get/set max number of records returned in a single poll()                               |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
+| `request_timeout_ms`                  | `request-timeout`                     | Get/set per-request RPC timeout in milliseconds                                         |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
 | `security_sasl_username`              | `security.sasl.username`              | Get/set SASL username (required when protocol is `"sasl"`)                              |
