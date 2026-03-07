@@ -25,10 +25,10 @@ use crate::row::{ColumnarRow, InternalRow};
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
-    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
-    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder, UInt8Builder,
-    UInt16Builder, UInt32Builder, UInt64Builder,
+    Int32Builder, Int64Builder, ListBuilder, StringBuilder, Time32MillisecondBuilder,
+    Time32SecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
+    TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
+    TimestampSecondBuilder, UInt8Builder, UInt16Builder, UInt32Builder, UInt64Builder,
 };
 use arrow::{
     array::RecordBatch,
@@ -313,6 +313,10 @@ impl RowAppendRecordBatchBuilder {
             }
             arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
                 Ok(Box::new(TimestampNanosecondBuilder::new()))
+            }
+            arrow_schema::DataType::List(field) => {
+                let inner_builder = Self::create_builder(field.data_type())?;
+                Ok(Box::new(ListBuilder::new(inner_builder)))
             }
             dt => Err(Error::IllegalArgument {
                 message: format!("Unsupported data type: {dt:?}"),
@@ -1155,6 +1159,71 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
                 })
                 .collect();
             ArrowDataType::Struct(arrow_schema::Fields::from(fields?))
+        }
+    })
+}
+
+/// Converts an Arrow data type back to a Fluss `DataType`.
+/// Used for reading array elements from Arrow ListArray back into Fluss types.
+pub fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
+    use crate::metadata::DataTypes;
+
+    Ok(match arrow_type {
+        ArrowDataType::Boolean => DataTypes::boolean(),
+        ArrowDataType::Int8 => DataTypes::tinyint(),
+        ArrowDataType::Int16 => DataTypes::smallint(),
+        ArrowDataType::Int32 => DataTypes::int(),
+        ArrowDataType::Int64 => DataTypes::bigint(),
+        ArrowDataType::Float32 => DataTypes::float(),
+        ArrowDataType::Float64 => DataTypes::double(),
+        ArrowDataType::Utf8 => DataTypes::string(),
+        ArrowDataType::Binary => DataTypes::bytes(),
+        ArrowDataType::Date32 => DataTypes::date(),
+        ArrowDataType::FixedSizeBinary(len) => {
+            if *len < 0 {
+                return Err(Error::IllegalArgument {
+                    message: format!("FixedSizeBinary length must be >= 0, got {len}"),
+                });
+            }
+            DataTypes::binary(*len as usize)
+        }
+        ArrowDataType::Decimal128(p, s) => {
+            if *s < 0 {
+                return Err(Error::IllegalArgument {
+                    message: format!("Decimal scale must be >= 0, got {s}"),
+                });
+            }
+            DataTypes::decimal(*p as u32, *s as u32)
+        }
+        ArrowDataType::Time32(arrow_schema::TimeUnit::Second) => DataTypes::time_with_precision(0),
+        ArrowDataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+            DataTypes::time_with_precision(3)
+        }
+        ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+            DataTypes::time_with_precision(6)
+        }
+        ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond) => {
+            DataTypes::time_with_precision(9)
+        }
+        ArrowDataType::Timestamp(unit, tz) => {
+            let precision = match unit {
+                arrow_schema::TimeUnit::Second => 0,
+                arrow_schema::TimeUnit::Millisecond => 3,
+                arrow_schema::TimeUnit::Microsecond => 6,
+                arrow_schema::TimeUnit::Nanosecond => 9,
+            };
+
+            if tz.is_some() {
+                DataTypes::timestamp_ltz_with_precision(precision)
+            } else {
+                DataTypes::timestamp_with_precision(precision)
+            }
+        }
+        ArrowDataType::List(field) => DataTypes::array(from_arrow_type(field.data_type())?),
+        other => {
+            return Err(Error::IllegalArgument {
+                message: format!("Cannot convert Arrow type to Fluss type: {other:?}"),
+            });
         }
     })
 }

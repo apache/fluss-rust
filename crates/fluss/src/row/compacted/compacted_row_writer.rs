@@ -165,6 +165,10 @@ impl BinaryWriter for CompactedRowWriter {
         self.write_bytes(&bytes[..length.min(bytes.len())])
     }
 
+    fn write_array(&mut self, value: &[u8]) {
+        self.write_bytes(value)
+    }
+
     fn complete(&mut self) {
         // do nothing
     }

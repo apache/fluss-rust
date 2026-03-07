@@ -82,6 +82,8 @@ impl FieldGetter {
                 pos,
                 precision: t.precision(),
             },
+            // TODO: add Map and Row variants when get_map/get_row are available in InternalRow.
+            DataType::Array(_) => InnerFieldGetter::Array { pos },
             _ => unimplemented!("DataType {:?} is currently unimplemented", data_type),
         };
 
@@ -149,6 +151,9 @@ pub enum InnerFieldGetter {
         pos: usize,
         precision: u32,
     },
+    Array {
+        pos: usize,
+    },
 }
 
 impl InnerFieldGetter {
@@ -177,7 +182,9 @@ impl InnerFieldGetter {
             }
             InnerFieldGetter::TimestampLtz { pos, precision } => {
                 Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision)?)
-            } //TODO Array, Map, Row
+            }
+            // TODO: add Map and Row field getter support once their binary forms are implemented.
+            InnerFieldGetter::Array { pos } => Datum::Array(row.get_array(*pos)?),
         })
     }
 
@@ -198,7 +205,51 @@ impl InnerFieldGetter {
             | Self::Date { pos }
             | Self::Time { pos }
             | Self::Timestamp { pos, .. }
-            | Self::TimestampLtz { pos, .. } => *pos,
+            | Self::TimestampLtz { pos, .. }
+            | Self::Array { pos } => *pos,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::DataTypes;
+    use crate::row::GenericRow;
+    use crate::row::binary_array::FlussArrayWriter;
+
+    #[test]
+    fn test_field_getter_array() {
+        let elem_type = DataTypes::int();
+        let mut arr_writer = FlussArrayWriter::new(2, &elem_type);
+        arr_writer.write_int(0, 10);
+        arr_writer.write_int(1, 20);
+        let arr = arr_writer.complete().unwrap();
+
+        let mut row = GenericRow::new(2);
+        row.set_field(0, Datum::Int32(42));
+        row.set_field(1, Datum::Array(arr.clone()));
+
+        let getter = FieldGetter::create(&DataTypes::array(DataTypes::int()), 1);
+        let datum = getter.get_field(&row).unwrap();
+
+        match datum {
+            Datum::Array(a) => {
+                assert_eq!(a.size(), 2);
+                assert_eq!(a.get_int(0), 10);
+                assert_eq!(a.get_int(1), 20);
+            }
+            _ => panic!("Expected Array datum"),
+        }
+    }
+
+    #[test]
+    fn test_field_getter_nullable_array() {
+        let row = GenericRow::from_data(vec![Datum::Null]);
+
+        let data_type = DataTypes::array(DataTypes::int());
+        let getter = FieldGetter::create(&data_type, 0);
+        let datum = getter.get_field(&row).unwrap();
+        assert!(datum.is_null());
     }
 }

@@ -18,12 +18,14 @@
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use crate::row::Decimal;
+use crate::row::binary_array::FlussArray;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
-    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
-    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
+    Int32Builder, Int64Builder, ListBuilder, StringBuilder, Time32MillisecondBuilder,
+    Time32SecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
+    TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
+    TimestampSecondBuilder,
 };
 use arrow::datatypes as arrow_schema;
 use arrow::error::ArrowError;
@@ -68,6 +70,8 @@ pub enum Datum<'a> {
     TimestampNtz(TimestampNtz),
     #[display("{0}")]
     TimestampLtz(TimestampLtz),
+    #[display("{0}")]
+    Array(FlussArray),
 }
 
 impl Datum<'_> {
@@ -121,6 +125,13 @@ impl Datum<'_> {
         match self {
             Self::TimestampLtz(ts) => *ts,
             _ => panic!("not a timestamp ltz: {self:?}"),
+        }
+    }
+
+    pub fn as_array(&self) -> &FlussArray {
+        match self {
+            Self::Array(a) => a,
+            _ => panic!("not an array: {self:?}"),
         }
     }
 }
@@ -388,6 +399,13 @@ impl<'a> From<TimestampLtz> for Datum<'a> {
     }
 }
 
+impl<'a> From<FlussArray> for Datum<'a> {
+    #[inline]
+    fn from(arr: FlussArray) -> Datum<'a> {
+        Datum::Array(arr)
+    }
+}
+
 pub trait ToArrow {
     fn append_to(
         &self,
@@ -458,6 +476,86 @@ impl AppendResult for std::result::Result<(), ArrowError> {
     }
 }
 
+fn append_fluss_array_to_list_builder(
+    arr: &FlussArray,
+    builder: &mut dyn ArrayBuilder,
+    data_type: &arrow_schema::DataType,
+) -> Result<()> {
+    use crate::record::from_arrow_type;
+
+    let list_builder = builder
+        .as_any_mut()
+        .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
+        .ok_or_else(|| RowConvertError {
+            message: "Builder type mismatch for Array: expected ListBuilder".to_string(),
+        })?;
+
+    let element_arrow_type = match data_type {
+        arrow_schema::DataType::List(field) => field.data_type().clone(),
+        _ => {
+            return Err(RowConvertError {
+                message: format!("Expected List Arrow type for Array datum, got: {data_type:?}"),
+            });
+        }
+    };
+
+    let element_fluss_type = from_arrow_type(&element_arrow_type)?;
+    let values_builder = list_builder.values();
+
+    for i in 0..arr.size() {
+        if arr.is_null_at(i) {
+            let null_datum = Datum::Null;
+            null_datum.append_to(values_builder, &element_arrow_type)?;
+        } else {
+            let datum = read_datum_from_fluss_array(arr, i, &element_fluss_type)?;
+            datum.append_to(values_builder, &element_arrow_type)?;
+        }
+    }
+    list_builder.append(true);
+    Ok(())
+}
+
+fn read_datum_from_fluss_array<'a>(
+    arr: &FlussArray,
+    pos: usize,
+    element_type: &crate::metadata::DataType,
+) -> Result<Datum<'a>> {
+    use crate::metadata::DataType;
+
+    Ok(match element_type {
+        DataType::Boolean(_) => Datum::Bool(arr.get_boolean(pos)),
+        DataType::TinyInt(_) => Datum::Int8(arr.get_byte(pos)),
+        DataType::SmallInt(_) => Datum::Int16(arr.get_short(pos)),
+        DataType::Int(_) => Datum::Int32(arr.get_int(pos)),
+        DataType::BigInt(_) => Datum::Int64(arr.get_long(pos)),
+        DataType::Float(_) => Datum::Float32(arr.get_float(pos).into()),
+        DataType::Double(_) => Datum::Float64(arr.get_double(pos).into()),
+        DataType::Char(_) | DataType::String(_) => {
+            Datum::String(Cow::Owned(arr.get_string(pos)?.to_string()))
+        }
+        DataType::Binary(_) | DataType::Bytes(_) => {
+            Datum::Blob(Cow::Owned(arr.get_binary(pos)?.to_vec()))
+        }
+        DataType::Decimal(dt) => {
+            Datum::Decimal(arr.get_decimal(pos, dt.precision(), dt.scale())?)
+        }
+        DataType::Date(_) => Datum::Date(arr.get_date(pos)),
+        DataType::Time(_) => Datum::Time(arr.get_time(pos)),
+        DataType::Timestamp(t) => Datum::TimestampNtz(arr.get_timestamp_ntz(pos, t.precision())?),
+        DataType::TimestampLTz(t) => {
+            Datum::TimestampLtz(arr.get_timestamp_ltz(pos, t.precision())?)
+        }
+        DataType::Array(_) => Datum::Array(arr.get_array(pos)?),
+        _ => {
+            return Err(RowConvertError {
+                message: format!(
+                    "Unsupported element type for FlussArray → Arrow conversion: {element_type:?}"
+                ),
+            });
+        }
+    })
+}
+
 impl Datum<'_> {
     pub fn append_to(
         &self,
@@ -504,6 +602,16 @@ impl Datum<'_> {
                 append_null_to_arrow!(TimestampMillisecondBuilder);
                 append_null_to_arrow!(TimestampMicrosecondBuilder);
                 append_null_to_arrow!(TimestampNanosecondBuilder);
+                // For List (Array) type, append null generically
+                if let arrow_schema::DataType::List(_) = data_type {
+                    if let Some(b) = builder
+                        .as_any_mut()
+                        .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
+                    {
+                        b.append_null();
+                    }
+                    return Ok(());
+                }
             }
             Datum::Bool(v) => append_value_to_arrow!(BooleanBuilder, *v),
             Datum::Int8(v) => append_value_to_arrow!(Int8Builder, *v),
@@ -736,6 +844,9 @@ impl Datum<'_> {
                 return Err(RowConvertError {
                     message: "Builder type mismatch for TimestampLtz".to_string(),
                 });
+            }
+            Datum::Array(arr) => {
+                return append_fluss_array_to_list_builder(arr, builder, data_type);
             }
         }
 
