@@ -67,8 +67,7 @@ pub trait BinaryWriter {
 
     fn write_timestamp_ltz(&mut self, value: &crate::row::datum::TimestampLtz, precision: u32);
 
-    // TODO InternalArray, ArraySerializer
-    // fn write_array(&mut self, pos: i32, value: i64);
+    fn write_array(&mut self, value: &[u8]);
 
     // TODO Row serializer
     // fn write_row(&mut self, pos: i32, value: &InternalRow);
@@ -136,7 +135,8 @@ pub enum InnerValueWriter {
     Time(u32),         // precision (not used in wire format, but kept for consistency)
     TimestampNtz(u32), // precision
     TimestampLtz(u32), // precision
-                       // TODO Array, Row
+    Array,
+    // TODO Row
 }
 
 /// Accessor for writing the fields/elements of a binary writer during runtime, the
@@ -175,6 +175,7 @@ impl InnerValueWriter {
                 // Validation is done at TimestampLTzType construction time
                 Ok(InnerValueWriter::TimestampLtz(t.precision()))
             }
+            DataType::Array(_) => Ok(InnerValueWriter::Array),
             _ => unimplemented!(
                 "ValueWriter for DataType {:?} is currently not implemented",
                 data_type
@@ -236,6 +237,9 @@ impl InnerValueWriter {
             }
             (InnerValueWriter::TimestampLtz(p), Datum::TimestampLtz(ts)) => {
                 writer.write_timestamp_ltz(ts, *p);
+            }
+            (InnerValueWriter::Array, Datum::Array(arr)) => {
+                writer.write_array(arr.as_bytes());
             }
             _ => {
                 return Err(IllegalArgument {

@@ -351,6 +351,7 @@ pub fn resolve_row_types(
             Datum::Time(t) => Datum::Time(*t),
             Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
             Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
+            Datum::Array(a) => Datum::Array(a.clone()),
         };
         out.set_field(idx, resolved);
     }
@@ -408,6 +409,7 @@ pub fn compacted_row_to_owned(
             fcore::metadata::DataType::Binary(dt) => {
                 Datum::Blob(Cow::Owned(row.get_binary(i, dt.length())?.to_vec()))
             }
+            fcore::metadata::DataType::Array(_) => Datum::Array(row.get_array(i)?),
             other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
         };
 

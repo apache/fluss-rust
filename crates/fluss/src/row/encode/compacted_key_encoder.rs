@@ -238,6 +238,22 @@ mod tests {
     }
 
     #[test]
+    fn test_array_type_rejected_as_key() {
+        let row_type =
+            RowType::with_data_types(vec![DataTypes::int(), DataTypes::array(DataTypes::int())]);
+        let result = CompactedKeyEncoder::new(&row_type, vec![0, 1]);
+        match result {
+            Ok(_) => panic!("Expected error when using Array as key type"),
+            Err(err) => {
+                assert!(
+                    err.to_string().contains("Cannot use"),
+                    "Expected 'Cannot use' error, got: {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_all_data_types_java_compatible() {
         // Test encoding compatibility with Java using reference from:
         // https://github.com/apache/fluss/blob/main/fluss-common/src/test/resources/encoding/encoded_key.hex
@@ -263,7 +279,6 @@ mod tests {
             DataType::Timestamp(TimestampType::with_nullable(false, 5).unwrap()), // TIMESTAMP(5)
             DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 1).unwrap()), // TIMESTAMP_LTZ(1)
             DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 5).unwrap()), // TIMESTAMP_LTZ(5)
-                                                                                        // TODO: Add support for ARRAY type
                                                                                         // TODO: Add support for MAP type
                                                                                         // TODO: Add support for ROW type
         ]);

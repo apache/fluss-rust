@@ -47,6 +47,17 @@ impl CompactedKeyWriter {
     }
 
     pub fn create_value_writer(field_type: &DataType) -> Result<ValueWriter> {
+        // Key columns are scalar-only. We reject Array/Map/Row explicitly
+        // here, so future complex-type writer support does not
+        // silently widen key semantics.
+        if matches!(
+            field_type,
+            DataType::Array(_) | DataType::Map(_) | DataType::Row(_)
+        ) {
+            return Err(crate::error::Error::IllegalArgument {
+                message: format!("Cannot use {field_type:?} as a key column type"),
+            });
+        }
         ValueWriter::create_value_writer(field_type, Some(&BinaryRowFormat::Compacted))
     }
 
@@ -101,6 +112,8 @@ impl BinaryWriter for CompactedKeyWriter {
             fn write_timestamp_ntz(&mut self, value: &crate::row::datum::TimestampNtz, precision: u32);
 
             fn write_timestamp_ltz(&mut self, value: &crate::row::datum::TimestampLtz, precision: u32);
+
+            fn write_array(&mut self, value: &[u8]);
         }
     }
 

@@ -407,16 +407,114 @@ impl InternalRow for ColumnarRow {
             })?
             .value(self.row_id))
     }
+
+    fn get_array(&self, pos: usize) -> Result<crate::row::FlussArray> {
+        use crate::record::from_arrow_type;
+        use crate::row::binary_array::FlussArrayWriter;
+        use arrow::array::ListArray;
+
+        let column = self.column(pos)?;
+        let list_array =
+            column
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("expected List array at position {pos}"),
+                })?;
+
+        let values = list_array.value(self.row_id);
+        let num_elements = values.len();
+        let element_arrow_type = values.data_type();
+        let element_fluss_type = from_arrow_type(element_arrow_type)?;
+
+        let mut writer = FlussArrayWriter::new(num_elements, &element_fluss_type);
+        let element_row = ColumnarRow::new(std::sync::Arc::new(
+            arrow::array::RecordBatch::try_from_iter(vec![("v", values)]).map_err(|e| {
+                IllegalArgument {
+                    message: format!("Failed to create RecordBatch from list values: {e}"),
+                }
+            })?,
+        ));
+
+        for i in 0..num_elements {
+            let mut row = element_row.clone();
+            row.set_row_id(i);
+            if row.is_null_at(0)? {
+                writer.set_null_at(i);
+            } else {
+                write_arrow_value_to_fluss_array(&row, 0, &element_fluss_type, &mut writer, i)?;
+            }
+        }
+
+        writer.complete()
+    }
+}
+
+fn write_arrow_value_to_fluss_array(
+    row: &ColumnarRow,
+    col: usize,
+    element_type: &crate::metadata::DataType,
+    writer: &mut crate::row::binary_array::FlussArrayWriter,
+    pos: usize,
+) -> Result<()> {
+    use crate::metadata::DataType;
+
+    match element_type {
+        DataType::Boolean(_) => writer.write_boolean(pos, row.get_boolean(col)?),
+        DataType::TinyInt(_) => writer.write_byte(pos, row.get_byte(col)?),
+        DataType::SmallInt(_) => writer.write_short(pos, row.get_short(col)?),
+        DataType::Int(_) => writer.write_int(pos, row.get_int(col)?),
+        DataType::BigInt(_) => writer.write_long(pos, row.get_long(col)?),
+        DataType::Float(_) => writer.write_float(pos, row.get_float(col)?),
+        DataType::Double(_) => writer.write_double(pos, row.get_double(col)?),
+        DataType::Char(t) => writer.write_string(pos, row.get_char(col, t.length() as usize)?),
+        DataType::String(_) => writer.write_string(pos, row.get_string(col)?),
+        DataType::Binary(t) => writer.write_binary_bytes(pos, row.get_binary(col, t.length())?),
+        DataType::Bytes(_) => writer.write_binary_bytes(pos, row.get_bytes(col)?),
+        DataType::Decimal(dt) => {
+            let d = row.get_decimal(col, dt.precision() as usize, dt.scale() as usize)?;
+            writer.write_decimal(pos, &d, dt.precision());
+        }
+        DataType::Date(_) => writer.write_date(pos, row.get_date(col)?),
+        DataType::Time(_) => writer.write_time(pos, row.get_time(col)?),
+        DataType::Timestamp(t) => {
+            let ts = row.get_timestamp_ntz(col, t.precision())?;
+            writer.write_timestamp_ntz(pos, &ts, t.precision());
+        }
+        DataType::TimestampLTz(t) => {
+            let ts = row.get_timestamp_ltz(col, t.precision())?;
+            writer.write_timestamp_ltz(pos, &ts, t.precision());
+        }
+        DataType::Array(_) => {
+            let nested = row.get_array(col)?;
+            writer.write_array(pos, &nested);
+        }
+        _ => {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Unsupported element type for Arrow → FlussArray conversion: {element_type:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{
-        BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, StringArray,
+        ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array,
+        Int8Array, Int16Array, Int32Array, Int32Builder, Int64Array, ListBuilder, StringArray,
+        UInt32Builder,
     };
     use arrow::datatypes::{DataType, Field, Schema};
+
+    fn single_column_row(array: ArrayRef) -> ColumnarRow {
+        let batch =
+            RecordBatch::try_from_iter(vec![("arr", array)]).expect("record batch with one column");
+        ColumnarRow::new(Arc::new(batch))
+    }
 
     #[test]
     fn columnar_row_reads_values() {
@@ -531,6 +629,98 @@ mod tests {
                 10
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn columnar_row_get_array_int_roundtrip() {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.values().append_value(3);
+        builder.append(true);
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let arr = row.get_array(0).unwrap();
+        assert_eq!(arr.size(), 3);
+        assert_eq!(arr.get_int(0), 1);
+        assert_eq!(arr.get_int(1), 2);
+        assert_eq!(arr.get_int(2), 3);
+    }
+
+    #[test]
+    fn columnar_row_get_array_with_nulls() {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.values().append_null();
+        builder.values().append_value(3);
+        builder.append(true);
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let arr = row.get_array(0).unwrap();
+        assert_eq!(arr.size(), 3);
+        assert_eq!(arr.get_int(0), 1);
+        assert!(arr.is_null_at(1));
+        assert_eq!(arr.get_int(2), 3);
+    }
+
+    #[test]
+    fn columnar_row_get_array_nested_array() {
+        let mut outer = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+
+        // first nested array: [1, 2]
+        outer.values().values().append_value(1);
+        outer.values().values().append_value(2);
+        outer.values().append(true);
+
+        // second nested array: [99]
+        outer.values().values().append_value(99);
+        outer.values().append(true);
+
+        // one row containing two nested arrays
+        outer.append(true);
+        let array = Arc::new(outer.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let arr = row.get_array(0).unwrap();
+        assert_eq!(arr.size(), 2);
+
+        let nested0 = arr.get_array(0).unwrap();
+        assert_eq!(nested0.size(), 2);
+        assert_eq!(nested0.get_int(0), 1);
+        assert_eq!(nested0.get_int(1), 2);
+
+        let nested1 = arr.get_array(1).unwrap();
+        assert_eq!(nested1.size(), 1);
+        assert_eq!(nested1.get_int(0), 99);
+    }
+
+    #[test]
+    fn columnar_row_get_array_non_list_column_returns_error() {
+        let array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let row = single_column_row(array);
+        let err = row.get_array(0).unwrap_err();
+        assert!(
+            err.to_string().contains("expected List array"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn columnar_row_get_array_unsupported_element_type_returns_error() {
+        let mut builder = ListBuilder::new(UInt32Builder::new());
+        builder.values().append_value(7);
+        builder.append(true);
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let err = row.get_array(0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot convert Arrow type to Fluss type"),
+            "unexpected error: {err}"
         );
     }
 }
