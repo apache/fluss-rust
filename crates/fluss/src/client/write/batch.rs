@@ -308,7 +308,6 @@ pub struct KvWriteBatch {
 }
 
 impl KvWriteBatch {
-    pub const DEFAULT_WRITE_LIMIT: usize = 256;
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_id: i64,
@@ -560,7 +559,7 @@ mod tests {
             1,
             Arc::clone(&physical_path),
             1,
-            KvWriteBatch::DEFAULT_WRITE_LIMIT,
+            256,
             KvFormat::COMPACTED,
             None,
             0,
