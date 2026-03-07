@@ -319,6 +319,15 @@ impl RowAppendRecordBatchBuilder {
             }),
         }
     }
+    /// Appends a row to the builder.
+    pub fn append(&mut self, row: &dyn InternalRow) -> Result<bool> {
+        ArrowRecordBatchInnerBuilder::append(self, row)
+    }
+
+    /// Builds the final Arrow RecordBatch.
+    pub fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>> {
+        ArrowRecordBatchInnerBuilder::build_arrow_record_batch(self)
+    }
 }
 
 impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
