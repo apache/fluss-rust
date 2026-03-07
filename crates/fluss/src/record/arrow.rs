@@ -154,6 +154,10 @@ pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
 // TODO: Switch to byte-size-based is_full() like Java's ArrowWriter instead of a hard record cap.
 pub const DEFAULT_MAX_RECORD: i32 = 256;
 
+/// Estimated average byte size for variable-width columns (Utf8, Binary).
+/// Used to pre-allocate data buffers and avoid reallocations during batch building.
+const VARIABLE_WIDTH_AVG_BYTES: usize = 64;
+
 pub struct MemoryLogRecordsArrowBuilder {
     base_log_offset: i64,
     schema_id: i32,
@@ -275,20 +279,14 @@ impl RowAppendRecordBatchBuilder {
             arrow_schema::DataType::Boolean => {
                 Ok(Box::new(BooleanBuilder::with_capacity(capacity)))
             }
-            arrow_schema::DataType::Utf8 => {
-                // Estimate 64 bytes average per string value
-                Ok(Box::new(StringBuilder::with_capacity(
-                    capacity,
-                    capacity * 64,
-                )))
-            }
-            arrow_schema::DataType::Binary => {
-                // Estimate 64 bytes average per binary value
-                Ok(Box::new(BinaryBuilder::with_capacity(
-                    capacity,
-                    capacity * 64,
-                )))
-            }
+            arrow_schema::DataType::Utf8 => Ok(Box::new(StringBuilder::with_capacity(
+                capacity,
+                capacity * VARIABLE_WIDTH_AVG_BYTES,
+            ))),
+            arrow_schema::DataType::Binary => Ok(Box::new(BinaryBuilder::with_capacity(
+                capacity,
+                capacity * VARIABLE_WIDTH_AVG_BYTES,
+            ))),
             arrow_schema::DataType::FixedSizeBinary(size) => Ok(Box::new(
                 FixedSizeBinaryBuilder::with_capacity(capacity, *size),
             )),
