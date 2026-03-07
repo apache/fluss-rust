@@ -44,6 +44,13 @@ use tokio::sync::mpsc;
 
 type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
+/// Result of a synchronous drain: send futures, optional delay, and unknown leader tables.
+type DrainResult<'a> = (
+    Vec<SendFuture<'a>>,
+    Option<u64>,
+    HashSet<Arc<PhysicalTablePath>>,
+);
+
 #[allow(dead_code)]
 pub struct Sender {
     running: AtomicBool,
@@ -186,55 +193,38 @@ impl Sender {
         }
     }
 
-    /// Drain batches and return per-leader send futures without awaiting them.
-    /// Returns `(send_futures, next_check_delay)` where `next_check_delay` is
-    /// `Some(ms)` when no nodes were ready (caller should sleep).
+    /// Sequential init + drain + metadata refresh. Used by `run_once` (shutdown)
+    /// where blocking is acceptable.
     async fn prepare_sends(&self) -> Result<(Vec<SendFuture<'_>>, Option<u64>)> {
         if let Err(e) = self.maybe_wait_for_writer_id().await {
             warn!("Failed to allocate writer ID after retries: {e}");
             self.maybe_abort_batches(&e);
             return Ok((vec![], None));
         }
+        let (futures, delay, unknown_leaders) = self.drain_ready_sends()?;
+        if !unknown_leaders.is_empty() {
+            if let Err(e) = self.refresh_unknown_leaders(&unknown_leaders).await {
+                warn!("Metadata refresh for unknown leaders failed: {e}");
+            }
+        }
+        Ok((futures, delay))
+    }
 
+    /// Fully synchronous drain: `ready()` → `drain()` → build send futures.
+    /// No async work — safe to call on the hot path without starving
+    /// `pending.next()`. Returns unknown leader tables so the caller can
+    /// schedule a concurrent metadata refresh.
+    fn drain_ready_sends(&self) -> Result<DrainResult<'_>> {
         let cluster = self.metadata.get_cluster();
         let ready_check_result = self.accumulator.ready(&cluster)?;
 
-        // Update metadata if needed
-        if !ready_check_result.unknown_leader_tables.is_empty() {
-            let mut table_paths: HashSet<&TablePath> = HashSet::new();
-            let mut physical_table_paths: HashSet<&Arc<PhysicalTablePath>> = HashSet::new();
-
-            for unknown_paths in ready_check_result.unknown_leader_tables.iter() {
-                if unknown_paths.get_partition_name().is_some() {
-                    physical_table_paths.insert(unknown_paths);
-                } else {
-                    table_paths.insert(unknown_paths.get_table_path());
-                }
-            }
-
-            if let Err(e) = self
-                .metadata
-                .update_tables_metadata(&table_paths, &physical_table_paths, vec![])
-                .await
-            {
-                match e.api_error() {
-                    Some(FlussError::PartitionNotExists) => {
-                        warn!("Partition does not exist during metadata update, continuing: {e}");
-                    }
-                    _ => return Err(e),
-                }
-            }
-
-            debug!(
-                "Client update metadata due to unknown leader tables from the batched records: {:?}",
-                ready_check_result.unknown_leader_tables
-            );
-        }
+        let unknown_leaders = ready_check_result.unknown_leader_tables;
 
         if ready_check_result.ready_nodes.is_empty() {
             return Ok((
                 vec![],
                 Some(ready_check_result.next_ready_check_delay_ms as u64),
+                unknown_leaders,
             ));
         }
 
@@ -255,7 +245,44 @@ impl Sender {
             }
         }
 
-        Ok((futures, None))
+        Ok((futures, None, unknown_leaders))
+    }
+
+    /// Refresh metadata for buckets with unknown leaders. Runs as a concurrent
+    /// maintenance task so it never blocks the response-processing hot path.
+    async fn refresh_unknown_leaders(
+        &self,
+        unknown_leaders: &HashSet<Arc<PhysicalTablePath>>,
+    ) -> Result<()> {
+        let mut table_paths: HashSet<&TablePath> = HashSet::new();
+        let mut physical_table_paths: HashSet<&Arc<PhysicalTablePath>> = HashSet::new();
+
+        for path in unknown_leaders {
+            if path.get_partition_name().is_some() {
+                physical_table_paths.insert(path);
+            } else {
+                table_paths.insert(path.get_table_path());
+            }
+        }
+
+        if let Err(e) = self
+            .metadata
+            .update_tables_metadata(&table_paths, &physical_table_paths, vec![])
+            .await
+        {
+            match e.api_error() {
+                Some(FlussError::PartitionNotExists) => {
+                    warn!("Partition does not exist during metadata update, continuing: {e}");
+                }
+                _ => return Err(e),
+            }
+        }
+
+        debug!(
+            "Updated metadata for unknown leader tables: {:?}",
+            unknown_leaders
+        );
+        Ok(())
     }
 
     /// Blocking version of drain + send, used during shutdown drain.
@@ -781,69 +808,118 @@ impl Sender {
     /// response handling — when a fast leader responds, we immediately drain and
     /// send more batches for its buckets while slow leaders are still in-flight.
     ///
-    /// Better than Java's fire-and-forget + Netty callback threads: same I/O
-    /// overlap, but single-task cooperative multitasking — no cross-thread
-    /// synchronization needed for response handling.
+    /// Slow work (writer-ID init with retry backoff, metadata refresh for
+    /// unknown leaders) runs as concurrent maintenance tasks so it never blocks
+    /// `pending.next()`. The drain path (`drain_ready_sends`) is fully
+    /// synchronous — no `.await` on the hot path. Without this separation,
+    /// backoff sleeps during writer-ID init could stall response processing
+    /// and cause severe backpressure when the accumulator memory budget is full
+    /// (responses not polled → memory not freed → writers block).
+    /// Single-select event loop with `need_drain` tick.
+    ///
+    /// Invariants:
+    /// - `need_drain` is a one-shot "try a drain tick ASAP" flag.
+    /// - Each iteration either performs a sync drain tick (if flagged) or blocks
+    ///   in a single `tokio::select!`.
+    /// - `accumulator.notified()` is always listened to (producer wakeups).
+    /// - The idle timer is only armed when truly idle (no futures in any pool).
+    /// - When writer_id isn't ready, a drain tick is a no-op but the loop stays
+    ///   responsive (notified/init/meta can still wake it).
     pub async fn run_with_shutdown(&self, mut shutdown_rx: mpsc::Receiver<()>) -> Result<()> {
         let mut pending: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
+        let mut init_futs: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
+        let mut meta_futs: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
+        let mut pending_unknown: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
+
+        let mut need_drain = true; // drain on first iteration to pick up any pre-existing batches
+        let mut next_delay_ms: u64 = 1;
 
         loop {
-            if pending.is_empty() {
-                // Nothing in-flight: run a full drain cycle. This may briefly
-                // block on writer ID init or metadata refresh — acceptable here
-                // because there are no pending responses to starve.
-                tokio::select! {
-                    result = self.prepare_sends() => {
-                        match result {
-                            Ok((futures, delay)) => {
-                                if futures.is_empty() {
-                                    // Nothing to drain. Sleep for the ready-check
-                                    // delay to avoid busy-spinning.
-                                    // TODO: add a Notify that append() signals so we
-                                    // wake immediately on new batches instead of
-                                    // polling on a timer (same as Kafka's wakeup()).
-                                    let sleep_ms = delay.unwrap_or(1);
-                                    tokio::select! {
-                                        _ = shutdown_rx.recv() => break,
-                                        _ = tokio::time::sleep(Duration::from_millis(sleep_ms)) => continue,
-                                    }
-                                }
-                                for f in futures {
-                                    pending.push(f);
-                                }
+            // Spawn writer-ID init task if needed and not already running.
+            if init_futs.is_empty()
+                && self.idempotence_manager.is_enabled()
+                && !self.idempotence_manager.has_writer_id()
+                && self.accumulator.has_undrained()
+            {
+                init_futs.push(Box::pin(self.maybe_wait_for_writer_id()));
+            }
+
+            // Spawn metadata refresh if we have accumulated unknown leaders
+            // and no refresh is currently running.
+            if !pending_unknown.is_empty() && meta_futs.is_empty() {
+                let leaders = std::mem::take(&mut pending_unknown);
+                meta_futs.push(Box::pin(async move {
+                    self.refresh_unknown_leaders(&leaders).await
+                }));
+            }
+
+            // Drain tick: synchronous, never blocks response processing.
+            // Clear unconditionally — "need_drain" means "try", not "must succeed".
+            if need_drain {
+                need_drain = false;
+
+                if !self.idempotence_manager.is_enabled()
+                    || self.idempotence_manager.has_writer_id()
+                {
+                    match self.drain_ready_sends() {
+                        Ok((futures, delay, unknown_leaders)) => {
+                            if let Some(d) = delay {
+                                next_delay_ms = d;
                             }
-                            Err(e) => {
-                                warn!("Uncaught error in sender drain, continuing: {e}");
-                                tokio::select! {
-                                    _ = shutdown_rx.recv() => break,
-                                    _ = tokio::time::sleep(Duration::from_millis(1)) => continue,
-                                }
-                            }
-                        }
-                    }
-                    _ = shutdown_rx.recv() => break,
-                }
-            } else {
-                // Sends are in-flight: process responses as they arrive,
-                // then try to drain and send more batches. The prepare_sends
-                // call may briefly await on writer ID init or metadata refresh
-                // in rare cases (writer ID reset, leader change); this is
-                // acceptable because the alternative (skipping the drain)
-                // would delay recovery.
-                tokio::select! {
-                    Some(result) = pending.next() => {
-                        if let Err(e) = result {
-                            warn!("Uncaught error in send request, continuing: {e}");
-                        }
-                        // Drain: fire new sends if batches are ready.
-                        // Completed responses may have freed in-flight slots.
-                        if let Ok((futures, _)) = self.prepare_sends().await {
+                            pending_unknown.extend(unknown_leaders);
                             for f in futures {
                                 pending.push(f);
                             }
                         }
+                        Err(e) => {
+                            warn!("Error in drain cycle: {e}");
+                        }
                     }
-                    _ = shutdown_rx.recv() => break,
+                }
+            }
+
+            let truly_idle = pending.is_empty() && init_futs.is_empty() && meta_futs.is_empty();
+            debug_assert!(next_delay_ms >= 1);
+
+            // One select to rule them all.
+            tokio::select! {
+                _ = shutdown_rx.recv() => break,
+
+                // Always listen for producer wakeups.
+                _ = self.accumulator.notified() => {
+                    need_drain = true;
+                }
+
+                // Process in-flight send responses.
+                Some(result) = pending.next(), if !pending.is_empty() => {
+                    if let Err(e) = result {
+                        warn!("Uncaught error in send request, continuing: {e}");
+                    }
+                    need_drain = true;
+                }
+
+                // Writer-ID init completed.
+                Some(result) = init_futs.next(), if !init_futs.is_empty() => {
+                    match result {
+                        Ok(()) => need_drain = true,
+                        Err(e) => {
+                            warn!("Failed to allocate writer ID after retries: {e}");
+                            self.maybe_abort_batches(&e);
+                        }
+                    }
+                }
+
+                // Metadata refresh completed — new leaders may now be known.
+                Some(result) = meta_futs.next(), if !meta_futs.is_empty() => {
+                    if let Err(e) = result {
+                        warn!("Metadata refresh for unknown leaders failed: {e}");
+                    }
+                    need_drain = true;
+                }
+
+                // Idle timer: batch timeout / linger expiry.
+                _ = tokio::time::sleep(Duration::from_millis(next_delay_ms)), if truly_idle => {
+                    need_drain = true;
                 }
             }
         }

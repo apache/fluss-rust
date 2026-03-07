@@ -33,6 +33,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 
 /// Byte-counting semaphore that blocks producers when total buffered memory
 /// exceeds the configured limit. Matches Java's `LazyMemorySegmentPool` behavior.
@@ -123,6 +124,13 @@ impl MemoryLimiter {
         self.cond.notify_all();
     }
 
+    /// Returns true if any producers are currently blocked waiting for memory.
+    /// Used by `ready()` to mark all batches as immediately sendable when
+    /// memory is exhausted (matching Java's `exhausted` flag).
+    pub fn has_waiters(&self) -> bool {
+        self.waiting_count.load(Ordering::Relaxed) > 0
+    }
+
     /// Mark the limiter as closed and wake all blocked producers.
     fn close(&self) {
         self.closed.store(true, Ordering::Release);
@@ -169,6 +177,11 @@ pub struct RecordAccumulator {
     batch_id: AtomicI64,
     idempotence_manager: Arc<IdempotenceManager>,
     memory_limiter: Arc<MemoryLimiter>,
+    /// Wakes the sender task when new batches are created or existing batches
+    /// become full, so the sender can drain them immediately instead of waiting
+    /// for its next poll cycle. This is the Rust equivalent of Java's
+    /// `Sender.wakeup()` / Kafka's `RecordAccumulator.wakeup()`.
+    sender_wakeup: Notify,
 }
 
 impl RecordAccumulator {
@@ -190,6 +203,7 @@ impl RecordAccumulator {
             batch_id: Default::default(),
             idempotence_manager,
             memory_limiter,
+            sender_wakeup: Notify::new(),
         }
     }
 
@@ -220,6 +234,7 @@ impl RecordAccumulator {
         record: &WriteRecord,
         dq: &mut VecDeque<WriteBatch>,
         permit: MemoryPermit,
+        alloc_size: usize,
     ) -> Result<RecordAppendResult> {
         let physical_table_path = &record.physical_table_path;
         let table_path = physical_table_path.get_table_path();
@@ -243,8 +258,7 @@ impl RecordAccumulator {
                 self.batch_id.fetch_add(1, Ordering::Relaxed),
                 Arc::clone(physical_table_path),
                 schema_id,
-                // TODO: Decide how to derive write limit in the absence of java's equivalent of PreAllocatedPagedOutputView
-                KvWriteBatch::DEFAULT_WRITE_LIMIT,
+                alloc_size,
                 record.write_format.to_kv_format()?,
                 kv_record.target_columns.clone(),
                 current_time_ms(),
@@ -323,7 +337,9 @@ impl RecordAccumulator {
         drop(dq_guard);
 
         let batch_size = self.config.writer_batch_size as usize;
-        let permit = self.memory_limiter.acquire(batch_size)?;
+        let record_size = record.estimated_record_size();
+        let alloc_size = batch_size.max(record_size);
+        let permit = self.memory_limiter.acquire(alloc_size)?;
 
         // Re-acquire dq lock after memory is available
         let mut dq_guard = dq.lock();
@@ -332,7 +348,7 @@ impl RecordAccumulator {
             return Ok(append_result); // permit drops here, memory released
         }
 
-        self.append_new_batch(cluster, record, &mut dq_guard, permit)
+        self.append_new_batch(cluster, record, &mut dq_guard, permit, alloc_size)
     }
 
     pub fn ready(&self, cluster: &Arc<Cluster>) -> Result<ReadyCheckResult> {
@@ -356,6 +372,7 @@ impl RecordAccumulator {
         let mut ready_nodes = HashSet::new();
         let mut next_ready_check_delay_ms = self.batch_timeout_ms;
         let mut unknown_leader_tables = HashSet::new();
+        let exhausted = self.memory_limiter.has_waiters();
 
         for (physical_table_path, mut partition_id, bucket_batches) in entries {
             next_ready_check_delay_ms = self.bucket_ready(
@@ -367,6 +384,7 @@ impl RecordAccumulator {
                 &mut unknown_leader_tables,
                 cluster,
                 next_ready_check_delay_ms,
+                exhausted,
             )?
         }
 
@@ -388,6 +406,7 @@ impl RecordAccumulator {
         unknown_leader_tables: &mut HashSet<Arc<PhysicalTablePath>>,
         cluster: &Cluster,
         next_ready_check_delay_ms: i64,
+        exhausted: bool,
     ) -> Result<i64> {
         let mut next_delay = next_ready_check_delay_ms;
 
@@ -425,8 +444,14 @@ impl RecordAccumulator {
             let full = deque_size > 1 || batch.is_closed();
             let table_bucket = cluster.get_table_bucket(physical_table_path, bucket_id)?;
             if let Some(leader) = cluster.leader_for(&table_bucket) {
-                next_delay =
-                    self.batch_ready(leader, waited_time_ms, full, ready_nodes, next_delay);
+                next_delay = self.batch_ready(
+                    leader,
+                    waited_time_ms,
+                    full,
+                    exhausted,
+                    ready_nodes,
+                    next_delay,
+                );
             } else {
                 unknown_leader_tables.insert(Arc::clone(physical_table_path));
             }
@@ -439,13 +464,17 @@ impl RecordAccumulator {
         leader: &ServerNode,
         waited_time_ms: i64,
         full: bool,
+        exhausted: bool,
         ready_nodes: &mut HashSet<ServerNode>,
         next_ready_check_delay_ms: i64,
     ) -> i64 {
         if !ready_nodes.contains(leader) {
             let expired = waited_time_ms >= self.batch_timeout_ms;
-            let sendable =
-                full || expired || self.closed.load(Ordering::Acquire) || self.flush_in_progress();
+            let sendable = full
+                || expired
+                || exhausted
+                || self.closed.load(Ordering::Acquire)
+                || self.flush_in_progress();
 
             if sendable {
                 ready_nodes.insert(leader.clone());
@@ -752,6 +781,7 @@ impl RecordAccumulator {
     /// for `batch_timeout_ms`. Matches Java's `RecordAccumulator.close()`.
     pub fn close(&self) {
         self.closed.store(true, Ordering::Release);
+        self.wakeup_sender();
     }
 
     pub fn is_closed(&self) -> bool {
@@ -760,6 +790,7 @@ impl RecordAccumulator {
 
     pub fn abort_batches(&self, error: broadcast::Error) {
         self.memory_limiter.close();
+        // Complete batches still in deques (not yet drained).
         for mut entry in self.write_batches.iter_mut() {
             for (_bucket_id, deque) in entry.value_mut().batches.iter_mut() {
                 let mut dq = deque.lock();
@@ -768,11 +799,28 @@ impl RecordAccumulator {
                 }
             }
         }
-        self.incomplete_batches.write().clear();
+        // Fail any remaining handles (including in-flight batches that were
+        // drained but not yet completed). This is a no-op for handles already
+        // completed above via WriteBatch::complete.
+        let mut incomplete = self.incomplete_batches.write();
+        for (handle, _permit) in incomplete.values() {
+            handle.fail(error.clone());
+        }
+        incomplete.clear();
     }
 
     pub fn has_incomplete(&self) -> bool {
         !self.incomplete_batches.read().is_empty()
+    }
+
+    /// Wake the sender task so it can drain ready batches immediately.
+    pub fn wakeup_sender(&self) {
+        self.sender_wakeup.notify_one();
+    }
+
+    /// Returns a future that completes when `wakeup_sender()` is called.
+    pub fn notified(&self) -> tokio::sync::futures::Notified<'_> {
+        self.sender_wakeup.notified()
     }
 
     fn get_all_buckets_in_current_node(
@@ -817,6 +865,7 @@ impl RecordAccumulator {
 
     pub fn begin_flush(&self) {
         self.flushes_in_progress.fetch_add(1, Ordering::SeqCst);
+        self.wakeup_sender();
     }
 
     #[allow(unused_must_use)]
@@ -1389,5 +1438,99 @@ mod tests {
         let (result, elapsed) = handle.join().unwrap();
         assert!(matches!(result.unwrap_err(), Error::WriterClosed { .. }));
         assert!(elapsed < Duration::from_secs(5)); // should not wait the full 60s
+    }
+
+    #[test]
+    fn test_oversized_kv_record_does_not_panic() {
+        use crate::client::write::write_format::WriteFormat;
+        use crate::client::write::{RowBytes, WriteRecord};
+        use bytes::Bytes;
+
+        // Use a tiny batch size so the KV record exceeds it
+        let mut config = Config::default();
+        config.writer_batch_size = 64;
+        config.writer_buffer_memory_size = 1024 * 1024;
+
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+
+        // Create a KV record larger than batch_size (64 bytes)
+        let key = Bytes::from(vec![0u8; 32]);
+        let value = vec![0u8; 256];
+        let record = WriteRecord::for_upsert(
+            table_info,
+            physical_table_path,
+            1,
+            key,
+            None,
+            WriteFormat::CompactedKv,
+            None,
+            Some(RowBytes::Owned(Bytes::from(value))),
+        );
+
+        // This used to panic with "must append to a new batch" because
+        // the KV write limit was hardcoded to DEFAULT_WRITE_LIMIT (256 bytes)
+        // instead of using alloc_size = max(batch_size, record_size).
+        let result = accumulator.append(&record, 0, &cluster, false);
+        assert!(result.is_ok(), "oversized KV record should not panic");
+    }
+
+    #[test]
+    fn test_memory_permit_accounts_for_oversized_record() {
+        use crate::client::write::write_format::WriteFormat;
+        use crate::client::write::{RowBytes, WriteRecord};
+        use bytes::Bytes;
+
+        let mut config = Config::default();
+        config.writer_batch_size = 64;
+        config.writer_buffer_memory_size = 1024 * 1024;
+
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+
+        let key = Bytes::from(vec![0u8; 32]);
+        let value = vec![0u8; 256];
+        let record = WriteRecord::for_upsert(
+            table_info,
+            physical_table_path,
+            1,
+            key,
+            None,
+            WriteFormat::CompactedKv,
+            None,
+            Some(RowBytes::Owned(Bytes::from(value))),
+        );
+
+        // estimated_record_size includes batch header overhead
+        let expected_alloc = record.estimated_record_size();
+        assert!(expected_alloc > 64, "record should exceed batch_size=64");
+
+        accumulator.append(&record, 0, &cluster, false).unwrap();
+
+        // The permit should reserve max(batch_size, estimated_record_size) bytes.
+        let used = *accumulator.memory_limiter.state.lock();
+        assert_eq!(
+            used, expected_alloc,
+            "memory limiter should reserve max(batch_size, estimated_record_size)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sender_wakeup_notifies() {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+
+        // notified() should complete when wakeup_sender() is called
+        let notified = accumulator.notified();
+        accumulator.wakeup_sender();
+        // If wakeup doesn't work, this would hang forever.
+        tokio::time::timeout(Duration::from_millis(100), notified)
+            .await
+            .expect("notified should complete after wakeup_sender");
     }
 }

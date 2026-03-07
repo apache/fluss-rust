@@ -137,7 +137,7 @@ impl WriterClient {
         }
 
         if result.batch_is_full || result.new_batch_created {
-            // todo: wakeup
+            self.accumulate.wakeup_sender();
         }
 
         Ok(result.result_handle.expect("result_handle should exist"))
