@@ -55,6 +55,7 @@ serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = "1.0"
 log = { version = "0.4", features = ["kv_std"] }
+metrics = { workspace = true }
 tokio = { workspace = true }
 parking_lot = "0.12"
 bytes = "1.10.1"
@@ -77,6 +78,7 @@ strum_macros = "0.26"
 jiff = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
+metrics-util = "0.20"
 testcontainers = "0.25.0"
 test-env-helpers = "0.2.2"
 

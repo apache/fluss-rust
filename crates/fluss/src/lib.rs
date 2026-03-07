@@ -113,6 +113,7 @@ pub use cluster::{ServerNode, ServerType};
 
 pub mod config;
 pub mod error;
+pub mod metrics;
 
 mod bucketing;
 mod compression;

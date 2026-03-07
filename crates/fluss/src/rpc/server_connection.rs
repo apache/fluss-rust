@@ -22,7 +22,8 @@ use crate::rpc::error::RpcError;
 use crate::rpc::error::RpcError::ConnectionError;
 use crate::rpc::frame::{AsyncMessageRead, AsyncMessageWrite};
 use crate::rpc::message::{
-    ReadVersionedType, RequestBody, RequestHeader, ResponseHeader, WriteVersionedType,
+    REQUEST_HEADER_LENGTH, ReadVersionedType, RequestBody, RequestHeader, ResponseHeader,
+    WriteVersionedType,
 };
 use crate::rpc::transport::Transport;
 use futures::future::BoxFuture;
@@ -35,7 +36,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufStream, WriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::oneshot::{Sender, channel};
@@ -217,6 +218,89 @@ struct ActiveRequest {
     channel: Sender<Result<Response, RpcError>>,
 }
 
+/// Tracks per-request connection metrics and ensures in-flight gauge cleanup on drop.
+struct RequestMetricsLifecycle {
+    label: Option<&'static str>,
+    start: Instant,
+    completed: bool,
+}
+
+impl RequestMetricsLifecycle {
+    fn begin(api_key: crate::rpc::ApiKey, request_bytes: u64) -> Self {
+        let label = crate::metrics::api_key_label(api_key);
+        if let Some(label) = label {
+            // Match Java semantics: count request attempts before write/send.
+            metrics::counter!(
+                crate::metrics::CLIENT_REQUESTS_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(1);
+            metrics::counter!(
+                crate::metrics::CLIENT_BYTES_SENT_TOTAL,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(request_bytes);
+            metrics::gauge!(
+                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .increment(1.0);
+        }
+        Self {
+            label,
+            start: Instant::now(),
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self, response_bytes: u64) {
+        let Some(label) = self.label else {
+            return;
+        };
+        if self.completed {
+            return;
+        }
+
+        metrics::counter!(
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .increment(1);
+        metrics::counter!(
+            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .increment(response_bytes);
+        metrics::gauge!(
+            crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .decrement(1.0);
+        metrics::histogram!(
+            crate::metrics::CLIENT_REQUEST_LATENCY_MS,
+            crate::metrics::LABEL_API_KEY => label
+        )
+        .record(self.start.elapsed().as_secs_f64() * 1000.0);
+        self.completed = true;
+    }
+}
+
+impl Drop for RequestMetricsLifecycle {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        if let Some(label) = self.label {
+            metrics::gauge!(
+                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+                crate::metrics::LABEL_API_KEY => label
+            )
+            .decrement(1.0);
+            self.completed = true;
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ConnectionState {
     /// Currently active requests by request ID.
@@ -386,12 +470,34 @@ where
             ConnectionState::Poison(e) => return Err(RpcError::Poisoned(Arc::clone(e)).into()),
         }
 
-        self.send_message(buf).await?;
+        // count only the API message body, excluding the protocol header.
+        let request_body_bytes = buf.len().saturating_sub(REQUEST_HEADER_LENGTH) as u64;
+        let mut request_metrics = RequestMetricsLifecycle::begin(R::API_KEY, request_body_bytes);
+
+        if let Err(e) = self.send_message(buf).await {
+            request_metrics.complete(0);
+            return Err(e.into());
+        }
         _cleanup_on_cancel.message_sent();
-        let mut response = rx.await.map_err(|e| Error::UnexpectedError {
-            message: "Got recvError, some one close the channel".to_string(),
-            source: Some(Box::new(e)),
-        })??;
+        let mut response = match rx.await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => {
+                request_metrics.complete(0);
+                return Err(e.into());
+            }
+            Err(e) => {
+                request_metrics.complete(0);
+                return Err(Error::UnexpectedError {
+                    message: "Got recvError, some one close the channel".to_string(),
+                    source: Some(Box::new(e)),
+                });
+            }
+        };
+
+        // count only the API message body, excluding the response header.
+        let response_bytes =
+            (response.data.get_ref().len() as u64).saturating_sub(response.data.position());
+        request_metrics.complete(response_bytes);
 
         if let Some(error_response) = response.header.error_response {
             return Err(Error::FlussAPIError {
@@ -559,5 +665,398 @@ impl Drop for CleanupRequestStateOnCancel {
                 map.remove(&self.request_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::rpc::ApiKey;
+    use crate::rpc::api_version::ApiVersion;
+    use crate::rpc::frame::{ReadError, WriteError};
+    use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+    use metrics::{SharedString, Unit};
+    use metrics_util::CompositeKey;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use std::sync::OnceLock;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
+    use tokio::sync::Mutex as AsyncMutex;
+
+    // -- Test-only request/response types --------------------------------
+
+    struct TestProduceRequest;
+    struct TestProduceResponse;
+
+    impl RequestBody for TestProduceRequest {
+        type ResponseBody = TestProduceResponse;
+        const API_KEY: ApiKey = ApiKey::ProduceLog;
+        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
+    }
+
+    impl WriteVersionedType<Vec<u8>> for TestProduceRequest {
+        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+            Ok(())
+        }
+    }
+
+    impl ReadVersionedType<Cursor<Vec<u8>>> for TestProduceResponse {
+        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+            Ok(TestProduceResponse)
+        }
+    }
+
+    struct TestMetadataRequest;
+    struct TestMetadataResponse;
+
+    impl RequestBody for TestMetadataRequest {
+        type ResponseBody = TestMetadataResponse;
+        const API_KEY: ApiKey = ApiKey::MetaData;
+        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
+    }
+
+    impl WriteVersionedType<Vec<u8>> for TestMetadataRequest {
+        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+            Ok(())
+        }
+    }
+
+    impl ReadVersionedType<Cursor<Vec<u8>>> for TestMetadataResponse {
+        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+            Ok(TestMetadataResponse)
+        }
+    }
+
+    // -- Mock server -----------------------------------------------------
+
+    /// Reads framed requests and echoes back minimal success responses.
+    async fn mock_echo_server(mut stream: tokio::io::DuplexStream) {
+        loop {
+            let mut len_buf = [0u8; 4];
+            if stream.read_exact(&mut len_buf).await.is_err() {
+                return;
+            }
+            let len = i32::from_be_bytes(len_buf) as usize;
+
+            let mut payload = vec![0u8; len];
+            if stream.read_exact(&mut payload).await.is_err() {
+                return;
+            }
+
+            // Header layout: api_key(2) + api_version(2) + request_id(4)
+            let request_id = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+
+            // Response: resp_type(1, 0=success) + request_id(4)
+            let mut resp = Vec::with_capacity(5);
+            resp.push(0u8);
+            resp.extend_from_slice(&request_id.to_be_bytes());
+
+            let resp_len = (resp.len() as i32).to_be_bytes();
+            if stream.write_all(&resp_len).await.is_err()
+                || stream.write_all(&resp).await.is_err()
+                || stream.flush().await.is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    /// Reads framed requests and echoes back error responses (resp_type=1).
+    async fn mock_error_server(mut stream: tokio::io::DuplexStream) {
+        use prost::Message;
+
+        loop {
+            let mut len_buf = [0u8; 4];
+            if stream.read_exact(&mut len_buf).await.is_err() {
+                return;
+            }
+            let len = i32::from_be_bytes(len_buf) as usize;
+
+            let mut payload = vec![0u8; len];
+            if stream.read_exact(&mut payload).await.is_err() {
+                return;
+            }
+
+            let request_id = i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+
+            let err = crate::proto::ErrorResponse {
+                error_code: 1,
+                error_message: Some("test error".to_string()),
+            };
+            let mut err_buf = Vec::new();
+            err.encode(&mut err_buf).expect("ErrorResponse encode");
+
+            let mut resp = Vec::with_capacity(5 + err_buf.len());
+            resp.push(1u8); // ERROR_RESPONSE
+            resp.extend_from_slice(&request_id.to_be_bytes());
+            resp.extend(err_buf);
+
+            let resp_len = (resp.len() as i32).to_be_bytes();
+            if stream.write_all(&resp_len).await.is_err()
+                || stream.write_all(&resp).await.is_err()
+                || stream.flush().await.is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    // -- Recorder setup --------------------------------------------------
+
+    /// Shared test recorder (installed once per test binary).
+    static TEST_SNAPSHOTTER: OnceLock<metrics_util::debugging::Snapshotter> = OnceLock::new();
+    static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+
+    fn test_snapshotter() -> &'static metrics_util::debugging::Snapshotter {
+        TEST_SNAPSHOTTER.get_or_init(|| {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            recorder
+                .install()
+                .expect("debugging recorder install should succeed in this test binary");
+            snapshotter
+        })
+    }
+
+    fn test_lock() -> &'static AsyncMutex<()> {
+        TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
+    }
+
+    type SnapshotEntry = (
+        CompositeKey,
+        Option<Unit>,
+        Option<SharedString>,
+        DebugValue,
+    );
+
+    fn has_api_label(key: &CompositeKey, label: &str) -> bool {
+        key.key()
+            .labels()
+            .any(|l| l.key() == crate::metrics::LABEL_API_KEY && l.value() == label)
+    }
+
+    fn counter_for_label(entries: &[SnapshotEntry], metric_name: &str, label: &str) -> u64 {
+        entries
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                if key.key().name() != metric_name || !has_api_label(key, label) {
+                    return None;
+                }
+                match value {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    fn gauge_for_label(entries: &[SnapshotEntry], metric_name: &str, label: &str) -> f64 {
+        entries
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                if key.key().name() != metric_name || !has_api_label(key, label) {
+                    return None;
+                }
+                match value {
+                    DebugValue::Gauge(v) => Some(v.into_inner()),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0.0)
+    }
+
+    fn counter_sum(entries: &[SnapshotEntry], metric_name: &str) -> u64 {
+        entries
+            .iter()
+            .filter_map(|(key, _, _, value)| {
+                if key.key().name() != metric_name {
+                    return None;
+                }
+                match value {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+
+    // -- Tests -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn request_records_metrics_for_reportable_api_key() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(mock_echo_server(server));
+
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_before =
+            counter_for_label(&before, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_before =
+            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+
+        conn.request(TestProduceRequest).await.unwrap();
+
+        let after: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_after =
+            counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_after =
+            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        assert_eq!(
+            request_after - request_before,
+            1,
+            "produce_log request counter should increment by 1"
+        );
+        assert_eq!(
+            response_after - response_before,
+            1,
+            "produce_log completion counter should increment by 1"
+        );
+
+        let has_latency_sample = after.iter().any(|(key, _, _, value)| {
+            key.key().name() == crate::metrics::CLIENT_REQUEST_LATENCY_MS
+                && has_api_label(key, "produce_log")
+                && matches!(value, DebugValue::Histogram(_))
+        });
+        assert!(
+            has_latency_sample,
+            "request latency histogram should be recorded for produce_log"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_skips_metrics_for_non_reportable_api_key() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(mock_echo_server(server));
+
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_sum_before = counter_sum(&before, crate::metrics::CLIENT_REQUESTS_TOTAL);
+        let response_sum_before = counter_sum(&before, crate::metrics::CLIENT_RESPONSES_TOTAL);
+
+        conn.request(TestMetadataRequest).await.unwrap();
+
+        let snapshot: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_sum_after = counter_sum(&snapshot, crate::metrics::CLIENT_REQUESTS_TOTAL);
+        let response_sum_after = counter_sum(&snapshot, crate::metrics::CLIENT_RESPONSES_TOTAL);
+        assert_eq!(
+            request_sum_after, request_sum_before,
+            "non-reportable API keys must not change request counters"
+        );
+        assert_eq!(
+            response_sum_after, response_sum_before,
+            "non-reportable API keys must not change response counters"
+        );
+
+        // No metric entry should carry a non-reportable API key label.
+        let non_reportable = snapshot.iter().any(|(key, _, _, _)| has_api_label(key, "metadata"));
+        assert!(
+            !non_reportable,
+            "non-reportable API keys must not appear in metrics"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_records_completion_metrics_when_send_fails() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(64);
+        drop(server); // force write failure on request path
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_before =
+            counter_for_label(&before, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_before =
+            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_before =
+            counter_for_label(&before, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let result = conn.request(TestProduceRequest).await;
+        assert!(
+            result.is_err(),
+            "request should fail when transport is closed"
+        );
+        let after: Vec<_> = snapshotter.snapshot().into_vec();
+        let request_after =
+            counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_after =
+            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_after =
+            counter_for_label(&after, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let inflight_after =
+            gauge_for_label(&after, crate::metrics::CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
+
+        assert_eq!(
+            request_after - request_before,
+            1,
+            "failed request should still count as request"
+        );
+        assert_eq!(
+            response_after - response_before,
+            1,
+            "failed request should still count as a completion like Java ConnectionMetrics"
+        );
+        assert_eq!(
+            bytes_received_after - bytes_received_before,
+            0,
+            "failed send should record zero received bytes"
+        );
+        assert_eq!(
+            inflight_after, 0.0,
+            "in-flight gauge must return to zero after failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_records_completion_metrics_when_server_returns_api_error() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(mock_error_server(server));
+
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let response_before =
+            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_before =
+            counter_for_label(&before, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+
+        let result = conn.request(TestProduceRequest).await;
+        assert!(
+            matches!(result, Err(Error::FlussAPIError { .. })),
+            "request should fail with FlussAPIError when server returns error_response"
+        );
+
+        let after: Vec<_> = snapshotter.snapshot().into_vec();
+        let response_after =
+            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_after =
+            counter_for_label(&after, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let inflight_after =
+            gauge_for_label(&after, crate::metrics::CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
+
+        assert_eq!(
+            response_after - response_before,
+            1,
+            "API error response should count as completion like Java"
+        );
+        assert_eq!(
+            bytes_received_after - bytes_received_before,
+            0,
+            "API error response should record zero body bytes like Java onRequestFailure"
+        );
+        assert_eq!(
+            inflight_after, 0.0,
+            "in-flight gauge must return to zero after API error"
+        );
     }
 }
