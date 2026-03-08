@@ -34,10 +34,12 @@ import socket
 import subprocess
 import time
 
-# Disable testcontainers Ryuk reaper — it would kill containers when the
-# first xdist worker exits, while other workers are still running.
+# Disable testcontainers Ryuk reaper for xdist runs — it would kill
+# containers when the first worker exits, while others are still running.
 # We handle cleanup ourselves in pytest_unconfigure.
-os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
+# In single-process mode, keep Ryuk as a safety net for hard crashes.
+if "PYTEST_XDIST_WORKER" in os.environ:
+    os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
 
 import pytest
 import pytest_asyncio
@@ -86,8 +88,8 @@ def _all_ports_ready(timeout=60):
 
 
 def _run_cmd(cmd):
-    """Run a shell command, return exit code."""
-    return subprocess.run(cmd, shell=True, capture_output=True).returncode
+    """Run a command (list form), return exit code."""
+    return subprocess.run(cmd, capture_output=True).returncode
 
 
 def _start_cluster():
@@ -108,7 +110,7 @@ def _start_cluster():
 
     # Create a named network via Docker CLI (idempotent, avoids orphaned
     # random-named networks when multiple xdist workers race).
-    _run_cmd(f"docker network create {NETWORK_NAME} 2>/dev/null || true")
+    _run_cmd(["docker", "network", "create", NETWORK_NAME])
 
     sasl_jaas = (
         "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required"
