@@ -73,9 +73,9 @@ jobs:
           uv sync --extra dev
           uv run maturin develop
 
-      - name: Run Python integration tests
+      - name: Run Python integration tests (parallel)
         working-directory: bindings/python
-        run: uv run pytest test/ -v
+        run: uv run pytest test/ -v -n auto
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
