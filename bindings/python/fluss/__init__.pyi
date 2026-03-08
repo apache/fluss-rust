@@ -19,7 +19,7 @@
 
 from enum import IntEnum
 from types import TracebackType
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, overload
+from typing import Dict, Iterator, List, Optional, Tuple, Union, overload
 
 import pandas as pd
 import pyarrow as pa
