@@ -80,6 +80,5 @@ jiff = { workspace = true, features = ["js"] }
 testcontainers = "0.25.0"
 test-env-helpers = "0.2.2"
 
-
 [build-dependencies]
 prost-build = { version = "0.14" }
