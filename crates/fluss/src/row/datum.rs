@@ -602,14 +602,16 @@ impl Datum<'_> {
                 append_null_to_arrow!(TimestampMillisecondBuilder);
                 append_null_to_arrow!(TimestampMicrosecondBuilder);
                 append_null_to_arrow!(TimestampNanosecondBuilder);
-                // For List (Array) type, append null generically
                 if let arrow_schema::DataType::List(_) = data_type {
-                    if let Some(b) = builder
+                    let b = builder
                         .as_any_mut()
                         .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
-                    {
-                        b.append_null();
-                    }
+                        .ok_or_else(|| RowConvertError {
+                            message:
+                                "Expected ListBuilder<Box<dyn ArrayBuilder>> for List Arrow type"
+                                    .to_string(),
+                        })?;
+                    b.append_null();
                     return Ok(());
                 }
             }

@@ -133,7 +133,7 @@ impl Serialize for FlussArray {
 }
 
 impl FlussArray {
-    /// Creates a FlussArray by pointing to existing bytes.
+    /// Creates a FlussArray from a byte slice (copies data into owned storage).
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() < 4 {
             return Err(IllegalArgument {

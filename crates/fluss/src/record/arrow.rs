@@ -331,7 +331,7 @@ impl RowAppendRecordBatchBuilder {
                 Ok(Box::new(TimestampSecondBuilder::with_capacity(capacity)))
             }
             arrow_schema::DataType::List(field) => {
-                let inner_builder = Self::create_builder(field.data_type())?;
+                let inner_builder = Self::create_builder(field.data_type(), capacity)?;
                 Ok(Box::new(ListBuilder::new(inner_builder)))
             }
             arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => Ok(
