@@ -256,6 +256,7 @@ if (FLUSS_ENABLE_TESTING)
     FetchContent_MakeAvailable(googletest)
 
     enable_testing()
+    include(GoogleTest)
 
     file(GLOB TEST_SOURCE_FILES "test/*.cpp")
     add_executable(fluss_cpp_test ${TEST_SOURCE_FILES})
@@ -267,5 +268,17 @@ if (FLUSS_ENABLE_TESTING)
         ${PROJECT_SOURCE_DIR}/test
     )
 
-    add_test(NAME fluss_cpp_integration_tests COMMAND fluss_cpp_test)
+    # Individual tests for parallel execution via ctest -j.
+    gtest_discover_tests(fluss_cpp_test
+        PROPERTIES
+            TIMEOUT 120
+            FIXTURES_REQUIRED fluss_cluster
+    )
+
+    # Cleanup: stop Docker containers after all tests finish.
+    # Mirrors Python's pytest_unconfigure and Rust's atexit cleanup.
+    add_test(NAME fluss_cluster_cleanup COMMAND fluss_cpp_test --cleanup)
+    set_tests_properties(fluss_cluster_cleanup PROPERTIES
+        FIXTURES_CLEANUP fluss_cluster
+    )
 endif()
