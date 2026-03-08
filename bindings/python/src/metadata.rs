@@ -220,6 +220,7 @@ impl Schema {
             .collect()
     }
 
+    /// Get primary key column names, returns empty list if no primary key is defined
     fn get_primary_keys(&self) -> Vec<String> {
         self.__schema
             .primary_key()

@@ -19,7 +19,7 @@
 
 from enum import IntEnum
 from types import TracebackType
-from typing import Dict, Iterator, List, Optional, Tuple, Union, overload
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, overload
 
 import pandas as pd
 import pyarrow as pa
@@ -775,6 +775,7 @@ class Schema:
     def get_column_names(self) -> List[str]: ...
     def get_column_types(self) -> List[str]: ...
     def get_columns(self) -> List[Tuple[str, str]]: ...
+    def get_primary_keys(self) -> List[str]: ...
     def __str__(self) -> str: ...
 
 class TableDescriptor:
