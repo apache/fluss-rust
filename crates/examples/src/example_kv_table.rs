@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use clap::Parser;
 use fluss::client::FlussConnection;
 use fluss::config::Config;
