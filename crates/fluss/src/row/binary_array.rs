@@ -310,11 +310,10 @@ impl FlussArray {
         if TimestampNtz::is_compact(precision) {
             Ok(TimestampNtz::new(self.get_long(pos)))
         } else {
-            let (offset, _size) = self.get_offset_and_size(pos);
+            let (offset, nanos_of_millis) = self.get_offset_and_size(pos);
             let millis_bytes = self.checked_slice(offset, 8, "timestamp ntz millis")?;
             let millis = i64::from_ne_bytes(millis_bytes.try_into().unwrap());
-            let nanos = _size as i32;
-            TimestampNtz::from_millis_nanos(millis, nanos)
+            TimestampNtz::from_millis_nanos(millis, nanos_of_millis as i32)
         }
     }
 
@@ -322,11 +321,10 @@ impl FlussArray {
         if TimestampLtz::is_compact(precision) {
             Ok(TimestampLtz::new(self.get_long(pos)))
         } else {
-            let (offset, _size) = self.get_offset_and_size(pos);
+            let (offset, nanos_of_millis) = self.get_offset_and_size(pos);
             let millis_bytes = self.checked_slice(offset, 8, "timestamp ltz millis")?;
             let millis = i64::from_ne_bytes(millis_bytes.try_into().unwrap());
-            let nanos = _size as i32;
-            TimestampLtz::from_millis_nanos(millis, nanos)
+            TimestampLtz::from_millis_nanos(millis, nanos_of_millis as i32)
         }
     }
 

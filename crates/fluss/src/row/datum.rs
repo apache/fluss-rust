@@ -504,6 +504,9 @@ fn append_fluss_array_to_list_builder(
 
     for i in 0..arr.size() {
         if arr.is_null_at(i) {
+            // TODO: Datum::Null triggers a chain of downcast attempts in append_to.
+            // For sparse arrays with many nulls, call append_null directly on the
+            // typed inner builder to avoid the overhead.
             let null_datum = Datum::Null;
             null_datum.append_to(values_builder, &element_arrow_type)?;
         } else {
