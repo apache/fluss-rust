@@ -488,7 +488,7 @@ where
             Err(e) => {
                 request_metrics.complete(0);
                 return Err(Error::UnexpectedError {
-                    message: "Got recvError, some one close the channel".to_string(),
+                    message: "Receive error: response channel closed".to_string(),
                     source: Some(Box::new(e)),
                 });
             }
@@ -822,12 +822,7 @@ mod tests {
         TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
-    type SnapshotEntry = (
-        CompositeKey,
-        Option<Unit>,
-        Option<SharedString>,
-        DebugValue,
-    );
+    type SnapshotEntry = (CompositeKey, Option<Unit>, Option<SharedString>, DebugValue);
 
     fn has_api_label(key: &CompositeKey, label: &str) -> bool {
         key.key()
@@ -893,18 +888,27 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_before =
-            counter_for_label(&before, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
-        let response_before =
-            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let request_before = counter_for_label(
+            &before,
+            crate::metrics::CLIENT_REQUESTS_TOTAL,
+            "produce_log",
+        );
+        let response_before = counter_for_label(
+            &before,
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            "produce_log",
+        );
 
         conn.request(TestProduceRequest).await.unwrap();
 
         let after: Vec<_> = snapshotter.snapshot().into_vec();
         let request_after =
             counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
-        let response_after =
-            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
+        let response_after = counter_for_label(
+            &after,
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            "produce_log",
+        );
         assert_eq!(
             request_after - request_before,
             1,
@@ -955,7 +959,9 @@ mod tests {
         );
 
         // No metric entry should carry a non-reportable API key label.
-        let non_reportable = snapshot.iter().any(|(key, _, _, _)| has_api_label(key, "metadata"));
+        let non_reportable = snapshot
+            .iter()
+            .any(|(key, _, _, _)| has_api_label(key, "metadata"));
         assert!(
             !non_reportable,
             "non-reportable API keys must not appear in metrics"
@@ -972,12 +978,21 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_before =
-            counter_for_label(&before, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
-        let response_before =
-            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
-        let bytes_received_before =
-            counter_for_label(&before, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let request_before = counter_for_label(
+            &before,
+            crate::metrics::CLIENT_REQUESTS_TOTAL,
+            "produce_log",
+        );
+        let response_before = counter_for_label(
+            &before,
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            "produce_log",
+        );
+        let bytes_received_before = counter_for_label(
+            &before,
+            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
+            "produce_log",
+        );
         let result = conn.request(TestProduceRequest).await;
         assert!(
             result.is_err(),
@@ -986,12 +1001,21 @@ mod tests {
         let after: Vec<_> = snapshotter.snapshot().into_vec();
         let request_after =
             counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
-        let response_after =
-            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
-        let bytes_received_after =
-            counter_for_label(&after, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
-        let inflight_after =
-            gauge_for_label(&after, crate::metrics::CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
+        let response_after = counter_for_label(
+            &after,
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            "produce_log",
+        );
+        let bytes_received_after = counter_for_label(
+            &after,
+            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
+            "produce_log",
+        );
+        let inflight_after = gauge_for_label(
+            &after,
+            crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+            "produce_log",
+        );
 
         assert_eq!(
             request_after - request_before,
@@ -1025,10 +1049,16 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let response_before =
-            counter_for_label(&before, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
-        let bytes_received_before =
-            counter_for_label(&before, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let response_before = counter_for_label(
+            &before,
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            "produce_log",
+        );
+        let bytes_received_before = counter_for_label(
+            &before,
+            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
+            "produce_log",
+        );
 
         let result = conn.request(TestProduceRequest).await;
         assert!(
@@ -1037,12 +1067,21 @@ mod tests {
         );
 
         let after: Vec<_> = snapshotter.snapshot().into_vec();
-        let response_after =
-            counter_for_label(&after, crate::metrics::CLIENT_RESPONSES_TOTAL, "produce_log");
-        let bytes_received_after =
-            counter_for_label(&after, crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
-        let inflight_after =
-            gauge_for_label(&after, crate::metrics::CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
+        let response_after = counter_for_label(
+            &after,
+            crate::metrics::CLIENT_RESPONSES_TOTAL,
+            "produce_log",
+        );
+        let bytes_received_after = counter_for_label(
+            &after,
+            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
+            "produce_log",
+        );
+        let inflight_after = gauge_for_label(
+            &after,
+            crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
+            "produce_log",
+        );
 
         assert_eq!(
             response_after - response_before,
