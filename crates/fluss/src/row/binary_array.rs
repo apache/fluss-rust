@@ -29,6 +29,7 @@ use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::Decimal;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+use bytes::Bytes;
 use serde::Serialize;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -75,9 +76,11 @@ fn round_to_nearest_word(num_bytes: usize) -> usize {
 ///
 /// Stores elements in a flat byte buffer with a header (element count + null bitmap)
 /// followed by fixed-length slots and an optional variable-length section.
+///
+/// Uses `Bytes` internally so cloning is O(1) reference-counted.
 #[derive(Clone)]
 pub struct FlussArray {
-    data: Vec<u8>,
+    data: Bytes,
     size: usize,
     element_offset: usize,
 }
@@ -133,8 +136,8 @@ impl Serialize for FlussArray {
 }
 
 impl FlussArray {
-    /// Creates a FlussArray from a byte slice (copies data into owned storage).
-    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+    /// Validates the raw bytes and computes derived fields (size, element_offset).
+    fn validate(data: &[u8]) -> Result<(usize, usize)> {
         if data.len() < 4 {
             return Err(IllegalArgument {
                 message: format!(
@@ -143,7 +146,7 @@ impl FlussArray {
                 ),
             });
         }
-        let raw_size = i32::from_ne_bytes(data[0..4].try_into().unwrap());
+        let raw_size = i32::from_le_bytes(data[0..4].try_into().unwrap());
         if raw_size < 0 {
             return Err(IllegalArgument {
                 message: format!("FlussArray size must be non-negative, got {raw_size}"),
@@ -160,9 +163,34 @@ impl FlussArray {
                 ),
             });
         }
+        Ok((size, element_offset))
+    }
 
+    /// Creates a FlussArray from a byte slice (copies data).
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        let (size, element_offset) = Self::validate(data)?;
         Ok(FlussArray {
-            data: data.to_vec(),
+            data: Bytes::copy_from_slice(data),
+            size,
+            element_offset,
+        })
+    }
+
+    /// Creates a FlussArray from an owned `Vec<u8>` without copying.
+    pub fn from_vec(data: Vec<u8>) -> Result<Self> {
+        let (size, element_offset) = Self::validate(&data)?;
+        Ok(FlussArray {
+            data: Bytes::from(data),
+            size,
+            element_offset,
+        })
+    }
+
+    /// Creates a FlussArray from owned bytes without copying.
+    fn from_owned_bytes(data: Bytes) -> Result<Self> {
+        let (size, element_offset) = Self::validate(&data)?;
+        Ok(FlussArray {
+            data,
             size,
             element_offset,
         })
@@ -204,7 +232,7 @@ impl FlussArray {
         Ok(&self.data[start..end])
     }
 
-    fn read_var_len_bytes(&self, pos: usize) -> Result<&[u8]> {
+    fn read_var_len_span(&self, pos: usize) -> Result<(usize, usize)> {
         let field_offset = self.element_offset(pos, 8);
         let packed = self.get_long(pos) as u64;
         let mark = packed & HIGHEST_FIRST_BIT;
@@ -212,7 +240,8 @@ impl FlussArray {
         if mark == 0 {
             let offset = (packed >> 32) as usize;
             let len = (packed & 0xFFFF_FFFF) as usize;
-            self.checked_slice(offset, len, "variable-length array element")
+            let _ = self.checked_slice(offset, len, "variable-length array element")?;
+            Ok((offset, len))
         } else {
             let len = ((packed & HIGHEST_SECOND_TO_EIGHTH_BIT) >> 56) as usize;
             if len > MAX_FIX_PART_DATA_SIZE {
@@ -229,8 +258,14 @@ impl FlussArray {
             } else {
                 field_offset + 1
             };
-            self.checked_slice(start, len, "inline array element")
+            let _ = self.checked_slice(start, len, "inline array element")?;
+            Ok((start, len))
         }
+    }
+
+    fn read_var_len_bytes(&self, pos: usize) -> Result<&[u8]> {
+        let (start, len) = self.read_var_len_span(pos)?;
+        Ok(&self.data[start..start + len])
     }
 
     pub fn get_boolean(&self, pos: usize) -> bool {
@@ -245,27 +280,27 @@ impl FlussArray {
 
     pub fn get_short(&self, pos: usize) -> i16 {
         let offset = self.element_offset(pos, 2);
-        i16::from_ne_bytes(self.data[offset..offset + 2].try_into().unwrap())
+        i16::from_le_bytes(self.data[offset..offset + 2].try_into().unwrap())
     }
 
     pub fn get_int(&self, pos: usize) -> i32 {
         let offset = self.element_offset(pos, 4);
-        i32::from_ne_bytes(self.data[offset..offset + 4].try_into().unwrap())
+        i32::from_le_bytes(self.data[offset..offset + 4].try_into().unwrap())
     }
 
     pub fn get_long(&self, pos: usize) -> i64 {
         let offset = self.element_offset(pos, 8);
-        i64::from_ne_bytes(self.data[offset..offset + 8].try_into().unwrap())
+        i64::from_le_bytes(self.data[offset..offset + 8].try_into().unwrap())
     }
 
     pub fn get_float(&self, pos: usize) -> f32 {
         let offset = self.element_offset(pos, 4);
-        f32::from_ne_bytes(self.data[offset..offset + 4].try_into().unwrap())
+        f32::from_le_bytes(self.data[offset..offset + 4].try_into().unwrap())
     }
 
     pub fn get_double(&self, pos: usize) -> f64 {
         let offset = self.element_offset(pos, 8);
-        f64::from_ne_bytes(self.data[offset..offset + 8].try_into().unwrap())
+        f64::from_le_bytes(self.data[offset..offset + 8].try_into().unwrap())
     }
 
     /// Reads the offset_and_size packed long for variable-length elements.
@@ -312,7 +347,7 @@ impl FlussArray {
         } else {
             let (offset, nanos_of_millis) = self.get_offset_and_size(pos);
             let millis_bytes = self.checked_slice(offset, 8, "timestamp ntz millis")?;
-            let millis = i64::from_ne_bytes(millis_bytes.try_into().unwrap());
+            let millis = i64::from_le_bytes(millis_bytes.try_into().unwrap());
             TimestampNtz::from_millis_nanos(millis, nanos_of_millis as i32)
         }
     }
@@ -323,14 +358,14 @@ impl FlussArray {
         } else {
             let (offset, nanos_of_millis) = self.get_offset_and_size(pos);
             let millis_bytes = self.checked_slice(offset, 8, "timestamp ltz millis")?;
-            let millis = i64::from_ne_bytes(millis_bytes.try_into().unwrap());
+            let millis = i64::from_le_bytes(millis_bytes.try_into().unwrap());
             TimestampLtz::from_millis_nanos(millis, nanos_of_millis as i32)
         }
     }
 
     pub fn get_array(&self, pos: usize) -> Result<FlussArray> {
-        let bytes = self.read_var_len_bytes(pos)?;
-        FlussArray::from_bytes(bytes)
+        let (start, len) = self.read_var_len_span(pos)?;
+        FlussArray::from_owned_bytes(self.data.slice(start..start + len))
     }
 }
 
@@ -358,8 +393,8 @@ impl FlussArrayWriter {
         let fixed_size = round_to_nearest_word(header_in_bytes + element_size * num_elements);
         let mut data = vec![0u8; fixed_size];
 
-        // Write element count at offset 0 (native endian, matches Java Unsafe behavior)
-        data[0..4].copy_from_slice(&(num_elements as i32).to_ne_bytes());
+        // Java's MemorySegment.putInt() stores little-endian.
+        data[0..4].copy_from_slice(&(num_elements as i32).to_le_bytes());
 
         FlussArrayWriter {
             data,
@@ -394,27 +429,27 @@ impl FlussArrayWriter {
 
     pub fn write_short(&mut self, pos: usize, value: i16) {
         let offset = self.get_element_offset(pos);
-        self.data[offset..offset + 2].copy_from_slice(&value.to_ne_bytes());
+        self.data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
 
     pub fn write_int(&mut self, pos: usize, value: i32) {
         let offset = self.get_element_offset(pos);
-        self.data[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
+        self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     pub fn write_long(&mut self, pos: usize, value: i64) {
         let offset = self.get_element_offset(pos);
-        self.data[offset..offset + 8].copy_from_slice(&value.to_ne_bytes());
+        self.data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
 
     pub fn write_float(&mut self, pos: usize, value: f32) {
         let offset = self.get_element_offset(pos);
-        self.data[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
+        self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     pub fn write_double(&mut self, pos: usize, value: f64) {
         let offset = self.get_element_offset(pos);
-        self.data[offset..offset + 8].copy_from_slice(&value.to_ne_bytes());
+        self.data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
 
     /// Writes variable-length bytes to the variable part and stores offset+size in the fixed slot.
@@ -493,7 +528,7 @@ impl FlussArrayWriter {
         if TimestampNtz::is_compact(precision) {
             self.write_long(pos, value.get_millisecond());
         } else {
-            let millis_bytes = value.get_millisecond().to_ne_bytes();
+            let millis_bytes = value.get_millisecond().to_le_bytes();
             let var_offset = self.cursor;
             let rounded = round_to_nearest_word(8);
             self.data.resize(self.data.len() + rounded, 0);
@@ -507,7 +542,7 @@ impl FlussArrayWriter {
         if TimestampLtz::is_compact(precision) {
             self.write_long(pos, value.get_epoch_millisecond());
         } else {
-            let millis_bytes = value.get_epoch_millisecond().to_ne_bytes();
+            let millis_bytes = value.get_epoch_millisecond().to_le_bytes();
             let var_offset = self.cursor;
             let rounded = round_to_nearest_word(8);
             self.data.resize(self.data.len() + rounded, 0);
@@ -526,7 +561,7 @@ impl FlussArrayWriter {
     pub fn complete(self) -> Result<FlussArray> {
         let mut data = self.data;
         data.truncate(self.cursor);
-        FlussArray::from_bytes(&data)
+        FlussArray::from_vec(data)
     }
 
     /// Returns the number of elements this writer was initialized with.
@@ -620,12 +655,12 @@ mod tests {
         // Manually construct Java-style inline encoded short string ("abc")
         // slot payload: [len|0x80 in top byte] + [bytes in low 7 bytes on little-endian]
         let mut data = vec![0_u8; 16];
-        data[0..4].copy_from_slice(&(1_i32).to_ne_bytes());
+        data[0..4].copy_from_slice(&(1_i32).to_le_bytes());
         // null bits remain 0
         let first_byte = (3_u64 | 0x80) << 56;
         let seven_bytes = (b'a' as u64) | ((b'b' as u64) << 8) | ((b'c' as u64) << 16);
         let packed = first_byte | seven_bytes;
-        data[8..16].copy_from_slice(&packed.to_ne_bytes());
+        data[8..16].copy_from_slice(&packed.to_le_bytes());
 
         let arr = FlussArray::from_bytes(&data).unwrap();
         assert_eq!(arr.size(), 1);
@@ -722,13 +757,13 @@ mod tests {
         let array = writer.complete().unwrap();
         let bytes = array.as_bytes();
 
-        // size = 3 at offset 0 (4 bytes, native endian)
-        assert_eq!(i32::from_ne_bytes(bytes[0..4].try_into().unwrap()), 3);
+        // size = 3 at offset 0 (4 bytes, little-endian per Java MemorySegment.putInt)
+        assert_eq!(i32::from_le_bytes(bytes[0..4].try_into().unwrap()), 3);
         // null bits: 4 bytes starting at offset 4, should be all zeros
         assert_eq!(&bytes[4..8], &[0, 0, 0, 0]);
-        // elements start at offset 8 (header = 4 + 4), each 4 bytes
-        assert_eq!(i32::from_ne_bytes(bytes[8..12].try_into().unwrap()), 1);
-        assert_eq!(i32::from_ne_bytes(bytes[12..16].try_into().unwrap()), 2);
-        assert_eq!(i32::from_ne_bytes(bytes[16..20].try_into().unwrap()), 3);
+        // elements start at offset 8 (header = 4 + 4), each 4 bytes (little-endian)
+        assert_eq!(i32::from_le_bytes(bytes[8..12].try_into().unwrap()), 1);
+        assert_eq!(i32::from_le_bytes(bytes[12..16].try_into().unwrap()), 2);
+        assert_eq!(i32::from_le_bytes(bytes[16..20].try_into().unwrap()), 3);
     }
 }

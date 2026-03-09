@@ -47,13 +47,11 @@ impl CompactedKeyWriter {
     }
 
     pub fn create_value_writer(field_type: &DataType) -> Result<ValueWriter> {
-        // Key columns are scalar-only. We reject Array/Map/Row explicitly
-        // here, so future complex-type writer support does not
-        // silently widen key semantics.
-        if matches!(
-            field_type,
-            DataType::Array(_) | DataType::Map(_) | DataType::Row(_)
-        ) {
+        // Java's CompactedKeyEncoder allows encoding Array types (Map/Row
+        // are not yet supported by ValueWriter). The server rejects
+        // unsupported key types at table-creation time, so encoding is
+        // allowed here to match Java parity.
+        if matches!(field_type, DataType::Map(_) | DataType::Row(_)) {
             return Err(crate::error::Error::IllegalArgument {
                 message: format!("Cannot use {field_type:?} as a key column type"),
             });

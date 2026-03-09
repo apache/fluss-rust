@@ -64,8 +64,12 @@ impl CompactedKeyEncoder {
 
         for pos in &encode_field_pos {
             let data_type = row_type.fields().get(*pos).unwrap().data_type();
-            field_getters.push(FieldGetter::create(data_type, *pos));
-            field_encoders.push(CompactedKeyWriter::create_value_writer(data_type)?);
+            // Validate key type support first, so unsupported types return a
+            // typed error instead of panicking in FieldGetter::create.
+            let field_encoder = CompactedKeyWriter::create_value_writer(data_type)?;
+            let field_getter = FieldGetter::create(data_type, *pos);
+            field_getters.push(field_getter);
+            field_encoders.push(field_encoder);
         }
 
         Ok(CompactedKeyEncoder {
@@ -82,18 +86,19 @@ impl KeyEncoder for CompactedKeyEncoder {
         self.compacted_encoder.reset();
 
         // iterate all the fields of the row, and encode each field
-        for (pos, field_getter) in self.field_getters.iter().enumerate() {
+        for (pos, (field_getter, field_encoder)) in self
+            .field_getters
+            .iter()
+            .zip(self.field_encoders.iter())
+            .enumerate()
+        {
             match &field_getter.get_field(row)? {
                 Datum::Null => {
                     return Err(IllegalArgument {
                         message: format!("Cannot encode key with null value at position: {pos:?}"),
                     });
                 }
-                value => self.field_encoders.get(pos).unwrap().write_value(
-                    &mut self.compacted_encoder,
-                    pos,
-                    value,
-                )?,
+                value => field_encoder.write_value(&mut self.compacted_encoder, pos, value)?,
             }
         }
 
@@ -105,7 +110,16 @@ impl KeyEncoder for CompactedKeyEncoder {
 mod tests {
     use super::*;
     use crate::metadata::DataTypes;
+    use crate::row::binary_array::FlussArrayWriter;
     use crate::row::{Datum, GenericRow};
+
+    fn build_int_array(values: &[i32]) -> crate::row::FlussArray {
+        let mut w = FlussArrayWriter::new(values.len(), &DataTypes::int());
+        for (i, v) in values.iter().enumerate() {
+            w.write_int(i, *v);
+        }
+        w.complete().unwrap()
+    }
 
     pub fn for_test_row_type(row_type: &RowType) -> CompactedKeyEncoder {
         CompactedKeyEncoder::new(row_type, (0..row_type.fields().len()).collect())
@@ -238,12 +252,41 @@ mod tests {
     }
 
     #[test]
-    fn test_array_type_rejected_as_key() {
+    fn test_array_type_allowed_as_key() {
+        // Java's CompactedKeyEncoder allows Array as a key column type
+        // (the server rejects unsupported key types at table-creation time).
         let row_type =
             RowType::with_data_types(vec![DataTypes::int(), DataTypes::array(DataTypes::int())]);
-        let result = CompactedKeyEncoder::new(&row_type, vec![0, 1]);
-        match result {
-            Ok(_) => panic!("Expected error when using Array as key type"),
+        let mut encoder = CompactedKeyEncoder::new(&row_type, vec![0, 1]).unwrap();
+
+        let row_a = GenericRow::from_data(vec![
+            Datum::Int32(42),
+            Datum::Array(build_int_array(&[10, 20])),
+        ]);
+        let row_b = GenericRow::from_data(vec![
+            Datum::Int32(42),
+            Datum::Array(build_int_array(&[10, 30])),
+        ]);
+
+        let encoded_a = encoder.encode_key(&row_a).unwrap();
+        let encoded_b = encoder.encode_key(&row_b).unwrap();
+
+        assert!(!encoded_a.is_empty());
+        assert_ne!(
+            encoded_a.iter().as_slice(),
+            encoded_b.iter().as_slice(),
+            "Array key payload should affect compacted key encoding"
+        );
+    }
+
+    #[test]
+    fn test_map_type_rejected_as_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::int(),
+            DataTypes::map(DataTypes::int(), DataTypes::string()),
+        ]);
+        match CompactedKeyEncoder::new(&row_type, vec![0, 1]) {
+            Ok(_) => panic!("Expected error when using Map as key type"),
             Err(err) => {
                 assert!(
                     err.to_string().contains("Cannot use"),

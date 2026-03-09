@@ -332,7 +332,10 @@ impl RowAppendRecordBatchBuilder {
             }
             arrow_schema::DataType::List(field) => {
                 let inner_builder = Self::create_builder(field.data_type(), capacity)?;
-                Ok(Box::new(ListBuilder::with_capacity(inner_builder, capacity)))
+                Ok(Box::new(ListBuilder::with_capacity(
+                    inner_builder,
+                    capacity,
+                )))
             }
             arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => Ok(
                 Box::new(TimestampMillisecondBuilder::with_capacity(capacity)),
@@ -1190,7 +1193,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
 
 /// Converts an Arrow data type back to a Fluss `DataType`.
 /// Used for reading array elements from Arrow ListArray back into Fluss types.
-pub fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
+pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
     use crate::metadata::DataTypes;
 
     Ok(match arrow_type {

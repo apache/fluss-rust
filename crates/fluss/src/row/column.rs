@@ -614,12 +614,12 @@ fn write_arrow_values_to_fluss_array(
                     .ok_or_else(|| IllegalArgument {
                         message: format!("Expected ListArray for {element_type:?} element"),
                     })?;
+            let nested_element_type = from_arrow_type(&list_arr.value_type())?;
             for i in 0..len {
                 if list_arr.is_null(i) {
                     writer.set_null_at(i);
                 } else {
                     let nested_values = list_arr.value(i);
-                    let nested_element_type = from_arrow_type(nested_values.data_type())?;
                     let mut nested_writer =
                         FlussArrayWriter::new(nested_values.len(), &nested_element_type);
                     write_arrow_values_to_fluss_array(
