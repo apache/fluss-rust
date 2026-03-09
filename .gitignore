@@ -20,7 +20,6 @@ Cargo.lock
 .vscode/
 
 # Python
-bindings/python/GENERATED_README.md
 __pycache__/
 *.py[cod]
 *$py.class
