@@ -729,6 +729,55 @@ async def test_scan_records_indexing_and_slicing(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def test_async_iterator(connection, admin):
+    """Test the Python asynchronous iterator loop (`async for`) on LogScanner."""
+    table_path = fluss.TablePath("fluss", "py_test_async_iterator")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    
+    # Write 5 records
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [pa.array(list(range(1, 6)), type=pa.int32()),
+             pa.array([f"async{i}" for i in range(1, 6)])],
+            schema=pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())]),
+        )
+    )
+    await writer.flush()
+
+    scanner = await table.new_scan().create_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+    collected = []
+    
+    # Here is the magical Issue #424 async iterator logic at work:
+    async def consume_scanner():
+        async for record in scanner:
+            collected.append(record)
+            if len(collected) == 5:
+                break
+                
+    # We must race the consumption against a timeout so the test doesn't hang if the iterator is broken
+    await asyncio.wait_for(consume_scanner(), timeout=10.0)
+    
+    assert len(collected) == 5, f"Expected 5 records, got {len(collected)}"
+    
+    collected.sort(key=lambda r: r.row["id"])
+    for i, record in enumerate(collected):
+        assert record.row["id"] == i + 1
+        assert record.row["val"] == f"async{i + 1}"
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
