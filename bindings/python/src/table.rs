@@ -31,7 +31,7 @@ use pyo3::types::{
     PyTzInfo,
 };
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyClassInitializer, PyErr, PyRef, PyRefMut, PyResult, Python,
+    Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
 };
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
