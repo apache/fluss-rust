@@ -875,6 +875,25 @@ mod tests {
             .sum()
     }
 
+    fn histogram_sample_count_for_label(
+        entries: &[SnapshotEntry],
+        metric_name: &str,
+        label: &str,
+    ) -> usize {
+        entries
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                if key.key().name() != metric_name || !has_api_label(key, label) {
+                    return None;
+                }
+                match value {
+                    DebugValue::Histogram(v) => Some(v.len()),
+                    _ => None,
+                }
+            })
+            .unwrap_or(0)
+    }
+
     // -- Tests -----------------------------------------------------------
 
     #[tokio::test]
@@ -898,6 +917,11 @@ mod tests {
             crate::metrics::CLIENT_RESPONSES_TOTAL,
             "produce_log",
         );
+        let latency_samples_before = histogram_sample_count_for_label(
+            &before,
+            crate::metrics::CLIENT_REQUEST_LATENCY_MS,
+            "produce_log",
+        );
 
         conn.request(TestProduceRequest).await.unwrap();
 
@@ -907,6 +931,11 @@ mod tests {
         let response_after = counter_for_label(
             &after,
             crate::metrics::CLIENT_RESPONSES_TOTAL,
+            "produce_log",
+        );
+        let latency_samples_after = histogram_sample_count_for_label(
+            &after,
+            crate::metrics::CLIENT_REQUEST_LATENCY_MS,
             "produce_log",
         );
         assert_eq!(
@@ -919,15 +948,10 @@ mod tests {
             1,
             "produce_log completion counter should increment by 1"
         );
-
-        let has_latency_sample = after.iter().any(|(key, _, _, value)| {
-            key.key().name() == crate::metrics::CLIENT_REQUEST_LATENCY_MS
-                && has_api_label(key, "produce_log")
-                && matches!(value, DebugValue::Histogram(_))
-        });
-        assert!(
-            has_latency_sample,
-            "request latency histogram should be recorded for produce_log"
+        assert_eq!(
+            latency_samples_after - latency_samples_before,
+            1,
+            "request latency histogram sample count should increment by 1 for produce_log"
         );
     }
 
