@@ -21,7 +21,7 @@ sidebar_position: 3
 | `TIMESTAMP_LTZ` | `TimestampLtz` | `get_timestamp_ltz(idx, precision)`  | `set_field(idx, TimestampLtz)` |
 | `BYTES`         | `&[u8]`        | `get_bytes()`                        | `set_field(idx, &[u8])`        |
 | `BINARY(n)`     | `&[u8]`        | `get_binary(idx, length)`            | `set_field(idx, &[u8])`        |
-| `ARRAY<T>`      | `FlussArray`   | `get_array()`                        | `set_field(idx, Datum::Array)` |
+| `ARRAY<T>`      | `FlussArray`   | `get_array()`                        | `set_field(idx, FlussArray)`   |
 
 ## Constructing Special Types
 
@@ -81,7 +81,7 @@ let mut row = GenericRow::new(1);
 row.set_field(0, Datum::Array(arr));
 ```
 
-`ARRAY` is supported for row values and nested row fields. Key encoding paths currently reject `ARRAY`, `MAP`, and `ROW` as key column types.
+`ARRAY` is supported for row values and nested row fields. For key encoding, Rust follows Java parity: `ARRAY` can be encoded by the compacted key encoder, while table-level key constraints are validated by the server (which may reject unsupported key types).
 
 ## Reading Row Data
 
