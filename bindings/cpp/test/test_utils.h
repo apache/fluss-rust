@@ -306,8 +306,17 @@ class FlussTestEnvironment : public ::testing::Environment {
             if (result.Ok()) {
                 auto admin_result = connection_.GetAdmin(admin_);
                 if (admin_result.Ok()) {
-                    std::cout << "Connected to Fluss cluster." << std::endl;
-                    return;
+                    // check tablet server is available
+                    std::vector<fluss::ServerNode> nodes;
+                    auto nodes_result = admin_.GetServerNodes(nodes);
+                    if (nodes_result.Ok() &&
+                        std::any_of(nodes.begin(), nodes.end(),
+                                    [](const fluss::ServerNode& n) {
+                                        return n.server_type == "TabletServer";
+                                    })) {
+                        std::cout << "Connected to Fluss cluster." << std::endl;
+                        return;
+                    }
                 }
             }
             std::cout << "Waiting for Fluss cluster to be ready..." << std::endl;
