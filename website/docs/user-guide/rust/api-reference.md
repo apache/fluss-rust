@@ -5,6 +5,10 @@ sidebar_position: 2
 
 Complete API reference for the Fluss Rust client.
 
+> Compatibility note: `RpcClient::with_timeout` was renamed to
+> `RpcClient::with_connect_timeout` to distinguish it from
+> `RpcClient::with_request_timeout`.
+
 ## `Config`
 
 | Field                                 | Type            | Default            | Description                                                                          |
@@ -21,7 +25,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_remote_log_read_concurrency` | `usize`         | `4`                | Streaming read concurrency within a remote log file                                  |
 | `scanner_log_max_poll_records`        | `usize`         | `500`              | Maximum number of records returned in a single poll()                                |
 | `connect_timeout_ms`                  | `u64`           | `120000`           | TCP connect timeout in milliseconds                                                  |
-| `request_timeout_ms`                  | `u64`           | `30000`            | Per-request RPC timeout in milliseconds                                              |
+| `request_timeout_ms`                  | `u64`           | `30000`            | Timeout in ms while waiting for an RPC response after the request is sent (request write/send can take longer) |
 | `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
 | `security_sasl_username`              | `String`        | (empty)            | SASL username (required when protocol is `sasl`)                                     |

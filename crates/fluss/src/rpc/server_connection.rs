@@ -88,6 +88,11 @@ impl RpcClient {
         }
     }
 
+    /// Set the timeout used when establishing TCP connections.
+    ///
+    /// Compatibility note: this builder was previously named `with_timeout`.
+    /// It was renamed to make timeout semantics explicit now that
+    /// `with_request_timeout` is also available.
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(timeout);
         self
@@ -618,7 +623,7 @@ mod tests {
             BufStream::new(client_stream),
             usize::MAX,
             Arc::from("test"),
-            Some(Duration::from_millis(50)),
+            Some(Duration::from_millis(500)),
         );
 
         let table_path = TablePath::new("db", "table");
@@ -664,10 +669,10 @@ mod tests {
 
         let table_path = TablePath::new("db", "table");
         let request = TableExistsRequest::new(&table_path);
-        let pending = tokio::time::timeout(Duration::from_millis(50), conn.request(request)).await;
+        let pending = tokio::time::timeout(Duration::from_millis(300), conn.request(request)).await;
         assert!(
             pending.is_err(),
-            "expected request to remain pending without per-request timeout"
+            "expected request to remain pending without per-request timeout",
         );
     }
 }
