@@ -416,7 +416,7 @@ Implements the `InternalRow` trait (see below).
 
 Element getters mirror `InternalRow` typed getters and return `Result<T>`. For example, use `get_int()`, `get_long()`, and `get_double()` for primitive elements, and `get_string()`, `get_binary()`, `get_decimal()`, `get_timestamp_ntz()`, `get_timestamp_ltz()`, and `get_array()` for variable-length or nested elements.
 
-Note: `FlussArray` currently exposes the fallible getter surface as the stable API. Infallible fast-path variants may be added later as non-breaking extensions if needed.
+TODO: `FlussArray` currently exposes the fallible getter surface as the stable API. Infallible fast-path variants may be added later as non-breaking extensions if needed.
 
 ## `ChangeType`
 
