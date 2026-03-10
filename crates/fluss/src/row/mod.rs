@@ -21,7 +21,7 @@ pub(crate) mod datum;
 mod decimal;
 
 pub mod binary;
-pub mod column_writer;
+pub(crate) mod column_writer;
 pub mod compacted;
 pub mod encode;
 pub mod field_getter;

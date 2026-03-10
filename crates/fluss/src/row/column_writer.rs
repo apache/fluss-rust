@@ -137,16 +137,16 @@ impl ColumnWriter {
                 len: t.length() as usize,
                 builder: StringBuilder::with_capacity(
                     capacity,
-                    capacity * VARIABLE_WIDTH_AVG_BYTES,
+                    capacity.saturating_mul(VARIABLE_WIDTH_AVG_BYTES),
                 ),
             },
             DataType::String(_) => TypedWriter::String(StringBuilder::with_capacity(
                 capacity,
-                capacity * VARIABLE_WIDTH_AVG_BYTES,
+                capacity.saturating_mul(VARIABLE_WIDTH_AVG_BYTES),
             )),
             DataType::Bytes(_) => TypedWriter::Bytes(BinaryBuilder::with_capacity(
                 capacity,
-                capacity * VARIABLE_WIDTH_AVG_BYTES,
+                capacity.saturating_mul(VARIABLE_WIDTH_AVG_BYTES),
             )),
             DataType::Binary(t) => {
                 let arrow_len: i32 = t.length().try_into().map_err(|_| Error::IllegalArgument {
