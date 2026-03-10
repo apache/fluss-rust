@@ -526,13 +526,13 @@ fn read_datum_from_fluss_array<'a>(
     use crate::metadata::DataType;
 
     Ok(match element_type {
-        DataType::Boolean(_) => Datum::Bool(arr.get_boolean(pos)),
-        DataType::TinyInt(_) => Datum::Int8(arr.get_byte(pos)),
-        DataType::SmallInt(_) => Datum::Int16(arr.get_short(pos)),
-        DataType::Int(_) => Datum::Int32(arr.get_int(pos)),
-        DataType::BigInt(_) => Datum::Int64(arr.get_long(pos)),
-        DataType::Float(_) => Datum::Float32(arr.get_float(pos).into()),
-        DataType::Double(_) => Datum::Float64(arr.get_double(pos).into()),
+        DataType::Boolean(_) => Datum::Bool(arr.get_boolean(pos)?),
+        DataType::TinyInt(_) => Datum::Int8(arr.get_byte(pos)?),
+        DataType::SmallInt(_) => Datum::Int16(arr.get_short(pos)?),
+        DataType::Int(_) => Datum::Int32(arr.get_int(pos)?),
+        DataType::BigInt(_) => Datum::Int64(arr.get_long(pos)?),
+        DataType::Float(_) => Datum::Float32(arr.get_float(pos)?.into()),
+        DataType::Double(_) => Datum::Float64(arr.get_double(pos)?.into()),
         DataType::Char(_) | DataType::String(_) => {
             Datum::String(Cow::Owned(arr.get_string(pos)?.to_string()))
         }
@@ -542,8 +542,8 @@ fn read_datum_from_fluss_array<'a>(
         DataType::Decimal(dt) => {
             Datum::Decimal(arr.get_decimal(pos, dt.precision(), dt.scale())?)
         }
-        DataType::Date(_) => Datum::Date(arr.get_date(pos)),
-        DataType::Time(_) => Datum::Time(arr.get_time(pos)),
+        DataType::Date(_) => Datum::Date(arr.get_date(pos)?),
+        DataType::Time(_) => Datum::Time(arr.get_time(pos)?),
         DataType::Timestamp(t) => Datum::TimestampNtz(arr.get_timestamp_ntz(pos, t.precision())?),
         DataType::TimestampLTz(t) => {
             Datum::TimestampLtz(arr.get_timestamp_ltz(pos, t.precision())?)

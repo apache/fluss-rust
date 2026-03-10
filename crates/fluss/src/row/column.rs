@@ -911,9 +911,9 @@ mod tests {
         let row = single_column_row(array);
         let arr = row.get_array(0).unwrap();
         assert_eq!(arr.size(), 3);
-        assert_eq!(arr.get_int(0), 1);
-        assert_eq!(arr.get_int(1), 2);
-        assert_eq!(arr.get_int(2), 3);
+        assert_eq!(arr.get_int(0).unwrap(), 1);
+        assert_eq!(arr.get_int(1).unwrap(), 2);
+        assert_eq!(arr.get_int(2).unwrap(), 3);
     }
 
     #[test]
@@ -928,9 +928,9 @@ mod tests {
         let row = single_column_row(array);
         let arr = row.get_array(0).unwrap();
         assert_eq!(arr.size(), 3);
-        assert_eq!(arr.get_int(0), 1);
+        assert_eq!(arr.get_int(0).unwrap(), 1);
         assert!(arr.is_null_at(1));
-        assert_eq!(arr.get_int(2), 3);
+        assert_eq!(arr.get_int(2).unwrap(), 3);
     }
 
     #[test]
@@ -956,12 +956,12 @@ mod tests {
 
         let nested0 = arr.get_array(0).unwrap();
         assert_eq!(nested0.size(), 2);
-        assert_eq!(nested0.get_int(0), 1);
-        assert_eq!(nested0.get_int(1), 2);
+        assert_eq!(nested0.get_int(0).unwrap(), 1);
+        assert_eq!(nested0.get_int(1).unwrap(), 2);
 
         let nested1 = arr.get_array(1).unwrap();
         assert_eq!(nested1.size(), 1);
-        assert_eq!(nested1.get_int(0), 99);
+        assert_eq!(nested1.get_int(0).unwrap(), 99);
     }
 
     #[test]

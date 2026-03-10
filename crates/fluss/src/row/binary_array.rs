@@ -213,10 +213,6 @@ impl FlussArray {
         (self.data[4 + byte_index] & (1u8 << bit)) != 0
     }
 
-    fn element_offset(&self, ordinal: usize, element_size: usize) -> usize {
-        self.element_offset + ordinal * element_size
-    }
-
     fn checked_slice(&self, start: usize, len: usize, context: &str) -> Result<&[u8]> {
         let end = start.checked_add(len).ok_or_else(|| IllegalArgument {
             message: format!("Overflow while reading {context}: start={start}, len={len}"),
@@ -232,9 +228,67 @@ impl FlussArray {
         Ok(&self.data[start..end])
     }
 
+    fn checked_element_offset(
+        &self,
+        pos: usize,
+        element_size: usize,
+        context: &str,
+    ) -> Result<usize> {
+        if pos >= self.size {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Array element index out of bounds while reading {context}: pos={pos}, size={}",
+                    self.size
+                ),
+            });
+        }
+        let rel = pos.checked_mul(element_size).ok_or_else(|| IllegalArgument {
+            message: format!(
+                "Overflow while calculating array element offset for {context}: pos={pos}, element_size={element_size}"
+            ),
+        })?;
+        self.element_offset
+            .checked_add(rel)
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "Overflow while adding base offset for {context}: base={}, rel={rel}",
+                    self.element_offset
+                ),
+            })
+    }
+
+    fn read_fixed_bytes(&self, pos: usize, len: usize, context: &str) -> Result<&[u8]> {
+        let offset = self.checked_element_offset(pos, len, context)?;
+        self.checked_slice(offset, len, context)
+    }
+
+    fn read_i16(&self, pos: usize, context: &str) -> Result<i16> {
+        let bytes = self.read_fixed_bytes(pos, 2, context)?;
+        Ok(i16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+
+    fn read_i32(&self, pos: usize, context: &str) -> Result<i32> {
+        let bytes = self.read_fixed_bytes(pos, 4, context)?;
+        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_i64(&self, pos: usize, context: &str) -> Result<i64> {
+        let bytes = self.read_fixed_bytes(pos, 8, context)?;
+        let mut buf = [0_u8; 8];
+        buf.copy_from_slice(bytes);
+        Ok(i64::from_le_bytes(buf))
+    }
+
+    fn read_i64_at_offset(&self, offset: usize, context: &str) -> Result<i64> {
+        let bytes = self.checked_slice(offset, 8, context)?;
+        let mut buf = [0_u8; 8];
+        buf.copy_from_slice(bytes);
+        Ok(i64::from_le_bytes(buf))
+    }
+
     fn read_var_len_span(&self, pos: usize) -> Result<(usize, usize)> {
-        let field_offset = self.element_offset(pos, 8);
-        let packed = self.get_long(pos) as u64;
+        let field_offset = self.checked_element_offset(pos, 8, "variable-length array element")?;
+        let packed = self.read_i64(pos, "variable-length array element")? as u64;
         let mark = packed & HIGHEST_FIRST_BIT;
 
         if mark == 0 {
@@ -268,47 +322,44 @@ impl FlussArray {
         Ok(&self.data[start..start + len])
     }
 
-    pub fn get_boolean(&self, pos: usize) -> bool {
-        let offset = self.element_offset(pos, 1);
-        self.data[offset] != 0
+    pub fn get_boolean(&self, pos: usize) -> Result<bool> {
+        let bytes = self.read_fixed_bytes(pos, 1, "boolean array element")?;
+        Ok(bytes[0] != 0)
     }
 
-    pub fn get_byte(&self, pos: usize) -> i8 {
-        let offset = self.element_offset(pos, 1);
-        self.data[offset] as i8
+    pub fn get_byte(&self, pos: usize) -> Result<i8> {
+        let bytes = self.read_fixed_bytes(pos, 1, "byte array element")?;
+        Ok(bytes[0] as i8)
     }
 
-    pub fn get_short(&self, pos: usize) -> i16 {
-        let offset = self.element_offset(pos, 2);
-        i16::from_le_bytes(self.data[offset..offset + 2].try_into().unwrap())
+    pub fn get_short(&self, pos: usize) -> Result<i16> {
+        self.read_i16(pos, "short array element")
     }
 
-    pub fn get_int(&self, pos: usize) -> i32 {
-        let offset = self.element_offset(pos, 4);
-        i32::from_le_bytes(self.data[offset..offset + 4].try_into().unwrap())
+    pub fn get_int(&self, pos: usize) -> Result<i32> {
+        self.read_i32(pos, "int array element")
     }
 
-    pub fn get_long(&self, pos: usize) -> i64 {
-        let offset = self.element_offset(pos, 8);
-        i64::from_le_bytes(self.data[offset..offset + 8].try_into().unwrap())
+    pub fn get_long(&self, pos: usize) -> Result<i64> {
+        self.read_i64(pos, "long array element")
     }
 
-    pub fn get_float(&self, pos: usize) -> f32 {
-        let offset = self.element_offset(pos, 4);
-        f32::from_le_bytes(self.data[offset..offset + 4].try_into().unwrap())
+    pub fn get_float(&self, pos: usize) -> Result<f32> {
+        let bits = self.read_i32(pos, "float array element")? as u32;
+        Ok(f32::from_bits(bits))
     }
 
-    pub fn get_double(&self, pos: usize) -> f64 {
-        let offset = self.element_offset(pos, 8);
-        f64::from_le_bytes(self.data[offset..offset + 8].try_into().unwrap())
+    pub fn get_double(&self, pos: usize) -> Result<f64> {
+        let bits = self.read_i64(pos, "double array element")? as u64;
+        Ok(f64::from_bits(bits))
     }
 
     /// Reads the offset_and_size packed long for variable-length elements.
-    fn get_offset_and_size(&self, pos: usize) -> (usize, usize) {
-        let packed = self.get_long(pos) as u64;
+    fn get_offset_and_size(&self, pos: usize) -> Result<(usize, usize)> {
+        let packed = self.get_long(pos)? as u64;
         let offset = (packed >> 32) as usize;
         let size = (packed & 0xFFFF_FFFF) as usize;
-        (offset, size)
+        Ok((offset, size))
     }
 
     pub fn get_string(&self, pos: usize) -> Result<&str> {
@@ -324,41 +375,39 @@ impl FlussArray {
 
     pub fn get_decimal(&self, pos: usize, precision: u32, scale: u32) -> Result<Decimal> {
         if Decimal::is_compact_precision(precision) {
-            let unscaled = self.get_long(pos);
+            let unscaled = self.get_long(pos)?;
             Decimal::from_unscaled_long(unscaled, precision, scale)
         } else {
-            let (offset, size) = self.get_offset_and_size(pos);
+            let (offset, size) = self.get_offset_and_size(pos)?;
             let bytes = self.checked_slice(offset, size, "decimal bytes")?;
             Decimal::from_unscaled_bytes(bytes, precision, scale)
         }
     }
 
-    pub fn get_date(&self, pos: usize) -> Date {
-        Date::new(self.get_int(pos))
+    pub fn get_date(&self, pos: usize) -> Result<Date> {
+        Ok(Date::new(self.get_int(pos)?))
     }
 
-    pub fn get_time(&self, pos: usize) -> Time {
-        Time::new(self.get_int(pos))
+    pub fn get_time(&self, pos: usize) -> Result<Time> {
+        Ok(Time::new(self.get_int(pos)?))
     }
 
     pub fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz> {
         if TimestampNtz::is_compact(precision) {
-            Ok(TimestampNtz::new(self.get_long(pos)))
+            Ok(TimestampNtz::new(self.get_long(pos)?))
         } else {
-            let (offset, nanos_of_millis) = self.get_offset_and_size(pos);
-            let millis_bytes = self.checked_slice(offset, 8, "timestamp ntz millis")?;
-            let millis = i64::from_le_bytes(millis_bytes.try_into().unwrap());
+            let (offset, nanos_of_millis) = self.get_offset_and_size(pos)?;
+            let millis = self.read_i64_at_offset(offset, "timestamp ntz millis")?;
             TimestampNtz::from_millis_nanos(millis, nanos_of_millis as i32)
         }
     }
 
     pub fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz> {
         if TimestampLtz::is_compact(precision) {
-            Ok(TimestampLtz::new(self.get_long(pos)))
+            Ok(TimestampLtz::new(self.get_long(pos)?))
         } else {
-            let (offset, nanos_of_millis) = self.get_offset_and_size(pos);
-            let millis_bytes = self.checked_slice(offset, 8, "timestamp ltz millis")?;
-            let millis = i64::from_le_bytes(millis_bytes.try_into().unwrap());
+            let (offset, nanos_of_millis) = self.get_offset_and_size(pos)?;
+            let millis = self.read_i64_at_offset(offset, "timestamp ltz millis")?;
             TimestampLtz::from_millis_nanos(millis, nanos_of_millis as i32)
         }
     }
@@ -613,9 +662,9 @@ mod tests {
 
         assert_eq!(array.size(), 3);
         assert!(!array.is_null_at(0));
-        assert_eq!(array.get_int(0), 10);
-        assert_eq!(array.get_int(1), 20);
-        assert_eq!(array.get_int(2), 30);
+        assert_eq!(array.get_int(0).unwrap(), 10);
+        assert_eq!(array.get_int(1).unwrap(), 20);
+        assert_eq!(array.get_int(2).unwrap(), 30);
     }
 
     #[test]
@@ -631,8 +680,8 @@ mod tests {
         assert!(!array.is_null_at(0));
         assert!(array.is_null_at(1));
         assert!(!array.is_null_at(2));
-        assert_eq!(array.get_int(0), 1);
-        assert_eq!(array.get_int(2), 3);
+        assert_eq!(array.get_int(0).unwrap(), 1);
+        assert_eq!(array.get_int(2).unwrap(), 3);
     }
 
     #[test]
@@ -694,9 +743,9 @@ mod tests {
         let array = writer.complete().unwrap();
 
         assert_eq!(array.size(), 3);
-        assert!(array.get_boolean(0));
-        assert!(!array.get_boolean(1));
-        assert!(array.get_boolean(2));
+        assert!(array.get_boolean(0).unwrap());
+        assert!(!array.get_boolean(1).unwrap());
+        assert!(array.get_boolean(2).unwrap());
     }
 
     #[test]
@@ -707,8 +756,8 @@ mod tests {
         writer.write_long(1, i64::MIN);
         let array = writer.complete().unwrap();
 
-        assert_eq!(array.get_long(0), i64::MAX);
-        assert_eq!(array.get_long(1), i64::MIN);
+        assert_eq!(array.get_long(0).unwrap(), i64::MAX);
+        assert_eq!(array.get_long(1).unwrap(), i64::MIN);
     }
 
     #[test]
@@ -719,8 +768,8 @@ mod tests {
         writer.write_double(1, -4.56);
         let array = writer.complete().unwrap();
 
-        assert_eq!(array.get_double(0), 1.23);
-        assert_eq!(array.get_double(1), -4.56);
+        assert_eq!(array.get_double(0).unwrap(), 1.23);
+        assert_eq!(array.get_double(1).unwrap(), -4.56);
     }
 
     #[test]
@@ -742,8 +791,36 @@ mod tests {
         assert_eq!(outer_array.size(), 1);
         let nested = outer_array.get_array(0).unwrap();
         assert_eq!(nested.size(), 2);
-        assert_eq!(nested.get_int(0), 1);
-        assert_eq!(nested.get_int(1), 2);
+        assert_eq!(nested.get_int(0).unwrap(), 1);
+        assert_eq!(nested.get_int(1).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_primitive_getter_out_of_bounds_returns_error() {
+        let elem_type = DataTypes::int();
+        let mut writer = FlussArrayWriter::new(1, &elem_type);
+        writer.write_int(0, 10);
+        let array = writer.complete().unwrap();
+
+        let err = array.get_int(1).unwrap_err();
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_primitive_getter_on_malformed_payload_returns_error() {
+        // Size says 1, but payload only contains header (no element bytes).
+        let mut data = vec![0_u8; 8];
+        data[0..4].copy_from_slice(&(1_i32).to_le_bytes());
+        let arr = FlussArray::from_bytes(&data).unwrap();
+
+        let err = arr.get_int(0).unwrap_err();
+        assert!(
+            err.to_string().contains("Out-of-bounds"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

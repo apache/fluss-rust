@@ -236,8 +236,8 @@ mod tests {
         match datum {
             Datum::Array(a) => {
                 assert_eq!(a.size(), 2);
-                assert_eq!(a.get_int(0), 10);
-                assert_eq!(a.get_int(1), 20);
+                assert_eq!(a.get_int(0).unwrap(), 10);
+                assert_eq!(a.get_int(1).unwrap(), 20);
             }
             _ => panic!("Expected Array datum"),
         }

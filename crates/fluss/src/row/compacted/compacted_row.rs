@@ -364,9 +364,9 @@ mod tests {
         assert_eq!(row.get_int(0).unwrap(), 42);
         let read_arr = row.get_array(1).unwrap();
         assert_eq!(read_arr.size(), 3);
-        assert_eq!(read_arr.get_int(0), 1);
-        assert_eq!(read_arr.get_int(1), 2);
-        assert_eq!(read_arr.get_int(2), 3);
+        assert_eq!(read_arr.get_int(0).unwrap(), 1);
+        assert_eq!(read_arr.get_int(1).unwrap(), 2);
+        assert_eq!(read_arr.get_int(2).unwrap(), 3);
     }
 
     #[test]
@@ -419,10 +419,10 @@ mod tests {
         let read_arr = row.get_array(0).unwrap();
         assert_eq!(read_arr.size(), 3);
         assert!(!read_arr.is_null_at(0));
-        assert_eq!(read_arr.get_int(0), 10);
+        assert_eq!(read_arr.get_int(0).unwrap(), 10);
         assert!(read_arr.is_null_at(1));
         assert!(!read_arr.is_null_at(2));
-        assert_eq!(read_arr.get_int(2), 30);
+        assert_eq!(read_arr.get_int(2).unwrap(), 30);
     }
 
     #[test]
@@ -484,11 +484,11 @@ mod tests {
 
         let nested1 = read_outer.get_array(0).unwrap();
         assert_eq!(nested1.size(), 2);
-        assert_eq!(nested1.get_int(0), 1);
-        assert_eq!(nested1.get_int(1), 2);
+        assert_eq!(nested1.get_int(0).unwrap(), 1);
+        assert_eq!(nested1.get_int(1).unwrap(), 2);
 
         let nested2 = read_outer.get_array(1).unwrap();
         assert_eq!(nested2.size(), 1);
-        assert_eq!(nested2.get_int(0), 99);
+        assert_eq!(nested2.get_int(0).unwrap(), 99);
     }
 }
