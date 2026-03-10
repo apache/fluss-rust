@@ -2187,16 +2187,20 @@ impl LogScanner {
     /// Returns:
     ///     PyArrow Table containing all data from subscribed buckets
     fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let scanner_ref =
-            unsafe { &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>) };
-        let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
-        let scanner = lock.kind.as_batch()?;
-        let subscribed = scanner.get_subscribed_buckets();
-        if subscribed.is_empty() {
-            return Err(FlussError::new_err(
-                "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
-            ));
-        }
+        let subscribed = {
+            let scanner_ref = unsafe {
+                &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>)
+            };
+            let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
+            let scanner = lock.kind.as_batch()?;
+            let subs = scanner.get_subscribed_buckets();
+            if subs.is_empty() {
+                return Err(FlussError::new_err(
+                    "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
+                ));
+            }
+            subs.clone()
+        };
 
         // 2. Query latest offsets for all subscribed buckets
         let stopping_offsets = self.query_latest_offsets(py, &subscribed)?;
