@@ -30,9 +30,7 @@ use pyo3::types::{
     PyDeltaAccess, PyDict, PyList, PySequence, PySlice, PyTime, PyTimeAccess, PyTuple, PyType,
     PyTzInfo,
 };
-use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
-};
+use pyo3::{Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python};
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
 use std::sync::Arc;
