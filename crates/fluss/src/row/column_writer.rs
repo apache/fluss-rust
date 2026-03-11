@@ -614,24 +614,24 @@ mod tests {
         );
 
         // Float types
-        let arr = write_one(&DataTypes::float(), Datum::Float32(3.14.into()));
+        let arr = write_one(&DataTypes::float(), Datum::Float32(1.5.into()));
         assert!(
             (arr.as_any()
                 .downcast_ref::<Float32Array>()
                 .unwrap()
                 .value(0)
-                - 3.14)
+                - 1.5)
                 .abs()
                 < 0.001
         );
 
-        let arr = write_one(&DataTypes::double(), Datum::Float64(2.718.into()));
+        let arr = write_one(&DataTypes::double(), Datum::Float64(1.125.into()));
         assert!(
             (arr.as_any()
                 .downcast_ref::<Float64Array>()
                 .unwrap()
                 .value(0)
-                - 2.718)
+                - 1.125)
                 .abs()
                 < 0.001
         );
@@ -736,16 +736,15 @@ mod tests {
 
         // Multiple rows
         let mut w = writer_for(&DataTypes::int(), 8);
-        for i in 0..5 {
-            w.write_field(&GenericRow::from_data(vec![i as i32]))
-                .unwrap();
+        for val in [10, 20, 30] {
+            w.write_field(&GenericRow::from_data(vec![val])).unwrap();
         }
         let arr = w.finish();
         let int_arr = arr.as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(int_arr.len(), 5);
-        for i in 0..5 {
-            assert_eq!(int_arr.value(i), i as i32);
-        }
+        assert_eq!(int_arr.len(), 3);
+        assert_eq!(int_arr.value(0), 10);
+        assert_eq!(int_arr.value(1), 20);
+        assert_eq!(int_arr.value(2), 30);
 
         // finish_cloned does not reset
         let mut w = writer_for(&DataTypes::int(), 4);
