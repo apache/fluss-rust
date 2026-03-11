@@ -1447,9 +1447,11 @@ mod tests {
         use bytes::Bytes;
 
         // Use a tiny batch size so the KV record exceeds it
-        let mut config = Config::default();
-        config.writer_batch_size = 64;
-        config.writer_buffer_memory_size = 1024 * 1024;
+        let config = Config {
+            writer_batch_size: 64,
+            writer_buffer_memory_size: 1024 * 1024,
+            ..Config::default()
+        };
 
         let accumulator = RecordAccumulator::new(config, disabled_idempotence());
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
@@ -1484,9 +1486,11 @@ mod tests {
         use crate::client::write::{RowBytes, WriteRecord};
         use bytes::Bytes;
 
-        let mut config = Config::default();
-        config.writer_batch_size = 64;
-        config.writer_buffer_memory_size = 1024 * 1024;
+        let config = Config {
+            writer_batch_size: 64,
+            writer_buffer_memory_size: 1024 * 1024,
+            ..Config::default()
+        };
 
         let accumulator = RecordAccumulator::new(config, disabled_idempotence());
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
