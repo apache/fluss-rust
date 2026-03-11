@@ -113,6 +113,40 @@ enum TypedWriter {
     },
 }
 
+/// Dispatch to the inner builder across all `TypedWriter` variants.
+/// Exhaustive matching ensures new variants won't compile without an arm.
+macro_rules! with_builder {
+    ($self:expr, $b:ident => $body:expr) => {
+        match $self {
+            TypedWriter::Bool($b) => $body,
+            TypedWriter::Int8($b) => $body,
+            TypedWriter::Int16($b) => $body,
+            TypedWriter::Int32($b) => $body,
+            TypedWriter::Int64($b) => $body,
+            TypedWriter::Float32($b) => $body,
+            TypedWriter::Float64($b) => $body,
+            TypedWriter::Char { builder: $b, .. } => $body,
+            TypedWriter::String($b) => $body,
+            TypedWriter::Bytes($b) => $body,
+            TypedWriter::Binary { builder: $b, .. } => $body,
+            TypedWriter::Decimal128 { builder: $b, .. } => $body,
+            TypedWriter::Date32($b) => $body,
+            TypedWriter::Time32Second($b) => $body,
+            TypedWriter::Time32Millisecond($b) => $body,
+            TypedWriter::Time64Microsecond($b) => $body,
+            TypedWriter::Time64Nanosecond($b) => $body,
+            TypedWriter::TimestampNtzSecond { builder: $b, .. } => $body,
+            TypedWriter::TimestampNtzMillisecond { builder: $b, .. } => $body,
+            TypedWriter::TimestampNtzMicrosecond { builder: $b, .. } => $body,
+            TypedWriter::TimestampNtzNanosecond { builder: $b, .. } => $body,
+            TypedWriter::TimestampLtzSecond { builder: $b, .. } => $body,
+            TypedWriter::TimestampLtzMillisecond { builder: $b, .. } => $body,
+            TypedWriter::TimestampLtzMicrosecond { builder: $b, .. } => $body,
+            TypedWriter::TimestampLtzNanosecond { builder: $b, .. } => $body,
+        }
+    };
+}
+
 impl ColumnWriter {
     /// Create a column writer for the given Fluss `DataType` and Arrow
     /// `ArrowDataType` at position `pos` with the given pre-allocation
@@ -323,103 +357,17 @@ impl ColumnWriter {
     }
 
     fn append_null(&mut self) {
-        // Every concrete Arrow builder has `append_null()` but it is NOT on the
-        // `ArrayBuilder` trait, so we dispatch through the enum.  Exhaustive
-        // matching ensures new variants won't compile without a null arm.
-        macro_rules! null {
-            ($b:expr) => {
-                $b.append_null()
-            };
-        }
-        match &mut self.inner {
-            TypedWriter::Bool(b) => null!(b),
-            TypedWriter::Int8(b) => null!(b),
-            TypedWriter::Int16(b) => null!(b),
-            TypedWriter::Int32(b) => null!(b),
-            TypedWriter::Int64(b) => null!(b),
-            TypedWriter::Float32(b) => null!(b),
-            TypedWriter::Float64(b) => null!(b),
-            TypedWriter::Char { builder, .. } => null!(builder),
-            TypedWriter::String(b) => null!(b),
-            TypedWriter::Bytes(b) => null!(b),
-            TypedWriter::Binary { builder, .. } => null!(builder),
-            TypedWriter::Decimal128 { builder, .. } => null!(builder),
-            TypedWriter::Date32(b) => null!(b),
-            TypedWriter::Time32Second(b) => null!(b),
-            TypedWriter::Time32Millisecond(b) => null!(b),
-            TypedWriter::Time64Microsecond(b) => null!(b),
-            TypedWriter::Time64Nanosecond(b) => null!(b),
-            TypedWriter::TimestampNtzSecond { builder, .. } => null!(builder),
-            TypedWriter::TimestampNtzMillisecond { builder, .. } => null!(builder),
-            TypedWriter::TimestampNtzMicrosecond { builder, .. } => null!(builder),
-            TypedWriter::TimestampNtzNanosecond { builder, .. } => null!(builder),
-            TypedWriter::TimestampLtzSecond { builder, .. } => null!(builder),
-            TypedWriter::TimestampLtzMillisecond { builder, .. } => null!(builder),
-            TypedWriter::TimestampLtzMicrosecond { builder, .. } => null!(builder),
-            TypedWriter::TimestampLtzNanosecond { builder, .. } => null!(builder),
-        }
+        with_builder!(&mut self.inner, b => b.append_null());
     }
 
     /// Returns a trait-object reference to the inner builder.
     /// Used for type-agnostic operations (`finish`, `finish_cloned`).
     fn as_builder_mut(&mut self) -> &mut dyn ArrayBuilder {
-        match &mut self.inner {
-            TypedWriter::Bool(b) => b,
-            TypedWriter::Int8(b) => b,
-            TypedWriter::Int16(b) => b,
-            TypedWriter::Int32(b) => b,
-            TypedWriter::Int64(b) => b,
-            TypedWriter::Float32(b) => b,
-            TypedWriter::Float64(b) => b,
-            TypedWriter::Char { builder, .. } => builder,
-            TypedWriter::String(b) => b,
-            TypedWriter::Bytes(b) => b,
-            TypedWriter::Binary { builder, .. } => builder,
-            TypedWriter::Decimal128 { builder, .. } => builder,
-            TypedWriter::Date32(b) => b,
-            TypedWriter::Time32Second(b) => b,
-            TypedWriter::Time32Millisecond(b) => b,
-            TypedWriter::Time64Microsecond(b) => b,
-            TypedWriter::Time64Nanosecond(b) => b,
-            TypedWriter::TimestampNtzSecond { builder, .. } => builder,
-            TypedWriter::TimestampNtzMillisecond { builder, .. } => builder,
-            TypedWriter::TimestampNtzMicrosecond { builder, .. } => builder,
-            TypedWriter::TimestampNtzNanosecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzSecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzMillisecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzMicrosecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzNanosecond { builder, .. } => builder,
-        }
+        with_builder!(&mut self.inner, b => b)
     }
 
     fn as_builder_ref(&self) -> &dyn ArrayBuilder {
-        match &self.inner {
-            TypedWriter::Bool(b) => b,
-            TypedWriter::Int8(b) => b,
-            TypedWriter::Int16(b) => b,
-            TypedWriter::Int32(b) => b,
-            TypedWriter::Int64(b) => b,
-            TypedWriter::Float32(b) => b,
-            TypedWriter::Float64(b) => b,
-            TypedWriter::Char { builder, .. } => builder,
-            TypedWriter::String(b) => b,
-            TypedWriter::Bytes(b) => b,
-            TypedWriter::Binary { builder, .. } => builder,
-            TypedWriter::Decimal128 { builder, .. } => builder,
-            TypedWriter::Date32(b) => b,
-            TypedWriter::Time32Second(b) => b,
-            TypedWriter::Time32Millisecond(b) => b,
-            TypedWriter::Time64Microsecond(b) => b,
-            TypedWriter::Time64Nanosecond(b) => b,
-            TypedWriter::TimestampNtzSecond { builder, .. } => builder,
-            TypedWriter::TimestampNtzMillisecond { builder, .. } => builder,
-            TypedWriter::TimestampNtzMicrosecond { builder, .. } => builder,
-            TypedWriter::TimestampNtzNanosecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzSecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzMillisecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzMicrosecond { builder, .. } => builder,
-            TypedWriter::TimestampLtzNanosecond { builder, .. } => builder,
-        }
+        with_builder!(&self.inner, b => b)
     }
 
     #[inline]
@@ -603,5 +551,222 @@ impl ColumnWriter {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::DataTypes;
+    use crate::record::to_arrow_type;
+    use crate::row::{Date, Datum, GenericRow, Time, TimestampLtz, TimestampNtz};
+    use arrow::array::*;
+    use bigdecimal::BigDecimal;
+    use std::str::FromStr;
+
+    /// Helper: create a ColumnWriter from a Fluss DataType, deriving the Arrow type automatically.
+    fn writer_for(fluss_type: &DataType, capacity: usize) -> ColumnWriter {
+        let arrow_type = to_arrow_type(fluss_type).unwrap();
+        ColumnWriter::create(fluss_type, &arrow_type, 0, capacity).unwrap()
+    }
+
+    /// Helper: write a single datum and return the finished array.
+    fn write_one(fluss_type: &DataType, datum: Datum) -> ArrayRef {
+        let mut w = writer_for(fluss_type, 4);
+        w.write_field(&GenericRow::from_data(vec![datum])).unwrap();
+        w.finish()
+    }
+
+    #[test]
+    fn write_all_scalar_types() {
+        // Boolean
+        let arr = write_one(&DataTypes::boolean(), Datum::Bool(true));
+        assert!(
+            arr.as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .value(0)
+        );
+
+        // Integer types
+        let arr = write_one(&DataTypes::tinyint(), Datum::Int8(42));
+        assert_eq!(
+            arr.as_any().downcast_ref::<Int8Array>().unwrap().value(0),
+            42
+        );
+
+        let arr = write_one(&DataTypes::smallint(), Datum::Int16(1000));
+        assert_eq!(
+            arr.as_any().downcast_ref::<Int16Array>().unwrap().value(0),
+            1000
+        );
+
+        let arr = write_one(&DataTypes::int(), Datum::Int32(100_000));
+        assert_eq!(
+            arr.as_any().downcast_ref::<Int32Array>().unwrap().value(0),
+            100_000
+        );
+
+        let arr = write_one(&DataTypes::bigint(), Datum::Int64(9_000_000_000));
+        assert_eq!(
+            arr.as_any().downcast_ref::<Int64Array>().unwrap().value(0),
+            9_000_000_000
+        );
+
+        // Float types
+        let arr = write_one(&DataTypes::float(), Datum::Float32(3.14.into()));
+        assert!(
+            (arr.as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap()
+                .value(0)
+                - 3.14)
+                .abs()
+                < 0.001
+        );
+
+        let arr = write_one(&DataTypes::double(), Datum::Float64(2.718.into()));
+        assert!(
+            (arr.as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0)
+                - 2.718)
+                .abs()
+                < 0.001
+        );
+
+        // String / Char
+        let arr = write_one(&DataTypes::string(), Datum::String("hello".into()));
+        assert_eq!(
+            arr.as_any().downcast_ref::<StringArray>().unwrap().value(0),
+            "hello"
+        );
+
+        let arr = write_one(&DataTypes::char(10), Datum::String("world".into()));
+        assert_eq!(
+            arr.as_any().downcast_ref::<StringArray>().unwrap().value(0),
+            "world"
+        );
+
+        // Bytes / Binary
+        let arr = write_one(&DataTypes::bytes(), Datum::Blob(vec![1, 2, 3].into()));
+        assert_eq!(
+            arr.as_any().downcast_ref::<BinaryArray>().unwrap().value(0),
+            &[1, 2, 3]
+        );
+
+        let arr = write_one(
+            &DataTypes::binary(4),
+            Datum::Blob(vec![10, 20, 30, 40].into()),
+        );
+        assert_eq!(
+            arr.as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap()
+                .value(0),
+            &[10, 20, 30, 40]
+        );
+
+        // Date
+        let arr = write_one(&DataTypes::date(), Datum::Date(Date::new(19000)));
+        assert_eq!(
+            arr.as_any().downcast_ref::<Date32Array>().unwrap().value(0),
+            19000
+        );
+
+        // Time (precision 3 → Millisecond)
+        let arr = write_one(
+            &DataTypes::time_with_precision(3),
+            Datum::Time(Time::new(45_000)),
+        );
+        assert_eq!(
+            arr.as_any()
+                .downcast_ref::<Time32MillisecondArray>()
+                .unwrap()
+                .value(0),
+            45_000
+        );
+
+        // Decimal
+        let decimal =
+            crate::row::Decimal::from_big_decimal(BigDecimal::from_str("123.45").unwrap(), 10, 2)
+                .unwrap();
+        let arr = write_one(&DataTypes::decimal(10, 2), Datum::Decimal(decimal));
+        assert_eq!(
+            arr.as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap()
+                .value(0),
+            12345
+        );
+
+        // Timestamp NTZ (precision 3 → Millisecond)
+        let arr = write_one(
+            &DataTypes::timestamp_with_precision(3),
+            Datum::TimestampNtz(TimestampNtz::new(1_700_000_000_000)),
+        );
+        assert_eq!(
+            arr.as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .value(0),
+            1_700_000_000_000
+        );
+
+        // Timestamp LTZ (precision 3 → Millisecond)
+        let arr = write_one(
+            &DataTypes::timestamp_ltz_with_precision(3),
+            Datum::TimestampLtz(TimestampLtz::new(1_700_000_000_000)),
+        );
+        assert_eq!(
+            arr.as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .value(0),
+            1_700_000_000_000
+        );
+    }
+
+    #[test]
+    fn write_null_and_multiple_rows() {
+        // Null
+        let arr = write_one(&DataTypes::int(), Datum::Null);
+        assert!(arr.is_null(0));
+
+        // Multiple rows
+        let mut w = writer_for(&DataTypes::int(), 8);
+        for i in 0..5 {
+            w.write_field(&GenericRow::from_data(vec![i as i32]))
+                .unwrap();
+        }
+        let arr = w.finish();
+        let int_arr = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int_arr.len(), 5);
+        for i in 0..5 {
+            assert_eq!(int_arr.value(i), i as i32);
+        }
+
+        // finish_cloned does not reset
+        let mut w = writer_for(&DataTypes::int(), 4);
+        w.write_field(&GenericRow::from_data(vec![42_i32])).unwrap();
+        assert_eq!(w.finish_cloned().len(), 1);
+        w.write_field(&GenericRow::from_data(vec![99_i32])).unwrap();
+        let int_arr = w
+            .finish()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .clone();
+        assert_eq!((int_arr.value(0), int_arr.value(1)), (42, 99));
+    }
+
+    #[test]
+    fn unsupported_type_returns_error() {
+        let fluss_type = DataTypes::array(DataTypes::int());
+        let arrow_type = ArrowDataType::List(arrow_schema::FieldRef::new(
+            arrow_schema::Field::new("item", ArrowDataType::Int32, true),
+        ));
+        assert!(ColumnWriter::create(&fluss_type, &arrow_type, 0, 4).is_err());
     }
 }
