@@ -78,6 +78,48 @@ match result {
 }
 ```
 
+## Retry Logic
+
+Some errors are transient, where the server may be temporarily unavailable, mid-election, or under load. `is_retriable()` can be used for deciding to retry an operation rather than treating the error as permanent.
+
+`Error::is_retriable()` is available directly on any `Error` value. `RpcError` is always retriable; `FlussAPIError` delegates to the server error code; all other variants return `false`.
+
+```rust
+use fluss::error::Error;
+
+match writer.append(&row) {
+    Ok(_) => {}
+    Err(ref e) if e.is_retriable() => {
+        // Transient failure — safe to retry
+    }
+    Err(e) => {
+        // Permanent failure — log and abort
+        eprintln!("Fatal error: {}", e);
+    }
+}
+```
+
+### Retriable Variants
+
+| Variant / Error                              | Code | Reason                                    |
+|----------------------------------------------|------|-------------------------------------------|
+| `Error::RpcError`                            | —    | Network-level failure, always retriable   |
+| `FlussError::NetworkException`               | 1    | Server disconnected                       |
+| `FlussError::CorruptMessage`                 | 3    | CRC or size error                         |
+| `FlussError::SchemaNotExist`                 | 9    | Schema may not exist                      |
+| `FlussError::LogStorageException`            | 10   | Transient log storage error               |
+| `FlussError::KvStorageException`             | 11   | Transient KV storage error                |
+| `FlussError::NotLeaderOrFollower`            | 12   | Leader election in progress               |
+| `FlussError::CorruptRecordException`         | 14   | Corrupt record                            |
+| `FlussError::UnknownTableOrBucketException`  | 21   | Metadata not yet available                |
+| `FlussError::RequestTimeOut`                 | 25   | Request timed out                         |
+| `FlussError::StorageException`               | 26   | Transient storage error                   |
+| `FlussError::NotEnoughReplicasAfterAppendException` | 28 | Wrote to server but with low ISR size |
+| `FlussError::NotEnoughReplicasException`     | 29   | Low ISR size at write time                |
+| `FlussError::LeaderNotAvailableException`    | 44   | No leader available for partition         |
+
+All other `Error` variants (e.g. `RowConvertError`, `IllegalArgument`, `UnsupportedOperation`) always return `false` from `is_retriable()`.
+
 ## Common Error Scenarios
 
 ### Connection Refused

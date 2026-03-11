@@ -29,7 +29,7 @@ use std::sync::{Arc, OnceLock};
 pub struct CompactedRow<'a> {
     arity: usize,
     size_in_bytes: usize,
-    decoded_row: OnceLock<Result<GenericRow<'a>>>,
+    decoded_row: OnceLock<GenericRow<'a>>,
     deserializer: Arc<CompactedRowDeserializer<'a>>,
     reader: CompactedRowReader<'a>,
     data: &'a [u8],
@@ -69,15 +69,15 @@ impl<'a> CompactedRow<'a> {
     }
 
     fn decoded_row(&self) -> Result<&GenericRow<'_>> {
-        match self
-            .decoded_row
-            .get_or_init(|| self.deserializer.deserialize(&self.reader))
-        {
-            Ok(row) => Ok(row),
-            Err(err) => Err(crate::error::Error::IllegalArgument {
-                message: format!("Failed to deserialize compacted row: {err}"),
-            }),
+        if let Some(row) = self.decoded_row.get() {
+            return Ok(row);
         }
+
+        // `OnceLock::get_or_try_init` is still unstable on our toolchain.
+        // Keep the same semantics by performing the fallible decode first,
+        // then atomically installing it via `get_or_init`.
+        let decoded = self.deserializer.deserialize(&self.reader)?;
+        Ok(self.decoded_row.get_or_init(|| decoded))
     }
 
     pub fn as_bytes(&self) -> &[u8] {

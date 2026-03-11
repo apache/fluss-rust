@@ -18,10 +18,11 @@
 pub mod binary_array;
 mod column;
 
-mod datum;
+pub(crate) mod datum;
 mod decimal;
 
 pub mod binary;
+pub(crate) mod column_writer;
 pub mod compacted;
 pub mod encode;
 pub mod field_getter;
