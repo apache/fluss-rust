@@ -241,6 +241,8 @@ for record in scan_records:
 | `Schema(schema: pa.Schema, primary_keys=None)` | Create from PyArrow schema |
 | `.get_column_names() -> list[str]`             | Get column names           |
 | `.get_column_types() -> list[str]`             | Get column type names      |
+| `.get_columns() -> list[tuple[str, str]]`      | Get `(name, type)` pairs   |
+| `.get_primary_keys() -> list[str]`             | Get primary key columns    |
 
 ## `TableDescriptor`
 
