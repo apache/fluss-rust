@@ -82,6 +82,7 @@ async def test_create_table(admin):
         ),
         primary_keys=["id"],
     )
+    assert schema.get_primary_keys() == ["id"]
 
     table_descriptor = fluss.TableDescriptor(
         schema,

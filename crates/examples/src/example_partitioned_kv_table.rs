@@ -22,7 +22,6 @@ use fluss::error::Result;
 use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableDescriptor, TablePath};
 use fluss::row::{GenericRow, InternalRow};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[tokio::main]
 #[allow(dead_code)]
@@ -130,7 +129,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn create_partition(table_path: &TablePath, admin: &Arc<FlussAdmin>, region: &str, zone: i64) {
+async fn create_partition(table_path: &TablePath, admin: &FlussAdmin, region: &str, zone: i64) {
     let mut partition_values = HashMap::new();
     partition_values.insert("region".to_string(), region.to_string());
     partition_values.insert("zone".to_string(), zone.to_string());

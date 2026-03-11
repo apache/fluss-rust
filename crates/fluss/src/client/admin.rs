@@ -52,12 +52,13 @@ impl FlussAdmin {
 
     async fn admin_gateway(&self) -> Result<ServerConnection> {
         let cluster = self.metadata.get_cluster();
-        let coordinator = cluster.get_coordinator_server().ok_or_else(|| {
-            Error::UnexpectedError {
-                message: "Coordinator server not found in cluster metadata".to_string(),
-                source: None,
-            }
-        })?;
+        let coordinator =
+            cluster
+                .get_coordinator_server()
+                .ok_or_else(|| Error::UnexpectedError {
+                    message: "Coordinator server not found in cluster metadata".to_string(),
+                    source: None,
+                })?;
         self.rpc_client.get_connection(coordinator).await
     }
 

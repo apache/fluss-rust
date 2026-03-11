@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{WriterClient};
+use crate::client::WriterClient;
 use crate::client::admin::FlussAdmin;
 use crate::client::metadata::Metadata;
 use crate::client::table::FlussTable;
 use crate::config::Config;
+use crate::error::{Error, FlussError, Result};
+use crate::metadata::TablePath;
 use crate::rpc::RpcClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::error::{Error, FlussError, Result};
-use crate::metadata::TablePath;
 
 pub struct FlussConnection {
     metadata: Arc<Metadata>,
@@ -91,7 +91,10 @@ impl FlussConnection {
         }
 
         // 4. Initialize and cache.
-        let admin = Arc::new(FlussAdmin::new(self.network_connects.clone(), self.metadata.clone()));
+        let admin = Arc::new(FlussAdmin::new(
+            self.network_connects.clone(),
+            self.metadata.clone(),
+        ));
         *admin_guard = Some(admin.clone());
         Ok(admin)
     }

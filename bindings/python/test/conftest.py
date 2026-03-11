@@ -92,32 +92,6 @@ def _run_cmd(cmd):
     return subprocess.run(cmd, capture_output=True).returncode
 
 
-def _wait_for_coordinator_ready(host, port, timeout=60):
-    """Poll list_databases() until the CoordinatorEventProcessor is ready."""
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            async def _probe():
-                cfg = fluss.Config({"bootstrap.servers": f"{host}:{port}"})
-                conn = await fluss.FlussConnection.create(cfg)
-                try:
-                    admin = await conn.get_admin()
-                    await admin.list_databases()
-                    return True
-                finally:
-                    conn.close()
-
-            if asyncio.run(_probe()):
-                return
-        except Exception:
-            pass
-        time.sleep(1)
-    raise TimeoutError(
-        f"Fluss coordinator on {host}:{port} did not become ready after {timeout}s. "
-        "CoordinatorEventProcessor may not be initialised."
-    )
-
-
 def _start_cluster():
     """Start the Fluss Docker cluster via testcontainers.
 
@@ -211,7 +185,6 @@ def _start_cluster():
     if not _all_ports_ready():
         raise RuntimeError("Cluster listeners did not become ready")
 
-    _wait_for_coordinator_ready("localhost", PLAIN_CLIENT_PORT)
     print("Fluss cluster started successfully.")
 
 

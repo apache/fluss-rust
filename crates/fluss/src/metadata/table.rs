@@ -234,8 +234,8 @@ impl SchemaBuilder {
         Ok(self)
     }
 
-    pub fn build(&mut self) -> Result<Schema> {
-        let columns = Self::normalize_columns(&mut self.columns, self.primary_key.as_ref())?;
+    pub fn build(&self) -> Result<Schema> {
+        let columns = Self::normalize_columns(&self.columns, self.primary_key.as_ref())?;
 
         let column_names: HashSet<_> = columns.iter().map(|c| &c.name).collect();
         for auto_inc_col in &self.auto_increment_col_names {
@@ -266,7 +266,7 @@ impl SchemaBuilder {
     }
 
     fn normalize_columns(
-        columns: &mut [Column],
+        columns: &[Column],
         primary_key: Option<&PrimaryKey>,
     ) -> Result<Vec<Column>> {
         let names: Vec<_> = columns.iter().map(|c| &c.name).collect();

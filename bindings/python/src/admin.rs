@@ -533,9 +533,7 @@ impl FlussAdmin {
 impl FlussAdmin {
     // Internal method to create FlussAdmin from core admin
     pub fn from_core(admin: Arc<fcore::client::FlussAdmin>) -> Self {
-        Self {
-            __admin: admin,
-        }
+        Self { __admin: admin }
     }
 }
 

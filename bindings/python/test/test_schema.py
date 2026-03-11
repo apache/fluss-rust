@@ -15,26 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "fluss_python"
-edition.workspace = true
-version.workspace = true
-license.workspace = true
-rust-version.workspace = true
+"""Unit tests for Schema (no cluster required)."""
 
-[lib]
-name = "fluss"
-crate-type = ["cdylib"]
+import pyarrow as pa
 
-[dependencies]
-pyo3 = { version = "0.26.0", features = ["extension-module", "generate-import-lib"] }
-fluss = { workspace = true, features = ["storage-all"] }
-tokio = { workspace = true }
-arrow = { workspace = true }
-arrow-pyarrow = "57.0.0"
-arrow-schema = "57.0.0"
-arrow-array = "57.0.0"
-pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
-jiff = { workspace = true }
-bigdecimal = "0.4"
-indexmap = "2"
+import fluss
+
+
+def test_get_primary_keys():
+    fields = pa.schema([
+        pa.field("id", pa.int32()),
+        pa.field("name", pa.string()),
+    ])
+
+    schema_with_pk = fluss.Schema(fields, primary_keys=["id"])
+    assert schema_with_pk.get_primary_keys() == ["id"]
+
+    schema_without_pk = fluss.Schema(fields)
+    assert schema_without_pk.get_primary_keys() == []
+
+

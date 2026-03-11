@@ -20,16 +20,9 @@ use crate::compression::ArrowCompressionInfo;
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
-use crate::row::field_getter::FieldGetter;
+use crate::row::column_writer::ColumnWriter;
 use crate::row::{ColumnarRow, InternalRow};
-use arrow::array::{
-    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
-    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
-    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder, UInt8Builder,
-    UInt16Builder, UInt32Builder, UInt64Builder,
-};
+use arrow::array::{ArrayBuilder, ArrayRef};
 use arrow::{
     array::RecordBatch,
     buffer::Buffer,
@@ -151,6 +144,7 @@ pub const NO_BATCH_SEQUENCE: i32 = -1;
 
 pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
 
+// TODO: Switch to byte-size-based is_full() like Java's ArrowWriter instead of a hard record cap.
 pub const DEFAULT_MAX_RECORD: i32 = 256;
 
 pub struct MemoryLogRecordsArrowBuilder {
@@ -229,106 +223,39 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
 
 pub struct RowAppendRecordBatchBuilder {
     table_schema: SchemaRef,
-    arrow_column_builders: Vec<Box<dyn ArrayBuilder>>,
-    field_getters: Box<[FieldGetter]>,
+    column_writers: Vec<ColumnWriter>,
     records_count: i32,
 }
 
 impl RowAppendRecordBatchBuilder {
     pub fn new(row_type: &RowType) -> Result<Self> {
+        let capacity = DEFAULT_MAX_RECORD as usize;
         let schema_ref = to_arrow_schema(row_type)?;
-        let builders: Result<Vec<_>> = schema_ref
+        let writers: Result<Vec<_>> = row_type
             .fields()
             .iter()
-            .map(|field| Self::create_builder(field.data_type()))
+            .enumerate()
+            .map(|(pos, field)| {
+                let arrow_type = schema_ref.field(pos).data_type();
+                ColumnWriter::create(field.data_type(), arrow_type, pos, capacity)
+            })
             .collect();
-        let field_getters = FieldGetter::create_field_getters(row_type);
         Ok(Self {
             table_schema: schema_ref.clone(),
-            arrow_column_builders: builders?,
-            field_getters,
+            column_writers: writers?,
             records_count: 0,
         })
-    }
-
-    fn create_builder(data_type: &arrow_schema::DataType) -> Result<Box<dyn ArrayBuilder>> {
-        match data_type {
-            arrow_schema::DataType::Int8 => Ok(Box::new(Int8Builder::new())),
-            arrow_schema::DataType::Int16 => Ok(Box::new(Int16Builder::new())),
-            arrow_schema::DataType::Int32 => Ok(Box::new(Int32Builder::new())),
-            arrow_schema::DataType::Int64 => Ok(Box::new(Int64Builder::new())),
-            arrow_schema::DataType::UInt8 => Ok(Box::new(UInt8Builder::new())),
-            arrow_schema::DataType::UInt16 => Ok(Box::new(UInt16Builder::new())),
-            arrow_schema::DataType::UInt32 => Ok(Box::new(UInt32Builder::new())),
-            arrow_schema::DataType::UInt64 => Ok(Box::new(UInt64Builder::new())),
-            arrow_schema::DataType::Float32 => Ok(Box::new(Float32Builder::new())),
-            arrow_schema::DataType::Float64 => Ok(Box::new(Float64Builder::new())),
-            arrow_schema::DataType::Boolean => Ok(Box::new(BooleanBuilder::new())),
-            arrow_schema::DataType::Utf8 => Ok(Box::new(StringBuilder::new())),
-            arrow_schema::DataType::Binary => Ok(Box::new(BinaryBuilder::new())),
-            arrow_schema::DataType::FixedSizeBinary(size) => {
-                Ok(Box::new(FixedSizeBinaryBuilder::new(*size)))
-            }
-            arrow_schema::DataType::Decimal128(precision, scale) => {
-                let builder = Decimal128Builder::new()
-                    .with_precision_and_scale(*precision, *scale)
-                    .map_err(|e| Error::IllegalArgument {
-                        message: format!(
-                            "Invalid decimal precision {precision} or scale {scale}: {e}"
-                        ),
-                    })?;
-                Ok(Box::new(builder))
-            }
-            arrow_schema::DataType::Date32 => Ok(Box::new(Date32Builder::new())),
-            arrow_schema::DataType::Time32(unit) => match unit {
-                arrow_schema::TimeUnit::Second => Ok(Box::new(Time32SecondBuilder::new())),
-                arrow_schema::TimeUnit::Millisecond => {
-                    Ok(Box::new(Time32MillisecondBuilder::new()))
-                }
-                _ => Err(Error::IllegalArgument {
-                    message: format!(
-                        "Time32 only supports Second and Millisecond units, got: {unit:?}"
-                    ),
-                }),
-            },
-            arrow_schema::DataType::Time64(unit) => match unit {
-                arrow_schema::TimeUnit::Microsecond => {
-                    Ok(Box::new(Time64MicrosecondBuilder::new()))
-                }
-                arrow_schema::TimeUnit::Nanosecond => Ok(Box::new(Time64NanosecondBuilder::new())),
-                _ => Err(Error::IllegalArgument {
-                    message: format!(
-                        "Time64 only supports Microsecond and Nanosecond units, got: {unit:?}"
-                    ),
-                }),
-            },
-            arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Second, _) => {
-                Ok(Box::new(TimestampSecondBuilder::new()))
-            }
-            arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => {
-                Ok(Box::new(TimestampMillisecondBuilder::new()))
-            }
-            arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
-                Ok(Box::new(TimestampMicrosecondBuilder::new()))
-            }
-            arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
-                Ok(Box::new(TimestampNanosecondBuilder::new()))
-            }
-            dt => Err(Error::IllegalArgument {
-                message: format!("Unsupported data type: {dt:?}"),
-            }),
-        }
     }
 }
 
 impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
     fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>> {
         let arrays: Result<Vec<ArrayRef>> = self
-            .arrow_column_builders
+            .column_writers
             .iter_mut()
             .enumerate()
-            .map(|(idx, b)| {
-                let array = b.finish();
+            .map(|(idx, writer)| {
+                let array = writer.finish();
                 let expected_type = self.table_schema.field(idx).data_type();
 
                 // Validate array type matches schema
@@ -354,17 +281,8 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
     }
 
     fn append(&mut self, row: &dyn InternalRow) -> Result<bool> {
-        for (idx, getter) in self.field_getters.iter().enumerate() {
-            let datum = getter.get_field(row)?;
-            let field_type = self.table_schema.field(idx).data_type();
-            let builder =
-                self.arrow_column_builders
-                    .get_mut(idx)
-                    .ok_or_else(|| Error::UnexpectedError {
-                        message: format!("Column builder at index {idx} not found."),
-                        source: None,
-                    })?;
-            datum.append_to(builder, field_type)?;
+        for writer in &mut self.column_writers {
+            writer.write_field(row)?;
         }
         self.records_count += 1;
         Ok(true)
@@ -390,9 +308,9 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
         // Returns the uncompressed Arrow array memory size (same as Java's arrowWriter.estimatedSizeInBytes()).
         // Note: This is the size before compression. After build(), the actual size may be smaller
         // if compression is enabled.
-        self.arrow_column_builders
+        self.column_writers
             .iter()
-            .map(|builder| builder.finish_cloned().get_array_memory_size())
+            .map(|writer| writer.finish_cloned().get_array_memory_size())
             .sum()
     }
 }
@@ -1697,22 +1615,27 @@ mod tests {
 
     #[test]
     fn test_temporal_and_decimal_builder_validation() {
+        use crate::row::column_writer::ColumnWriter;
         use arrow::array::Array;
 
         // Test valid builder creation with precision=10, scale=2
-        let mut builder =
-            RowAppendRecordBatchBuilder::create_builder(&ArrowDataType::Decimal128(10, 2)).unwrap();
-        let decimal_builder = builder
-            .as_any_mut()
-            .downcast_mut::<Decimal128Builder>()
-            .expect("Expected Decimal128Builder");
-        // Verify precision and scale
-        let array = decimal_builder.finish();
+        let mut writer = ColumnWriter::create(
+            &DataTypes::decimal(10, 2),
+            &ArrowDataType::Decimal128(10, 2),
+            0,
+            256,
+        )
+        .unwrap();
+        let array = writer.finish();
         assert_eq!(array.data_type(), &ArrowDataType::Decimal128(10, 2));
 
-        // Test error case: invalid precision/scale
-        let result =
-            RowAppendRecordBatchBuilder::create_builder(&ArrowDataType::Decimal128(100, 50));
+        // Test error case: invalid Arrow precision/scale (exceeds Arrow's limit)
+        let result = ColumnWriter::create(
+            &DataTypes::decimal(10, 2),
+            &ArrowDataType::Decimal128(100, 50),
+            0,
+            256,
+        );
         assert!(result.is_err());
     }
 
