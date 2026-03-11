@@ -1864,13 +1864,6 @@ enum ScannerKind {
     Batch(fcore::client::RecordBatchLogScanner),
 }
 
-/// The internal state of the scanner, protected by a Tokio Mutex for async cross-thread sharing
-struct ScannerState {
-    kind: ScannerKind,
-    /// A buffer to hold records polled from the network before yielding them one-by-one to Python
-    pending_records: std::collections::VecDeque<Py<ScanRecord>>,
-}
-
 impl ScannerKind {
     fn as_record(&self) -> PyResult<&fcore::client::LogScanner> {
         match self {
@@ -1895,7 +1888,7 @@ impl ScannerKind {
 /// Both `LogScanner` and `RecordBatchLogScanner` share the same subscribe interface.
 macro_rules! with_scanner {
     ($scanner:expr, $method:ident($($arg:expr),*)) => {
-        match $scanner {
+        match $scanner.as_ref() {
             ScannerKind::Record(s) => s.$method($($arg),*).await,
             ScannerKind::Batch(s) => s.$method($($arg),*).await,
         }
@@ -1909,7 +1902,7 @@ macro_rules! with_scanner {
 /// - Batch-based scanning via `poll_arrow()` / `poll_record_batch()` - returns Arrow batches
 #[pyclass]
 pub struct LogScanner {
-    state: Arc<tokio::sync::Mutex<ScannerState>>,
+    kind: Arc<ScannerKind>,
     admin: fcore::client::FlussAdmin,
     table_info: fcore::metadata::TableInfo,
     /// The projected Arrow schema to use for empty table creation
@@ -1930,8 +1923,7 @@ impl LogScanner {
     fn subscribe(&self, py: Python, bucket_id: i32, start_offset: i64) -> PyResult<()> {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
-                let state = self.state.lock().await;
-                with_scanner!(&state.kind, subscribe(bucket_id, start_offset))
+                with_scanner!(&self.kind, subscribe(bucket_id, start_offset))
                     .map_err(|e| FlussError::from_core_error(&e))
             })
         })
@@ -1944,8 +1936,7 @@ impl LogScanner {
     fn subscribe_buckets(&self, py: Python, bucket_offsets: HashMap<i32, i64>) -> PyResult<()> {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
-                let state = self.state.lock().await;
-                with_scanner!(&state.kind, subscribe_buckets(&bucket_offsets))
+                with_scanner!(&self.kind, subscribe_buckets(&bucket_offsets))
                     .map_err(|e| FlussError::from_core_error(&e))
             })
         })
@@ -1966,9 +1957,8 @@ impl LogScanner {
     ) -> PyResult<()> {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
-                let state = self.state.lock().await;
                 with_scanner!(
-                    &state.kind,
+                    &self.kind,
                     subscribe_partition(partition_id, bucket_id, start_offset)
                 )
                 .map_err(|e| FlussError::from_core_error(&e))
@@ -1987,9 +1977,8 @@ impl LogScanner {
     ) -> PyResult<()> {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
-                let state = self.state.lock().await;
                 with_scanner!(
-                    &state.kind,
+                    &self.kind,
                     subscribe_partition_buckets(&partition_bucket_offsets)
                 )
                 .map_err(|e| FlussError::from_core_error(&e))
@@ -2004,8 +1993,7 @@ impl LogScanner {
     fn unsubscribe(&self, py: Python, bucket_id: i32) -> PyResult<()> {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
-                let state = self.state.lock().await;
-                with_scanner!(&state.kind, unsubscribe(bucket_id))
+                with_scanner!(&self.kind, unsubscribe(bucket_id))
                     .map_err(|e| FlussError::from_core_error(&e))
             })
         })
@@ -2019,8 +2007,7 @@ impl LogScanner {
     fn unsubscribe_partition(&self, py: Python, partition_id: i64, bucket_id: i32) -> PyResult<()> {
         py.detach(|| {
             TOKIO_RUNTIME.block_on(async {
-                let state = self.state.lock().await;
-                with_scanner!(&state.kind, unsubscribe_partition(partition_id, bucket_id))
+                with_scanner!(&self.kind, unsubscribe_partition(partition_id, bucket_id))
                     .map_err(|e| FlussError::from_core_error(&e))
             })
         })
@@ -2041,10 +2028,7 @@ impl LogScanner {
     ///     - Returns an empty ScanRecords if no records are available
     ///     - When timeout expires, returns an empty ScanRecords (NOT an error)
     fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<ScanRecords> {
-        let scanner_ref =
-            unsafe { &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>) };
-        let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
-        let scanner = lock.kind.as_record()?;
+        let scanner = self.kind.as_record()?;
 
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
@@ -2093,10 +2077,7 @@ impl LogScanner {
     ///     - Returns an empty list if no batches are available
     ///     - When timeout expires, returns an empty list (NOT an error)
     fn poll_record_batch(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<RecordBatch>> {
-        let scanner_ref =
-            unsafe { &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>) };
-        let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
-        let scanner = lock.kind.as_batch()?;
+        let scanner = self.kind.as_batch()?;
 
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
@@ -2131,10 +2112,7 @@ impl LogScanner {
     ///     - Returns an empty table (with correct schema) if no records are available
     ///     - When timeout expires, returns an empty table (NOT an error)
     fn poll_arrow(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
-        let scanner_ref =
-            unsafe { &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>) };
-        let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
-        let scanner = lock.kind.as_batch()?;
+        let scanner = self.kind.as_batch()?;
 
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
@@ -2188,11 +2166,7 @@ impl LogScanner {
     ///     PyArrow Table containing all data from subscribed buckets
     fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
         let subscribed = {
-            let scanner_ref = unsafe {
-                &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>)
-            };
-            let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
-            let scanner = lock.kind.as_batch()?;
+            let scanner = self.kind.as_batch()?;
             let subs = scanner.get_subscribed_buckets();
             if subs.is_empty() {
                 return Err(FlussError::new_err(
@@ -2227,87 +2201,84 @@ impl LogScanner {
     }
 
     fn __aiter__<'py>(slf: PyRef<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
+        static ASYNC_GEN_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
         let py = slf.py();
-        let code = pyo3::ffi::c_str!(
-            r#"
-async def _adapter(obj):
+        let gen_fn = ASYNC_GEN_FN.get_or_init(py, || {
+            let code = pyo3::ffi::c_str!(
+                r#"
+async def _async_scan(scanner, timeout_ms=1000):
     while True:
-        try:
-            yield await obj.__anext__()
-        except StopAsyncIteration:
-            break
+        batch = await scanner._async_poll(timeout_ms)
+        if batch:
+            for record in batch:
+                yield record
 "#
-        );
-        let globals = pyo3::types::PyDict::new(py);
-        py.run(code, Some(&globals), None)?;
-        let adapter = globals.get_item("_adapter")?.unwrap();
-        // Return adapt(self)
-        adapter.call1((slf.into_bound_py_any(py)?,))
+            );
+            let globals = pyo3::types::PyDict::new(py);
+            py.run(code, Some(&globals), None).unwrap();
+            globals.get_item("_async_scan").unwrap().unwrap().unbind()
+        });
+        gen_fn.bind(py).call1((slf.into_bound_py_any(py)?,))
     }
 
-    fn __anext__<'py>(slf: PyRefMut<'py, Self>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let state_arc = slf.state.clone();
-        let projected_row_type = slf.projected_row_type.clone();
-        let py = slf.py();
+    /// Perform a single bounded poll and return a list of ScanRecord objects.
+    ///
+    /// This is the async building block used by `__aiter__` to implement
+    /// `async for`. Each call does exactly one network poll (bounded by
+    /// `timeout_ms`), converts any results to Python objects, and returns
+    /// them as a list. An empty list signals a timeout (no data yet), not
+    /// end-of-stream.
+    ///
+    /// Args:
+    ///     timeout_ms: Timeout in milliseconds for the network poll (default: 1000)
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a list of ScanRecord objects
+    fn _async_poll<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_ms: Option<i64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = timeout_ms.unwrap_or(1000);
+        if timeout_ms < 0 {
+            return Err(FlussError::new_err(format!(
+                "timeout_ms must be non-negative, got: {timeout_ms}"
+            )));
+        }
 
-        let future = future_into_py(py, async move {
-            let mut state = state_arc.lock().await;
+        let scanner = Arc::clone(&self.kind);
+        let projected_row_type = self.projected_row_type.clone();
+        let timeout = Duration::from_millis(timeout_ms as u64);
 
-            // 1. If we already have buffered records, pop and return immediately
-            if let Some(record) = state.pending_records.pop_front() {
-                return Ok(record.into_any());
-            }
-
-            // 2. Buffer is empty, we must poll the network for the next batch
-            // The underlying kind must be a Record-based scanner.
-            let scanner = match state.kind.as_record() {
-                Ok(s) => s,
-                Err(_) => {
-                    return Err(pyo3::exceptions::PyStopAsyncIteration::new_err(
-                        "Stream Ended",
+        future_into_py(py, async move {
+            let core_scanner = match scanner.as_ref() {
+                ScannerKind::Record(s) => s,
+                ScannerKind::Batch(_) => {
+                    return Err(PyTypeError::new_err(
+                        "Async iteration is only supported for record scanners; \
+                         use create_log_scanner() instead.",
                     ));
                 }
             };
 
-            // Poll with a reasonable internal timeout before unblocking the event loop
-            let timeout = core::time::Duration::from_millis(5000);
-
-            let mut current_records = scanner
+            let scan_records = core_scanner
                 .poll(timeout)
                 .await
                 .map_err(|e| FlussError::from_core_error(&e))?;
 
-            // If it's a real timeout with zero records, loop or throw StopAsyncIteration?
-            // Since it's a streaming log, we can yield None or block. Blocking requires a loop in the future.
-            while current_records.is_empty() {
-                current_records = scanner
-                    .poll(timeout)
-                    .await
-                    .map_err(|e| FlussError::from_core_error(&e))?;
-            }
-
-            // Now we have records.
+            // Convert to Python list
             Python::attach(|py| {
-                for (_, records) in current_records.into_records_by_buckets() {
+                let mut result: Vec<Py<ScanRecord>> = Vec::new();
+                for (_, records) in scan_records.into_records_by_buckets() {
                     for core_record in records {
                         let scan_record =
                             ScanRecord::from_core(py, &core_record, &projected_row_type)?;
-                        state.pending_records.push_back(Py::new(py, scan_record)?);
+                        result.push(Py::new(py, scan_record)?);
                     }
                 }
-
-                // Pop the very first one to return right now
-                if let Some(record) = state.pending_records.pop_front() {
-                    Ok(record.into_any())
-                } else {
-                    Err(pyo3::exceptions::PyStopAsyncIteration::new_err(
-                        "Stream Ended",
-                    ))
-                }
+                Ok(result)
             })
-        })?;
-
-        Ok(Some(future))
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -2324,10 +2295,7 @@ impl LogScanner {
         projected_row_type: fcore::metadata::RowType,
     ) -> Self {
         Self {
-            state: std::sync::Arc::new(tokio::sync::Mutex::new(ScannerState {
-                kind: scanner,
-                pending_records: std::collections::VecDeque::new(),
-            })),
+            kind: Arc::new(scanner),
             admin,
             table_info,
             projected_schema,
@@ -2378,10 +2346,7 @@ impl LogScanner {
         py: Python,
         subscribed: &[(fcore::metadata::TableBucket, i64)],
     ) -> PyResult<HashMap<fcore::metadata::TableBucket, i64>> {
-        let scanner_ref =
-            unsafe { &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>) };
-        let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
-        let scanner = lock.kind.as_batch()?;
+        let scanner = self.kind.as_batch()?;
         let is_partitioned = scanner.is_partitioned();
         let table_path = &self.table_info.table_path;
 
@@ -2484,10 +2449,7 @@ impl LogScanner {
         py: Python,
         mut stopping_offsets: HashMap<fcore::metadata::TableBucket, i64>,
     ) -> PyResult<Py<PyAny>> {
-        let scanner_ref =
-            unsafe { &*(&self.state as *const std::sync::Arc<tokio::sync::Mutex<ScannerState>>) };
-        let lock = TOKIO_RUNTIME.block_on(async { scanner_ref.lock().await });
-        let scanner = lock.kind.as_batch()?;
+        let scanner = self.kind.as_batch()?;
         let mut all_batches = Vec::new();
 
         while !stopping_offsets.is_empty() {
