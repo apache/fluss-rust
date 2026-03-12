@@ -28,6 +28,10 @@ Complete API reference for the Fluss C++ client.
 | `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |
 | `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |
 | `scanner_log_max_poll_records`        | `size_t`      | `500`                | Maximum number of records returned in a single Poll()                                    |
+| `scanner_log_fetch_max_bytes`         | `int32_t`     | `16777216` (16 MB)   | Maximum bytes per fetch response for LogScanner                                          |
+| `scanner_log_fetch_min_bytes`         | `int32_t`     | `1`                  | Minimum bytes the server must accumulate before returning a fetch response               |
+| `scanner_log_fetch_wait_max_time_ms`  | `int32_t`     | `500`                | Maximum time (ms) the server may wait to satisfy min-bytes                               |
+| `scanner_log_fetch_max_bytes_for_bucket`| `int32_t`   | `1048576` (1 MB)     | Maximum bytes per fetch response per bucket for LogScanner                               |
 | `connect_timeout_ms`                  | `uint64_t`    | `120000`             | TCP connect timeout in milliseconds                                                      |
 | `request_timeout_ms`                  | `uint64_t`    | `30000`              | Timeout in ms while waiting for an RPC response after the request is sent (request write/send can take longer) |
 | `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |

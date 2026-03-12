@@ -397,13 +397,13 @@ pub trait ToArrow {
 }
 
 // Time unit conversion constants
-const MILLIS_PER_SECOND: i64 = 1_000;
-const MICROS_PER_MILLI: i64 = 1_000;
-const NANOS_PER_MILLI: i64 = 1_000_000;
+pub(crate) const MILLIS_PER_SECOND: i64 = 1_000;
+pub(crate) const MICROS_PER_MILLI: i64 = 1_000;
+pub(crate) const NANOS_PER_MILLI: i64 = 1_000_000;
 
 /// Converts milliseconds and nanoseconds-within-millisecond to total microseconds.
 /// Returns an error if the conversion would overflow.
-fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
+pub(crate) fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
     let millis_micros = millis
         .checked_mul(MICROS_PER_MILLI)
         .ok_or_else(|| RowConvertError {
@@ -423,7 +423,7 @@ fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
 
 /// Converts milliseconds and nanoseconds-within-millisecond to total nanoseconds.
 /// Returns an error if the conversion would overflow.
-fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
+pub(crate) fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
     let millis_nanos = millis
         .checked_mul(NANOS_PER_MILLI)
         .ok_or_else(|| RowConvertError {
@@ -438,6 +438,42 @@ fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
                 "Timestamp overflow when adding nanoseconds: {millis_nanos} + {nanos}"
             ),
         })
+}
+
+/// Rescales a [`Decimal`] to the given Arrow target precision/scale and appends
+/// the resulting i128 to the builder.
+pub(crate) fn append_decimal_to_builder(
+    decimal: &Decimal,
+    target_precision: u32,
+    target_scale: i64,
+    builder: &mut Decimal128Builder,
+) -> Result<()> {
+    use bigdecimal::RoundingMode;
+
+    let bd = decimal.to_big_decimal();
+    let rescaled = bd.with_scale_round(target_scale, RoundingMode::HalfUp);
+    let (unscaled, _) = rescaled.as_bigint_and_exponent();
+
+    let actual_precision = Decimal::compute_precision(&unscaled);
+    if actual_precision > target_precision as usize {
+        return Err(RowConvertError {
+            message: format!(
+                "Decimal precision overflow: value has {actual_precision} digits but Arrow expects {target_precision} (value: {rescaled})"
+            ),
+        });
+    }
+
+    let i128_val: i128 = match unscaled.try_into() {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(RowConvertError {
+                message: format!("Decimal value exceeds i128 range: {rescaled}"),
+            });
+        }
+    };
+
+    builder.append_value(i128_val);
+    Ok(())
 }
 
 trait AppendResult {
@@ -539,45 +575,14 @@ impl Datum<'_> {
                     }
                 };
 
-                // Validate scale is non-negative (Fluss doesn't support negative scales)
                 if s < 0 {
                     return Err(RowConvertError {
                         message: format!("Negative decimal scale {s} is not supported"),
                     });
                 }
 
-                let target_precision = p as u32;
-                let target_scale = s as i64; // Safe now: 0..127 → 0i64..127i64
-
                 if let Some(b) = builder.as_any_mut().downcast_mut::<Decimal128Builder>() {
-                    use bigdecimal::RoundingMode;
-
-                    // Rescale the decimal to match Arrow's target scale
-                    let bd = decimal.to_big_decimal();
-                    let rescaled = bd.with_scale_round(target_scale, RoundingMode::HalfUp);
-                    let (unscaled, _) = rescaled.as_bigint_and_exponent();
-
-                    // Validate precision
-                    let actual_precision = Decimal::compute_precision(&unscaled);
-                    if actual_precision > target_precision as usize {
-                        return Err(RowConvertError {
-                            message: format!(
-                                "Decimal precision overflow: value has {actual_precision} digits but Arrow expects {target_precision} (value: {rescaled})"
-                            ),
-                        });
-                    }
-
-                    // Convert to i128 for Arrow
-                    let i128_val: i128 = match unscaled.try_into() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            return Err(RowConvertError {
-                                message: format!("Decimal value exceeds i128 range: {rescaled}"),
-                            });
-                        }
-                    };
-
-                    b.append_value(i128_val);
+                    append_decimal_to_builder(decimal, p as u32, s as i64, b)?;
                     return Ok(());
                 }
 

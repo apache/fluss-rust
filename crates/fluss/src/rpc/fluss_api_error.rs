@@ -39,6 +39,13 @@ impl Display for ApiError {
     }
 }
 
+impl ApiError {
+    /// Returns `true` if retrying the request may succeed. Delegates to [`FlussError::is_retriable`].
+    pub fn is_retriable(&self) -> bool {
+        FlussError::for_code(self.code).is_retriable()
+    }
+}
+
 /// Fluss protocol errors. These errors are part of the client-server protocol.
 /// The error codes cannot be changed, but the names can be.
 ///
@@ -170,6 +177,25 @@ impl FlussError {
     /// Returns the error code for this error.
     pub fn code(&self) -> i32 {
         *self as i32
+    }
+
+    pub fn is_retriable(&self) -> bool {
+        matches!(
+            self,
+            FlussError::NetworkException
+                | FlussError::CorruptMessage
+                | FlussError::SchemaNotExist
+                | FlussError::LogStorageException
+                | FlussError::KvStorageException
+                | FlussError::NotLeaderOrFollower
+                | FlussError::CorruptRecordException
+                | FlussError::UnknownTableOrBucketException
+                | FlussError::RequestTimeOut
+                | FlussError::StorageException
+                | FlussError::NotEnoughReplicasAfterAppendException
+                | FlussError::NotEnoughReplicasException
+                | FlussError::LeaderNotAvailableException
+        )
     }
 
     /// Returns a friendly description of the error.
@@ -402,5 +428,56 @@ mod tests {
         assert_eq!(api_error.message, "missing");
         let fluss_error = FlussError::from(api_error);
         assert_eq!(fluss_error, FlussError::TableNotExist);
+    }
+
+    #[test]
+    fn is_retriable_known_retriable_errors() {
+        let retriable = [
+            FlussError::NetworkException,
+            FlussError::CorruptMessage,
+            FlussError::SchemaNotExist,
+            FlussError::LogStorageException,
+            FlussError::KvStorageException,
+            FlussError::NotLeaderOrFollower,
+            FlussError::CorruptRecordException,
+            FlussError::UnknownTableOrBucketException,
+            FlussError::RequestTimeOut,
+            FlussError::StorageException,
+            FlussError::NotEnoughReplicasAfterAppendException,
+            FlussError::NotEnoughReplicasException,
+            FlussError::LeaderNotAvailableException,
+        ];
+        for err in &retriable {
+            assert!(err.is_retriable(), "{err:?} should be retriable");
+        }
+    }
+
+    #[test]
+    fn is_retriable_known_non_retriable_errors() {
+        let non_retriable = [
+            FlussError::UnknownServerError,
+            FlussError::None,
+            FlussError::TableNotExist,
+            FlussError::AuthenticateException,
+            FlussError::AuthorizationException,
+            FlussError::RecordTooLargeException,
+            FlussError::DeletionDisabledException,
+            FlussError::InvalidCoordinatorException,
+            FlussError::FencedLeaderEpochException,
+            FlussError::FencedTieringEpochException,
+            FlussError::RetriableAuthenticateException,
+        ];
+        for err in &non_retriable {
+            assert!(!err.is_retriable(), "{err:?} should not be retriable");
+        }
+    }
+
+    #[test]
+    fn api_error_is_retriable_delegates_to_fluss_error() {
+        let retriable_api = FlussError::RequestTimeOut.to_api_error(None);
+        assert!(retriable_api.is_retriable());
+
+        let permanent_api = FlussError::TableNotExist.to_api_error(None);
+        assert!(!permanent_api.is_retriable());
     }
 }

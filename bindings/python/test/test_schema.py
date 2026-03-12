@@ -15,30 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-edition = { workspace = true }
-license = { workspace = true }
-name = "fluss-examples"
-rust-version = { workspace = true }
-version = { workspace = true }
+"""Unit tests for Schema (no cluster required)."""
+
+import pyarrow as pa
+
+import fluss
 
 
-[dependencies]
-fluss = { workspace = true, features = ["storage-all"] }
-tokio = { workspace = true }
-clap = { workspace = true }
+def test_get_primary_keys():
+    fields = pa.schema([
+        pa.field("id", pa.int32()),
+        pa.field("name", pa.string()),
+    ])
 
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6"
+    schema_with_pk = fluss.Schema(fields, primary_keys=["id"])
+    assert schema_with_pk.get_primary_keys() == ["id"]
 
-[[example]]
-name = "example-table"
-path = "src/example_table.rs"
+    schema_without_pk = fluss.Schema(fields)
+    assert schema_without_pk.get_primary_keys() == []
 
-[[example]]
-name = "example-upsert-lookup"
-path = "src/example_kv_table.rs"
 
-[[example]]
-name = "example-partitioned-upsert-lookup"
-path = "src/example_partitioned_kv_table.rs"

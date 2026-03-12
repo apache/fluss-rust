@@ -101,6 +101,25 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! # Performance
+//!
+//! For production deployments on Linux, we recommend using
+//! [jemalloc](https://crates.io/crates/tikv-jemallocator) as the global allocator.
+//! The default glibc allocator (ptmalloc2) can cause RSS bloat and fragmentation under
+//! sustained write loads due to repeated same-size alloc/free cycles in Arrow batch building.
+//! jemalloc's thread-local size-class bins handle this pattern efficiently.
+//!
+//! ```toml
+//! [target.'cfg(not(target_env = "msvc"))'.dependencies]
+//! tikv-jemallocator = "0.6"
+//! ```
+//!
+//! ```rust,ignore
+//! #[cfg(not(target_env = "msvc"))]
+//! #[global_allocator]
+//! static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+//! ```
 
 pub mod client;
 pub mod metadata;
