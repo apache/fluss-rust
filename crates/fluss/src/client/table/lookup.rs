@@ -55,30 +55,34 @@ impl LookupResult {
         }
     }
 
+    /// Extracts the row payload by stripping the schema id prefix.
+    fn extract_payload(bytes: &[u8]) -> Result<&[u8]> {
+        bytes
+            .get(SCHEMA_ID_LENGTH..)
+            .ok_or_else(|| Error::RowConvertError {
+                message: format!(
+                    "Row payload too short: {} bytes, need at least {} for schema id",
+                    bytes.len(),
+                    SCHEMA_ID_LENGTH
+                ),
+            })
+    }
+
     /// Returns the only row in the result set as a [`CompactedRow`].
     ///
     /// This method provides a zero-copy view of the row data, which means the returned
     /// `CompactedRow` borrows from this result set and cannot outlive it.
     ///
     /// # Returns
-    /// - `Ok(rows)` - All rows in the result set.
-    /// - `Err(Error)` - If any row payload is too short to contain a schema id.
-    ///
+    /// - `Ok(Some(row))`: If exactly one row exists.
+    /// - `Ok(None)`: If the result set is empty.
+    /// - `Err(Error::UnexpectedError)`: If the result set contains more than one row.
+    /// - `Err(Error)`: If the row payload is too short to contain a schema id.
     pub fn get_single_row(&self) -> Result<Option<CompactedRow<'_>>> {
         match self.rows.len() {
             0 => Ok(None),
             1 => {
-                let payload =
-                    self.rows[0]
-                        .get(SCHEMA_ID_LENGTH..)
-                        .ok_or_else(|| Error::UnexpectedError {
-                            message: format!(
-                                "Row payload too short: {} bytes, need at least {} for schema id",
-                                self.rows[0].len(),
-                                SCHEMA_ID_LENGTH
-                            ),
-                            source: None,
-                        })?;
+                let payload = Self::extract_payload(&self.rows[0])?;
                 Ok(Some(CompactedRow::from_bytes(&self.row_type, payload)))
             }
             _ => Err(Error::UnexpectedError {
@@ -88,25 +92,22 @@ impl LookupResult {
         }
     }
 
+    /// Returns all rows in the result set as [`CompactedRow`]s.
+    ///
+    /// # Returns
+    /// - `Ok(rows)` - All rows in the result set.
+    /// - `Err(Error)` - If any row payload is too short to contain a schema id.
     pub fn get_rows(&self) -> Result<Vec<CompactedRow<'_>>> {
         self.rows
             .iter()
+            // TODO Add schema id check and fetch when implementing prefix lookup
             .map(|bytes| {
-                let payload =
-                    bytes
-                        .get(SCHEMA_ID_LENGTH..)
-                        .ok_or_else(|| Error::UnexpectedError {
-                            message: format!(
-                                "Row payload too short: {} bytes, need at least {} for schema id",
-                                bytes.len(),
-                                SCHEMA_ID_LENGTH
-                            ),
-                            source: None,
-                        })?;
+                let payload = Self::extract_payload(bytes)?;
                 Ok(CompactedRow::from_bytes(&self.row_type, payload))
             })
             .collect()
     }
+
     /// Converts all rows in this result into an Arrow [`RecordBatch`].
     ///
     /// This is useful for integration with DataFusion or other Arrow-based tools.
@@ -119,15 +120,7 @@ impl LookupResult {
         let mut builder = RowAppendRecordBatchBuilder::new(&self.row_type)?;
 
         for bytes in &self.rows {
-            let payload = bytes.get(SCHEMA_ID_LENGTH..).ok_or_else(|| {
-                Error::RowConvertError {
-                    message: format!(
-                        "LookupResult row payload too short: {} bytes, need at least {} bytes for schema id",
-                        bytes.len(),
-                        SCHEMA_ID_LENGTH
-                    ),
-                }
-            })?;
+            let payload = Self::extract_payload(bytes)?;
 
             let row = CompactedRow::from_bytes(&self.row_type, payload);
             builder.append(&row)?;
