@@ -33,7 +33,7 @@ pub enum Error {
     )]
     UnexpectedError {
         message: String,
-        /// see https://github.com/shepmaster/snafu/issues/446
+        /// see <https://github.com/shepmaster/snafu/issues/446>
         #[snafu(source(from(Box<dyn std::error::Error + Send + Sync + 'static>, Some)))]
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
@@ -163,6 +163,17 @@ impl Error {
             Some(FlussError::for_code(api_error.code))
         } else {
             None
+        }
+    }
+
+    /// Returns `true` if retrying the request may succeed.
+    /// [`Error::RpcError`] is always retriable; [`Error::FlussAPIError`] delegates to
+    /// [`ApiError::is_retriable`]; all other variants are not.
+    pub fn is_retriable(&self) -> bool {
+        match self {
+            Error::RpcError { .. } => true,
+            Error::FlussAPIError { api_error } => api_error.is_retriable(),
+            _ => false,
         }
     }
 }

@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <cassert>
+
 #include "fluss.hpp"
 #include "lib.rs.h"
 
@@ -35,6 +37,12 @@ inline Result make_ok() { return Result{0, {}}; }
 
 inline Result from_ffi_result(const ffi::FfiResult& ffi_result) {
     return Result{ffi_result.error_code, std::string(ffi_result.error_message)};
+}
+
+template <typename T>
+inline T* ptr_from_ffi(const ffi::FfiPtrResult& r) {
+    assert(r.ptr != 0 && "ptr_from_ffi: null pointer in FfiPtrResult");
+    return reinterpret_cast<T*>(r.ptr);
 }
 
 inline ffi::FfiTablePath to_ffi_table_path(const TablePath& path) {
@@ -54,8 +62,18 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_bucket_no_key_assigner = rust::String(config.writer_bucket_no_key_assigner);
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
+    ffi_config.scanner_remote_log_read_concurrency = config.scanner_remote_log_read_concurrency;
     ffi_config.scanner_log_max_poll_records = config.scanner_log_max_poll_records;
+    ffi_config.scanner_log_fetch_max_bytes = config.scanner_log_fetch_max_bytes;
+    ffi_config.scanner_log_fetch_min_bytes = config.scanner_log_fetch_min_bytes;
+    ffi_config.scanner_log_fetch_wait_max_time_ms = config.scanner_log_fetch_wait_max_time_ms;
+    ffi_config.scanner_log_fetch_max_bytes_for_bucket = config.scanner_log_fetch_max_bytes_for_bucket;
     ffi_config.writer_batch_timeout_ms = config.writer_batch_timeout_ms;
+    ffi_config.connect_timeout_ms = config.connect_timeout_ms;
+    ffi_config.security_protocol = rust::String(config.security_protocol);
+    ffi_config.security_sasl_mechanism = rust::String(config.security_sasl_mechanism);
+    ffi_config.security_sasl_username = rust::String(config.security_sasl_username);
+    ffi_config.security_sasl_password = rust::String(config.security_sasl_password);
     return ffi_config;
 }
 

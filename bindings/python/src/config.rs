@@ -81,6 +81,14 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.remote-log.read-concurrency" => {
+                        config.scanner_remote_log_read_concurrency =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "scanner.log.max-poll-records" => {
                         config.scanner_log_max_poll_records =
                             value.parse::<usize>().map_err(|e| {
@@ -89,16 +97,56 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.log.fetch.max-bytes" => {
+                        config.scanner_log_fetch_max_bytes = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "scanner.log.fetch.min-bytes" => {
+                        config.scanner_log_fetch_min_bytes = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "scanner.log.fetch.wait-max-time-ms" => {
+                        config.scanner_log_fetch_wait_max_time_ms =
+                            value.parse::<i32>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "scanner.log.fetch.max-bytes-for-bucket" => {
+                        config.scanner_log_fetch_max_bytes_for_bucket =
+                            value.parse::<i32>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "writer.bucket.no-key-assigner" => {
-                        config.writer_bucket_no_key_assigner = match value.as_str() {
-                            "round_robin" => fcore::config::NoKeyAssigner::RoundRobin,
-                            "sticky" => fcore::config::NoKeyAssigner::Sticky,
-                            other => {
-                                return Err(FlussError::new_err(format!(
-                                    "Unknown bucket assigner type: {other}, expected 'sticky' or 'round_robin'"
-                                )));
-                            }
-                        };
+                        config.writer_bucket_no_key_assigner =
+                            value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "connect-timeout" => {
+                        config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "security.protocol" => {
+                        config.security_protocol = value;
+                    }
+                    "security.sasl.mechanism" => {
+                        config.security_sasl_mechanism = value;
+                    }
+                    "security.sasl.username" => {
+                        config.security_sasl_username = value;
+                    }
+                    "security.sasl.password" => {
+                        config.security_sasl_password = value;
                     }
                     _ => {
                         return Err(FlussError::new_err(format!("Unknown property: {key}")));
@@ -194,6 +242,18 @@ impl Config {
         self.inner.remote_file_download_thread_num = num;
     }
 
+    /// Get the scanner remote log read concurrency
+    #[getter]
+    fn scanner_remote_log_read_concurrency(&self) -> usize {
+        self.inner.scanner_remote_log_read_concurrency
+    }
+
+    /// Set the scanner remote log read concurrency
+    #[setter]
+    fn set_scanner_remote_log_read_concurrency(&mut self, num: usize) {
+        self.inner.scanner_remote_log_read_concurrency = num;
+    }
+
     /// Get the scanner log max poll records
     #[getter]
     fn scanner_log_max_poll_records(&self) -> usize {
@@ -216,6 +276,132 @@ impl Config {
     #[setter]
     fn set_writer_batch_timeout_ms(&mut self, timeout: i64) {
         self.inner.writer_batch_timeout_ms = timeout;
+    }
+
+    /// Get the bucket assignment strategy for tables without bucket keys
+    #[getter]
+    fn writer_bucket_no_key_assigner(&self) -> String {
+        self.inner.writer_bucket_no_key_assigner.to_string()
+    }
+
+    /// Set the bucket assignment strategy for tables without bucket keys
+    #[setter]
+    fn set_writer_bucket_no_key_assigner(&mut self, value: String) -> PyResult<()> {
+        self.inner.writer_bucket_no_key_assigner =
+            value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
+                FlussError::new_err(format!(
+                    "Invalid value '{value}' for 'writer.bucket.no-key-assigner': {e}"
+                ))
+            })?;
+        Ok(())
+    }
+
+    /// Get the connect timeout in milliseconds
+    #[getter]
+    fn connect_timeout_ms(&self) -> u64 {
+        self.inner.connect_timeout_ms
+    }
+
+    /// Set the connect timeout in milliseconds
+    #[setter]
+    fn set_connect_timeout_ms(&mut self, timeout: u64) {
+        self.inner.connect_timeout_ms = timeout;
+    }
+
+    /// Get the security protocol
+    #[getter]
+    fn security_protocol(&self) -> String {
+        self.inner.security_protocol.clone()
+    }
+
+    /// Set the security protocol
+    #[setter]
+    fn set_security_protocol(&mut self, protocol: String) {
+        self.inner.security_protocol = protocol;
+    }
+
+    /// Get the SASL mechanism
+    #[getter]
+    fn security_sasl_mechanism(&self) -> String {
+        self.inner.security_sasl_mechanism.clone()
+    }
+
+    /// Set the SASL mechanism
+    #[setter]
+    fn set_security_sasl_mechanism(&mut self, mechanism: String) {
+        self.inner.security_sasl_mechanism = mechanism;
+    }
+
+    /// Get the SASL username
+    #[getter]
+    fn security_sasl_username(&self) -> String {
+        self.inner.security_sasl_username.clone()
+    }
+
+    /// Set the SASL username
+    #[setter]
+    fn set_security_sasl_username(&mut self, username: String) {
+        self.inner.security_sasl_username = username;
+    }
+
+    /// Get the SASL password
+    #[getter]
+    fn security_sasl_password(&self) -> String {
+        self.inner.security_sasl_password.clone()
+    }
+
+    /// Set the SASL password
+    #[setter]
+    fn set_security_sasl_password(&mut self, password: String) {
+        self.inner.security_sasl_password = password;
+    }
+
+    /// Get the maximum bytes per fetch response for LogScanner
+    #[getter]
+    fn scanner_log_fetch_max_bytes(&self) -> i32 {
+        self.inner.scanner_log_fetch_max_bytes
+    }
+
+    /// Set the maximum bytes per fetch response for LogScanner
+    #[setter]
+    fn set_scanner_log_fetch_max_bytes(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_max_bytes = bytes;
+    }
+
+    /// Get the minimum bytes to accumulate before returning a fetch response
+    #[getter]
+    fn scanner_log_fetch_min_bytes(&self) -> i32 {
+        self.inner.scanner_log_fetch_min_bytes
+    }
+
+    /// Set the minimum bytes to accumulate before returning a fetch response
+    #[setter]
+    fn set_scanner_log_fetch_min_bytes(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_min_bytes = bytes;
+    }
+
+    /// Get the maximum time (ms) the server may wait to satisfy min-bytes
+    #[getter]
+    fn scanner_log_fetch_wait_max_time_ms(&self) -> i32 {
+        self.inner.scanner_log_fetch_wait_max_time_ms
+    }
+
+    /// Set the maximum time (ms) the server may wait to satisfy min-bytes
+    #[setter]
+    fn set_scanner_log_fetch_wait_max_time_ms(&mut self, ms: i32) {
+        self.inner.scanner_log_fetch_wait_max_time_ms = ms;
+    }
+
+    /// Get the maximum bytes per fetch response per bucket for LogScanner
+    #[getter]
+    fn scanner_log_fetch_max_bytes_for_bucket(&self) -> i32 {
+        self.inner.scanner_log_fetch_max_bytes_for_bucket
+    }
+
+    /// Set the maximum bytes per fetch response per bucket for LogScanner
+    #[setter]
+    fn set_scanner_log_fetch_max_bytes_for_bucket(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_max_bytes_for_bucket = bytes;
     }
 }
 

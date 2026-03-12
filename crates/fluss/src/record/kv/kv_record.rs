@@ -50,7 +50,7 @@ pub const LENGTH_LENGTH: usize = 4;
 /// use the `row()` method with a RowDecoder (typically obtained from the iterator).
 ///
 /// Reference implementation:
-/// https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/record/KvRecord.java
+/// <https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/record/KvRecord.java>
 #[derive(Debug, Clone)]
 pub struct KvRecord {
     key: Bytes,

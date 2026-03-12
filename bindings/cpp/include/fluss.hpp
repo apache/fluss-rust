@@ -180,6 +180,18 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+
+    /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
+    static constexpr bool IsRetriable(int32_t code) {
+        return code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
+               code == SCHEMA_NOT_EXIST || code == LOG_STORAGE_EXCEPTION ||
+               code == KV_STORAGE_EXCEPTION || code == NOT_LEADER_OR_FOLLOWER ||
+               code == CORRUPT_RECORD_EXCEPTION ||
+               code == UNKNOWN_TABLE_OR_BUCKET_EXCEPTION || code == REQUEST_TIME_OUT ||
+               code == STORAGE_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION;
+    }
 };
 
 struct Date {
@@ -326,6 +338,9 @@ struct Result {
     std::string error_message;
 
     bool Ok() const { return error_code == 0; }
+
+    /// Returns true if retrying the request may succeed. Client-side errors always return false.
+    bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
 
 struct TablePath {
@@ -881,6 +896,14 @@ struct PartitionInfo {
     std::string partition_name;
 };
 
+struct ServerNode {
+    int32_t id;
+    std::string host;
+    uint32_t port;
+    std::string server_type;
+    std::string uid;
+};
+
 /// Descriptor for create_database (optional). Leave comment and properties empty for default.
 struct DatabaseDescriptor {
     std::string comment;
@@ -985,9 +1008,29 @@ struct Configuration {
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
     size_t remote_file_download_thread_num{3};
+    // Remote log read concurrency within one file (streaming read path)
+    size_t scanner_remote_log_read_concurrency{4};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
+    // Maximum bytes per fetch response for LogScanner (16 MB)
+    int32_t scanner_log_fetch_max_bytes{16 * 1024 * 1024};
+    // Minimum bytes to accumulate before server returns a fetch response
+    int32_t scanner_log_fetch_min_bytes{1};
+    // Maximum time (ms) the server may wait to satisfy min bytes
+    int32_t scanner_log_fetch_wait_max_time_ms{500};
+    // Maximum bytes per fetch response per bucket for LogScanner (1 MB)
+    int32_t scanner_log_fetch_max_bytes_for_bucket{1024 * 1024};
     int64_t writer_batch_timeout_ms{100};
+    // Connect timeout in milliseconds for TCP transport connect
+    uint64_t connect_timeout_ms{120000};
+    // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
+    std::string security_protocol{"PLAINTEXT"};
+    // SASL mechanism (only "PLAIN" is supported)
+    std::string security_sasl_mechanism{"PLAIN"};
+    // SASL username (required when security_protocol is "sasl")
+    std::string security_sasl_username;
+    // SASL password (required when security_protocol is "sasl")
+    std::string security_sasl_password;
 };
 
 class Connection {
@@ -1070,6 +1113,8 @@ class Admin {
     Result ListTables(const std::string& database_name, std::vector<std::string>& out);
 
     Result TableExists(const TablePath& table_path, bool& out);
+
+    Result GetServerNodes(std::vector<ServerNode>& out);
 
    private:
     Result DoListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,

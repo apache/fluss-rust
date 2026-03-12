@@ -17,12 +17,19 @@ let conn = FlussConnection::new(config).await?;
 
 ## Connection Configurations
 
-| Option                          | Description                                                                          | Default          |
-|---------------------------------|--------------------------------------------------------------------------------------|------------------|
-| `bootstrap_servers`             | Coordinator server address                                                           | `127.0.0.1:9123` |
-| `writer_request_max_size`       | Maximum request size in bytes                                                        | 10 MB            |
-| `writer_acks`                   | Acknowledgment setting (`all` waits for all replicas)                                | `all`            |
-| `writer_retries`                | Number of retries on failure                                                         | `i32::MAX`       |
-| `writer_batch_size`             | Batch size for writes                                                                | 2 MB             |
-| `writer_bucket_no_key_assigner` | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin` | `sticky`         |
-| `writer_batch_timeout_ms`       | The maximum time to wait for a writer batch to fill up before sending.               | `100`            |
+See the [`Config`](../api-reference.md#config) section in the API Reference for the full list of configuration options, types, and defaults.
+
+## SASL Authentication
+
+To connect to a Fluss cluster with SASL/PLAIN authentication enabled:
+
+```rust
+let mut config = Config::default();
+config.bootstrap_servers = "127.0.0.1:9123".to_string();
+config.security_protocol = "sasl".to_string();
+config.security_sasl_mechanism = "PLAIN".to_string();
+config.security_sasl_username = "admin".to_string();
+config.security_sasl_password = "admin-secret".to_string();
+
+let conn = FlussConnection::new(config).await?;
+```

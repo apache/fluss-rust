@@ -15,17 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::SchemaRef;
-use log::{debug, warn};
-use parking_lot::{Mutex, RwLock};
-use std::{
-    collections::{HashMap, HashSet},
-    slice::from_ref,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use tempfile::TempDir;
-
 use crate::client::connection::FlussConnection;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
@@ -44,12 +33,16 @@ use crate::record::{
 use crate::rpc::{RpcClient, RpcError, message};
 use crate::util::FairBucketStatusMap;
 use crate::{PartitionId, TableId};
-
-const LOG_FETCH_MAX_BYTES: i32 = 16 * 1024 * 1024;
-#[allow(dead_code)]
-const LOG_FETCH_MAX_BYTES_FOR_BUCKET: i32 = 1024;
-const LOG_FETCH_MIN_BYTES: i32 = 1;
-const LOG_FETCH_WAIT_MAX_TIME: i32 = 500;
+use arrow_schema::SchemaRef;
+use log::{debug, warn};
+use parking_lot::{Mutex, RwLock};
+use std::{
+    collections::{HashMap, HashSet},
+    slice::from_ref,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tempfile::TempDir;
 
 pub struct TableScan<'a> {
     conn: &'a FlussConnection,
@@ -637,6 +630,10 @@ struct LogFetcher {
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
     max_poll_records: usize,
+    fetch_max_bytes: i32,
+    fetch_min_bytes: i32,
+    fetch_wait_max_time_ms: i32,
+    fetch_max_bytes_for_bucket: i32,
 }
 
 struct FetchResponseContext {
@@ -677,6 +674,7 @@ impl LogFetcher {
             tmp_dir,
             config.scanner_remote_log_prefetch_num,
             config.remote_file_download_thread_num,
+            config.scanner_remote_log_read_concurrency,
             credentials_rx,
         )?);
 
@@ -696,6 +694,10 @@ impl LogFetcher {
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
             max_poll_records: config.scanner_log_max_poll_records,
+            fetch_max_bytes: config.scanner_log_fetch_max_bytes,
+            fetch_min_bytes: config.scanner_log_fetch_min_bytes,
+            fetch_wait_max_time_ms: config.scanner_log_fetch_wait_max_time_ms,
+            fetch_max_bytes_for_bucket: config.scanner_log_fetch_max_bytes_for_bucket,
         })
     }
 
@@ -1478,8 +1480,7 @@ impl LogFetcher {
                             partition_id: bucket.partition_id(),
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
-                            // 1M
-                            max_fetch_bytes: 1024 * 1024,
+                            max_fetch_bytes: self.fetch_max_bytes_for_bucket,
                         };
 
                         fetch_log_req_for_buckets
@@ -1513,10 +1514,10 @@ impl LogFetcher {
 
                     let fetch_log_request = FetchLogRequest {
                         follower_server_id: -1,
-                        max_bytes: LOG_FETCH_MAX_BYTES,
+                        max_bytes: self.fetch_max_bytes,
                         tables_req: vec![req_for_table],
-                        max_wait_ms: Some(LOG_FETCH_WAIT_MAX_TIME),
-                        min_bytes: Some(LOG_FETCH_MIN_BYTES),
+                        max_wait_ms: Some(self.fetch_wait_max_time_ms),
+                        min_bytes: Some(self.fetch_min_bytes),
                     };
                     (leader_id, fetch_log_request)
                 })
@@ -1988,5 +1989,48 @@ mod tests {
         let (table_info, table_path) = create_test_table_info(false, Some("ARROW"));
         let result = validate_scan_support(&table_path, &table_info);
         assert!(result.is_ok());
+    }
+    #[tokio::test]
+    async fn prepare_fetch_log_requests_uses_configured_fetch_params() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+
+        let config = crate::config::Config {
+            scanner_log_fetch_max_bytes: 1234,
+            scanner_log_fetch_min_bytes: 7,
+            scanner_log_fetch_wait_max_time_ms: 89,
+            scanner_log_fetch_max_bytes_for_bucket: 512,
+            ..crate::config::Config::default()
+        };
+
+        let fetcher = LogFetcher::new(
+            table_info,
+            Arc::new(RpcClient::new()),
+            metadata,
+            status,
+            &config,
+            None,
+        )?;
+
+        let requests = fetcher.prepare_fetch_log_requests().await;
+        // In this test cluster, leader id should exist; but even if it changes,
+        // assert over all built requests.
+        assert!(!requests.is_empty());
+        for req in requests.values() {
+            assert_eq!(req.max_bytes, 1234);
+            assert_eq!(req.min_bytes, Some(7));
+            assert_eq!(req.max_wait_ms, Some(89));
+
+            for table_req in &req.tables_req {
+                for bucket_req in &table_req.buckets_req {
+                    assert_eq!(bucket_req.max_fetch_bytes, 512);
+                }
+            }
+        }
+        Ok(())
     }
 }

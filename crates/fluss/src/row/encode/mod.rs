@@ -64,12 +64,12 @@ impl KeyEncoderFactory {
     }
 }
 
-/// An encoder to write [`BinaryRow`]. It's used to write row
-/// multi-times one by one. When writing a new row:
+/// An encoder to write binary row data. It's used to write rows
+/// one by one. When writing a new row:
 ///
 /// 1. call method [`RowEncoder::start_new_row()`] to start the writing.
 /// 2. call method [`RowEncoder::encode_field()`] to write the row's field.
-/// 3. call method [`RowEncoder::finishRow()`] to finish the writing and get the written row.
+/// 3. call method [`RowEncoder::finish_row()`] to finish the writing and get the written row.
 #[allow(dead_code)]
 pub trait RowEncoder: Send + Sync {
     /// Start to write a new row.

@@ -19,7 +19,7 @@ mod binary_writer;
 
 pub use binary_writer::*;
 
-/// The binary row format types, it indicates the generated [`BinaryRow`] type by the [`BinaryWriter`]
+/// The binary row format types, it indicates the generated row type by the [`BinaryWriter`]
 #[allow(dead_code)]
 pub enum BinaryRowFormat {
     Compacted,

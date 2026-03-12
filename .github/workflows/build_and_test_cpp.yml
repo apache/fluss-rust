@@ -70,9 +70,9 @@ jobs:
           cmake -B build -DFLUSS_ENABLE_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build build --parallel
 
-      - name: Run C++ integration tests
+      - name: Run C++ integration tests (parallel)
         working-directory: bindings/cpp
-        run: cd build && ctest --output-on-failure --timeout 300
+        run: cd build && ctest -j$(nproc) --output-on-failure --timeout 300
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

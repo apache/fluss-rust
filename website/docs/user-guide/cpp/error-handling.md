@@ -94,8 +94,56 @@ if (!result.Ok()) {
 | `ErrorCode::PARTITION_ALREADY_EXISTS`         | 42   | Partition already exists            |
 | `ErrorCode::PARTITION_SPEC_INVALID_EXCEPTION` | 43   | Invalid partition spec              |
 | `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for partition   |
+| `ErrorCode::AUTHENTICATE_EXCEPTION`           | 46   | Authentication failed (bad credentials) |
 
 See `fluss::ErrorCode` in `fluss.hpp` for the full list of named constants.
+
+## Retry Logic
+
+Some errors are transient, where the server may be temporarily unavailable, mid-election, or under load. `IsRetriable()` can be used for deciding to to retry an operation rather than treating the error as permanent.
+
+`ErrorCode::IsRetriable(int32_t code)` is a static helper available directly on the error code:
+
+```cpp
+fluss::Result result = writer.Append(row);
+if (!result.Ok()) {
+    if (result.IsRetriable()) {
+        // Transient failure — safe to retry 
+    } else {
+        // Permanent failure — log and abort
+        std::cerr << "Fatal error (code " << result.error_code
+                  << "): " << result.error_message << std::endl;
+    }
+}
+```
+
+`Result::IsRetriable()` delegates to `ErrorCode::IsRetriable()`, so you can also call it directly on the code:
+
+```cpp
+if (fluss::ErrorCode::IsRetriable(result.error_code)) {
+    // retry
+}
+```
+
+### Retriable Error Codes
+
+| Constant                                                    | Code | Reason                                    |
+|-------------------------------------------------------------|------|-------------------------------------------|
+| `ErrorCode::NETWORK_EXCEPTION`                          | 1    | Server disconnected                       |
+| `ErrorCode::CORRUPT_MESSAGE`                            | 3    | CRC or size error                         |
+| `ErrorCode::SCHEMA_NOT_EXIST`                           | 9    | Schema may not exist                      |
+| `ErrorCode::LOG_STORAGE_EXCEPTION`                      | 10   | Transient log storage error               |
+| `ErrorCode::KV_STORAGE_EXCEPTION`                       | 11   | Transient KV storage error                |
+| `ErrorCode::NOT_LEADER_OR_FOLLOWER`                     | 12   | Leader election in progress               |
+| `ErrorCode::CORRUPT_RECORD_EXCEPTION`                   | 14   | Corrupt record                            |
+| `ErrorCode::UNKNOWN_TABLE_OR_BUCKET_EXCEPTION`          | 21   | Metadata not yet available                |
+| `ErrorCode::REQUEST_TIME_OUT`                           | 25   | Request timed out                         |
+| `ErrorCode::STORAGE_EXCEPTION`                          | 26   | Transient storage error                   |
+| `ErrorCode::NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION` | 28   | Wrote to server but with low ISR size     |
+| `ErrorCode::NOT_ENOUGH_REPLICAS_EXCEPTION`              | 29   | Low ISR size at write time                |
+| `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`             | 44   | No leader available for partition         |
+
+Client-side errors (`ErrorCode::CLIENT_ERROR`, code -2) always return `false` from `IsRetriable()`.
 
 ## Common Error Scenarios
 
@@ -143,6 +191,26 @@ fluss::Result result = writer.Upsert(row, wr);
 if (!result.Ok()) {
     if (result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
         std::cerr << "Partition not found, create partitions before writing" << std::endl;
+    }
+}
+```
+
+### Authentication Failed
+
+SASL credentials are incorrect or the user does not exist:
+
+```cpp
+fluss::Configuration config;
+config.bootstrap_servers = "127.0.0.1:9123";
+config.security_protocol = "sasl";
+config.security_sasl_username = "admin";
+config.security_sasl_password = "wrong-password";
+
+fluss::Connection conn;
+fluss::Result result = fluss::Connection::Create(config, conn);
+if (!result.Ok()) {
+    if (result.error_code == fluss::ErrorCode::AUTHENTICATE_EXCEPTION) {
+        std::cerr << "Authentication failed: " << result.error_message << std::endl;
     }
 }
 ```

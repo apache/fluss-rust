@@ -16,55 +16,21 @@
  * limitations under the License.
  */
 
-use parking_lot::RwLock;
-use std::sync::Arc;
-use std::sync::LazyLock;
-
-use crate::integration::fluss_cluster::FlussTestingCluster;
 #[cfg(test)]
-use test_env_helpers::*;
-
-// Module-level shared cluster instance (only for this test file)
-static SHARED_FLUSS_CLUSTER: LazyLock<Arc<RwLock<Option<FlussTestingCluster>>>> =
-    LazyLock::new(|| Arc::new(RwLock::new(None)));
-
-#[cfg(test)]
-#[before_all]
-#[after_all]
 mod table_test {
-    use super::SHARED_FLUSS_CLUSTER;
-    use crate::integration::fluss_cluster::FlussTestingCluster;
-    use crate::integration::utils::{
-        create_partitions, create_table, get_cluster, start_cluster, stop_cluster,
-    };
+    use crate::integration::utils::{create_partitions, create_table, get_shared_cluster};
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::record::ScanRecord;
     use fluss::row::InternalRow;
     use fluss::rpc::message::OffsetSpec;
-    use jiff::Timestamp;
     use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
     use std::time::Duration;
-
-    fn before_all() {
-        start_cluster("test_table", SHARED_FLUSS_CLUSTER.clone());
-    }
-
-    fn get_fluss_cluster() -> Arc<FlussTestingCluster> {
-        get_cluster(&SHARED_FLUSS_CLUSTER)
-    }
-
-    fn after_all() {
-        stop_cluster(SHARED_FLUSS_CLUSTER.clone());
-    }
 
     #[tokio::test]
     async fn append_record_batch_and_scan() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -174,7 +140,7 @@ mod table_test {
 
     #[tokio::test]
     async fn list_offsets() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -221,8 +187,6 @@ mod table_test {
             "Latest offset should be 0 for empty table"
         );
 
-        let before_append_ms = Timestamp::now().as_millisecond();
-
         // Append some records
         let append_writer = connection
             .get_table(&table_path)
@@ -246,8 +210,6 @@ mod table_test {
         append_writer.flush().await.expect("Failed to flush");
 
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-        let after_append_ms = Timestamp::now().as_millisecond();
 
         // Test latest offset after appending (should be 3)
         let latest_offsets_after = admin
@@ -273,34 +235,65 @@ mod table_test {
             "Earliest offset should still be 0"
         );
 
-        // Test list_offsets_by_timestamp
-
-        let timestamp_offsets = admin
-            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(before_append_ms))
+        // Scan records back to get server-assigned timestamps (avoids host/container
+        // clock skew issues that make host-based timestamps unreliable).
+        let table = connection
+            .get_table(&table_path)
             .await
-            .expect("Failed to list offsets by timestamp");
+            .expect("Failed to get table");
+        let log_scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let mut record_timestamps: Vec<i64> = Vec::new();
+        let scan_start = std::time::Instant::now();
+        while record_timestamps.len() < 3 && scan_start.elapsed() < Duration::from_secs(10) {
+            let scan_records = log_scanner
+                .poll(Duration::from_millis(500))
+                .await
+                .expect("Failed to poll records");
+            for rec in scan_records {
+                record_timestamps.push(rec.timestamp());
+            }
+        }
+        assert_eq!(record_timestamps.len(), 3, "Expected 3 record timestamps");
+
+        let min_ts = *record_timestamps.iter().min().unwrap();
+        let max_ts = *record_timestamps.iter().max().unwrap();
+
+        // Timestamp before all records should resolve to offset 0
+        let before_offsets = admin
+            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(min_ts - 1))
+            .await
+            .expect("Failed to list offsets by timestamp (before)");
 
         assert_eq!(
-            timestamp_offsets.get(&0),
+            before_offsets.get(&0),
             Some(&0),
-            "Timestamp before append should resolve to offset 0 (start of new data)"
+            "Timestamp before first record should resolve to offset 0"
         );
 
-        let timestamp_offsets = admin
-            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(after_append_ms))
+        // Timestamp after all records should resolve to offset 3
+        let after_offsets = admin
+            .list_offsets(&table_path, &[0], OffsetSpec::Timestamp(max_ts + 1))
             .await
-            .expect("Failed to list offsets by timestamp");
+            .expect("Failed to list offsets by timestamp (after)");
 
         assert_eq!(
-            timestamp_offsets.get(&0),
+            after_offsets.get(&0),
             Some(&3),
-            "Timestamp after append should resolve to offset 0 (no newer records)"
+            "Timestamp after last record should resolve to offset 3"
         );
     }
 
     #[tokio::test]
     async fn test_project() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -456,7 +449,7 @@ mod table_test {
 
     #[tokio::test]
     async fn test_poll_batches() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.expect("Failed to get admin");
 
@@ -588,7 +581,7 @@ mod table_test {
     async fn all_supported_datatypes() {
         use fluss::row::{Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz};
 
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -1019,7 +1012,7 @@ mod table_test {
 
     #[tokio::test]
     async fn partitioned_table_append_scan() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().await.expect("Failed to get admin");
@@ -1314,7 +1307,7 @@ mod table_test {
 
     #[tokio::test]
     async fn undersized_row_returns_error() {
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().await.expect("Failed to get admin");
 

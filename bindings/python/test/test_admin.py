@@ -82,6 +82,7 @@ async def test_create_table(admin):
         ),
         primary_keys=["id"],
     )
+    assert schema.get_primary_keys() == ["id"]
 
     table_descriptor = fluss.TableDescriptor(
         schema,
@@ -270,6 +271,23 @@ async def test_error_table_not_exist(admin):
 
     # drop with ignore flag should succeed
     await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+
+async def test_get_server_nodes(admin):
+    """Test get_server_nodes returns coordinator and tablet servers."""
+    nodes = await admin.get_server_nodes()
+
+    assert len(nodes) > 0, "Expected at least one server node"
+
+    server_types = [n.server_type for n in nodes]
+    assert "CoordinatorServer" in server_types, "Expected a coordinator server"
+    assert "TabletServer" in server_types, "Expected at least one tablet server"
+
+    for node in nodes:
+        assert node.host, "Server node host should not be empty"
+        assert node.port > 0, "Server node port should be > 0"
+        assert node.uid, "Server node uid should not be empty"
+        assert repr(node).startswith("ServerNode(")
 
 
 async def test_error_table_not_partitioned(admin):
