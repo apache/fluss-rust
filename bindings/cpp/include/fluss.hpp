@@ -1012,6 +1012,14 @@ struct Configuration {
     size_t scanner_remote_log_read_concurrency{4};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
+    // Maximum bytes per fetch response for LogScanner (16 MB)
+    int32_t scanner_log_fetch_max_bytes{16 * 1024 * 1024};
+    // Minimum bytes to accumulate before server returns a fetch response
+    int32_t scanner_log_fetch_min_bytes{1};
+    // Maximum time (ms) the server may wait to satisfy min bytes
+    int32_t scanner_log_fetch_wait_max_time_ms{500};
+    // Maximum bytes per fetch response per bucket for LogScanner (1 MB)
+    int32_t scanner_log_fetch_max_bytes_for_bucket{1024 * 1024};
     int64_t writer_batch_timeout_ms{100};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{120000};
