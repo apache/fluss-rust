@@ -2201,11 +2201,14 @@ impl LogScanner {
     }
 
     fn __aiter__<'py>(slf: PyRef<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
-        static ASYNC_GEN_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
         let py = slf.py();
-        let gen_fn = ASYNC_GEN_FN.get_or_init(py, || {
-            let code = pyo3::ffi::c_str!(
-                r#"
+
+        match slf.kind.as_ref() {
+            ScannerKind::Record(_) => {
+                static RECORD_ASYNC_GEN_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+                let gen_fn = RECORD_ASYNC_GEN_FN.get_or_init(py, || {
+                    let code = pyo3::ffi::c_str!(
+                        r#"
 async def _async_scan(scanner, timeout_ms=1000):
     while True:
         batch = await scanner._async_poll(timeout_ms)
@@ -2213,12 +2216,37 @@ async def _async_scan(scanner, timeout_ms=1000):
             for record in batch:
                 yield record
 "#
-            );
-            let globals = pyo3::types::PyDict::new(py);
-            py.run(code, Some(&globals), None).unwrap();
-            globals.get_item("_async_scan").unwrap().unwrap().unbind()
-        });
-        gen_fn.bind(py).call1((slf.into_bound_py_any(py)?,))
+                    );
+                    let globals = pyo3::types::PyDict::new(py);
+                    py.run(code, Some(&globals), None).unwrap();
+                    globals.get_item("_async_scan").unwrap().unwrap().unbind()
+                });
+                gen_fn.bind(py).call1((slf.into_bound_py_any(py)?,))
+            }
+            ScannerKind::Batch(_) => {
+                static BATCH_ASYNC_GEN_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+                let gen_fn = BATCH_ASYNC_GEN_FN.get_or_init(py, || {
+                    let code = pyo3::ffi::c_str!(
+                        r#"
+async def _async_batch_scan(scanner, timeout_ms=1000):
+    while True:
+        batches = await scanner._async_poll_batches(timeout_ms)
+        if batches:
+            for rb in batches:
+                yield rb
+"#
+                    );
+                    let globals = pyo3::types::PyDict::new(py);
+                    py.run(code, Some(&globals), None).unwrap();
+                    globals
+                        .get_item("_async_batch_scan")
+                        .unwrap()
+                        .unwrap()
+                        .unbind()
+                });
+                gen_fn.bind(py).call1((slf.into_bound_py_any(py)?,))
+            }
+        }
     }
 
     /// Perform a single bounded poll and return a list of ScanRecord objects.
@@ -2275,6 +2303,62 @@ async def _async_scan(scanner, timeout_ms=1000):
                             ScanRecord::from_core(py, &core_record, &projected_row_type)?;
                         result.push(Py::new(py, scan_record)?);
                     }
+                }
+                Ok(result)
+            })
+        })
+    }
+
+    /// Perform a single bounded poll and return a list of RecordBatch objects.
+    ///
+    /// This is the async building block used by `__aiter__` (batch mode) to
+    /// implement `async for`. Each call does exactly one network poll (bounded
+    /// by `timeout_ms`), converts any results to Python RecordBatch objects,
+    /// and returns them as a list. An empty list signals a timeout (no data
+    /// yet), not end-of-stream.
+    ///
+    /// Args:
+    ///     timeout_ms: Timeout in milliseconds for the network poll (default: 1000)
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a list of RecordBatch objects
+    fn _async_poll_batches<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_ms: Option<i64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = timeout_ms.unwrap_or(1000);
+        if timeout_ms < 0 {
+            return Err(FlussError::new_err(format!(
+                "timeout_ms must be non-negative, got: {timeout_ms}"
+            )));
+        }
+
+        let scanner = Arc::clone(&self.kind);
+        let timeout = Duration::from_millis(timeout_ms as u64);
+
+        future_into_py(py, async move {
+            let core_scanner = match scanner.as_ref() {
+                ScannerKind::Batch(s) => s,
+                ScannerKind::Record(_) => {
+                    return Err(PyTypeError::new_err(
+                        "Batch async iteration is only supported for batch scanners; \
+                         use create_record_batch_log_scanner() instead.",
+                    ));
+                }
+            };
+
+            let scan_batches = core_scanner
+                .poll(timeout)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
+
+            // Convert to Python list of RecordBatch objects
+            Python::attach(|py| {
+                let mut result: Vec<Py<RecordBatch>> = Vec::new();
+                for scan_batch in scan_batches {
+                    let rb = RecordBatch::from_scan_batch(scan_batch);
+                    result.push(Py::new(py, rb)?);
                 }
                 Ok(result)
             })

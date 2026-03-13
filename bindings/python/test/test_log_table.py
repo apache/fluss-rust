@@ -916,11 +916,14 @@ async def test_async_iterator_multiple_batches(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
-async def test_async_iterator_batch_scanner_raises_type_error(
-    connection, admin
-):
-    """Verify that using `async for` on a batch scanner raises TypeError."""
-    table_path = fluss.TablePath("fluss", "py_test_async_batch_error")
+async def test_batch_async_iterator(connection, admin):
+    """Test the Python asynchronous iterator loop (`async for`) on a batch LogScanner.
+
+    With our __aiter__ dispatch, a batch-based scanner should yield RecordBatch
+    objects (not ScanRecord). Each yielded item has .batch (PyArrow RecordBatch),
+    .bucket, .base_offset, .last_offset.
+    """
+    table_path = fluss.TablePath("fluss", "py_test_batch_async_iter")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
 
     schema = fluss.Schema(
@@ -929,14 +932,12 @@ async def test_async_iterator_batch_scanner_raises_type_error(
     await admin.create_table(table_path, fluss.TableDescriptor(schema))
 
     table = await connection.get_table(table_path)
-
-    # Write some data so there's something to iterate
     writer = table.new_append().create_writer()
     writer.write_arrow_batch(
         pa.RecordBatch.from_arrays(
             [
-                pa.array([1, 2, 3], type=pa.int32()),
-                pa.array(["a", "b", "c"]),
+                pa.array(list(range(1, 7)), type=pa.int32()),
+                pa.array([f"bv{i}" for i in range(1, 7)]),
             ],
             schema=pa.schema(
                 [pa.field("id", pa.int32()), pa.field("val", pa.string())]
@@ -945,20 +946,546 @@ async def test_async_iterator_batch_scanner_raises_type_error(
     )
     await writer.flush()
 
-    # Create a BATCH scanner (not a record scanner)
     batch_scanner = await table.new_scan().create_record_batch_log_scanner()
-    batch_scanner.subscribe(bucket_id=0, start_offset=0)
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    batch_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
 
-    # Attempting async for on a batch scanner must raise TypeError
+    collected_batches = []
+    total_rows = 0
+
+    async def consume_batches():
+        nonlocal total_rows
+        async for rb in batch_scanner:
+            collected_batches.append(rb)
+            total_rows += rb.batch.num_rows
+            if total_rows >= 6:
+                break
+
+    await asyncio.wait_for(consume_batches(), timeout=15.0)
+
+    assert total_rows >= 6, f"Expected >=6 total rows, got {total_rows}"
+    assert len(collected_batches) > 0
+
+    # Verify each yielded item is a RecordBatch with expected attributes
+    for rb in collected_batches:
+        assert hasattr(rb, "batch"), "RecordBatch should have .batch"
+        assert hasattr(rb, "bucket"), "RecordBatch should have .bucket"
+        assert hasattr(rb, "base_offset"), "RecordBatch should have .base_offset"
+        assert hasattr(rb, "last_offset"), "RecordBatch should have .last_offset"
+        # .batch should be a PyArrow RecordBatch
+        arrow_batch = rb.batch
+        assert isinstance(arrow_batch, pa.RecordBatch), (
+            f"Expected PyArrow RecordBatch, got {type(arrow_batch).__name__}"
+        )
+        assert arrow_batch.num_columns == 2
+        assert set(arrow_batch.schema.names) == {"id", "val"}
+
+    # Verify all 6 IDs are present
+    all_ids = []
+    for rb in collected_batches:
+        all_ids.extend(rb.batch.column("id").to_pylist())
+    assert sorted(all_ids[:6]) == [1, 2, 3, 4, 5, 6]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_batch_async_iterator_break_no_leak(connection, admin):
+    """Verify that breaking out of batch `async for` does not leak resources.
+
+    After breaking, the scanner must still be usable for synchronous
+    poll_record_batch() calls, proving no leaked task or lock.
+    """
+    table_path = fluss.TablePath("fluss", "py_test_batch_async_break")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array(list(range(1, 11)), type=pa.int32()),
+                pa.array([f"bl{i}" for i in range(1, 11)]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("val", pa.string())]
+            ),
+        )
+    )
+    await writer.flush()
+
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    batch_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
+
+    # Phase 1: async for with early break (collect just 1 batch)
+    first_batch = None
+
+    async def consume_and_break():
+        nonlocal first_batch
+        async for rb in batch_scanner:
+            first_batch = rb
+            break
+
+    await asyncio.wait_for(consume_and_break(), timeout=10.0)
+    assert first_batch is not None, "Should have received at least 1 batch"
+    assert first_batch.batch.num_rows > 0
+
+    # Phase 2: sync poll_record_batch() must still work — proves no leak
+    remaining = batch_scanner.poll_record_batch(2000)
+    assert remaining is not None, "poll_record_batch() should return (not deadlock)"
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_batch_async_iterator_multiple_batches(connection, admin):
+    """Verify batch async iteration works across multiple network poll cycles.
+
+    Writing 20 records to 3 buckets ensures the generator must loop through
+    several _async_poll_batches calls to collect them all.
+    """
+    table_path = fluss.TablePath("fluss", "py_test_batch_async_multi")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    table_descriptor = fluss.TableDescriptor(
+        schema, bucket_count=3, bucket_keys=["id"]
+    )
+    await admin.create_table(
+        table_path, table_descriptor, ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+
+    num_records = 20
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array(list(range(1, num_records + 1)), type=pa.int32()),
+                pa.array([f"bm{i}" for i in range(1, num_records + 1)]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("val", pa.string())]
+            ),
+        )
+    )
+    await writer.flush()
+
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    batch_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
+
+    all_ids = []
+
+    async def consume_all():
+        async for rb in batch_scanner:
+            all_ids.extend(rb.batch.column("id").to_pylist())
+            if len(all_ids) >= num_records:
+                break
+
+    await asyncio.wait_for(consume_all(), timeout=15.0)
+    assert len(all_ids) >= num_records, (
+        f"Expected >={num_records} IDs, got {len(all_ids)}"
+    )
+    assert sorted(all_ids[:num_records]) == list(range(1, num_records + 1))
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_async_poll_batches_wrong_scanner_type(connection, admin):
+    """Verify _async_poll_batches raises TypeError on a record scanner."""
+    table_path = fluss.TablePath("fluss", "py_test_apb_wrong_type")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    # Create a RECORD scanner (not batch)
+    record_scanner = await table.new_scan().create_log_scanner()
+    record_scanner.subscribe(bucket_id=0, start_offset=0)
+
     import pytest
 
     with pytest.raises(TypeError):
+        await record_scanner._async_poll_batches(1000)
 
-        async def try_iterate():
-            async for _ in batch_scanner:
-                pass
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
 
-        await asyncio.wait_for(try_iterate(), timeout=5.0)
+
+async def test_async_poll_on_batch_scanner_raises_type_error(
+    connection, admin
+):
+    """Verify _async_poll (record method) raises TypeError on a batch scanner.
+
+    This is the inverse: _async_poll is for records only, _async_poll_batches
+    is for batches only. Calling the wrong one should raise TypeError.
+    """
+    table_path = fluss.TablePath("fluss", "py_test_apoll_batch_err")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    batch_scanner.subscribe(bucket_id=0, start_offset=0)
+
+    import pytest
+
+    with pytest.raises(TypeError):
+        await batch_scanner._async_poll(1000)
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_async_poll_batches_negative_timeout(connection, admin):
+    """Verify _async_poll_batches rejects a negative timeout_ms with an error."""
+    table_path = fluss.TablePath("fluss", "py_test_apb_neg_timeout")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    batch_scanner.subscribe(bucket_id=0, start_offset=0)
+
+    import pytest
+
+    with pytest.raises(Exception, match="non-negative"):
+        await batch_scanner._async_poll_batches(-1)
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_async_poll_batches_returns_list(connection, admin):
+    """Verify _async_poll_batches returns a Python list of RecordBatch objects."""
+    table_path = fluss.TablePath("fluss", "py_test_apb_returns_list")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array([1, 2, 3], type=pa.int32()),
+                pa.array(["x", "y", "z"]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("val", pa.string())]
+            ),
+        )
+    )
+    await writer.flush()
+
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    batch_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
+
+    # Poll until we get a non-empty result
+    result = None
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        result = await batch_scanner._async_poll_batches(2000)
+        if result:
+            break
+
+    assert result is not None, "Expected non-None result from _async_poll_batches"
+    assert isinstance(result, list), (
+        f"Expected list, got {type(result).__name__}"
+    )
+    assert len(result) > 0, "Expected non-empty list"
+
+    # Each element must be a RecordBatch with .batch, .bucket, .base_offset, .last_offset
+    for rb in result:
+        assert hasattr(rb, "batch"), "RecordBatch should have .batch"
+        assert hasattr(rb, "bucket"), "RecordBatch should have .bucket"
+        assert hasattr(rb, "base_offset"), "RecordBatch should have .base_offset"
+        assert hasattr(rb, "last_offset"), "RecordBatch should have .last_offset"
+        assert isinstance(rb.batch, pa.RecordBatch)
+        assert rb.base_offset >= 0
+        assert rb.last_offset >= rb.base_offset
+
+    # An empty poll (no new data) should return an empty list, not None
+    empty_result = await batch_scanner._async_poll_batches(100)
+    assert isinstance(empty_result, list), (
+        f"Empty poll should return list, got {type(empty_result).__name__}"
+    )
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_batch_async_iterator_record_batch_metadata(connection, admin):
+    """Verify that RecordBatch objects yielded by async for contain correct metadata.
+
+    Each RecordBatch must have:
+    - .bucket with a valid bucket_id
+    - .base_offset >= 0
+    - .last_offset = base_offset + num_rows - 1 (for non-empty batches)
+    - .batch.num_rows > 0
+    """
+    table_path = fluss.TablePath("fluss", "py_test_batch_async_meta")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array(list(range(1, 6)), type=pa.int32()),
+                pa.array([f"m{i}" for i in range(1, 6)]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("val", pa.string())]
+            ),
+        )
+    )
+    await writer.flush()
+
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    batch_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
+
+    collected_batches = []
+    total_rows = 0
+
+    async def consume():
+        nonlocal total_rows
+        async for rb in batch_scanner:
+            collected_batches.append(rb)
+            total_rows += rb.batch.num_rows
+            if total_rows >= 5:
+                break
+
+    await asyncio.wait_for(consume(), timeout=15.0)
+    assert total_rows >= 5
+
+    for rb in collected_batches:
+        assert rb.batch.num_rows > 0, "Yielded batch should not be empty"
+        assert rb.base_offset >= 0, "base_offset should be non-negative"
+        expected_last = rb.base_offset + rb.batch.num_rows - 1
+        assert rb.last_offset == expected_last, (
+            f"last_offset should be {expected_last}, got {rb.last_offset}"
+        )
+        assert rb.bucket.bucket_id >= 0, "bucket_id should be non-negative"
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_batch_async_iterator_to_pandas(connection, admin):
+    """Verify end-to-end: async for → RecordBatch → .batch.to_pandas()."""
+    table_path = fluss.TablePath("fluss", "py_test_batch_async_pandas")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("name", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array([10, 20, 30], type=pa.int32()),
+                pa.array(["alice", "bob", "charlie"]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("name", pa.string())]
+            ),
+        )
+    )
+    await writer.flush()
+
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    batch_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
+
+    all_dfs = []
+    total_rows = 0
+
+    async def consume():
+        nonlocal total_rows
+        async for rb in batch_scanner:
+            df = rb.batch.to_pandas()
+            all_dfs.append(df)
+            total_rows += len(df)
+            if total_rows >= 3:
+                break
+
+    await asyncio.wait_for(consume(), timeout=15.0)
+    assert total_rows >= 3
+
+    import pandas as pd
+    combined = pd.concat(all_dfs, ignore_index=True).sort_values("id").reset_index(drop=True)
+    assert list(combined.columns) == ["id", "name"]
+    assert combined["id"].tolist()[:3] == [10, 20, 30]
+    assert combined["name"].tolist()[:3] == ["alice", "bob", "charlie"]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_batch_async_iterator_projected_columns(connection, admin):
+    """Verify batch async for respects column projection."""
+    table_path = fluss.TablePath("fluss", "py_test_batch_async_proj")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema(
+            [
+                pa.field("col_a", pa.int32()),
+                pa.field("col_b", pa.string()),
+                pa.field("col_c", pa.int32()),
+            ]
+        )
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array([1, 2, 3], type=pa.int32()),
+                pa.array(["x", "y", "z"]),
+                pa.array([10, 20, 30], type=pa.int32()),
+            ],
+            schema=pa.schema(
+                [
+                    pa.field("col_a", pa.int32()),
+                    pa.field("col_b", pa.string()),
+                    pa.field("col_c", pa.int32()),
+                ]
+            ),
+        )
+    )
+    await writer.flush()
+
+    # Project only col_b and col_c
+    proj_scanner = (
+        await table.new_scan()
+        .project_by_name(["col_b", "col_c"])
+        .create_record_batch_log_scanner()
+    )
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    proj_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
+
+    all_batches = []
+    total_rows = 0
+
+    async def consume():
+        nonlocal total_rows
+        async for rb in proj_scanner:
+            all_batches.append(rb)
+            total_rows += rb.batch.num_rows
+            if total_rows >= 3:
+                break
+
+    await asyncio.wait_for(consume(), timeout=15.0)
+    assert total_rows >= 3
+
+    # Verify projected schema: only col_b and col_c, no col_a
+    for rb in all_batches:
+        assert set(rb.batch.schema.names) == {"col_b", "col_c"}, (
+            f"Projected schema should only have col_b and col_c, "
+            f"got {rb.batch.schema.names}"
+        )
+        assert rb.batch.num_columns == 2
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_sync_methods_after_batch_async_iteration(connection, admin):
+    """Verify sync poll_record_batch() works after batch async iteration.
+
+    This proves no lock contention between the batch async and sync paths.
+    """
+    table_path = fluss.TablePath("fluss", "py_test_sync_after_batch_async")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
+    )
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [
+                pa.array(list(range(1, 9)), type=pa.int32()),
+                pa.array([f"sv{i}" for i in range(1, 9)]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("val", pa.string())]
+            ),
+        )
+    )
+    await writer.flush()
+
+    batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    batch_scanner.subscribe_buckets(
+        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+    )
+
+    # Step 1: Collect 1 batch via async for then break
+    first_batch = None
+
+    async def partial_consume():
+        nonlocal first_batch
+        async for rb in batch_scanner:
+            first_batch = rb
+            break
+
+    await asyncio.wait_for(partial_consume(), timeout=10.0)
+    assert first_batch is not None
+
+    # Step 2: Sync poll_record_batch() must work (no deadlock)
+    sync_batches = batch_scanner.poll_record_batch(2000)
+    assert sync_batches is not None, "poll_record_batch() should return (not deadlock)"
+
+    # Step 3: Sync poll_arrow() must also work
+    arrow_table = batch_scanner.poll_arrow(2000)
+    assert arrow_table is not None, "poll_arrow() should return (not deadlock)"
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
@@ -1145,3 +1672,4 @@ def _poll_arrow_ids(scanner, expected_count, timeout_s=10):
         if arrow_table.num_rows > 0:
             all_ids.extend(arrow_table.column("id").to_pylist())
     return all_ids
+
