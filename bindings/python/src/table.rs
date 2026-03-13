@@ -2283,8 +2283,8 @@ async def _async_batch_scan(scanner, timeout_ms=1000):
                 ScannerKind::Record(s) => s,
                 ScannerKind::Batch(_) => {
                     return Err(PyTypeError::new_err(
-                        "Async iteration is only supported for record scanners; \
-                         use create_log_scanner() instead.",
+                        "This internal method only supports record-based scanners. \
+                         For batch-based scanners, use 'async for' or 'poll_record_batch' instead.",
                     ));
                 }
             };
@@ -2342,8 +2342,8 @@ async def _async_batch_scan(scanner, timeout_ms=1000):
                 ScannerKind::Batch(s) => s,
                 ScannerKind::Record(_) => {
                     return Err(PyTypeError::new_err(
-                        "Batch async iteration is only supported for batch scanners; \
-                         use create_record_batch_log_scanner() instead.",
+                        "This internal method only supports batch-based scanners. \
+                         For record-based scanners, use 'async for' or 'poll' instead.",
                     ));
                 }
             };
