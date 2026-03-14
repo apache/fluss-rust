@@ -325,7 +325,7 @@ where
                                 match map.remove(&header.request_id) {
                                     Some(active_request) => active_request,
                                     _ => {
-                                        log::debug!(
+                                        log::warn!(
                                             request_id:% = header.request_id;
                                             "Ignoring response for unknown request (likely timed out or cancelled)",
                                         );
