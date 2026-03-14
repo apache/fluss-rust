@@ -19,7 +19,17 @@
 
 from enum import IntEnum
 from types import TracebackType
-from typing import Dict, Iterator, List, Optional, Tuple, Union, overload
+from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    overload,
+)
 
 import pandas as pd
 import pyarrow as pa
@@ -765,8 +775,12 @@ class LogScanner:
 
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
-        ...
     def __repr__(self) -> str: ...
+    def __aiter__(self) -> AsyncIterator[Union[ScanRecord, RecordBatch]]: ...
+    async def _async_poll(self, timeout_ms: Optional[int] = ...) -> List[ScanRecord]: ...
+    async def _async_poll_batches(
+        self, timeout_ms: Optional[int] = ...
+    ) -> List[RecordBatch]: ...
 
 class Schema:
     def __init__(
