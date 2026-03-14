@@ -23,6 +23,7 @@ use arrow_schema::SchemaRef;
 use fluss::record::to_arrow_schema;
 use fluss::rpc::message::OffsetSpec;
 use indexmap::IndexMap;
+use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError};
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{
@@ -30,7 +31,6 @@ use pyo3::types::{
     PyDeltaAccess, PyDict, PyList, PySequence, PySlice, PyTime, PyTimeAccess, PyTuple, PyType,
     PyTzInfo,
 };
-use pyo3::{Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python};
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
 use std::sync::Arc;
