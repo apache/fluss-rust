@@ -180,6 +180,18 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+
+    /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
+    static constexpr bool IsRetriable(int32_t code) {
+        return code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
+               code == SCHEMA_NOT_EXIST || code == LOG_STORAGE_EXCEPTION ||
+               code == KV_STORAGE_EXCEPTION || code == NOT_LEADER_OR_FOLLOWER ||
+               code == CORRUPT_RECORD_EXCEPTION ||
+               code == UNKNOWN_TABLE_OR_BUCKET_EXCEPTION || code == REQUEST_TIME_OUT ||
+               code == STORAGE_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION;
+    }
 };
 
 struct Date {
@@ -326,6 +338,9 @@ struct Result {
     std::string error_message;
 
     bool Ok() const { return error_code == 0; }
+
+    /// Returns true if retrying the request may succeed. Client-side errors always return false.
+    bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
 
 struct TablePath {
@@ -997,6 +1012,14 @@ struct Configuration {
     size_t scanner_remote_log_read_concurrency{4};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
+    // Maximum bytes per fetch response for LogScanner (16 MB)
+    int32_t scanner_log_fetch_max_bytes{16 * 1024 * 1024};
+    // Minimum bytes to accumulate before server returns a fetch response
+    int32_t scanner_log_fetch_min_bytes{1};
+    // Maximum time (ms) the server may wait to satisfy min bytes
+    int32_t scanner_log_fetch_wait_max_time_ms{500};
+    // Maximum bytes per fetch response per bucket for LogScanner (1 MB)
+    int32_t scanner_log_fetch_max_bytes_for_bucket{1024 * 1024};
     int64_t writer_batch_timeout_ms{100};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{120000};
