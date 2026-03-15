@@ -104,6 +104,15 @@ pub enum Error {
     )]
     UnsupportedOperation { message: String },
 
+    #[snafu(visibility(pub(crate)), display("Fluss writer closed: {}.", message))]
+    WriterClosed { message: String },
+
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss buffer exhausted: {}.", message)
+    )]
+    BufferExhausted { message: String },
+
     #[snafu(visibility(pub(crate)), display("Fluss API Error: {}.", api_error))]
     FlussAPIError { api_error: ApiError },
 }

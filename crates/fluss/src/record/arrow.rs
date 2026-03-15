@@ -246,6 +246,15 @@ impl RowAppendRecordBatchBuilder {
             records_count: 0,
         })
     }
+    /// Appends a row to the builder.
+    pub fn append(&mut self, row: &dyn InternalRow) -> Result<bool> {
+        ArrowRecordBatchInnerBuilder::append(self, row)
+    }
+
+    /// Builds the final Arrow RecordBatch.
+    pub fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>> {
+        ArrowRecordBatchInnerBuilder::build_arrow_record_batch(self)
+    }
 }
 
 impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
@@ -434,6 +443,11 @@ impl MemoryLogRecordsArrowBuilder {
         cursor.write_i32::<LittleEndian>(self.batch_sequence)?;
         cursor.write_i32::<LittleEndian>(record_count)?;
         Ok(())
+    }
+
+    pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {
+        self.writer_id = writer_id;
+        self.batch_sequence = batch_base_sequence;
     }
 
     /// Get an estimate of the number of bytes written to the underlying buffer.

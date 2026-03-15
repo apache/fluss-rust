@@ -1012,7 +1012,23 @@ struct Configuration {
     size_t scanner_remote_log_read_concurrency{4};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
+    // Maximum bytes per fetch response for LogScanner (16 MB)
+    int32_t scanner_log_fetch_max_bytes{16 * 1024 * 1024};
+    // Minimum bytes to accumulate before server returns a fetch response
+    int32_t scanner_log_fetch_min_bytes{1};
+    // Maximum time (ms) the server may wait to satisfy min bytes
+    int32_t scanner_log_fetch_wait_max_time_ms{500};
+    // Maximum bytes per fetch response per bucket for LogScanner (1 MB)
+    int32_t scanner_log_fetch_max_bytes_for_bucket{1024 * 1024};
     int64_t writer_batch_timeout_ms{100};
+    // Whether to enable idempotent writes
+    bool writer_enable_idempotence{true};
+    // Maximum number of in-flight requests per bucket for idempotent writes
+    size_t writer_max_inflight_requests_per_bucket{5};
+    // Total memory available for buffering write batches (default 64MB)
+    size_t writer_buffer_memory_size{64 * 1024 * 1024};
+    // Maximum time in milliseconds to block waiting for buffer memory
+    uint64_t writer_buffer_wait_timeout_ms{std::numeric_limits<uint64_t>::max()};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{120000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)

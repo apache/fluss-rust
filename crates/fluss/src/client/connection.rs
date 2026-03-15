@@ -28,6 +28,10 @@ use std::time::Duration;
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::TablePath;
 
+// TODO: implement `close(&self, timeout: Duration)` to gracefully shut down the
+// writer client (drain pending batches, then force-close on timeout).
+// Java's FlussConnection.close() calls writerClient.close(Long.MAX_VALUE).
+// WriterClient::close() already exists but is never called from the public API.
 pub struct FlussConnection {
     metadata: Arc<Metadata>,
     network_connects: Arc<RpcClient>,
@@ -38,6 +42,8 @@ pub struct FlussConnection {
 impl FlussConnection {
     pub async fn new(arg: Config) -> Result<Self> {
         arg.validate_security()
+            .map_err(|msg| Error::IllegalArgument { message: msg })?;
+        arg.validate_scanner_fetch()
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
 
         let timeout = Duration::from_millis(arg.connect_timeout_ms);
