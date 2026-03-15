@@ -68,6 +68,53 @@ mod tests {
     use super::*;
     use metrics_util::debugging::DebuggingRecorder;
 
+    macro_rules! find_counter {
+        ($entries:expr, $name:expr) => {
+            $entries.iter().find_map(|(key, _, _, val)| {
+                if key.key().name() == $name {
+                    match val {
+                        metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        };
+    }
+
+    macro_rules! find_histogram {
+        ($entries:expr, $name:expr) => {
+            $entries.iter().find_map(|(key, _, _, val)| {
+                if key.key().name() == $name {
+                    match val {
+                        metrics_util::debugging::DebugValue::Histogram(v) => {
+                            Some(v.iter().map(|f| f.into_inner()).collect::<Vec<_>>())
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        };
+    }
+
+    macro_rules! find_gauge {
+        ($entries:expr, $name:expr) => {
+            $entries.iter().find_map(|(key, _, _, val)| {
+                if key.key().name() == $name {
+                    match val {
+                        metrics_util::debugging::DebugValue::Gauge(g) => Some(g.into_inner()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        };
+    }
+
     #[test]
     fn reportable_api_keys_return_label() {
         assert_eq!(api_key_label(ApiKey::ProduceLog), Some("produce_log"));
@@ -106,39 +153,18 @@ mod tests {
         let snapshot = snapshotter.snapshot();
         let entries: Vec<_> = snapshot.into_vec();
 
-        let find_counter = |name: &str| -> Option<u64> {
-            entries.iter().find_map(|(key, _, _, val)| {
-                if key.key().name() == name {
-                    match val {
-                        metrics_util::debugging::DebugValue::Counter(v) => Some(*v),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            })
-        };
-
-        let find_histogram = |name: &str| -> Option<Vec<f64>> {
-            entries.iter().find_map(|(key, _, _, val)| {
-                if key.key().name() == name {
-                    match val {
-                        metrics_util::debugging::DebugValue::Histogram(v) => {
-                            Some(v.iter().map(|f| f.into_inner()).collect())
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            })
-        };
-
-        assert_eq!(find_counter(CLIENT_REQUESTS_TOTAL), Some(1));
-        assert_eq!(find_counter(CLIENT_RESPONSES_TOTAL), Some(1));
-        assert_eq!(find_counter(CLIENT_BYTES_SENT_TOTAL), Some(256));
-        assert_eq!(find_counter(CLIENT_BYTES_RECEIVED_TOTAL), Some(128));
-        assert_eq!(find_histogram(CLIENT_REQUEST_LATENCY_MS), Some(vec![42.5]));
+        assert_eq!(find_counter!(entries, CLIENT_REQUESTS_TOTAL), Some(1));
+        assert_eq!(find_counter!(entries, CLIENT_RESPONSES_TOTAL), Some(1));
+        assert_eq!(find_counter!(entries, CLIENT_BYTES_SENT_TOTAL), Some(256));
+        assert_eq!(
+            find_counter!(entries, CLIENT_BYTES_RECEIVED_TOTAL),
+            Some(128)
+        );
+        assert_eq!(
+            find_histogram!(entries, CLIENT_REQUEST_LATENCY_MS),
+            Some(vec![42.5])
+        );
+        assert_eq!(find_gauge!(entries, CLIENT_REQUESTS_IN_FLIGHT), Some(0.0));
 
         let has_label = entries.iter().all(|(key, _, _, _)| {
             key.key()
@@ -184,24 +210,18 @@ mod tests {
         });
 
         let snapshot = snapshotter.snapshot();
-        for (key, _, _, val) in snapshot.into_vec() {
-            if key.key().name() == CLIENT_REQUESTS_IN_FLIGHT {
-                match val {
-                    metrics_util::debugging::DebugValue::Gauge(g) => {
-                        let value: f64 = g.into_inner();
-                        assert!(
-                            value == 0.0,
-                            "in-flight gauge should be 0 after balanced inc/dec, got: {value}"
-                        );
-                    }
-                    other => panic!("expected Gauge, got {other:?}"),
-                }
-            }
-        }
+        let entries: Vec<_> = snapshot.into_vec();
+        assert_eq!(
+            find_gauge!(entries, CLIENT_REQUESTS_IN_FLIGHT),
+            Some(0.0),
+            "in-flight gauge should be 0 after balanced inc/dec"
+        );
     }
 
     #[test]
     fn different_api_keys_produce_separate_metric_series() {
+        use std::collections::HashMap;
+
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
 
@@ -226,5 +246,25 @@ mod tests {
             2,
             "produce_log and fetch_log should be separate metric series"
         );
+
+        let mut counter_by_api_key: HashMap<String, u64> = HashMap::new();
+        for (key, _, _, val) in request_entries {
+            let api_key = key
+                .key()
+                .labels()
+                .find(|label| label.key() == LABEL_API_KEY)
+                .map(|label| label.value())
+                .expect("requests total metric must include api_key label");
+
+            let counter_value = match val {
+                metrics_util::debugging::DebugValue::Counter(v) => *v,
+                other => panic!("expected Counter, got {other:?}"),
+            };
+
+            counter_by_api_key.insert(api_key.to_string(), counter_value);
+        }
+
+        assert_eq!(counter_by_api_key.get("produce_log"), Some(&5));
+        assert_eq!(counter_by_api_key.get("fetch_log"), Some(&3));
     }
 }
