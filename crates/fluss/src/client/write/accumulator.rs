@@ -679,7 +679,7 @@ impl RecordAccumulator {
         if self.idempotence_manager.is_enabled()
             && ready_write_batch.write_batch.has_batch_sequence()
         {
-            if let Some(adjusted_seq) = self.idempotence_manager.take_adjusted_sequence(
+            if let Some(adjusted_seq) = self.idempotence_manager.get_adjusted_sequence(
                 &ready_write_batch.table_bucket,
                 ready_write_batch.write_batch.batch_id(),
             ) {

@@ -285,15 +285,18 @@ impl IdempotenceManager {
             .is_some_and(|b| b.batch_id == batch_id)
     }
 
-    /// Returns the current (possibly adjusted) in-flight sequence for a batch
-    /// and clears its reset flag in a single lock scope. Used by `re_enqueue`
-    /// to sync the WriteBatch's sequence with the adjusted InFlightBatch
-    /// sequence. Clearing the reset flag matches Java where `close()` resets
-    /// `reopened = false` — the hint is consumed after one re-enqueue cycle.
-    pub fn take_adjusted_sequence(&self, bucket: &TableBucket, batch_id: i64) -> Option<i32> {
-        let mut entries = self.bucket_entries.lock();
-        let entry = entries.get_mut(bucket)?;
-        entry.reset_batch_ids.remove(&batch_id);
+    /// Returns the current (possibly adjusted) in-flight sequence for a batch.
+    /// Used by `re_enqueue` to sync the WriteBatch's sequence with the adjusted
+    /// InFlightBatch sequence.
+    ///
+    /// Does NOT clear `reset_batch_ids` — the reset marker must survive
+    /// re-enqueue so that `can_retry_for_error` can still see it on subsequent
+    /// retries. It is cleared only on terminal events: `handle_completed_batch`
+    /// or `handle_failed_batch`. This matches Java where `reopened` persists
+    /// across retries and is only cleared in `close()` (resource cleanup).
+    pub fn get_adjusted_sequence(&self, bucket: &TableBucket, batch_id: i64) -> Option<i32> {
+        let entries = self.bucket_entries.lock();
+        let entry = entries.get(bucket)?;
         entry
             .in_flight
             .iter()
@@ -551,21 +554,30 @@ mod tests {
     }
 
     #[test]
-    fn test_take_adjusted_sequence() {
+    fn test_get_adjusted_sequence() {
         let (mgr, b0) = setup_three_in_flight();
 
         // No entry for unknown bucket
-        assert_eq!(mgr.take_adjusted_sequence(&test_bucket(9), 100), None);
+        assert_eq!(mgr.get_adjusted_sequence(&test_bucket(9), 100), None);
 
         // Before adjustment: returns original sequences
-        assert_eq!(mgr.take_adjusted_sequence(&b0, 101), Some(1));
-        assert_eq!(mgr.take_adjusted_sequence(&b0, 999), None);
+        assert_eq!(mgr.get_adjusted_sequence(&b0, 101), Some(1));
+        assert_eq!(mgr.get_adjusted_sequence(&b0, 999), None);
 
         // After adjustment: returns adjusted sequences
         mgr.handle_failed_batch(&b0, 100, 42, None, true);
-        assert_eq!(mgr.take_adjusted_sequence(&b0, 100), None); // removed
-        assert_eq!(mgr.take_adjusted_sequence(&b0, 101), Some(0)); // was 1
-        assert_eq!(mgr.take_adjusted_sequence(&b0, 102), Some(1)); // was 2
+        assert_eq!(mgr.get_adjusted_sequence(&b0, 100), None); // removed
+        assert_eq!(mgr.get_adjusted_sequence(&b0, 101), Some(0)); // was 1
+        assert_eq!(mgr.get_adjusted_sequence(&b0, 102), Some(1)); // was 2
+
+        // Reset flag survives get_adjusted_sequence (unlike the old take_ variant).
+        // This matches Java where `reopened` persists across retries.
+        {
+            let entries = mgr.bucket_entries.lock();
+            let entry = entries.get(&b0).unwrap();
+            assert!(entry.reset_batch_ids.contains(&101));
+            assert!(entry.reset_batch_ids.contains(&102));
+        }
     }
 
     // --- Scenario tests ---

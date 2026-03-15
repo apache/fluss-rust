@@ -87,16 +87,6 @@ impl Sender {
         }
     }
 
-    #[allow(dead_code)]
-    pub async fn run(&self) -> Result<()> {
-        loop {
-            if !self.running.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            self.run_once().await?;
-        }
-    }
-
     const WRITER_ID_RETRY_TIMES: u32 = 3;
     const WRITER_ID_RETRY_INTERVAL_MS: u64 = 100;
 
