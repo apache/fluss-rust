@@ -18,6 +18,7 @@
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use crate::row::Decimal;
+use crate::row::GenericRow;
 use crate::row::binary_array::FlussArray;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
@@ -72,6 +73,8 @@ pub enum Datum<'a> {
     TimestampLtz(TimestampLtz),
     #[display("{0}")]
     Array(FlussArray),
+    #[display("{0:?}")]
+    Row(Box<GenericRow<'a>>),
 }
 
 impl Datum<'_> {
@@ -132,6 +135,13 @@ impl Datum<'_> {
         match self {
             Self::Array(a) => a,
             _ => panic!("not an array: {self:?}"),
+        }
+    }
+
+    pub fn as_row(&self) -> &GenericRow<'_> {
+        match self {
+            Self::Row(r) => r.as_ref(),
+            _ => panic!("not a row: {self:?}"),
         }
     }
 }
@@ -877,6 +887,11 @@ impl Datum<'_> {
             }
             Datum::Array(arr) => {
                 return append_fluss_array_to_list_builder(arr, builder, data_type);
+            }
+            Datum::Row(_) => {
+                return Err(RowConvertError {
+                    message: "append_to is not supported for Row type".to_string(),
+                });
             }
         }
 

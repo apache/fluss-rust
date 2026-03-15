@@ -529,6 +529,7 @@ pub fn resolve_row_types(
             Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
             Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
             Datum::Array(a) => Datum::Array(a.clone()),
+            Datum::Row(r) => Datum::Row(Box::new(resolve_row_types(r, None)?)),
         };
         out.set_field(idx, resolved);
     }
