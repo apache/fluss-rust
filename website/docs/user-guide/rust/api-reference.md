@@ -229,7 +229,8 @@ for record in records {
 | Method                                                         |  Description                     |
 |----------------------------------------------------------------|----------------------------------|
 | `fn get_single_row(&self) -> Result<Option<impl InternalRow>>` | Get a single row from the result |
-| `fn get_rows(&self) -> Vec<impl InternalRow>`                  | Get all rows from the result     |
+| `fn get_rows(&self) -> Result<Vec<impl InternalRow>>`          | Get all rows from the result     |
+| `fn to_record_batch(&self) -> Result<RecordBatch>`             | Convert all rows to an Arrow `RecordBatch` for DataFusion or other Arrow-based tools    |
 
 ## `WriteResultFuture`
 
