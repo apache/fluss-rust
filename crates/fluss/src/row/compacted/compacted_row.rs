@@ -160,6 +160,10 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.decoded_row().get_bytes(pos)
     }
 
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        self.decoded_row().get_row(pos)
+    }
+
     fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
         match write_format {
             WriteFormat::CompactedKv => Some(self.as_bytes()),
