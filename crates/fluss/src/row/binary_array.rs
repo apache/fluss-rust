@@ -78,6 +78,8 @@ fn round_to_nearest_word(num_bytes: usize) -> usize {
 /// followed by fixed-length slots and an optional variable-length section.
 ///
 /// Uses `Bytes` internally so cloning is O(1) reference-counted.
+// TODO: FlussArray currently exposes only fallible getters. Infallible
+// fast-path variants may be added later as non-breaking extensions.
 #[derive(Clone)]
 pub struct FlussArray {
     data: Bytes,
