@@ -60,21 +60,47 @@ impl IcebergBinaryRowWriter {
         }
     }
 
-    // TODO: Once IcebergKeyEncoder lands (see #308), add end-to-end tests via
-    // IcebergKeyEncoder to verify correctness of this writer (similar to
-    // CompactedKeyEncoder tests for CompactedKeyWriter).
+    // Dependency order note:
+    // 1) Keep this PR scoped to writer-level Java parity.
+    // 2) Wire the writer through IcebergKeyEncoder in follow-up #308.
+    // TODO(#308): add end-to-end key-encoding tests via IcebergKeyEncoder
+    // (similar to CompactedKeyEncoder tests for CompactedKeyWriter).
     pub fn create_value_writer(field_type: &DataType) -> Result<ValueWriter> {
-        // Iceberg does not support TinyInt or SmallInt — reject them to match
-        // Java IcebergBinaryRowWriter.createFieldWriter() behavior.
-        if matches!(field_type, DataType::TinyInt(_) | DataType::SmallInt(_)) {
-            return Err(Error::UnsupportedOperation {
+        match field_type {
+            // Match Java IcebergBinaryRowWriter.createFieldWriter() supported types exactly.
+            DataType::Int(_)
+            | DataType::Date(_)
+            | DataType::Time(_)
+            | DataType::BigInt(_)
+            | DataType::Float(_)
+            | DataType::Double(_)
+            | DataType::Timestamp(_)
+            | DataType::Decimal(_)
+            | DataType::String(_)
+            | DataType::Char(_)
+            | DataType::Binary(_)
+            | DataType::Bytes(_) => ValueWriter::create_value_writer(field_type, None),
+
+            // Keep Java's explicit scalar-only rejection messaging for ARRAY/MAP.
+            DataType::Array(_) => Err(Error::UnsupportedOperation {
+                message:
+                    "Array types cannot be used as bucket keys. Bucket keys must be scalar types."
+                        .to_string(),
+            }),
+            DataType::Map(_) => Err(Error::UnsupportedOperation {
+                message:
+                    "Map types cannot be used as bucket keys. Bucket keys must be scalar types."
+                        .to_string(),
+            }),
+
+            // BOOLEAN, TINYINT, SMALLINT, TIMESTAMP_LTZ, ROW and any future types.
+            _ => Err(Error::UnsupportedOperation {
                 message: format!(
                     "Unsupported type for Iceberg binary row writer: {:?}",
                     field_type
                 ),
-            });
+            }),
         }
-        ValueWriter::create_value_writer(field_type, None)
     }
 
     #[allow(dead_code)]
@@ -204,9 +230,19 @@ impl BinaryWriter for IcebergBinaryRowWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{SmallIntType, TinyIntType};
+    use crate::metadata::{DataTypes, SmallIntType, TinyIntType};
     use crate::row::datum::{TimestampLtz, TimestampNtz};
     use bigdecimal::{BigDecimal, num_bigint::BigInt};
+
+    fn assert_unsupported_type(dt: DataType, expected_fragment: &str) {
+        match IcebergBinaryRowWriter::create_value_writer(&dt) {
+            Err(e) => assert!(
+                e.to_string().contains(expected_fragment),
+                "unexpected error for {dt:?}: {e}"
+            ),
+            Ok(_) => panic!("expected error for unsupported type {dt:?}, got Ok"),
+        }
+    }
 
     #[test]
     fn test_write_int_as_i64_le() {
@@ -425,6 +461,71 @@ mod tests {
                 "unexpected error: {e}",
             ),
             Ok(_) => panic!("expected error for SmallInt, got Ok"),
+        }
+    }
+
+    #[test]
+    fn test_create_value_writer_rejects_boolean() {
+        assert_unsupported_type(
+            DataTypes::boolean(),
+            "Unsupported type for Iceberg binary row writer",
+        );
+    }
+
+    #[test]
+    fn test_create_value_writer_rejects_timestamp_ltz() {
+        assert_unsupported_type(
+            DataTypes::timestamp_ltz(),
+            "Unsupported type for Iceberg binary row writer",
+        );
+    }
+
+    #[test]
+    fn test_create_value_writer_rejects_array() {
+        assert_unsupported_type(
+            DataTypes::array(DataTypes::int()),
+            "Array types cannot be used as bucket keys",
+        );
+    }
+
+    #[test]
+    fn test_create_value_writer_rejects_map() {
+        assert_unsupported_type(
+            DataTypes::map(DataTypes::string(), DataTypes::int()),
+            "Map types cannot be used as bucket keys",
+        );
+    }
+
+    #[test]
+    fn test_create_value_writer_rejects_row() {
+        assert_unsupported_type(
+            DataTypes::row(vec![DataTypes::field("f0", DataTypes::int())]),
+            "Unsupported type for Iceberg binary row writer",
+        );
+    }
+
+    #[test]
+    fn test_create_value_writer_accepts_java_supported_scalar_types() {
+        let supported_types = vec![
+            ("int", DataTypes::int()),
+            ("date", DataTypes::date()),
+            ("time", DataTypes::time()),
+            ("bigint", DataTypes::bigint()),
+            ("float", DataTypes::float()),
+            ("double", DataTypes::double()),
+            ("timestamp_ntz", DataTypes::timestamp()),
+            ("decimal", DataTypes::decimal(10, 2)),
+            ("string", DataTypes::string()),
+            ("char", DataTypes::char(16)),
+            ("binary", DataTypes::binary(8)),
+            ("bytes", DataTypes::bytes()),
+        ];
+
+        for (name, data_type) in supported_types {
+            let res = IcebergBinaryRowWriter::create_value_writer(&data_type);
+            if let Err(e) = res {
+                panic!("expected {name} to be supported, got error: {e}");
+            }
         }
     }
 
