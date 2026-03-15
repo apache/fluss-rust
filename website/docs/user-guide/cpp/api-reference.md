@@ -15,16 +15,28 @@ Complete API reference for the Fluss C++ client.
 
 ## `Configuration`
 
-| Field                             | Type          | Default              | Description                                                     |
-|-----------------------------------|---------------|----------------------|-----------------------------------------------------------------|
-| `bootstrap_servers`               | `std::string` | `"127.0.0.1:9123"`   | Coordinator server address                                      |
-| `writer_request_max_size`         | `int32_t`     | `10485760` (10 MB)   | Maximum request size in bytes                                   |
-| `writer_acks`                     | `std::string` | `"all"`              | Acknowledgment setting (`"all"`, `"0"`, `"1"`, or `"-1"`)       |
-| `writer_retries`                  | `int32_t`     | `INT32_MAX`          | Number of retries on failure                                    |
-| `writer_batch_size`               | `int32_t`     | `2097152` (2 MB)     | Batch size for writes in bytes                                  |
-| `scanner_remote_log_prefetch_num` | `size_t`      | `4`                  | Number of remote log segments to prefetch                       |
-| `remote_file_download_thread_num` | `size_t`      | `3`                  | Number of threads for remote log downloads                      |
-| `scanner_log_max_poll_records`    | `size_t`      | `500`                | Maximum number of records returned in a single Poll()           |
+| Field                                 | Type          | Default              | Description                                                                              |
+|---------------------------------------|---------------|----------------------|------------------------------------------------------------------------------------------|
+| `bootstrap_servers`                   | `std::string` | `"127.0.0.1:9123"`   | Coordinator server address                                                               |
+| `writer_request_max_size`             | `int32_t`     | `10485760` (10 MB)   | Maximum request size in bytes                                                            |
+| `writer_acks`                         | `std::string` | `"all"`              | Acknowledgment setting (`"all"`, `"0"`, `"1"`, or `"-1"`)                                |
+| `writer_retries`                      | `int32_t`     | `INT32_MAX`          | Number of retries on failure                                                             |
+| `writer_batch_size`                   | `int32_t`     | `2097152` (2 MB)     | Batch size for writes in bytes                                                           |
+| `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
+| `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
+| `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
+| `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |
+| `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |
+| `scanner_log_max_poll_records`        | `size_t`      | `500`                | Maximum number of records returned in a single Poll()                                    |
+| `scanner_log_fetch_max_bytes`         | `int32_t`     | `16777216` (16 MB)   | Maximum bytes per fetch response for LogScanner                                          |
+| `scanner_log_fetch_min_bytes`         | `int32_t`     | `1`                  | Minimum bytes the server must accumulate before returning a fetch response               |
+| `scanner_log_fetch_wait_max_time_ms`  | `int32_t`     | `500`                | Maximum time (ms) the server may wait to satisfy min-bytes                               |
+| `scanner_log_fetch_max_bytes_for_bucket`| `int32_t`   | `1048576` (1 MB)     | Maximum bytes per fetch response per bucket for LogScanner                               |
+| `connect_timeout_ms`                  | `uint64_t`    | `120000`             | TCP connect timeout in milliseconds                                                      |
+| `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
+| `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |
+| `security_sasl_username`              | `std::string` | (empty)              | SASL username (required when protocol is `"sasl"`)                                       |
+| `security_sasl_password`              | `std::string` | (empty)              | SASL password (required when protocol is `"sasl"`)                                       |
 
 ## `Connection`
 
@@ -77,6 +89,22 @@ Complete API reference for the Fluss C++ client.
 | Method                                                                      | Description                  |
 |-----------------------------------------------------------------------------|------------------------------|
 | `GetLatestLakeSnapshot(const TablePath& path, LakeSnapshot& out) -> Result` | Get the latest lake snapshot |
+
+### Cluster Operations
+
+| Method                                                    | Description                                        |
+|-----------------------------------------------------------|----------------------------------------------------|
+| `GetServerNodes(std::vector<ServerNode>& out) -> Result`  | Get all alive server nodes (coordinator + tablets) |
+
+## `ServerNode`
+
+| Field         | Type          | Description                                              |
+|---------------|---------------|----------------------------------------------------------|
+| `id`          | `int32_t`     | Server node ID                                           |
+| `host`        | `std::string` | Hostname of the server                                   |
+| `port`        | `uint32_t`    | Port number                                              |
+| `server_type` | `std::string` | Server type (`"CoordinatorServer"` or `"TabletServer"`)  |
+| `uid`         | `std::string` | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)             |
 
 ## `Table`
 
@@ -282,12 +310,12 @@ for (const auto& rec : records) {
 |-----------------------------------------------------------------|-----------------------------------------------------------------------|
 | `BucketCount() -> size_t`                                       | Number of distinct buckets                                            |
 | `Buckets() -> std::vector<TableBucket>`                         | List of distinct buckets                                              |
-| `Records(const TableBucket& bucket) -> BucketView`              | Records for a specific bucket (empty view if bucket not present)      |
-| `BucketAt(size_t idx) -> BucketView`                            | Records by bucket index (0-based, O(1))                               |
+| `Records(const TableBucket& bucket) -> BucketRecords`              | Records for a specific bucket (empty if bucket not present)           |
+| `BucketAt(size_t idx) -> BucketRecords`                            | Records by bucket index (0-based, O(1))                               |
 
-## `BucketView`
+## `BucketRecords`
 
-A view of records within a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`. `BucketView` is a value type — it shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
+A bundle of scan records belonging to a single bucket. Obtained from `ScanRecords::Records()` or `ScanRecords::BucketAt()`. `BucketRecords` is a value type — it shares ownership of the underlying scan data via reference counting, so it can safely outlive the `ScanRecords` that produced it.
 
 | Method                                         |  Description                               |
 |------------------------------------------------|--------------------------------------------|

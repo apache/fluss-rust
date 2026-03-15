@@ -21,16 +21,26 @@ with await fluss.FlussConnection.create(config) as conn:
 
 ## Connection Configurations
 
-| Key                 | Description                                           | Default            |
-|---------------------|-------------------------------------------------------|--------------------|
-| `bootstrap.servers` | Coordinator server address                            | `127.0.0.1:9123`   |
-| `writer.request-max-size`  | Maximum request size in bytes                  | `10485760` (10 MB) |
-| `writer.acks`       | Acknowledgment setting (`all` waits for all replicas) | `all`              |
-| `writer.retries`    | Number of retries on failure                          | `2147483647`       |
-| `writer.batch-size` | Batch size for writes in bytes                        | `2097152` (2 MB)   |
-| `scanner.remote-log.prefetch-num` | Number of remote log segments to prefetch | `4`                |
-| `remote-file.download-thread-num` | Number of threads for remote log downloads | `3`               |
-| `scanner.log.max-poll-records` | Max records returned in a single poll()       | `500`              |
+Configuration options can be set either via dict keys in the `Config()` constructor, or via Python property setters.
+
+See the [`Config`](../api-reference.md#config) section in the API Reference for the full list of options, their config keys, and descriptions.
+
+## SASL Authentication
+
+To connect to a Fluss cluster with SASL/PLAIN authentication enabled:
+
+```python
+config = fluss.Config({
+    "bootstrap.servers": "127.0.0.1:9123",
+    "security.protocol": "sasl",
+    "security.sasl.mechanism": "PLAIN",
+    "security.sasl.username": "admin",
+    "security.sasl.password": "admin-secret",
+})
+conn = await fluss.FlussConnection.create(config)
+```
+
+## Connection Lifecycle
 
 Remember to close the connection when done:
 

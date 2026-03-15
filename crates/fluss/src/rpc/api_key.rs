@@ -19,27 +19,29 @@ use crate::rpc::api_key::ApiKey::Unknown;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum ApiKey {
-    CreateDatabase,
-    DropDatabase,
-    ListDatabases,
-    DatabaseExists,
-    CreateTable,
-    DropTable,
-    GetTable,
-    ListTables,
-    ListPartitionInfos,
-    TableExists,
-    MetaData,
-    ProduceLog,
-    PutKv,
-    FetchLog,
-    Lookup,
-    ListOffsets,
-    GetFileSystemSecurityToken,
-    GetDatabaseInfo,
-    GetLatestLakeSnapshot,
-    CreatePartition,
-    DropPartition,
+    CreateDatabase,             // 1001
+    DropDatabase,               // 1002
+    ListDatabases,              // 1003
+    DatabaseExists,             // 1004
+    CreateTable,                // 1005
+    DropTable,                  // 1006
+    GetTable,                   // 1007
+    ListTables,                 // 1008
+    ListPartitionInfos,         // 1009
+    TableExists,                // 1010
+    MetaData,                   // 1012
+    ProduceLog,                 // 1014
+    FetchLog,                   // 1015
+    PutKv,                      // 1016
+    Lookup,                     // 1017
+    ListOffsets,                // 1021
+    GetFileSystemSecurityToken, // 1025
+    InitWriter,                 // 1026
+    GetLatestLakeSnapshot,      // 1032
+    GetDatabaseInfo,            // 1035
+    CreatePartition,            // 1036
+    DropPartition,              // 1037
+    Authenticate,               // 1038
     Unknown(i16),
 }
 
@@ -63,10 +65,13 @@ impl From<i16> for ApiKey {
             1017 => ApiKey::Lookup,
             1021 => ApiKey::ListOffsets,
             1025 => ApiKey::GetFileSystemSecurityToken,
+            1026 => ApiKey::InitWriter,
             1032 => ApiKey::GetLatestLakeSnapshot,
             1035 => ApiKey::GetDatabaseInfo,
             1036 => ApiKey::CreatePartition,
             1037 => ApiKey::DropPartition,
+            1038 => ApiKey::Authenticate,
+
             _ => Unknown(key),
         }
     }
@@ -92,10 +97,12 @@ impl From<ApiKey> for i16 {
             ApiKey::Lookup => 1017,
             ApiKey::ListOffsets => 1021,
             ApiKey::GetFileSystemSecurityToken => 1025,
+            ApiKey::InitWriter => 1026,
             ApiKey::GetLatestLakeSnapshot => 1032,
             ApiKey::GetDatabaseInfo => 1035,
             ApiKey::CreatePartition => 1036,
             ApiKey::DropPartition => 1037,
+            ApiKey::Authenticate => 1038,
             Unknown(x) => x,
         }
     }
@@ -125,10 +132,12 @@ mod tests {
             (1017, ApiKey::Lookup),
             (1021, ApiKey::ListOffsets),
             (1025, ApiKey::GetFileSystemSecurityToken),
+            (1026, ApiKey::InitWriter),
             (1032, ApiKey::GetLatestLakeSnapshot),
             (1035, ApiKey::GetDatabaseInfo),
             (1036, ApiKey::CreatePartition),
             (1037, ApiKey::DropPartition),
+            (1038, ApiKey::Authenticate),
         ];
 
         for (raw, key) in cases {

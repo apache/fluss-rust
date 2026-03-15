@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 mod example_kv_table;
 mod example_partitioned_kv_table;
 
@@ -83,9 +87,9 @@ pub async fn main() -> Result<()> {
             let row = record.row();
             println!(
                 "{{{}, {}, {}}}@{}",
-                row.get_int(0),
-                row.get_string(1),
-                row.get_long(2),
+                row.get_int(0)?,
+                row.get_string(1)?,
+                row.get_long(2)?,
                 record.offset()
             );
         }

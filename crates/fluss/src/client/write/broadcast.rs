@@ -58,6 +58,17 @@ impl<T: Clone + Send + Sync> BroadcastOnceReceiver<T> {
 
         self.peek().expect("just got notified")
     }
+
+    /// Force-complete with an error if not already completed.
+    /// Used by `abort_batches` to fail in-flight handles that can't be
+    /// reached through `WriteBatch::complete`.
+    pub(crate) fn fail(&self, error: Error) {
+        let mut data = self.shared.data.write();
+        if data.is_none() {
+            *data = Some(Err(error));
+            self.shared.notify.notify_waiters();
+        }
+    }
 }
 
 #[derive(Debug)]

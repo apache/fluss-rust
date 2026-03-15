@@ -104,11 +104,19 @@ let result = lookuper.lookup(&key).await?;
 if let Some(row) = result.get_single_row()? {
     println!(
         "Found: id={}, name={}, age={}",
-        row.get_int(0),
-        row.get_string(1),
-        row.get_long(2)
+        row.get_int(0)?,
+        row.get_string(1)?,
+        row.get_long(2)?
     );
 } else {
     println!("Record not found");
 }
+```
+## Looking Up Records as Arrow RecordBatch
+
+Use `to_record_batch()` to get lookup results in Arrow format, for example when integrating with DataFusion.
+```rust
+let result = lookuper.lookup(&key).await?;
+let batch = result.to_record_batch()?;
+println!("Rows: {}", batch.num_rows());
 ```

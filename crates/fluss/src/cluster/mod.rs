@@ -17,6 +17,7 @@
 
 use crate::BucketId;
 use crate::metadata::{PhysicalTablePath, TableBucket};
+use std::fmt;
 use std::sync::Arc;
 
 #[allow(clippy::module_inception)]
@@ -47,7 +48,7 @@ impl ServerNode {
         }
     }
 
-    pub fn uid(&self) -> &String {
+    pub fn uid(&self) -> &str {
         &self.uid
     }
 
@@ -58,12 +59,33 @@ impl ServerNode {
     pub fn id(&self) -> i32 {
         self.id
     }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> u32 {
+        self.port
+    }
+
+    pub fn server_type(&self) -> &ServerType {
+        &self.server_type
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ServerType {
     TabletServer,
     CoordinatorServer,
+}
+
+impl fmt::Display for ServerType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ServerType::TabletServer => write!(f, "TabletServer"),
+            ServerType::CoordinatorServer => write!(f, "CoordinatorServer"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

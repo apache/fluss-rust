@@ -23,13 +23,20 @@ if (!result.Ok()) {
 
 All fields have sensible defaults. Only `bootstrap_servers` typically needs to be set.
 
+See the [`Configuration`](../api-reference.md#configuration) section in the API Reference for the full list of configuration fields, types, and defaults.
+
+## SASL Authentication
+
+To connect to a Fluss cluster with SASL/PLAIN authentication enabled:
+
 ```cpp
 fluss::Configuration config;
-config.bootstrap_servers = "127.0.0.1:9123";    // Coordinator address
-config.writer_request_max_size = 10 * 1024 * 1024;     // Max request size (10 MB)
-config.writer_acks = "all";                      // Wait for all replicas
-config.writer_retries = std::numeric_limits<int32_t>::max();  // Retry on failure
-config.writer_batch_size = 2 * 1024 * 1024;     // Batch size (2 MB)
-config.scanner_remote_log_prefetch_num = 4;      // Remote log prefetch count
-config.remote_file_download_thread_num = 3;  // Download threads
+config.bootstrap_servers = "127.0.0.1:9123";
+config.security_protocol = "sasl";
+config.security_sasl_mechanism = "PLAIN";
+config.security_sasl_username = "admin";
+config.security_sasl_password = "admin-secret";
+
+fluss::Connection conn;
+fluss::Result result = fluss::Connection::Create(config, conn);
 ```

@@ -409,3 +409,21 @@ message DropPartitionRequest {
 }
 
 message DropPartitionResponse {}
+
+message AuthenticateRequest {
+  required string protocol = 1;
+  required bytes token = 2;
+}
+
+message AuthenticateResponse {
+  optional bytes challenge = 1;
+}
+
+// init writer request and response
+message InitWriterRequest {
+  repeated PbTablePath table_path = 1;
+}
+
+message InitWriterResponse {
+  required int64 writer_id = 1;
+}

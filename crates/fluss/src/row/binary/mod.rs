@@ -21,7 +21,7 @@ mod iceberg_binary_row_writer;
 pub use binary_writer::*;
 pub use iceberg_binary_row_writer::IcebergBinaryRowWriter;
 
-/// The binary row format types, it indicates the generated [`BinaryRow`] type by the [`BinaryWriter`]
+/// The binary row format types, it indicates the generated row type by the [`BinaryWriter`]
 #[allow(dead_code)]
 pub enum BinaryRowFormat {
     Compacted,

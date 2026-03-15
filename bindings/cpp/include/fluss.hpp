@@ -180,6 +180,18 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+
+    /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
+    static constexpr bool IsRetriable(int32_t code) {
+        return code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
+               code == SCHEMA_NOT_EXIST || code == LOG_STORAGE_EXCEPTION ||
+               code == KV_STORAGE_EXCEPTION || code == NOT_LEADER_OR_FOLLOWER ||
+               code == CORRUPT_RECORD_EXCEPTION ||
+               code == UNKNOWN_TABLE_OR_BUCKET_EXCEPTION || code == REQUEST_TIME_OUT ||
+               code == STORAGE_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
+               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION;
+    }
 };
 
 struct Date {
@@ -326,6 +338,9 @@ struct Result {
     std::string error_message;
 
     bool Ok() const { return error_code == 0; }
+
+    /// Returns true if retrying the request may succeed. Client-side errors always return false.
+    bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
 
 struct TablePath {
@@ -705,14 +720,14 @@ struct ScanRecord {
     RowView row;
 };
 
-/// A view into a subset of scan results for a single bucket.
+/// A bundle of scan records belonging to a single bucket.
 ///
-/// BucketView is a value type — it shares ownership of the underlying scan data
+/// BucketRecords is a value type — it shares ownership of the underlying scan data
 /// via reference counting, so it can safely outlive the ScanRecords that produced it.
-class BucketView {
+class BucketRecords {
    public:
-    BucketView(std::shared_ptr<const detail::ScanData> data, TableBucket bucket, size_t bucket_idx,
-               size_t count)
+    BucketRecords(std::shared_ptr<const detail::ScanData> data, TableBucket bucket,
+                  size_t bucket_idx, size_t count)
         : data_(std::move(data)),
           bucket_(std::move(bucket)),
           bucket_idx_(bucket_idx),
@@ -738,9 +753,9 @@ class BucketView {
         bool operator!=(const Iterator& other) const { return idx_ != other.idx_; }
 
        private:
-        friend class BucketView;
-        Iterator(const BucketView* owner, size_t idx) : owner_(owner), idx_(idx) {}
-        const BucketView* owner_;
+        friend class BucketRecords;
+        Iterator(const BucketRecords* owner, size_t idx) : owner_(owner), idx_(idx) {}
+        const BucketRecords* owner_;
         size_t idx_;
     };
 
@@ -774,16 +789,16 @@ class ScanRecords {
     /// List of distinct buckets that have records.
     std::vector<TableBucket> Buckets() const;
 
-    /// Get a view of records for a specific bucket.
+    /// Get records for a specific bucket.
     ///
-    /// Returns an empty BucketView if the bucket is not present (matches Rust/Java).
+    /// Returns an empty BucketRecords if the bucket is not present (matches Rust/Java).
     /// Note: O(B) linear scan. For iteration over all buckets, prefer BucketAt(idx).
-    BucketView Records(const TableBucket& bucket) const;
+    BucketRecords Records(const TableBucket& bucket) const;
 
-    /// Get a view of records by bucket index (0-based). O(1).
+    /// Get records by bucket index (0-based). O(1).
     ///
     /// Throws std::out_of_range if idx >= BucketCount().
-    BucketView BucketAt(size_t idx) const;
+    BucketRecords BucketAt(size_t idx) const;
 
     /// Flat iterator over all records across all buckets (matches Java Iterable<ScanRecord>).
     class Iterator {
@@ -879,6 +894,14 @@ struct LakeSnapshot {
 struct PartitionInfo {
     int64_t partition_id;
     std::string partition_name;
+};
+
+struct ServerNode {
+    int32_t id;
+    std::string host;
+    uint32_t port;
+    std::string server_type;
+    std::string uid;
 };
 
 /// Descriptor for create_database (optional). Leave comment and properties empty for default.
@@ -979,12 +1002,43 @@ struct Configuration {
     int32_t writer_retries{std::numeric_limits<int32_t>::max()};
     // Writer batch size in bytes (2 MB)
     int32_t writer_batch_size{2 * 1024 * 1024};
+    // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
+    std::string writer_bucket_no_key_assigner{"sticky"};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
     size_t remote_file_download_thread_num{3};
+    // Remote log read concurrency within one file (streaming read path)
+    size_t scanner_remote_log_read_concurrency{4};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
+    // Maximum bytes per fetch response for LogScanner (16 MB)
+    int32_t scanner_log_fetch_max_bytes{16 * 1024 * 1024};
+    // Minimum bytes to accumulate before server returns a fetch response
+    int32_t scanner_log_fetch_min_bytes{1};
+    // Maximum time (ms) the server may wait to satisfy min bytes
+    int32_t scanner_log_fetch_wait_max_time_ms{500};
+    // Maximum bytes per fetch response per bucket for LogScanner (1 MB)
+    int32_t scanner_log_fetch_max_bytes_for_bucket{1024 * 1024};
+    int64_t writer_batch_timeout_ms{100};
+    // Whether to enable idempotent writes
+    bool writer_enable_idempotence{true};
+    // Maximum number of in-flight requests per bucket for idempotent writes
+    size_t writer_max_inflight_requests_per_bucket{5};
+    // Total memory available for buffering write batches (default 64MB)
+    size_t writer_buffer_memory_size{64 * 1024 * 1024};
+    // Maximum time in milliseconds to block waiting for buffer memory
+    uint64_t writer_buffer_wait_timeout_ms{std::numeric_limits<uint64_t>::max()};
+    // Connect timeout in milliseconds for TCP transport connect
+    uint64_t connect_timeout_ms{120000};
+    // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
+    std::string security_protocol{"PLAINTEXT"};
+    // SASL mechanism (only "PLAIN" is supported)
+    std::string security_sasl_mechanism{"PLAIN"};
+    // SASL username (required when security_protocol is "sasl")
+    std::string security_sasl_username;
+    // SASL password (required when security_protocol is "sasl")
+    std::string security_sasl_password;
 };
 
 class Connection {
@@ -1067,6 +1121,8 @@ class Admin {
     Result ListTables(const std::string& database_name, std::vector<std::string>& out);
 
     Result TableExists(const TablePath& table_path, bool& out);
+
+    Result GetServerNodes(std::vector<ServerNode>& out);
 
    private:
     Result DoListOffsets(const TablePath& table_path, const std::vector<int32_t>& bucket_ids,

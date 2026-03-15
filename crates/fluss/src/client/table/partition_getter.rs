@@ -87,7 +87,7 @@ impl PartitionGetter {
         let mut partition_values = Vec::with_capacity(self.partitions.len());
 
         for (data_type, field_getter) in &self.partitions {
-            let value = field_getter.get_field(row);
+            let value = field_getter.get_field(row)?;
             if value.is_null() {
                 return Err(IllegalArgument {
                     message: "Partition value shouldn't be null.".to_string(),

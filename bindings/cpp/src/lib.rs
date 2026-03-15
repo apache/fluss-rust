@@ -43,9 +43,25 @@ mod ffi {
         writer_acks: String,
         writer_retries: i32,
         writer_batch_size: i32,
+        writer_bucket_no_key_assigner: String,
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
+        scanner_remote_log_read_concurrency: usize,
         scanner_log_max_poll_records: usize,
+        scanner_log_fetch_max_bytes: i32,
+        scanner_log_fetch_min_bytes: i32,
+        scanner_log_fetch_wait_max_time_ms: i32,
+        scanner_log_fetch_max_bytes_for_bucket: i32,
+        writer_batch_timeout_ms: i64,
+        writer_enable_idempotence: bool,
+        writer_max_inflight_requests_per_bucket: usize,
+        writer_buffer_memory_size: usize,
+        writer_buffer_wait_timeout_ms: u64,
+        connect_timeout_ms: u64,
+        security_protocol: String,
+        security_sasl_mechanism: String,
+        security_sasl_username: String,
+        security_sasl_password: String,
     }
 
     struct FfiResult {
@@ -226,6 +242,24 @@ mod ffi {
         value: bool,
     }
 
+    struct FfiServerNode {
+        node_id: i32,
+        host: String,
+        port: u32,
+        server_type: String,
+        uid: String,
+    }
+
+    struct FfiServerNodesResult {
+        result: FfiResult,
+        server_nodes: Vec<FfiServerNode>,
+    }
+
+    struct FfiPtrResult {
+        result: FfiResult,
+        ptr: usize,
+    }
+
     extern "Rust" {
         type Connection;
         type Admin;
@@ -242,10 +276,10 @@ mod ffi {
         type LookupResultInner;
 
         // Connection
-        fn new_connection(config: &FfiConfig) -> Result<*mut Connection>;
+        fn new_connection(config: &FfiConfig) -> FfiPtrResult;
         unsafe fn delete_connection(conn: *mut Connection);
-        fn get_admin(self: &Connection) -> Result<*mut Admin>;
-        fn get_table(self: &Connection, table_path: &FfiTablePath) -> Result<*mut Table>;
+        fn get_admin(self: &Connection) -> FfiPtrResult;
+        fn get_table(self: &Connection, table_path: &FfiTablePath) -> FfiPtrResult;
 
         // Admin
         unsafe fn delete_admin(admin: *mut Admin);
@@ -316,23 +350,17 @@ mod ffi {
         fn get_database_info(self: &Admin, database_name: &str) -> FfiDatabaseInfoResult;
         fn list_tables(self: &Admin, database_name: &str) -> FfiListTablesResult;
         fn table_exists(self: &Admin, table_path: &FfiTablePath) -> FfiBoolResult;
+        fn get_server_nodes(self: &Admin) -> FfiServerNodesResult;
 
         // Table
         unsafe fn delete_table(table: *mut Table);
-        fn new_append_writer(self: &Table) -> Result<*mut AppendWriter>;
-        fn create_scanner(
-            self: &Table,
-            column_indices: Vec<usize>,
-            batch: bool,
-        ) -> Result<*mut LogScanner>;
+        fn new_append_writer(self: &Table) -> FfiPtrResult;
+        fn create_scanner(self: &Table, column_indices: Vec<usize>, batch: bool) -> FfiPtrResult;
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
-        fn create_upsert_writer(
-            self: &Table,
-            column_indices: Vec<usize>,
-        ) -> Result<*mut UpsertWriter>;
-        fn new_lookuper(self: &Table) -> Result<*mut Lookuper>;
+        fn create_upsert_writer(self: &Table, column_indices: Vec<usize>) -> FfiPtrResult;
+        fn new_lookuper(self: &Table) -> FfiPtrResult;
 
         // GenericRowInner — opaque row for writes
         fn new_generic_row(field_count: usize) -> Box<GenericRowInner>;
@@ -353,21 +381,22 @@ mod ffi {
 
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
-        fn append(self: &mut AppendWriter, row: &GenericRowInner) -> Result<Box<WriteResult>>;
+        fn append(self: &mut AppendWriter, row: &GenericRowInner) -> FfiPtrResult;
         fn append_arrow_batch(
             self: &mut AppendWriter,
             array_ptr: usize,
             schema_ptr: usize,
-        ) -> Result<Box<WriteResult>>;
+        ) -> FfiPtrResult;
         fn flush(self: &mut AppendWriter) -> FfiResult;
 
-        // WriteResult — dropped automatically via rust::Box, or call wait() for ack
+        // WriteResult
+        unsafe fn delete_write_result(wr: *mut WriteResult);
         fn wait(self: &mut WriteResult) -> FfiResult;
 
         // UpsertWriter
         unsafe fn delete_upsert_writer(writer: *mut UpsertWriter);
-        fn upsert(self: &mut UpsertWriter, row: &GenericRowInner) -> Result<Box<WriteResult>>;
-        fn delete_row(self: &mut UpsertWriter, row: &GenericRowInner) -> Result<Box<WriteResult>>;
+        fn upsert(self: &mut UpsertWriter, row: &GenericRowInner) -> FfiPtrResult;
+        fn delete_row(self: &mut UpsertWriter, row: &GenericRowInner) -> FfiPtrResult;
         fn upsert_flush(self: &mut UpsertWriter) -> FfiResult;
 
         // Lookuper
@@ -605,27 +634,71 @@ fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
     }
 }
 
+fn ok_ptr(ptr: usize) -> ffi::FfiPtrResult {
+    ffi::FfiPtrResult {
+        result: ok_result(),
+        ptr,
+    }
+}
+
+fn client_err_ptr(msg: String) -> ffi::FfiPtrResult {
+    ffi::FfiPtrResult {
+        result: client_err(msg),
+        ptr: 0usize,
+    }
+}
+
+fn err_ptr_from_core(e: &fcore::error::Error) -> ffi::FfiPtrResult {
+    ffi::FfiPtrResult {
+        result: err_from_core_error(e),
+        ptr: 0usize,
+    }
+}
+
 // Connection implementation
-fn new_connection(config: &ffi::FfiConfig) -> Result<*mut Connection, String> {
-    let config = fluss::config::Config {
+fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
+    let assigner_type = match config
+        .writer_bucket_no_key_assigner
+        .parse::<fluss::config::NoKeyAssigner>()
+    {
+        Ok(v) => v,
+        Err(e) => return client_err_ptr(format!("Invalid bucket assigner type: {e}")),
+    };
+    let config_core = fluss::config::Config {
         bootstrap_servers: config.bootstrap_servers.to_string(),
         writer_request_max_size: config.writer_request_max_size,
         writer_acks: config.writer_acks.to_string(),
         writer_retries: config.writer_retries,
         writer_batch_size: config.writer_batch_size,
+        writer_batch_timeout_ms: config.writer_batch_timeout_ms,
+        writer_bucket_no_key_assigner: assigner_type,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
+        scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
+        scanner_log_fetch_max_bytes: config.scanner_log_fetch_max_bytes,
+        scanner_log_fetch_min_bytes: config.scanner_log_fetch_min_bytes,
+        scanner_log_fetch_wait_max_time_ms: config.scanner_log_fetch_wait_max_time_ms,
+        scanner_log_fetch_max_bytes_for_bucket: config.scanner_log_fetch_max_bytes_for_bucket,
+        writer_enable_idempotence: config.writer_enable_idempotence,
+        writer_max_inflight_requests_per_bucket: config.writer_max_inflight_requests_per_bucket,
+        writer_buffer_memory_size: config.writer_buffer_memory_size,
+        writer_buffer_wait_timeout_ms: config.writer_buffer_wait_timeout_ms,
+        connect_timeout_ms: config.connect_timeout_ms,
+        security_protocol: config.security_protocol.to_string(),
+        security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
+        security_sasl_username: config.security_sasl_username.to_string(),
+        security_sasl_password: config.security_sasl_password.to_string(),
     };
 
-    let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config).await });
+    let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });
 
     match conn {
         Ok(c) => {
-            let conn = Box::into_raw(Box::new(Connection { inner: Arc::new(c) }));
-            Ok(conn)
+            let ptr = Box::into_raw(Box::new(Connection { inner: Arc::new(c) }));
+            ok_ptr(ptr as usize)
         }
-        Err(e) => Err(format!("Failed to connect: {e}")),
+        Err(e) => err_ptr_from_core(&e),
     }
 }
 
@@ -638,19 +711,19 @@ unsafe fn delete_connection(conn: *mut Connection) {
 }
 
 impl Connection {
-    fn get_admin(&self) -> Result<*mut Admin, String> {
+    fn get_admin(&self) -> ffi::FfiPtrResult {
         let admin_result = RUNTIME.block_on(async { self.inner.get_admin().await });
 
         match admin_result {
             Ok(admin) => {
-                let admin = Box::into_raw(Box::new(Admin { inner: admin }));
-                Ok(admin)
+                let ptr = Box::into_raw(Box::new(Admin { inner: admin }));
+                ok_ptr(ptr as usize)
             }
-            Err(e) => Err(format!("Failed to get admin: {e}")),
+            Err(e) => err_ptr_from_core(&e),
         }
     }
 
-    fn get_table(&self, table_path: &ffi::FfiTablePath) -> Result<*mut Table, String> {
+    fn get_table(&self, table_path: &ffi::FfiTablePath) -> ffi::FfiPtrResult {
         let path = fcore::metadata::TablePath::new(
             table_path.database_name.clone(),
             table_path.table_name.clone(),
@@ -660,16 +733,16 @@ impl Connection {
 
         match table_result {
             Ok(t) => {
-                let table = Box::into_raw(Box::new(Table {
+                let ptr = Box::into_raw(Box::new(Table {
                     connection: self.inner.clone(),
                     metadata: t.metadata().clone(),
                     table_info: t.get_table_info().clone(),
                     table_path: t.table_path().clone(),
                     has_pk: t.has_primary_key(),
                 }));
-                Ok(table)
+                ok_ptr(ptr as usize)
             }
-            Err(e) => Err(format!("Failed to get table: {e}")),
+            Err(e) => err_ptr_from_core(&e),
         }
     }
 }
@@ -1089,6 +1162,33 @@ impl Admin {
             },
         }
     }
+
+    fn get_server_nodes(&self) -> ffi::FfiServerNodesResult {
+        let result = RUNTIME.block_on(async { self.inner.get_server_nodes().await });
+
+        match result {
+            Ok(nodes) => {
+                let server_nodes: Vec<ffi::FfiServerNode> = nodes
+                    .into_iter()
+                    .map(|node| ffi::FfiServerNode {
+                        node_id: node.id(),
+                        host: node.host().to_string(),
+                        port: node.port(),
+                        server_type: node.server_type().to_string(),
+                        uid: node.uid().to_string(),
+                    })
+                    .collect();
+                ffi::FfiServerNodesResult {
+                    result: ok_result(),
+                    server_nodes,
+                }
+            }
+            Err(e) => ffi::FfiServerNodesResult {
+                result: err_from_core_error(&e),
+                server_nodes: vec![],
+            },
+        }
+    }
 }
 
 // Table implementation
@@ -1127,29 +1227,27 @@ impl Table {
             .collect()
     }
 
-    fn new_append_writer(&self) -> Result<*mut AppendWriter, String> {
+    fn new_append_writer(&self) -> ffi::FfiPtrResult {
         let _enter = RUNTIME.enter();
 
-        let table_append = self
-            .fluss_table()
-            .new_append()
-            .map_err(|e| format!("Failed to create append: {e}"))?;
+        let table_append = match self.fluss_table().new_append() {
+            Ok(a) => a,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        let writer = table_append
-            .create_writer()
-            .map_err(|e| format!("Failed to create writer: {e}"))?;
+        let writer = match table_append.create_writer() {
+            Ok(w) => w,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        Ok(Box::into_raw(Box::new(AppendWriter {
+        let ptr = Box::into_raw(Box::new(AppendWriter {
             inner: writer,
             table_info: self.table_info.clone(),
-        })))
+        }));
+        ok_ptr(ptr as usize)
     }
 
-    fn create_scanner(
-        &self,
-        column_indices: Vec<usize>,
-        batch: bool,
-    ) -> Result<*mut LogScanner, String> {
+    fn create_scanner(&self, column_indices: Vec<usize>, batch: bool) -> ffi::FfiPtrResult {
         RUNTIME.block_on(async {
             let fluss_table = self.fluss_table();
             let scan = fluss_table.new_scan();
@@ -1157,29 +1255,34 @@ impl Table {
             let (projected_columns, scan) = if column_indices.is_empty() {
                 (self.table_info.get_schema().columns().to_vec(), scan)
             } else {
-                let cols = self.resolve_projected_columns(&column_indices)?;
-                let scan = scan
-                    .project(&column_indices)
-                    .map_err(|e| format!("Failed to project columns: {e}"))?;
+                let cols = match self.resolve_projected_columns(&column_indices) {
+                    Ok(c) => c,
+                    Err(e) => return client_err_ptr(e),
+                };
+                let scan = match scan.project(&column_indices) {
+                    Ok(s) => s,
+                    Err(e) => return err_ptr_from_core(&e),
+                };
                 (cols, scan)
             };
 
             let scanner = if batch {
-                let s = scan
-                    .create_record_batch_log_scanner()
-                    .map_err(|e| format!("Failed to create record batch log scanner: {e}"))?;
-                ScannerKind::Batch(s)
+                match scan.create_record_batch_log_scanner() {
+                    Ok(s) => ScannerKind::Batch(s),
+                    Err(e) => return err_ptr_from_core(&e),
+                }
             } else {
-                let s = scan
-                    .create_log_scanner()
-                    .map_err(|e| format!("Failed to create log scanner: {e}"))?;
-                ScannerKind::Record(s)
+                match scan.create_log_scanner() {
+                    Ok(s) => ScannerKind::Record(s),
+                    Err(e) => return err_ptr_from_core(&e),
+                }
             };
 
-            Ok(Box::into_raw(Box::new(LogScanner {
+            let ptr = Box::into_raw(Box::new(LogScanner {
                 scanner,
                 projected_columns,
-            })))
+            }));
+            ok_ptr(ptr as usize)
         })
     }
 
@@ -1198,51 +1301,53 @@ impl Table {
         self.has_pk
     }
 
-    fn create_upsert_writer(
-        &self,
-        column_indices: Vec<usize>,
-    ) -> Result<*mut UpsertWriter, String> {
+    fn create_upsert_writer(&self, column_indices: Vec<usize>) -> ffi::FfiPtrResult {
         let _enter = RUNTIME.enter();
 
-        let table_upsert = self
-            .fluss_table()
-            .new_upsert()
-            .map_err(|e| format!("Failed to create upsert: {e}"))?;
+        let table_upsert = match self.fluss_table().new_upsert() {
+            Ok(u) => u,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
         let table_upsert = if column_indices.is_empty() {
             table_upsert
         } else {
-            table_upsert
-                .partial_update(Some(column_indices))
-                .map_err(|e| format!("Failed to set partial update columns: {e}"))?
+            match table_upsert.partial_update(Some(column_indices)) {
+                Ok(u) => u,
+                Err(e) => return err_ptr_from_core(&e),
+            }
         };
 
-        let writer = table_upsert
-            .create_writer()
-            .map_err(|e| format!("Failed to create upsert writer: {e}"))?;
+        let writer = match table_upsert.create_writer() {
+            Ok(w) => w,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        Ok(Box::into_raw(Box::new(UpsertWriter {
+        let ptr = Box::into_raw(Box::new(UpsertWriter {
             inner: writer,
             table_info: self.table_info.clone(),
-        })))
+        }));
+        ok_ptr(ptr as usize)
     }
 
-    fn new_lookuper(&self) -> Result<*mut Lookuper, String> {
+    fn new_lookuper(&self) -> ffi::FfiPtrResult {
         let _enter = RUNTIME.enter();
 
-        let table_lookup = self
-            .fluss_table()
-            .new_lookup()
-            .map_err(|e| format!("Failed to create lookup: {e}"))?;
+        let table_lookup = match self.fluss_table().new_lookup() {
+            Ok(l) => l,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        let lookuper = table_lookup
-            .create_lookuper()
-            .map_err(|e| format!("Failed to create lookuper: {e}"))?;
+        let lookuper = match table_lookup.create_lookuper() {
+            Ok(l) => l,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        Ok(Box::into_raw(Box::new(Lookuper {
+        let ptr = Box::into_raw(Box::new(Lookuper {
             inner: lookuper,
             table_info: self.table_info.clone(),
-        })))
+        }));
+        ok_ptr(ptr as usize)
     }
 }
 
@@ -1256,26 +1361,25 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
 }
 
 impl AppendWriter {
-    fn append(&mut self, row: &GenericRowInner) -> Result<Box<WriteResult>, String> {
+    fn append(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row =
-            types::resolve_row_types(&row.row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
+            Ok(r) => r,
+            Err(e) => return client_err_ptr(e.to_string()),
+        };
 
-        let result_future = self
-            .inner
-            .append(&generic_row)
-            .map_err(|e| format!("Failed to append: {e}"))?;
+        let result_future = match self.inner.append(&generic_row) {
+            Ok(f) => f,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        Ok(Box::new(WriteResult {
+        let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
-        }))
+        }));
+        ok_ptr(ptr as usize)
     }
 
-    fn append_arrow_batch(
-        &mut self,
-        array_ptr: usize,
-        schema_ptr: usize,
-    ) -> Result<Box<WriteResult>, String> {
+    fn append_arrow_batch(&mut self, array_ptr: usize, schema_ptr: usize) -> ffi::FfiPtrResult {
         use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 
         // Safety: C++ allocates these via `new ArrowArray/ArrowSchema` after a
@@ -1286,22 +1390,25 @@ impl AppendWriter {
 
         // Safety: `from_ffi` requires that the array and schema conform to the
         // Arrow C Data Interface, which is guaranteed by C++'s ExportRecordBatch.
-        let array_data = unsafe { arrow::ffi::from_ffi(ffi_array, &ffi_schema) }
-            .map_err(|e| format!("Failed to import Arrow batch: {e}"))?;
+        let array_data = match unsafe { arrow::ffi::from_ffi(ffi_array, &ffi_schema) } {
+            Ok(d) => d,
+            Err(e) => return client_err_ptr(format!("Failed to import Arrow batch: {e}")),
+        };
         // ffi_array is consumed by from_ffi; ffi_schema is dropped here (Box goes out of scope)
 
         // Reconstruct RecordBatch from the imported StructArray data
         let struct_array = arrow::array::StructArray::from(array_data);
         let batch = arrow::record_batch::RecordBatch::from(struct_array);
 
-        let result_future = self
-            .inner
-            .append_arrow_batch(batch)
-            .map_err(|e| format!("Failed to append Arrow batch: {e}"))?;
+        let result_future = match self.inner.append_arrow_batch(batch) {
+            Ok(f) => f,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        Ok(Box::new(WriteResult {
+        let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
-        }))
+        }));
+        ok_ptr(ptr as usize)
     }
 
     fn flush(&mut self) -> ffi::FfiResult {
@@ -1310,6 +1417,14 @@ impl AppendWriter {
         match result {
             Ok(_) => ok_result(),
             Err(e) => err_from_core_error(&e),
+        }
+    }
+}
+
+unsafe fn delete_write_result(wr: *mut WriteResult) {
+    if !wr.is_null() {
+        unsafe {
+            drop(Box::from_raw(wr));
         }
     }
 }
@@ -1348,36 +1463,42 @@ impl UpsertWriter {
         row
     }
 
-    fn upsert(&mut self, row: &GenericRowInner) -> Result<Box<WriteResult>, String> {
+    fn upsert(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row =
-            types::resolve_row_types(&row.row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
+            Ok(r) => r,
+            Err(e) => return client_err_ptr(e.to_string()),
+        };
         let generic_row = self.pad_row(generic_row);
 
-        let result_future = self
-            .inner
-            .upsert(&generic_row)
-            .map_err(|e| format!("Failed to upsert: {e}"))?;
+        let result_future = match self.inner.upsert(&generic_row) {
+            Ok(f) => f,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        Ok(Box::new(WriteResult {
+        let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
-        }))
+        }));
+        ok_ptr(ptr as usize)
     }
 
-    fn delete_row(&mut self, row: &GenericRowInner) -> Result<Box<WriteResult>, String> {
+    fn delete_row(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row =
-            types::resolve_row_types(&row.row, Some(schema)).map_err(|e| e.to_string())?;
+        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
+            Ok(r) => r,
+            Err(e) => return client_err_ptr(e.to_string()),
+        };
         let generic_row = self.pad_row(generic_row);
 
-        let result_future = self
-            .inner
-            .delete(&generic_row)
-            .map_err(|e| format!("Failed to delete: {e}"))?;
+        let result_future = match self.inner.delete(&generic_row) {
+            Ok(f) => f,
+            Err(e) => return err_ptr_from_core(&e),
+        };
 
-        Ok(Box::new(WriteResult {
+        let ptr = Box::into_raw(Box::new(WriteResult {
             inner: Some(result_future),
-        }))
+        }));
+        ok_ptr(ptr as usize)
     }
 
     fn upsert_flush(&mut self) -> ffi::FfiResult {
@@ -1773,7 +1894,7 @@ mod row_reader {
         allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
     ) -> Result<&'a fcore::metadata::DataType, String> {
         let col = get_column(columns, field)?;
-        if row.is_null_at(field) {
+        if row.is_null_at(field).map_err(|e| e.to_string())? {
             return Err(format!("field {field} is null"));
         }
         let dt = col.data_type();
@@ -1801,7 +1922,7 @@ mod row_reader {
         field: usize,
     ) -> Result<bool, String> {
         get_column(columns, field)?;
-        Ok(row.is_null_at(field))
+        row.is_null_at(field).map_err(|e| e.to_string())
     }
 
     pub fn get_bool(
@@ -1812,7 +1933,7 @@ mod row_reader {
         validate(row, columns, field, "get_bool", |dt| {
             matches!(dt, fcore::metadata::DataType::Boolean(_))
         })?;
-        Ok(row.get_boolean(field))
+        row.get_boolean(field).map_err(|e| e.to_string())
     }
 
     pub fn get_i32(
@@ -1828,11 +1949,17 @@ mod row_reader {
                     | fcore::metadata::DataType::Int(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::TinyInt(_) => row.get_byte(field) as i32,
-            fcore::metadata::DataType::SmallInt(_) => row.get_short(field) as i32,
-            _ => row.get_int(field),
-        })
+        match dt {
+            fcore::metadata::DataType::TinyInt(_) => row
+                .get_byte(field)
+                .map(|v| v as i32)
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::SmallInt(_) => row
+                .get_short(field)
+                .map(|v| v as i32)
+                .map_err(|e| e.to_string()),
+            _ => row.get_int(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_i64(
@@ -1843,7 +1970,7 @@ mod row_reader {
         validate(row, columns, field, "get_i64", |dt| {
             matches!(dt, fcore::metadata::DataType::BigInt(_))
         })?;
-        Ok(row.get_long(field))
+        row.get_long(field).map_err(|e| e.to_string())
     }
 
     pub fn get_f32(
@@ -1854,7 +1981,7 @@ mod row_reader {
         validate(row, columns, field, "get_f32", |dt| {
             matches!(dt, fcore::metadata::DataType::Float(_))
         })?;
-        Ok(row.get_float(field))
+        row.get_float(field).map_err(|e| e.to_string())
     }
 
     pub fn get_f64(
@@ -1865,7 +1992,7 @@ mod row_reader {
         validate(row, columns, field, "get_f64", |dt| {
             matches!(dt, fcore::metadata::DataType::Double(_))
         })?;
-        Ok(row.get_double(field))
+        row.get_double(field).map_err(|e| e.to_string())
     }
 
     pub fn get_str<'a>(
@@ -1879,10 +2006,12 @@ mod row_reader {
                 fcore::metadata::DataType::Char(_) | fcore::metadata::DataType::String(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::Char(ct) => row.get_char(field, ct.length() as usize),
-            _ => row.get_string(field),
-        })
+        match dt {
+            fcore::metadata::DataType::Char(ct) => row
+                .get_char(field, ct.length() as usize)
+                .map_err(|e| e.to_string()),
+            _ => row.get_string(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_bytes<'a>(
@@ -1896,10 +2025,12 @@ mod row_reader {
                 fcore::metadata::DataType::Binary(_) | fcore::metadata::DataType::Bytes(_)
             )
         })?;
-        Ok(match dt {
-            fcore::metadata::DataType::Binary(bt) => row.get_binary(field, bt.length()),
-            _ => row.get_bytes(field),
-        })
+        match dt {
+            fcore::metadata::DataType::Binary(bt) => row
+                .get_binary(field, bt.length())
+                .map_err(|e| e.to_string()),
+            _ => row.get_bytes(field).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn get_date_days(
@@ -1910,7 +2041,9 @@ mod row_reader {
         validate(row, columns, field, "get_date_days", |dt| {
             matches!(dt, fcore::metadata::DataType::Date(_))
         })?;
-        Ok(row.get_date(field).get_inner())
+        row.get_date(field)
+            .map(|d| d.get_inner())
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_time_millis(
@@ -1921,7 +2054,9 @@ mod row_reader {
         validate(row, columns, field, "get_time_millis", |dt| {
             matches!(dt, fcore::metadata::DataType::Time(_))
         })?;
-        Ok(row.get_time(field).get_inner())
+        row.get_time(field)
+            .map(|t| t.get_inner())
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_ts_millis(
@@ -1937,12 +2072,14 @@ mod row_reader {
             )
         })?;
         match dt {
-            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+            fcore::metadata::DataType::TimestampLTz(ts) => row
                 .get_timestamp_ltz(field, ts.precision())
-                .get_epoch_millisecond()),
-            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .map(|v| v.get_epoch_millisecond())
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::Timestamp(ts) => row
                 .get_timestamp_ntz(field, ts.precision())
-                .get_millisecond()),
+                .map(|v| v.get_millisecond())
+                .map_err(|e| e.to_string()),
             dt => Err(format!("get_ts_millis: unexpected type {dt}")),
         }
     }
@@ -1960,12 +2097,14 @@ mod row_reader {
             )
         })?;
         match dt {
-            fcore::metadata::DataType::TimestampLTz(ts) => Ok(row
+            fcore::metadata::DataType::TimestampLTz(ts) => row
                 .get_timestamp_ltz(field, ts.precision())
-                .get_nano_of_millisecond()),
-            fcore::metadata::DataType::Timestamp(ts) => Ok(row
+                .map(|v| v.get_nano_of_millisecond())
+                .map_err(|e| e.to_string()),
+            fcore::metadata::DataType::Timestamp(ts) => row
                 .get_timestamp_ntz(field, ts.precision())
-                .get_nano_of_millisecond()),
+                .map(|v| v.get_nano_of_millisecond())
+                .map_err(|e| e.to_string()),
             dt => Err(format!("get_ts_nanos: unexpected type {dt}")),
         }
     }
@@ -1987,7 +2126,9 @@ mod row_reader {
         })?;
         match dt {
             fcore::metadata::DataType::Decimal(dd) => {
-                let decimal = row.get_decimal(field, dd.precision() as usize, dd.scale() as usize);
+                let decimal = row
+                    .get_decimal(field, dd.precision() as usize, dd.scale() as usize)
+                    .map_err(|e| e.to_string())?;
                 Ok(decimal.to_big_decimal().to_string())
             }
             dt => Err(format!("get_decimal_str: unexpected type {dt}")),
@@ -2061,7 +2202,7 @@ impl ScanResultInner {
         self.columns.len()
     }
 
-    // Field accessors — C++ validates bounds in BucketView/RecordAt, validate() checks field.
+    // Field accessors — C++ validates bounds in BucketRecords/RecordAt, validate() checks field.
     fn sv_is_null(&self, bucket: usize, rec: usize, field: usize) -> Result<bool, String> {
         row_reader::is_null(self.resolve(bucket, rec).row(), &self.columns, field)
     }

@@ -7,17 +7,29 @@ Complete API reference for the Fluss Python client.
 
 ## `Config`
 
-| Method / Property                  | Description                                               |
-|------------------------------------|-----------------------------------------------------------|
-| `Config(properties: dict = None)`  | Create config from a dict of key-value pairs              |
-| `bootstrap_servers`                | Get/set coordinator server address                        |
-| `writer_request_max_size`          | Get/set max request size in bytes                         |
-| `writer_acks`                      | Get/set acknowledgment setting (`"all"` for all replicas) |
-| `writer_retries`                   | Get/set number of retries on failure                      |
-| `writer_batch_size`                | Get/set write batch size in bytes                         |
-| `scanner_remote_log_prefetch_num`  | Get/set number of remote log segments to prefetch         |
-| `remote_file_download_thread_num`  | Get/set number of threads for remote log downloads        |
-| `scanner_log_max_poll_records`     | Get/set max number of records returned in a single poll() |
+| Method / Property                     | Config Key                            | Description                                                                             |
+|---------------------------------------|---------------------------------------|-----------------------------------------------------------------------------------------|
+| `Config(properties: dict = None)`     |                                       | Create config from a dict of key-value pairs                                            |
+| `bootstrap_servers`                   | `bootstrap.servers`                   | Get/set coordinator server address                                                      |
+| `writer_request_max_size`             | `writer.request-max-size`             | Get/set max request size in bytes                                                       |
+| `writer_acks`                         | `writer.acks`                         | Get/set acknowledgment setting (`"all"` for all replicas)                               |
+| `writer_retries`                      | `writer.retries`                      | Get/set number of retries on failure                                                    |
+| `writer_batch_size`                   | `writer.batch-size`                   | Get/set write batch size in bytes                                                       |
+| `writer_batch_timeout_ms`             | `writer.batch-timeout-ms`             | Get/set max time in ms to wait for a writer batch to fill up before sending             |
+| `writer_bucket_no_key_assigner`       | `writer.bucket.no-key-assigner`       | Get/set bucket assignment strategy (`"sticky"` or `"round_robin"`)                      |
+| `scanner_remote_log_prefetch_num`     | `scanner.remote-log.prefetch-num`     | Get/set number of remote log segments to prefetch                                       |
+| `remote_file_download_thread_num`     | `remote-file.download-thread-num`     | Get/set number of threads for remote log downloads                                      |
+| `scanner_remote_log_read_concurrency` | `scanner.remote-log.read-concurrency` | Get/set streaming read concurrency within a remote log file                             |
+| `scanner_log_max_poll_records`        | `scanner.log.max-poll-records`        | Get/set max number of records returned in a single poll()                               |
+| `scanner_log_fetch_max_bytes`         | `scanner.log.fetch.max-bytes`         | Get/set maximum bytes per fetch response for LogScanner                                 |
+| `scanner_log_fetch_min_bytes`         | `scanner.log.fetch.min-bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |
+| `scanner_log_fetch_wait_max_time_ms`  | `scanner.log.fetch.wait-max-time-ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
+| `scanner_log_fetch_max_bytes_for_bucket` | `scanner.log.fetch.max-bytes-for-bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                |
+| `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
+| `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
+| `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
+| `security_sasl_username`              | `security.sasl.username`              | Get/set SASL username (required when protocol is `"sasl"`)                              |
+| `security_sasl_password`              | `security.sasl.password`              | Get/set SASL password (required when protocol is `"sasl"`)                              |
 
 ## `FlussConnection`
 
@@ -50,6 +62,17 @@ Supports `with` statement (context manager).
 | `await drop_partition(table_path, partition_spec, ignore_if_not_exists=False)`                                        | Drop a partition                      |
 | `await list_partition_infos(table_path) -> list[PartitionInfo]`                                                       | List partitions                       |
 | `await get_latest_lake_snapshot(table_path) -> LakeSnapshot`                                                          | Get latest lake snapshot              |
+| `await get_server_nodes() -> list[ServerNode]`                                                                        | Get all alive server nodes            |
+
+## `ServerNode`
+
+| Property                 | Description                                                |
+|--------------------------|------------------------------------------------------------|
+| `.id -> int`             | Server node ID                                             |
+| `.host -> str`           | Hostname of the server                                     |
+| `.port -> int`           | Port number                                                |
+| `.server_type -> str`    | Server type (`"CoordinatorServer"` or `"TabletServer"`)    |
+| `.uid -> str`            | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)               |
 
 ## `FlussTable`
 
@@ -222,6 +245,8 @@ for record in scan_records:
 | `Schema(schema: pa.Schema, primary_keys=None)` | Create from PyArrow schema |
 | `.get_column_names() -> list[str]`             | Get column names           |
 | `.get_column_types() -> list[str]`             | Get column type names      |
+| `.get_columns() -> list[tuple[str, str]]`      | Get `(name, type)` pairs   |
+| `.get_primary_keys() -> list[str]`             | Get primary key columns    |
 
 ## `TableDescriptor`
 
