@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::client::{LogWriteRecord, Record, WriteRecord};
-use crate::compression::ArrowCompressionInfo;
+use crate::compression::{
+    ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
+};
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
@@ -27,6 +29,7 @@ use arrow::{
     array::RecordBatch,
     buffer::Buffer,
     ipc::{
+        CompressionType,
         reader::{StreamReader, read_record_batch},
         root_as_message,
         writer::StreamWriter,
@@ -40,6 +43,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use crc32c::crc32c;
 use std::{
+    cell::Cell,
     collections::HashMap,
     fs::File,
     io::{Cursor, Read, Seek, SeekFrom, Write},
@@ -144,8 +148,13 @@ pub const NO_BATCH_SEQUENCE: i32 = -1;
 
 pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
 
-// TODO: Switch to byte-size-based is_full() like Java's ArrowWriter instead of a hard record cap.
-pub const DEFAULT_MAX_RECORD: i32 = 256;
+/// Initial capacity for Arrow column vectors (pre-allocation hint, not a record cap).
+/// Matching Java's `ArrowWriter.INITIAL_CAPACITY`.
+const INITIAL_ROW_CAPACITY: usize = 1024;
+
+/// Fraction of the allocated buffer used as the effective write limit.
+/// Matching Java's `ArrowWriter.BUFFER_USAGE_RATIO`.
+const BUFFER_USAGE_RATIO: f64 = 0.95;
 
 pub struct MemoryLogRecordsArrowBuilder {
     base_log_offset: i64,
@@ -156,9 +165,24 @@ pub struct MemoryLogRecordsArrowBuilder {
     arrow_record_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder>,
     is_closed: bool,
     arrow_compression_info: ArrowCompressionInfo,
+    /// Effective write limit in bytes (after applying BUFFER_USAGE_RATIO).
+    write_limit: usize,
+    /// Pre-computed Arrow IPC overhead (metadata + body framing) for this schema.
+    /// Constant per schema+compression combination.
+    ipc_overhead: usize,
+    /// Estimated record count at which the next byte-size check should occur.
+    /// 0 means "unknown — check on the next append". Updated dynamically to
+    /// skip expensive `estimated_size_in_bytes()` calls on every append.
+    estimated_max_records_count: Cell<usize>,
+    /// Compression ratio estimator shared across batches for the same table.
+    compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
+    /// Snapshot of the compression ratio at batch creation time.
+    /// Matching Java's `ArrowWriter.estimatedCompressionRatio` which is
+    /// cached per batch and only refreshed on `reset()`.
+    estimated_compression_ratio: f32,
 }
 
-pub trait ArrowRecordBatchInnerBuilder: Send + Sync {
+pub trait ArrowRecordBatchInnerBuilder: Send {
     fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>>;
 
     fn append(&mut self, row: &dyn InternalRow) -> Result<bool>;
@@ -229,7 +253,7 @@ pub struct RowAppendRecordBatchBuilder {
 
 impl RowAppendRecordBatchBuilder {
     pub fn new(row_type: &RowType) -> Result<Self> {
-        let capacity = DEFAULT_MAX_RECORD as usize;
+        let capacity = INITIAL_ROW_CAPACITY;
         let schema_ref = to_arrow_schema(row_type)?;
         let writers: Result<Vec<_>> = row_type
             .fields()
@@ -310,26 +334,34 @@ impl ArrowRecordBatchInnerBuilder for RowAppendRecordBatchBuilder {
     }
 
     fn is_full(&self) -> bool {
-        self.records_count() >= DEFAULT_MAX_RECORD
+        // Size-based fullness is handled by MemoryLogRecordsArrowBuilder,
+        // which accounts for metadata length and compression ratio.
+        false
     }
 
     fn estimated_size_in_bytes(&self) -> usize {
-        // Returns the uncompressed Arrow array memory size (same as Java's arrowWriter.estimatedSizeInBytes()).
-        // Note: This is the size before compression. After build(), the actual size may be smaller
-        // if compression is enabled.
-        self.column_writers
-            .iter()
-            .map(|writer| writer.finish_cloned().get_array_memory_size())
-            .sum()
+        // Returns the uncompressed Arrow IPC body size by reading buffer lengths
+        // directly from the builders — O(num_columns), zero allocation.
+        // Analogous to Java's `ArrowUtils.estimateArrowBodyLength()`.
+        // Java reads exact IPC buffer sizes from vectors; we read builder
+        // buffer lengths. The IPC framing overhead is accounted for
+        // separately by `ipc_overhead`.
+        self.column_writers.iter().map(|w| w.buffer_size()).sum()
     }
 }
 
+// TODO: Pool and reuse MemoryLogRecordsArrowBuilder instances per table/schema like
+// Java's ArrowWriterPool. Reused writers can seed `estimated_max_records_count` from
+// the previous batch (recordsCount / 2) for a warm start, avoiding the first-record
+// size check on every new batch.
 impl MemoryLogRecordsArrowBuilder {
     pub fn new(
         schema_id: i32,
         row_type: &RowType,
         to_append_record_batch: bool,
         arrow_compression_info: ArrowCompressionInfo,
+        write_limit: usize,
+        compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
     ) -> Result<Self> {
         let arrow_batch_builder: Box<dyn ArrowRecordBatchInnerBuilder> = {
             if to_append_record_batch {
@@ -338,6 +370,11 @@ impl MemoryLogRecordsArrowBuilder {
                 Box::new(RowAppendRecordBatchBuilder::new(row_type)?)
             }
         };
+        let schema = to_arrow_schema(row_type)?;
+        let ipc_overhead =
+            estimate_arrow_ipc_overhead(&schema, arrow_compression_info.get_compression_type())?;
+        let effective_limit = (write_limit as f64 * BUFFER_USAGE_RATIO) as usize;
+        let estimated_compression_ratio = compression_ratio_estimator.estimation();
         Ok(MemoryLogRecordsArrowBuilder {
             base_log_offset: BUILDER_DEFAULT_OFFSET,
             schema_id,
@@ -347,6 +384,11 @@ impl MemoryLogRecordsArrowBuilder {
             is_closed: false,
             arrow_record_batch_builder: arrow_batch_builder,
             arrow_compression_info,
+            write_limit: effective_limit,
+            ipc_overhead,
+            estimated_max_records_count: Cell::new(0),
+            compression_ratio_estimator,
+            estimated_compression_ratio,
         })
     }
 
@@ -367,8 +409,54 @@ impl MemoryLogRecordsArrowBuilder {
         // todo: consider write other change type
     }
 
+    /// Check if the builder is full based on estimated serialized size.
+    ///
+    /// Uses a threshold-based optimization to skip expensive size checks:
+    /// only computes the actual estimated size when the record count reaches
+    /// the predicted threshold. Matching Java's `ArrowWriter.isFull()`.
     pub fn is_full(&self) -> bool {
-        self.arrow_record_batch_builder.records_count() >= DEFAULT_MAX_RECORD
+        // Delegate to inner builder first (e.g. PrebuiltRecordBatchBuilder
+        // is always full after one batch, regardless of size).
+        if self.arrow_record_batch_builder.is_full() {
+            return true;
+        }
+        let records_count = self.arrow_record_batch_builder.records_count();
+        if records_count == 0 {
+            return false;
+        }
+        let threshold = self.estimated_max_records_count.get();
+        if threshold == 0 || records_count as usize >= threshold {
+            let body_size = self.arrow_record_batch_builder.estimated_size_in_bytes();
+            let estimated_body = self.estimated_compressed_size(body_size);
+            let current_size = self.ipc_overhead + estimated_body;
+            if current_size >= self.write_limit {
+                return true;
+            }
+            if estimated_body == 0 {
+                self.estimated_max_records_count
+                    .set(records_count as usize + 1);
+                return false;
+            }
+            // Matching Java: subtract fixed metadata overhead from the limit,
+            // divide remaining body budget by per-record body cost.
+            let body_per_record = estimated_body as f64 / records_count as f64;
+            let next = ((self.write_limit.saturating_sub(self.ipc_overhead) as f64
+                / body_per_record)
+                .ceil() as usize)
+                .max(records_count as usize + 1);
+            self.estimated_max_records_count.set(next);
+        }
+        false
+    }
+
+    /// Estimate the compressed body size using the ratio snapshot taken at batch creation.
+    /// Matching Java's `ArrowWriter.estimatedBytesWritten()`.
+    fn estimated_compressed_size(&self, uncompressed_body: usize) -> usize {
+        if self.arrow_compression_info.compression_type == ArrowCompressionType::None {
+            uncompressed_body
+        } else {
+            (uncompressed_body as f64 * self.estimated_compression_ratio as f64) as usize
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -380,6 +468,9 @@ impl MemoryLogRecordsArrowBuilder {
     }
 
     pub fn build(&mut self) -> Result<Vec<u8>> {
+        // Capture uncompressed body size before serialization for compression ratio update.
+        let uncompressed_body_size = self.arrow_record_batch_builder.estimated_size_in_bytes();
+
         // serialize arrow batch
         let mut arrow_batch_bytes = vec![];
         let table_schema = self.arrow_record_batch_builder.schema();
@@ -396,8 +487,22 @@ impl MemoryLogRecordsArrowBuilder {
         let header = writer.get_ref().len();
         let record_batch = self.arrow_record_batch_builder.build_arrow_record_batch()?;
         writer.write(record_batch.as_ref())?;
-        // get real arrow batch bytes
+        // get real arrow batch bytes (metadata + body, potentially compressed)
         let real_arrow_batch_bytes = &arrow_batch_bytes[header..];
+
+        // Update compression ratio estimator with actual ratio.
+        // The serialized bytes include metadata + compressed body. Subtract
+        // metadata to isolate the compressed body for an accurate ratio.
+        if uncompressed_body_size > 0
+            && self.arrow_compression_info.compression_type != ArrowCompressionType::None
+        {
+            let compressed_body_size = real_arrow_batch_bytes
+                .len()
+                .saturating_sub(self.ipc_overhead);
+            let actual_ratio = compressed_body_size as f32 / uncompressed_body_size as f32;
+            self.compression_ratio_estimator
+                .update_estimation(actual_ratio);
+        }
 
         // now, write batch header and arrow batch
         let mut batch_bytes = vec![0u8; RECORD_BATCH_HEADER_SIZE + real_arrow_batch_bytes.len()];
@@ -451,10 +556,76 @@ impl MemoryLogRecordsArrowBuilder {
     }
 
     /// Get an estimate of the number of bytes written to the underlying buffer.
-    /// This includes the batch header size plus the estimated arrow data size.
+    /// Includes Fluss record batch header + Arrow IPC metadata + estimated
+    /// compressed body size.
     pub fn estimated_size_in_bytes(&self) -> usize {
-        RECORD_BATCH_HEADER_SIZE + self.arrow_record_batch_builder.estimated_size_in_bytes()
+        let body = self.arrow_record_batch_builder.estimated_size_in_bytes();
+        let estimated_body = self.estimated_compressed_size(body);
+        RECORD_BATCH_HEADER_SIZE + self.ipc_overhead + estimated_body
     }
+}
+
+/// Estimate the Arrow IPC overhead (metadata + body framing) for a given schema.
+///
+/// Serializes a 1-row RecordBatch with known data sizes, then subtracts the
+/// raw data contribution to isolate the fixed overhead: IPC message header,
+/// RecordBatch flatbuffer, and per-buffer alignment padding within the body.
+/// This overhead is constant for a given schema+compression combination.
+///
+/// Note: called once per batch creation. With writer pooling (see TODO above),
+/// this would be computed once per pooled writer and reused across batches.
+/// Analogous to Java's `ArrowUtils.estimateArrowMetadataLength()`.
+fn estimate_arrow_ipc_overhead(
+    schema: &SchemaRef,
+    compression: Option<CompressionType>,
+) -> Result<usize> {
+    use arrow::array::new_null_array;
+
+    // Create a 1-row batch of nulls. Null arrays have minimal, predictable
+    // data: no validity bitmap, no variable-length data, just fixed-width
+    // zero buffers. This lets us compute raw data size exactly.
+    let null_arrays: Vec<ArrayRef> = schema
+        .fields()
+        .iter()
+        .map(|field| new_null_array(field.data_type(), 1))
+        .collect();
+    let batch = RecordBatch::try_new(schema.clone(), null_arrays)?;
+
+    // Sum the raw buffer sizes — this is what buffer_size() would report.
+    let raw_data: usize = batch
+        .columns()
+        .iter()
+        .map(|col| {
+            col.to_data()
+                .buffers()
+                .iter()
+                .map(|buf| round_up_to_8(buf.len()))
+                .sum::<usize>()
+                // Validity buffer (null bitmap)
+                + col
+                    .nulls()
+                    .map_or(0, |n| round_up_to_8(n.buffer().len()))
+        })
+        .sum();
+
+    // Serialize the batch via IPC and measure total output.
+    let mut buf = vec![];
+    let write_option =
+        IpcWriteOptions::try_with_compression(IpcWriteOptions::default(), compression);
+    let mut writer = StreamWriter::try_new_with_options(&mut buf, schema, write_option?)?;
+    let header_len = writer.get_ref().len();
+    writer.write(&batch)?;
+    let total_len = writer.get_ref().len();
+
+    // IPC overhead = total message size - raw data we put in.
+    let ipc_message_len = total_len - header_len;
+    Ok(ipc_message_len.saturating_sub(raw_data))
+}
+
+/// Round up to the next multiple of 8 (Arrow IPC alignment).
+#[inline]
+fn round_up_to_8(n: usize) -> usize {
+    (n + 7) & !7
 }
 
 pub trait ToArrow {
@@ -1910,6 +2081,8 @@ mod tests {
                 compression_type: ArrowCompressionType::None,
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
 
         let mut row = GenericRow::new(2);
