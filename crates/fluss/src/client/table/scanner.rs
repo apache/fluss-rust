@@ -1700,7 +1700,8 @@ mod tests {
     use crate::client::WriteRecord;
     use crate::client::metadata::Metadata;
     use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+        ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
+        DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath};
     use crate::record::MemoryLogRecordsArrowBuilder;
@@ -1717,6 +1718,8 @@ mod tests {
                 compression_type: ArrowCompressionType::None,
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
         let row = GenericRow {

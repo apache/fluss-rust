@@ -38,7 +38,8 @@ use arrow_schema::DataType as ArrowDataType;
 
 /// Estimated average byte size for variable-width columns (Utf8, Binary).
 /// Used to pre-allocate data buffers and avoid reallocations during batch building.
-const VARIABLE_WIDTH_AVG_BYTES: usize = 64;
+/// Matches Java Arrow's `BaseVariableWidthVector.DEFAULT_RECORD_BYTE_COUNT`.
+const VARIABLE_WIDTH_AVG_BYTES: usize = 8;
 
 /// A typed column writer that reads one column from an [`InternalRow`] and
 /// appends directly to a concrete Arrow builder — no intermediate [`Datum`],
@@ -413,6 +414,87 @@ impl ColumnWriter {
         }
     }
 
+    /// Returns the total buffer size in bytes, rounded up to 8-byte alignment
+    /// per buffer. Reads buffer lengths directly from the builders — O(1), no
+    /// allocation. Analogous to Java's `ArrowUtils.estimateArrowBodyLength()`
+    /// which sums `buf.readableBytes()` with 8-byte rounding per buffer.
+    /// The IPC framing overhead not captured here is accounted for separately
+    /// by `estimate_arrow_ipc_overhead()`.
+    pub fn buffer_size(&self) -> usize {
+        /// Round up to the next multiple of 8 (Arrow IPC alignment).
+        #[inline]
+        fn round_up_8(n: usize) -> usize {
+            (n + 7) & !7
+        }
+
+        /// Validity bitmap size, rounded to 8-byte alignment.
+        /// When no nulls have been appended, the builder does not materialize
+        /// the bitmap and the IPC body contributes 0 bytes for this buffer.
+        #[inline]
+        fn validity_size(slice: Option<&[u8]>) -> usize {
+            round_up_8(slice.map_or(0, |s| s.len()))
+        }
+
+        /// Primitive builder: validity + values (values_slice returns &[T::Native]).
+        macro_rules! primitive_size {
+            ($b:expr) => {
+                validity_size($b.validity_slice())
+                    + round_up_8(std::mem::size_of_val($b.values_slice()))
+            };
+        }
+
+        /// Variable-width builder: validity + offsets + values.
+        macro_rules! var_width_size {
+            ($b:expr) => {
+                validity_size($b.validity_slice())
+                    + round_up_8(std::mem::size_of_val($b.offsets_slice()))
+                    + round_up_8($b.values_slice().len())
+            };
+        }
+
+        match &self.inner {
+            TypedWriter::Bool(b) => {
+                validity_size(b.validity_slice()) + round_up_8(b.values_slice().len())
+            }
+            TypedWriter::Int8(b) => primitive_size!(b),
+            TypedWriter::Int16(b) => primitive_size!(b),
+            TypedWriter::Int32(b) => primitive_size!(b),
+            TypedWriter::Int64(b) => primitive_size!(b),
+            TypedWriter::Float32(b) => primitive_size!(b),
+            TypedWriter::Float64(b) => primitive_size!(b),
+            TypedWriter::Decimal128 { builder: b, .. } => primitive_size!(b),
+            TypedWriter::Date32(b) => primitive_size!(b),
+            TypedWriter::Time32Second(b) => primitive_size!(b),
+            TypedWriter::Time32Millisecond(b) => primitive_size!(b),
+            TypedWriter::Time64Microsecond(b) => primitive_size!(b),
+            TypedWriter::Time64Nanosecond(b) => primitive_size!(b),
+            TypedWriter::TimestampNtzSecond { builder: b, .. } => primitive_size!(b),
+            TypedWriter::TimestampNtzMillisecond { builder: b, .. } => primitive_size!(b),
+            TypedWriter::TimestampNtzMicrosecond { builder: b, .. } => primitive_size!(b),
+            TypedWriter::TimestampNtzNanosecond { builder: b, .. } => primitive_size!(b),
+            TypedWriter::TimestampLtzSecond { builder: b, .. } => primitive_size!(b),
+            TypedWriter::TimestampLtzMillisecond { builder: b, .. } => primitive_size!(b),
+            TypedWriter::TimestampLtzMicrosecond { builder: b, .. } => primitive_size!(b),
+            TypedWriter::TimestampLtzNanosecond { builder: b, .. } => primitive_size!(b),
+            // Variable-width types: validity + offsets + values
+            TypedWriter::Char { builder: b, .. } => var_width_size!(b),
+            TypedWriter::String(b) => var_width_size!(b),
+            TypedWriter::Bytes(b) => var_width_size!(b),
+            TypedWriter::Binary { builder: b, .. } => {
+                validity_size(b.validity_slice()) + round_up_8(b.values_slice().len())
+            }
+            TypedWriter::List {
+                element_writer,
+                offsets,
+                validity,
+            } => {
+                let validity_bytes = round_up_8((validity.len() + 7) / 8);
+                let offsets_bytes = round_up_8(offsets.len() * std::mem::size_of::<i32>());
+                validity_bytes + offsets_bytes + element_writer.buffer_size()
+            }
+        }
+    }
+
     fn append_null(&mut self) {
         match &mut self.inner {
             TypedWriter::List {
@@ -424,6 +506,12 @@ impl ColumnWriter {
             }
             _ => with_builder!(&mut self.inner, b => b.append_null()),
         }
+    }
+
+    /// Returns a trait-object reference to the inner builder.
+    /// Used for type-agnostic operations (`finish`).
+    fn as_builder_mut(&mut self) -> &mut dyn ArrayBuilder {
+        with_builder!(&mut self.inner, b => b)
     }
 
     #[inline]
@@ -847,10 +935,10 @@ mod tests {
         assert_eq!(int_arr.value(1), 20);
         assert_eq!(int_arr.value(2), 30);
 
-        // finish_cloned does not reset
+        // buffer_size grows with appended data and does not reset the builder
         let mut w = writer_for(&DataTypes::int(), 4);
         w.write_field(&GenericRow::from_data(vec![42_i32])).unwrap();
-        assert_eq!(w.finish_cloned().len(), 1);
+        assert!(w.buffer_size() > 0);
         w.write_field(&GenericRow::from_data(vec![99_i32])).unwrap();
         let int_arr = w
             .finish()
