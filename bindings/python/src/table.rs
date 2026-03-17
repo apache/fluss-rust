@@ -2201,50 +2201,35 @@ impl LogScanner {
     fn __aiter__<'py>(slf: PyRef<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
         let py = slf.py();
 
-        match slf.kind.as_ref() {
-            ScannerKind::Record(_) => {
-                static RECORD_ASYNC_GEN_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
-                let gen_fn = RECORD_ASYNC_GEN_FN.get_or_init(py, || {
-                    let code = pyo3::ffi::c_str!(
-                        r#"
-async def _async_scan(scanner, timeout_ms=1000):
+        // Single lock for the generic async generator
+        static ASYNC_GEN_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+        let gen_fn = ASYNC_GEN_FN.get_or_init(py, || {
+            let code = pyo3::ffi::c_str!(
+                r#"
+async def _async_scan_generic(scanner, method_name, timeout_ms=1000):
+    # Dynamically resolve the polling method (e.g., _async_poll or _async_poll_batches)
+    poll_method = getattr(scanner, method_name)
     while True:
-        batch = await scanner._async_poll(timeout_ms)
-        if batch:
-            for record in batch:
-                yield record
+        items = await poll_method(timeout_ms)
+        if items:
+            for item in items:
+                yield item
 "#
-                    );
-                    let globals = pyo3::types::PyDict::new(py);
-                    py.run(code, Some(&globals), None).unwrap();
-                    globals.get_item("_async_scan").unwrap().unwrap().unbind()
-                });
-                gen_fn.bind(py).call1((slf.into_bound_py_any(py)?,))
-            }
-            ScannerKind::Batch(_) => {
-                static BATCH_ASYNC_GEN_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
-                let gen_fn = BATCH_ASYNC_GEN_FN.get_or_init(py, || {
-                    let code = pyo3::ffi::c_str!(
-                        r#"
-async def _async_batch_scan(scanner, timeout_ms=1000):
-    while True:
-        batches = await scanner._async_poll_batches(timeout_ms)
-        if batches:
-            for rb in batches:
-                yield rb
-"#
-                    );
-                    let globals = pyo3::types::PyDict::new(py);
-                    py.run(code, Some(&globals), None).unwrap();
-                    globals
-                        .get_item("_async_batch_scan")
-                        .unwrap()
-                        .unwrap()
-                        .unbind()
-                });
-                gen_fn.bind(py).call1((slf.into_bound_py_any(py)?,))
-            }
-        }
+            );
+            let globals = pyo3::types::PyDict::new(py);
+            py.run(code, Some(&globals), None).unwrap();
+            globals.get_item("_async_scan_generic").unwrap().unwrap().unbind()
+        });
+
+        // Determine which internal method to call based on the scanner kind
+        let method_name = match slf.kind.as_ref() {
+            ScannerKind::Record(_) => "_async_poll",
+            ScannerKind::Batch(_) => "_async_poll_batches",
+        };
+
+        // Instantiate the generator with the scanner instance and the target method name
+        gen_fn.bind(py).call1((slf.into_bound_py_any(py)?, method_name))
     }
 
     /// Perform a single bounded poll and return a list of ScanRecord objects.
