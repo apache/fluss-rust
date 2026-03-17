@@ -17,6 +17,11 @@
 
 use crate::cluster::ServerNode;
 use crate::error::Error;
+use crate::metrics::{
+    CLIENT_BYTES_RECEIVED_TOTAL, CLIENT_BYTES_SENT_TOTAL, CLIENT_REQUEST_LATENCY_MS,
+    CLIENT_REQUESTS_IN_FLIGHT, CLIENT_REQUESTS_TOTAL, CLIENT_RESPONSES_TOTAL, LABEL_API_KEY,
+    api_key_label,
+};
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::error::RpcError;
 use crate::rpc::error::RpcError::ConnectionError;
@@ -227,24 +232,12 @@ struct RequestMetricsLifecycle {
 
 impl RequestMetricsLifecycle {
     fn begin(api_key: crate::rpc::ApiKey, request_bytes: u64) -> Self {
-        let label = crate::metrics::api_key_label(api_key);
+        let label = api_key_label(api_key);
         if let Some(label) = label {
-            // Match Java semantics: count request attempts before write/send.
-            metrics::counter!(
-                crate::metrics::CLIENT_REQUESTS_TOTAL,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(1);
-            metrics::counter!(
-                crate::metrics::CLIENT_BYTES_SENT_TOTAL,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(request_bytes);
-            metrics::gauge!(
-                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .increment(1.0);
+            metrics::counter!(CLIENT_REQUESTS_TOTAL, LABEL_API_KEY => label).increment(1);
+            metrics::counter!(CLIENT_BYTES_SENT_TOTAL, LABEL_API_KEY => label)
+                .increment(request_bytes);
+            metrics::gauge!(CLIENT_REQUESTS_IN_FLIGHT, LABEL_API_KEY => label).increment(1.0);
         }
         Self {
             label,
@@ -261,26 +254,12 @@ impl RequestMetricsLifecycle {
             return;
         }
 
-        metrics::counter!(
-            crate::metrics::CLIENT_RESPONSES_TOTAL,
-            crate::metrics::LABEL_API_KEY => label
-        )
-        .increment(1);
-        metrics::counter!(
-            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
-            crate::metrics::LABEL_API_KEY => label
-        )
-        .increment(response_bytes);
-        metrics::gauge!(
-            crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-            crate::metrics::LABEL_API_KEY => label
-        )
-        .decrement(1.0);
-        metrics::histogram!(
-            crate::metrics::CLIENT_REQUEST_LATENCY_MS,
-            crate::metrics::LABEL_API_KEY => label
-        )
-        .record(self.start.elapsed().as_secs_f64() * 1000.0);
+        metrics::counter!(CLIENT_RESPONSES_TOTAL, LABEL_API_KEY => label).increment(1);
+        metrics::counter!(CLIENT_BYTES_RECEIVED_TOTAL, LABEL_API_KEY => label)
+            .increment(response_bytes);
+        metrics::gauge!(CLIENT_REQUESTS_IN_FLIGHT, LABEL_API_KEY => label).decrement(1.0);
+        metrics::histogram!(CLIENT_REQUEST_LATENCY_MS, LABEL_API_KEY => label)
+            .record(self.start.elapsed().as_secs_f64() * 1000.0);
         self.completed = true;
     }
 }
@@ -291,11 +270,7 @@ impl Drop for RequestMetricsLifecycle {
             return;
         }
         if let Some(label) = self.label {
-            metrics::gauge!(
-                crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-                crate::metrics::LABEL_API_KEY => label
-            )
-            .decrement(1.0);
+            metrics::gauge!(CLIENT_REQUESTS_IN_FLIGHT, LABEL_API_KEY => label).decrement(1.0);
             self.completed = true;
         }
     }
@@ -474,25 +449,18 @@ where
         let request_body_bytes = buf.len().saturating_sub(REQUEST_HEADER_LENGTH) as u64;
         let mut request_metrics = RequestMetricsLifecycle::begin(R::API_KEY, request_body_bytes);
 
-        if let Err(e) = self.send_message(buf).await {
-            request_metrics.complete(0);
-            return Err(e.into());
-        }
+        self.send_message(buf)
+            .await
+            .inspect_err(|_| request_metrics.complete(0))?;
         _cleanup_on_cancel.message_sent();
-        let mut response = match rx.await {
-            Ok(Ok(response)) => response,
-            Ok(Err(e)) => {
-                request_metrics.complete(0);
-                return Err(e.into());
-            }
-            Err(e) => {
-                request_metrics.complete(0);
-                return Err(Error::UnexpectedError {
-                    message: "Receive error: response channel closed".to_string(),
-                    source: Some(Box::new(e)),
-                });
-            }
-        };
+        let mut response = rx
+            .await
+            .map_err(|e| Error::UnexpectedError {
+                message: "Receive error: response channel closed".to_string(),
+                source: Some(Box::new(e)),
+            })
+            .and_then(|r| r.map_err(Error::from))
+            .inspect_err(|_| request_metrics.complete(0))?;
 
         // count only the API message body, excluding the response header.
         let response_bytes =
@@ -827,7 +795,7 @@ mod tests {
     fn has_api_label(key: &CompositeKey, label: &str) -> bool {
         key.key()
             .labels()
-            .any(|l| l.key() == crate::metrics::LABEL_API_KEY && l.value() == label)
+            .any(|l| l.key() == LABEL_API_KEY && l.value() == label)
     }
 
     fn counter_for_label(entries: &[SnapshotEntry], metric_name: &str, label: &str) -> u64 {
@@ -907,37 +875,18 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_before = counter_for_label(
-            &before,
-            crate::metrics::CLIENT_REQUESTS_TOTAL,
-            "produce_log",
-        );
-        let response_before = counter_for_label(
-            &before,
-            crate::metrics::CLIENT_RESPONSES_TOTAL,
-            "produce_log",
-        );
-        let latency_samples_before = histogram_sample_count_for_label(
-            &before,
-            crate::metrics::CLIENT_REQUEST_LATENCY_MS,
-            "produce_log",
-        );
+        let request_before = counter_for_label(&before, CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_before = counter_for_label(&before, CLIENT_RESPONSES_TOTAL, "produce_log");
+        let latency_samples_before =
+            histogram_sample_count_for_label(&before, CLIENT_REQUEST_LATENCY_MS, "produce_log");
 
         conn.request(TestProduceRequest).await.unwrap();
 
         let after: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_after =
-            counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
-        let response_after = counter_for_label(
-            &after,
-            crate::metrics::CLIENT_RESPONSES_TOTAL,
-            "produce_log",
-        );
-        let latency_samples_after = histogram_sample_count_for_label(
-            &after,
-            crate::metrics::CLIENT_REQUEST_LATENCY_MS,
-            "produce_log",
-        );
+        let request_after = counter_for_label(&after, CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_after = counter_for_label(&after, CLIENT_RESPONSES_TOTAL, "produce_log");
+        let latency_samples_after =
+            histogram_sample_count_for_label(&after, CLIENT_REQUEST_LATENCY_MS, "produce_log");
         assert_eq!(
             request_after - request_before,
             1,
@@ -965,14 +914,14 @@ mod tests {
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_sum_before = counter_sum(&before, crate::metrics::CLIENT_REQUESTS_TOTAL);
-        let response_sum_before = counter_sum(&before, crate::metrics::CLIENT_RESPONSES_TOTAL);
+        let request_sum_before = counter_sum(&before, CLIENT_REQUESTS_TOTAL);
+        let response_sum_before = counter_sum(&before, CLIENT_RESPONSES_TOTAL);
 
         conn.request(TestMetadataRequest).await.unwrap();
 
         let snapshot: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_sum_after = counter_sum(&snapshot, crate::metrics::CLIENT_REQUESTS_TOTAL);
-        let response_sum_after = counter_sum(&snapshot, crate::metrics::CLIENT_RESPONSES_TOTAL);
+        let request_sum_after = counter_sum(&snapshot, CLIENT_REQUESTS_TOTAL);
+        let response_sum_after = counter_sum(&snapshot, CLIENT_RESPONSES_TOTAL);
         assert_eq!(
             request_sum_after, request_sum_before,
             "non-reportable API keys must not change request counters"
@@ -1002,44 +951,21 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_before = counter_for_label(
-            &before,
-            crate::metrics::CLIENT_REQUESTS_TOTAL,
-            "produce_log",
-        );
-        let response_before = counter_for_label(
-            &before,
-            crate::metrics::CLIENT_RESPONSES_TOTAL,
-            "produce_log",
-        );
-        let bytes_received_before = counter_for_label(
-            &before,
-            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
-            "produce_log",
-        );
+        let request_before = counter_for_label(&before, CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_before = counter_for_label(&before, CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_before =
+            counter_for_label(&before, CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
         let result = conn.request(TestProduceRequest).await;
         assert!(
             result.is_err(),
             "request should fail when transport is closed"
         );
         let after: Vec<_> = snapshotter.snapshot().into_vec();
-        let request_after =
-            counter_for_label(&after, crate::metrics::CLIENT_REQUESTS_TOTAL, "produce_log");
-        let response_after = counter_for_label(
-            &after,
-            crate::metrics::CLIENT_RESPONSES_TOTAL,
-            "produce_log",
-        );
-        let bytes_received_after = counter_for_label(
-            &after,
-            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
-            "produce_log",
-        );
-        let inflight_after = gauge_for_label(
-            &after,
-            crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-            "produce_log",
-        );
+        let request_after = counter_for_label(&after, CLIENT_REQUESTS_TOTAL, "produce_log");
+        let response_after = counter_for_label(&after, CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_after =
+            counter_for_label(&after, CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let inflight_after = gauge_for_label(&after, CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
 
         assert_eq!(
             request_after - request_before,
@@ -1073,16 +999,9 @@ mod tests {
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
-        let response_before = counter_for_label(
-            &before,
-            crate::metrics::CLIENT_RESPONSES_TOTAL,
-            "produce_log",
-        );
-        let bytes_received_before = counter_for_label(
-            &before,
-            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
-            "produce_log",
-        );
+        let response_before = counter_for_label(&before, CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_before =
+            counter_for_label(&before, CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
 
         let result = conn.request(TestProduceRequest).await;
         assert!(
@@ -1091,21 +1010,10 @@ mod tests {
         );
 
         let after: Vec<_> = snapshotter.snapshot().into_vec();
-        let response_after = counter_for_label(
-            &after,
-            crate::metrics::CLIENT_RESPONSES_TOTAL,
-            "produce_log",
-        );
-        let bytes_received_after = counter_for_label(
-            &after,
-            crate::metrics::CLIENT_BYTES_RECEIVED_TOTAL,
-            "produce_log",
-        );
-        let inflight_after = gauge_for_label(
-            &after,
-            crate::metrics::CLIENT_REQUESTS_IN_FLIGHT,
-            "produce_log",
-        );
+        let response_after = counter_for_label(&after, CLIENT_RESPONSES_TOTAL, "produce_log");
+        let bytes_received_after =
+            counter_for_label(&after, CLIENT_BYTES_RECEIVED_TOTAL, "produce_log");
+        let inflight_after = gauge_for_label(&after, CLIENT_REQUESTS_IN_FLIGHT, "produce_log");
 
         assert_eq!(
             response_after - response_before,
