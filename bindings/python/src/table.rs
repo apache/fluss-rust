@@ -2165,16 +2165,14 @@ impl LogScanner {
     /// Returns:
     ///     PyArrow Table containing all data from subscribed buckets
     fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let subscribed = {
-            let scanner = self.kind.as_batch()?;
-            let subs = scanner.get_subscribed_buckets();
-            if subs.is_empty() {
-                return Err(FlussError::new_err(
-                    "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
-                ));
-            }
-            subs.clone()
-        };
+        let scanner = self.kind.as_batch()?;
+        let subscribed = scanner.get_subscribed_buckets();
+
+        if subscribed.is_empty() {
+            return Err(FlussError::new_err(
+                "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
+            ));
+        }
 
         // 2. Query latest offsets for all subscribed buckets
         let stopping_offsets = self.query_latest_offsets(py, &subscribed)?;
