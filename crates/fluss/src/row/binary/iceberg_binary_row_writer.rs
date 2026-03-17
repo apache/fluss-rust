@@ -134,6 +134,9 @@ impl IcebergBinaryRowWriter {
 
 impl BinaryWriter for IcebergBinaryRowWriter {
     fn reset(&mut self) {
+        if self.position > 0 {
+            self.buffer[..self.position].fill(0);
+        }
         self.position = 0;
     }
 
