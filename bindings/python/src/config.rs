@@ -97,6 +97,64 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.log.fetch.max-bytes" => {
+                        config.scanner_log_fetch_max_bytes = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "scanner.log.fetch.min-bytes" => {
+                        config.scanner_log_fetch_min_bytes = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "scanner.log.fetch.wait-max-time-ms" => {
+                        config.scanner_log_fetch_wait_max_time_ms =
+                            value.parse::<i32>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "scanner.log.fetch.max-bytes-for-bucket" => {
+                        config.scanner_log_fetch_max_bytes_for_bucket =
+                            value.parse::<i32>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "writer.enable-idempotence" => {
+                        config.writer_enable_idempotence = match value.as_str() {
+                            "true" => true,
+                            "false" => false,
+                            other => {
+                                return Err(FlussError::new_err(format!(
+                                    "Invalid value '{other}' for '{key}', expected 'true' or 'false'"
+                                )));
+                            }
+                        };
+                    }
+                    "writer.max-inflight-requests-per-bucket" => {
+                        config.writer_max_inflight_requests_per_bucket =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "writer.buffer.memory-size" => {
+                        config.writer_buffer_memory_size = value.parse::<usize>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "writer.buffer.wait-timeout-ms" => {
+                        config.writer_buffer_wait_timeout_ms =
+                            value.parse::<u64>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner =
                             value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
@@ -270,6 +328,54 @@ impl Config {
         Ok(())
     }
 
+    /// Get whether idempotent writes are enabled
+    #[getter]
+    fn writer_enable_idempotence(&self) -> bool {
+        self.inner.writer_enable_idempotence
+    }
+
+    /// Set whether idempotent writes are enabled
+    #[setter]
+    fn set_writer_enable_idempotence(&mut self, enabled: bool) {
+        self.inner.writer_enable_idempotence = enabled;
+    }
+
+    /// Get the max in-flight requests per bucket
+    #[getter]
+    fn writer_max_inflight_requests_per_bucket(&self) -> usize {
+        self.inner.writer_max_inflight_requests_per_bucket
+    }
+
+    /// Set the max in-flight requests per bucket
+    #[setter]
+    fn set_writer_max_inflight_requests_per_bucket(&mut self, num: usize) {
+        self.inner.writer_max_inflight_requests_per_bucket = num;
+    }
+
+    /// Get the writer buffer memory size
+    #[getter]
+    fn writer_buffer_memory_size(&self) -> usize {
+        self.inner.writer_buffer_memory_size
+    }
+
+    /// Set the writer buffer memory size
+    #[setter]
+    fn set_writer_buffer_memory_size(&mut self, size: usize) {
+        self.inner.writer_buffer_memory_size = size;
+    }
+
+    /// Get the writer buffer wait timeout in milliseconds
+    #[getter]
+    fn writer_buffer_wait_timeout_ms(&self) -> u64 {
+        self.inner.writer_buffer_wait_timeout_ms
+    }
+
+    /// Set the writer buffer wait timeout in milliseconds
+    #[setter]
+    fn set_writer_buffer_wait_timeout_ms(&mut self, timeout: u64) {
+        self.inner.writer_buffer_wait_timeout_ms = timeout;
+    }
+
     /// Get the connect timeout in milliseconds
     #[getter]
     fn connect_timeout_ms(&self) -> u64 {
@@ -328,6 +434,54 @@ impl Config {
     #[setter]
     fn set_security_sasl_password(&mut self, password: String) {
         self.inner.security_sasl_password = password;
+    }
+
+    /// Get the maximum bytes per fetch response for LogScanner
+    #[getter]
+    fn scanner_log_fetch_max_bytes(&self) -> i32 {
+        self.inner.scanner_log_fetch_max_bytes
+    }
+
+    /// Set the maximum bytes per fetch response for LogScanner
+    #[setter]
+    fn set_scanner_log_fetch_max_bytes(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_max_bytes = bytes;
+    }
+
+    /// Get the minimum bytes to accumulate before returning a fetch response
+    #[getter]
+    fn scanner_log_fetch_min_bytes(&self) -> i32 {
+        self.inner.scanner_log_fetch_min_bytes
+    }
+
+    /// Set the minimum bytes to accumulate before returning a fetch response
+    #[setter]
+    fn set_scanner_log_fetch_min_bytes(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_min_bytes = bytes;
+    }
+
+    /// Get the maximum time (ms) the server may wait to satisfy min-bytes
+    #[getter]
+    fn scanner_log_fetch_wait_max_time_ms(&self) -> i32 {
+        self.inner.scanner_log_fetch_wait_max_time_ms
+    }
+
+    /// Set the maximum time (ms) the server may wait to satisfy min-bytes
+    #[setter]
+    fn set_scanner_log_fetch_wait_max_time_ms(&mut self, ms: i32) {
+        self.inner.scanner_log_fetch_wait_max_time_ms = ms;
+    }
+
+    /// Get the maximum bytes per fetch response per bucket for LogScanner
+    #[getter]
+    fn scanner_log_fetch_max_bytes_for_bucket(&self) -> i32 {
+        self.inner.scanner_log_fetch_max_bytes_for_bucket
+    }
+
+    /// Set the maximum bytes per fetch response per bucket for LogScanner
+    #[setter]
+    fn set_scanner_log_fetch_max_bytes_for_bucket(&mut self, bytes: i32) {
+        self.inner.scanner_log_fetch_max_bytes_for_bucket = bytes;
     }
 }
 

@@ -17,6 +17,7 @@
 
 mod accumulator;
 mod batch;
+mod idempotence;
 
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};
 use crate::error::Error;
@@ -38,8 +39,9 @@ mod sender;
 mod write_format;
 mod writer_client;
 
+pub(crate) use idempotence::IdempotenceManager;
 pub use write_format::WriteFormat;
-pub use writer_client::WriterClient;
+pub(crate) use writer_client::WriterClient;
 
 #[allow(dead_code)]
 pub struct WriteRecord<'a> {
@@ -58,6 +60,22 @@ impl<'a> WriteRecord<'a> {
 
     pub fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
         &self.physical_table_path
+    }
+
+    /// Minimum batch capacity needed to fit this record, including batch header
+    /// overhead. Used to size memory reservations and KV write limits so that
+    /// oversized records don't panic on append.
+    pub fn estimated_record_size(&self) -> usize {
+        match &self.record {
+            Record::Kv(kv) => {
+                let record_size = crate::record::kv::KvRecord::size_of(
+                    &kv.key,
+                    kv.row_bytes.as_ref().map(|rb| rb.as_slice()),
+                );
+                crate::record::kv::RECORD_BATCH_HEADER_SIZE + record_size
+            }
+            Record::Log(_) => 0, // Arrow batches use record count, not byte size
+        }
     }
 }
 
@@ -173,6 +191,11 @@ pub struct ResultHandle {
 impl ResultHandle {
     pub fn new(receiver: BroadcastOnceReceiver<BatchWriteResult>) -> Self {
         ResultHandle { receiver }
+    }
+
+    /// Force-complete with an error if not already completed.
+    pub(crate) fn fail(&self, error: client_broadcast::Error) {
+        self.receiver.fail(error);
     }
 
     pub async fn wait(&self) -> Result<BatchWriteResult, Error> {
