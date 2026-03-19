@@ -254,6 +254,17 @@ pub struct LogScanner {
 ///
 /// More efficient than [`LogScanner`] for batch-level analytics where per-record
 /// metadata (offsets, timestamps) is not needed.
+///
+/// Cloning is cheap (shared `Arc` internals). Multiple clones share the same
+/// fetch buffer, subscription state, and in-flight fetches.
+///
+/// **Concurrency:** Do not overlap read work across clones that share this state.
+/// If [`RecordBatchLogScanner::poll`] runs concurrently with another
+/// [`RecordBatchLogScanner::poll`], [`LogScanner::poll`], or
+/// [`crate::client::RecordBatchLogReader::next_batch`], the overlapping call
+/// fails fast with [`Error::UnsupportedOperation`](crate::error::Error::UnsupportedOperation)
+/// (it is not queued).
+#[derive(Clone)]
 pub struct RecordBatchLogScanner {
     inner: Arc<LogScannerInner>,
 }
@@ -266,6 +277,14 @@ struct LogScannerInner {
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
     is_partitioned_table: bool,
+    arrow_schema: SchemaRef,
+    /// Serializes overlapping `poll` / `poll_batches` across clones sharing this `Arc`.
+    ///
+    /// TODO: Consider an API that consumes
+    /// the scanner when building [`crate::client::RecordBatchLogReader`] (or an explicit
+    /// `ScanSession`) so only one driver owns the fetch loop; discuss trade-offs vs. cheap
+    /// `Clone` over shared state.
+    poll_session: tokio::sync::Mutex<()>,
 }
 
 impl LogScannerInner {
@@ -277,6 +296,20 @@ impl LogScannerInner {
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
+
+        let full_row_type = table_info.get_row_type();
+        let arrow_schema = match &projected_fields {
+            Some(indices) => {
+                let projected_fields_vec: Vec<_> = indices
+                    .iter()
+                    .map(|&i| full_row_type.fields()[i].clone())
+                    .collect();
+                let projected_row_type = crate::metadata::RowType::new(projected_fields_vec);
+                to_arrow_schema(&projected_row_type)?
+            }
+            None => to_arrow_schema(full_row_type)?,
+        };
+
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
@@ -285,16 +318,30 @@ impl LogScannerInner {
             log_scanner_status: log_scanner_status.clone(),
             log_fetcher: LogFetcher::new(
                 table_info.clone(),
-                connections.clone(),
-                metadata.clone(),
+                connections,
+                metadata,
                 log_scanner_status.clone(),
                 config,
                 projected_fields,
             )?,
+            arrow_schema,
+            poll_session: tokio::sync::Mutex::new(()),
         })
     }
 
+    fn concurrent_log_scan_error() -> Error {
+        UnsupportedOperation {
+            message: "Concurrent log scan: another poll or RecordBatchLogReader session is active on this scanner. \
+Wait for it to finish, or create a separate TableScan."
+                .to_string(),
+        }
+    }
+
     async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+        let _poll_guard = self
+            .poll_session
+            .try_lock()
+            .map_err(|_| Self::concurrent_log_scan_error())?;
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -469,6 +516,10 @@ impl LogScannerInner {
     }
 
     async fn poll_batches(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
+        let _poll_guard = self
+            .poll_session
+            .try_lock()
+            .map_err(|_| Self::concurrent_log_scan_error())?;
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -611,6 +662,19 @@ impl RecordBatchLogScanner {
         bucket: i32,
     ) -> Result<()> {
         self.inner.unsubscribe_partition(partition_id, bucket).await
+    }
+
+    /// Returns the Arrow schema for batches produced by this scanner.
+    pub fn schema(&self) -> SchemaRef {
+        self.inner.arrow_schema.clone()
+    }
+
+    pub fn table_path(&self) -> &TablePath {
+        &self.inner.table_path
+    }
+
+    pub fn table_id(&self) -> TableId {
+        self.inner.table_id
     }
 }
 
@@ -1993,6 +2057,34 @@ mod tests {
         let result = validate_scan_support(&table_path, &table_info);
         assert!(result.is_ok());
     }
+
+    /// When `poll_session` is already held, [`RecordBatchLogScanner::poll`] must fail without
+    /// blocking (mirrors concurrent `poll` / [`crate::client::RecordBatchLogReader::next_batch`]).
+    #[tokio::test]
+    async fn poll_batches_rejects_when_poll_session_held() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let inner = Arc::new(LogScannerInner::new(
+            &table_info,
+            metadata,
+            Arc::new(RpcClient::new()),
+            &crate::config::Config::default(),
+            None,
+        )?);
+        let scanner = RecordBatchLogScanner {
+            inner: inner.clone(),
+        };
+        let _hold = inner.poll_session.lock().await;
+        let err = scanner
+            .poll(std::time::Duration::from_millis(1))
+            .await
+            .expect_err("expected concurrent poll error");
+        assert!(matches!(err, UnsupportedOperation { .. }));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn prepare_fetch_log_requests_uses_configured_fetch_params() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());

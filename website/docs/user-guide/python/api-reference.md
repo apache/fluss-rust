@@ -164,8 +164,11 @@ Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
 | `.poll(timeout_ms) -> ScanRecords`                            | Poll individual records (record scanner only)                                    |
 | `.poll_arrow(timeout_ms) -> pa.Table`                         | Poll as Arrow Table (batch scanner only)                                         |
 | `.poll_record_batch(timeout_ms) -> list[RecordBatch]`         | Poll batches with metadata (batch scanner only)                                  |
+| `.to_arrow_batch_reader() -> pa.RecordBatchReader`            | Lazy Arrow RecordBatchReader reading until latest offsets (batch scanner only)    |
 | `.to_arrow() -> pa.Table`                                     | Read all subscribed data as Arrow Table (batch scanner only)                     |
 | `.to_pandas() -> pd.DataFrame`                                | Read all subscribed data as DataFrame (batch scanner only)                       |
+
+> **Note:** Overlapping `poll_*` / `to_arrow*` / `to_arrow_batch_reader` calls on the same underlying scanner fail immediately with `FlussError` (they are not queued).
 
 ## `ScanRecords`
 
