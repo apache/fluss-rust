@@ -890,21 +890,54 @@ impl LogRecordBatch {
         LittleEndian::read_i32(&self.data[offset..offset + RECORDS_COUNT_LENGTH])
     }
 
+    pub fn is_append_only(&self) -> bool {
+        self.attributes() & 1 == 1
+    }
+
     pub fn records(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
         if self.record_count() == 0 {
             return Ok(LogRecordIterator::empty());
         }
 
-        let data = &self.data[RECORDS_OFFSET..];
+        let record_count = self.record_count() as usize;
+        let (arrow_data, change_types) = if self.is_append_only() {
+            let data = &self.data[RECORDS_OFFSET..];
+            let ct = vec![ChangeType::AppendOnly; record_count];
+            (data, ct)
+        } else {
+            let ct_start = RECORDS_OFFSET;
+            let ct_end = ct_start + record_count;
+            if self.data.len() < ct_end {
+                return Err(Error::UnexpectedError {
+                    message: format!(
+                        "Corrupt log record batch: data length {} too short for {} change type bytes",
+                        self.data.len(),
+                        record_count
+                    ),
+                    source: None,
+                });
+            }
+            let ct_bytes = &self.data[ct_start..ct_end];
+            let ct: std::result::Result<Vec<ChangeType>, String> = ct_bytes
+                .iter()
+                .map(|&b| ChangeType::from_byte_value(b))
+                .collect();
+            let ct = ct.map_err(|e| Error::UnexpectedError {
+                message: format!("Invalid change type in record batch: {e}"),
+                source: None,
+            })?;
+            let data = &self.data[ct_end..];
+            (data, ct)
+        };
 
-        let record_batch = read_context.record_batch(data)?;
+        let record_batch = read_context.record_batch(arrow_data)?;
         let arrow_reader = ArrowReader::new(Arc::new(record_batch));
         let log_record_iterator = LogRecordIterator::Arrow(ArrowLogRecordIterator {
             reader: arrow_reader,
             base_offset: self.base_log_offset(),
             timestamp: self.commit_timestamp(),
             row_id: 0,
-            change_type: ChangeType::AppendOnly,
+            change_types,
         });
 
         Ok(log_record_iterator)
@@ -915,9 +948,38 @@ impl LogRecordBatch {
             return Ok(LogRecordIterator::empty());
         }
 
-        let data = &self.data[RECORDS_OFFSET..];
+        let record_count = self.record_count() as usize;
+        let (arrow_data, change_types) = if self.is_append_only() {
+            let data = &self.data[RECORDS_OFFSET..];
+            let ct = vec![ChangeType::AppendOnly; record_count];
+            (data, ct)
+        } else {
+            let ct_start = RECORDS_OFFSET;
+            let ct_end = ct_start + record_count;
+            if self.data.len() < ct_end {
+                return Err(Error::UnexpectedError {
+                    message: format!(
+                        "Corrupt log record batch: data length {} too short for {} change type bytes",
+                        self.data.len(),
+                        record_count
+                    ),
+                    source: None,
+                });
+            }
+            let ct_bytes = &self.data[ct_start..ct_end];
+            let ct: std::result::Result<Vec<ChangeType>, String> = ct_bytes
+                .iter()
+                .map(|&b| ChangeType::from_byte_value(b))
+                .collect();
+            let ct = ct.map_err(|e| Error::UnexpectedError {
+                message: format!("Invalid change type in record batch: {e}"),
+                source: None,
+            })?;
+            let data = &self.data[ct_end..];
+            (data, ct)
+        };
 
-        let record_batch = read_context.record_batch_for_remote_log(data)?;
+        let record_batch = read_context.record_batch_for_remote_log(arrow_data)?;
         let log_record_iterator = match record_batch {
             None => LogRecordIterator::empty(),
             Some(record_batch) => {
@@ -927,7 +989,7 @@ impl LogRecordBatch {
                     base_offset: self.base_log_offset(),
                     timestamp: self.commit_timestamp(),
                     row_id: 0,
-                    change_type: ChangeType::AppendOnly,
+                    change_types,
                 })
             }
         };
@@ -943,14 +1005,20 @@ impl LogRecordBatch {
             return Ok(RecordBatch::new_empty(read_context.target_schema.clone()));
         }
 
+        let arrow_start = if self.is_append_only() {
+            RECORDS_OFFSET
+        } else {
+            RECORDS_OFFSET + self.record_count() as usize
+        };
+
         let data = self
             .data
-            .get(RECORDS_OFFSET..)
+            .get(arrow_start..)
             .ok_or_else(|| Error::UnexpectedError {
                 message: format!(
-                    "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
+                    "Corrupt log record batch: data length {} is less than arrow data offset {}",
                     self.data.len(),
-                    RECORDS_OFFSET
+                    arrow_start
                 ),
                 source: None,
             })?;
@@ -1407,18 +1475,23 @@ pub struct ArrowLogRecordIterator {
     base_offset: i64,
     timestamp: i64,
     row_id: usize,
-    change_type: ChangeType,
+    change_types: Vec<ChangeType>,
 }
 
 #[allow(dead_code)]
 impl ArrowLogRecordIterator {
-    fn new(reader: ArrowReader, base_offset: i64, timestamp: i64, change_type: ChangeType) -> Self {
+    fn new(
+        reader: ArrowReader,
+        base_offset: i64,
+        timestamp: i64,
+        change_types: Vec<ChangeType>,
+    ) -> Self {
         Self {
             reader,
             base_offset,
             timestamp,
             row_id: 0,
-            change_type,
+            change_types,
         }
     }
 }
@@ -1431,12 +1504,17 @@ impl Iterator for ArrowLogRecordIterator {
             return None;
         }
 
+        let change_type = self
+            .change_types
+            .get(self.row_id)
+            .copied()
+            .unwrap_or(ChangeType::AppendOnly);
         let columnar_row = self.reader.read(self.row_id);
         let scan_record = ScanRecord::new(
             columnar_row,
             self.base_offset + self.row_id as i64,
             self.timestamp,
-            self.change_type,
+            change_type,
         );
         self.row_id += 1;
         Some(scan_record)
@@ -2012,4 +2090,91 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_change_type_byte_parsing_in_non_append_only_batch() -> Result<()> {
+        use crate::compression::{
+            ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+        };
+        use crate::metadata::{PhysicalTablePath, TablePath};
+        use crate::row::GenericRow;
+
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("name", DataTypes::string(), None),
+        ]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            1,
+            &row_type,
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+        )?;
+
+        for (id, name) in [(1i32, "Alice"), (2, "Bob"), (3, "Charlie")] {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, name);
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                physical_table_path.clone(),
+                1,
+                &row,
+            );
+            builder.append(&record)?;
+        }
+
+        let append_only_bytes = builder.build()?;
+        let arrow_ipc_data = &append_only_bytes[RECORDS_OFFSET..];
+
+        let record_count: usize = 3;
+        let change_type_bytes: Vec<u8> = vec![
+            ChangeType::Insert.to_byte_value(),
+            ChangeType::UpdateBefore.to_byte_value(),
+            ChangeType::UpdateAfter.to_byte_value(),
+        ];
+
+        let total_len = RECORDS_OFFSET + change_type_bytes.len() + arrow_ipc_data.len();
+        let mut batch_bytes = vec![0u8; total_len];
+        batch_bytes[..RECORDS_OFFSET].copy_from_slice(&append_only_bytes[..RECORDS_OFFSET]);
+        batch_bytes[ATTRIBUTES_OFFSET] = 0;
+        batch_bytes[RECORDS_OFFSET..RECORDS_OFFSET + record_count]
+            .copy_from_slice(&change_type_bytes);
+        batch_bytes[RECORDS_OFFSET + record_count..].copy_from_slice(arrow_ipc_data);
+
+        LittleEndian::write_i32(
+            &mut batch_bytes[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH],
+            (total_len - BASE_OFFSET_LENGTH - LENGTH_LENGTH) as i32,
+        );
+        let crc = crc32c(&batch_bytes[SCHEMA_ID_OFFSET..]);
+        LittleEndian::write_u32(&mut batch_bytes[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH], crc);
+
+        let batch = LogRecordBatch::new(Bytes::from(batch_bytes));
+        assert!(!batch.is_append_only());
+        assert_eq!(batch.record_count(), 3);
+
+        let arrow_schema = to_arrow_schema(&row_type)?;
+        let read_context = ReadContext::new(arrow_schema, false);
+        let records: Vec<ScanRecord> = batch.records(&read_context)?.collect();
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(*records[0].change_type(), ChangeType::Insert);
+        assert_eq!(*records[1].change_type(), ChangeType::UpdateBefore);
+        assert_eq!(*records[2].change_type(), ChangeType::UpdateAfter);
+        assert_eq!(records[0].row().get_int(0)?, 1);
+        assert_eq!(records[0].row().get_string(1)?, "Alice");
+        assert_eq!(records[1].row().get_int(0)?, 2);
+        assert_eq!(records[1].row().get_string(1)?, "Bob");
+        assert_eq!(records[2].row().get_int(0)?, 3);
+        assert_eq!(records[2].row().get_string(1)?, "Charlie");
+
+        Ok(())
+    }
+
 }

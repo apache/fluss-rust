@@ -327,6 +327,18 @@ message GetLatestLakeSnapshotResponse {
   repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
 }
 
+message GetLakeSnapshotRequest {
+  required PbTablePath table_path = 1;
+  optional int64 snapshot_id = 2;
+  optional bool readable = 3;
+}
+
+message GetLakeSnapshotResponse {
+  required int64 table_id = 1;
+  required int64 snapshotId = 2;
+  repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
+}
+
 message PbLakeSnapshotForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
@@ -417,4 +429,30 @@ message AuthenticateRequest {
 
 message AuthenticateResponse {
   optional bytes challenge = 1;
+}
+
+message PbLakeDvEntry {
+  required string file_path = 1;
+  required bytes del_bitmap = 2;
+}
+
+message GetDvForUnionReadRequest {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+  required int64 requested_snapshot_id = 4;
+  repeated string data_files = 5;
+}
+
+message GetDvForUnionReadResponse {
+  repeated PbLakeDvEntry lake_dv = 1;
+  repeated PbLogDvEntry log_dv = 2;
+  required int64 log_end_offset = 3;
+  optional int64 current_readable_snapshot = 4;
+  optional bool is_stale = 5;
+}
+
+message PbLogDvEntry {
+  required int64 base_offset = 1;
+  required bytes del_bits = 2;
 }

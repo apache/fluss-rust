@@ -1676,12 +1676,6 @@ impl BucketScanStatus {
 }
 
 fn validate_scan_support(table_path: &TablePath, table_info: &TableInfo) -> Result<()> {
-    if table_info.schema.primary_key().is_some() {
-        return Err(UnsupportedOperation {
-            message: format!("Table {table_path} is not a Log Table and doesn't support scan."),
-        });
-    }
-
     let log_format = table_info.table_config.get_log_format()?;
     if LogFormat::ARROW != log_format {
         return Err(UnsupportedOperation {
@@ -1960,18 +1954,23 @@ mod tests {
 
     #[test]
     fn test_validate_scan_support() {
-        // Primary key table
+        // Primary key table with ARROW format — should succeed
         let (table_info, table_path) = create_test_table_info(true, Some("ARROW"));
         let result = validate_scan_support(&table_path, &table_info);
+        assert!(result.is_ok());
 
+        // Primary key table with INDEXED format — should fail
+        let (table_info, table_path) = create_test_table_info(true, Some("INDEXED"));
+        let result = validate_scan_support(&table_path, &table_info);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, UnsupportedOperation { .. }));
-        assert!(err.to_string().contains(
-            format!("Table {table_path} is not a Log Table and doesn't support scan.").as_str()
-        ));
+        assert!(
+            err.to_string()
+                .contains("Scan is only supported for ARROW format")
+        );
 
-        // Indexed format
+        // Indexed format (log table)
         let (table_info, table_path) = create_test_table_info(false, Some("INDEXED"));
         let result = validate_scan_support(&table_path, &table_info);
 

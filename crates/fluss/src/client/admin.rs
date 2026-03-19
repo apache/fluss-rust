@@ -24,7 +24,7 @@ use crate::metadata::{
 use crate::rpc::message::{
     CreateDatabaseRequest, CreatePartitionRequest, CreateTableRequest, DatabaseExistsRequest,
     DropDatabaseRequest, DropPartitionRequest, DropTableRequest, GetDatabaseInfoRequest,
-    GetLatestLakeSnapshotRequest, GetTableRequest, ListDatabasesRequest, ListPartitionInfosRequest,
+    GetLakeSnapshotRequest, GetTableRequest, ListDatabasesRequest, ListPartitionInfosRequest,
     ListTablesRequest, TableExistsRequest,
 };
 use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
@@ -279,10 +279,37 @@ impl FlussAdmin {
     pub async fn get_latest_lake_snapshot(&self, table_path: &TablePath) -> Result<LakeSnapshot> {
         let response = self
             .admin_gateway
-            .request(GetLatestLakeSnapshotRequest::new(table_path))
+            .request(GetLakeSnapshotRequest::latest(table_path))
             .await?;
 
-        // Convert proto response to LakeSnapshot
+        Self::to_lake_snapshot(response)
+    }
+
+    /// Get the latest readable lake snapshot for a table.
+    pub async fn get_readable_lake_snapshot(&self, table_path: &TablePath) -> Result<LakeSnapshot> {
+        let response = self
+            .admin_gateway
+            .request(GetLakeSnapshotRequest::readable(table_path))
+            .await?;
+
+        Self::to_lake_snapshot(response)
+    }
+
+    /// Get a specific lake snapshot by snapshot id.
+    pub async fn get_lake_snapshot(
+        &self,
+        table_path: &TablePath,
+        snapshot_id: i64,
+    ) -> Result<LakeSnapshot> {
+        let response = self
+            .admin_gateway
+            .request(GetLakeSnapshotRequest::by_id(table_path, snapshot_id))
+            .await?;
+
+        Self::to_lake_snapshot(response)
+    }
+
+    fn to_lake_snapshot(response: crate::proto::GetLakeSnapshotResponse) -> Result<LakeSnapshot> {
         let mut table_buckets_offset = HashMap::new();
         for bucket_snapshot in response.bucket_snapshots {
             let table_bucket = TableBucket::new_with_partition(
