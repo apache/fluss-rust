@@ -780,6 +780,26 @@ class LogScanner:
             or timeout expires.
         """
         ...
+    def to_arrow_batch_reader(self) -> pa.RecordBatchReader:
+        """Create a lazy Arrow RecordBatchReader that reads until latest offsets.
+
+        Returns a ``pyarrow.RecordBatchReader`` that lazily polls batches one at
+        a time (streaming). Prefer this when you want to process batches without
+        holding the full result in memory at once.
+
+        Do not call ``poll_arrow`` / ``poll_record_batch`` on this scanner while
+        iterating the reader; they share the same underlying scanner state.
+        Overlapping calls fail immediately with ``FlussError`` (client-side), not
+        by blocking behind the active session.
+
+        Requires a batch-based scanner (created with ``new_scan().create_record_batch_log_scanner()``).
+        You must call ``subscribe()``, ``subscribe_buckets()``, ``subscribe_partition()``,
+        or ``subscribe_partition_buckets()`` first.
+
+        Returns:
+            ``pyarrow.RecordBatchReader`` yielding ``RecordBatch`` objects.
+        """
+        ...
     def to_pandas(self) -> pd.DataFrame:
         """Convert all data to Pandas DataFrame.
 
@@ -791,6 +811,11 @@ class LogScanner:
         ...
     def to_arrow(self) -> pa.Table:
         """Convert all data to Arrow Table.
+
+        Batches are collected in Rust then combined into one table (no per-batch
+        Python iteration). Do not interleave with ``poll_arrow`` / ``poll_record_batch``
+        for the same subscription session; overlapping use fails immediately with
+        ``FlussError``.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
         Reads from currently subscribed buckets until reaching their latest offsets.
