@@ -34,7 +34,6 @@ github:
     - lakehouse
     - rust
     - python
-    - infra-test
   enabled_merge_buttons:
     squash:  true
     merge:   false
