@@ -709,8 +709,9 @@ impl Sender {
             return Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path));
         }
 
-        // Generic error path. handle_failed_batch will detect OutOfOrderSequence /
-        // UnknownWriterId and reset all writer state internally (matching Java).
+        // Generic error path. handle_failed_batch will detect remaining
+        // OutOfOrderSequence (not already committed) / UnknownWriterId cases and
+        // reset all writer state internally (matching Java).
         // For other errors, only adjust sequences if the batch didn't exhaust its retries.
         let can_adjust = ready_write_batch.write_batch.attempts() < self.retries;
         self.fail_batch(
