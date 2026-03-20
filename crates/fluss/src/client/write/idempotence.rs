@@ -314,6 +314,19 @@ impl IdempotenceManager {
         }
     }
 
+    /// Returns true if the batch has already been committed on the server.
+    ///
+    /// If the batch's sequence is less than or equal to `last_acked_sequence`, it means
+    /// a higher-sequence batch has already been acknowledged. This implies the current batch
+    /// was also successfully written on the server (otherwise the higher-sequence batch could
+    /// not have been committed).
+    pub fn is_already_committed(&self, bucket: &TableBucket, batch_sequence: i32) -> bool {
+        let entries = self.bucket_entries.lock();
+        entries
+            .get(bucket)
+            .is_some_and(|e| e.last_acked_sequence >= 0 && batch_sequence <= e.last_acked_sequence)
+    }
+
     pub fn can_retry_for_error(
         &self,
         bucket: &TableBucket,
@@ -528,6 +541,36 @@ mod tests {
 
         mgr.remove_in_flight_batch(&b0, 100);
         assert!(mgr.can_send_more_requests(&b0)); // under limit again
+    }
+
+    #[test]
+    fn test_is_already_committed() {
+        let mgr = IdempotenceManager::new(true, 5);
+        let b0 = test_bucket(0);
+        mgr.set_writer_id(42);
+
+        // No entry yet → not committed
+        assert!(!mgr.is_already_committed(&b0, 0));
+
+        // Initialize bucket and ack seq=0
+        let _ = mgr.next_sequence_and_increment(&b0); // 0
+        mgr.add_in_flight_batch(&b0, 0, 100);
+        mgr.handle_completed_batch(&b0, 100, 42); // last_acked=0
+
+        // seq=0 <= last_acked(0) → committed
+        assert!(mgr.is_already_committed(&b0, 0));
+        // seq=1 > last_acked(0) → not committed
+        assert!(!mgr.is_already_committed(&b0, 1));
+
+        // Ack up to seq=4, then check seq=0 still committed
+        for seq in 1..=4 {
+            let _ = mgr.next_sequence_and_increment(&b0);
+            mgr.add_in_flight_batch(&b0, seq, 100 + seq as i64);
+            mgr.handle_completed_batch(&b0, 100 + seq as i64, 42);
+        }
+        assert!(mgr.is_already_committed(&b0, 0)); // seq=0 <= last_acked(4)
+        assert!(mgr.is_already_committed(&b0, 4)); // seq=4 <= last_acked(4)
+        assert!(!mgr.is_already_committed(&b0, 5)); // seq=5 > last_acked(4)
     }
 
     #[test]
