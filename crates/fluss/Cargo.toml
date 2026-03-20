@@ -23,7 +23,7 @@ version = { workspace = true }
 name = "fluss-rs"
 authors = { workspace = true }
 description = "The official rust client of Apache Fluss (Incubating)"
-homepage = "https://clients.fluss.apache.org/"
+homepage = "https://clients.fluss.apache.org/user-guide/rust/installation/"
 repository = { workspace = true }
 keywords = { workspace = true }
 categories = { workspace = true }
