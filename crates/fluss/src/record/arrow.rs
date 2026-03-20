@@ -22,7 +22,7 @@ use crate::compression::{
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
-use crate::row::column_writer::ColumnWriter;
+use crate::row::column_writer::{ColumnWriter, round_up_to_8};
 use crate::row::{ColumnarRow, InternalRow};
 use arrow::array::{ArrayBuilder, ArrayRef};
 use arrow::{
@@ -154,7 +154,7 @@ const INITIAL_ROW_CAPACITY: usize = 1024;
 
 /// Fraction of the allocated buffer used as the effective write limit.
 /// Matching Java's `ArrowWriter.BUFFER_USAGE_RATIO`.
-const BUFFER_USAGE_RATIO: f64 = 0.95;
+const BUFFER_USAGE_RATIO: f32 = 0.95;
 
 pub struct MemoryLogRecordsArrowBuilder {
     base_log_offset: i64,
@@ -171,9 +171,10 @@ pub struct MemoryLogRecordsArrowBuilder {
     /// Constant per schema+compression combination.
     ipc_overhead: usize,
     /// Estimated record count at which the next byte-size check should occur.
-    /// 0 means "unknown — check on the next append". Updated dynamically to
+    /// -1 means "unknown — check on the next append". Updated dynamically to
     /// skip expensive `estimated_size_in_bytes()` calls on every append.
-    estimated_max_records_count: Cell<usize>,
+    /// Matching Java's `ArrowWriter.estimatedMaxRecordsCount`.
+    estimated_max_records_count: Cell<i32>,
     /// Compression ratio estimator shared across batches for the same table.
     compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
     /// Snapshot of the compression ratio at batch creation time.
@@ -373,7 +374,7 @@ impl MemoryLogRecordsArrowBuilder {
         let schema = to_arrow_schema(row_type)?;
         let ipc_overhead =
             estimate_arrow_ipc_overhead(&schema, arrow_compression_info.get_compression_type())?;
-        let effective_limit = (write_limit as f64 * BUFFER_USAGE_RATIO) as usize;
+        let effective_limit = (write_limit as f32 * BUFFER_USAGE_RATIO) as usize;
         let estimated_compression_ratio = compression_ratio_estimator.estimation();
         Ok(MemoryLogRecordsArrowBuilder {
             base_log_offset: BUILDER_DEFAULT_OFFSET,
@@ -386,7 +387,7 @@ impl MemoryLogRecordsArrowBuilder {
             arrow_compression_info,
             write_limit: effective_limit,
             ipc_overhead,
-            estimated_max_records_count: Cell::new(0),
+            estimated_max_records_count: Cell::new(-1),
             compression_ratio_estimator,
             estimated_compression_ratio,
         })
@@ -421,11 +422,8 @@ impl MemoryLogRecordsArrowBuilder {
             return true;
         }
         let records_count = self.arrow_record_batch_builder.records_count();
-        if records_count == 0 {
-            return false;
-        }
         let threshold = self.estimated_max_records_count.get();
-        if threshold == 0 || records_count as usize >= threshold {
+        if records_count > 0 && records_count >= threshold {
             let body_size = self.arrow_record_batch_builder.estimated_size_in_bytes();
             let estimated_body = self.estimated_compressed_size(body_size);
             let current_size = self.ipc_overhead + estimated_body;
@@ -433,8 +431,7 @@ impl MemoryLogRecordsArrowBuilder {
                 return true;
             }
             if estimated_body == 0 {
-                self.estimated_max_records_count
-                    .set(records_count as usize + 1);
+                self.estimated_max_records_count.set(records_count + 1);
                 return false;
             }
             // Matching Java: subtract fixed metadata overhead from the limit,
@@ -442,8 +439,8 @@ impl MemoryLogRecordsArrowBuilder {
             let body_per_record = estimated_body as f64 / records_count as f64;
             let next = ((self.write_limit.saturating_sub(self.ipc_overhead) as f64
                 / body_per_record)
-                .ceil() as usize)
-                .max(records_count as usize + 1);
+                .ceil() as i32)
+                .max(records_count + 1);
             self.estimated_max_records_count.set(next);
         }
         false
@@ -620,12 +617,6 @@ fn estimate_arrow_ipc_overhead(
     // IPC overhead = total message size - raw data we put in.
     let ipc_message_len = total_len - header_len;
     Ok(ipc_message_len.saturating_sub(raw_data))
-}
-
-/// Round up to the next multiple of 8 (Arrow IPC alignment).
-#[inline]
-fn round_up_to_8(n: usize) -> usize {
-    (n + 7) & !7
 }
 
 pub trait ToArrow {

@@ -36,6 +36,12 @@ use arrow::array::{
 };
 use arrow_schema::DataType as ArrowDataType;
 
+/// Round up to the next multiple of 8 (Arrow IPC buffer alignment).
+#[inline]
+pub(crate) fn round_up_to_8(n: usize) -> usize {
+    (n + 7) & !7
+}
+
 /// Estimated average byte size for variable-width columns (Utf8, Binary).
 /// Used to pre-allocate data buffers and avoid reallocations during batch building.
 /// Matches Java Arrow's `BaseVariableWidthVector.DEFAULT_RECORD_BYTE_COUNT`.
@@ -359,25 +365,19 @@ impl ColumnWriter {
     /// The IPC framing overhead not captured here is accounted for separately
     /// by `estimate_arrow_ipc_overhead()`.
     pub fn buffer_size(&self) -> usize {
-        /// Round up to the next multiple of 8 (Arrow IPC alignment).
-        #[inline]
-        fn round_up_8(n: usize) -> usize {
-            (n + 7) & !7
-        }
-
         /// Validity bitmap size, rounded to 8-byte alignment.
         /// When no nulls have been appended, the builder does not materialize
         /// the bitmap and the IPC body contributes 0 bytes for this buffer.
         #[inline]
         fn validity_size(slice: Option<&[u8]>) -> usize {
-            round_up_8(slice.map_or(0, |s| s.len()))
+            round_up_to_8(slice.map_or(0, |s| s.len()))
         }
 
         /// Primitive builder: validity + values (values_slice returns &[T::Native]).
         macro_rules! primitive_size {
             ($b:expr) => {
                 validity_size($b.validity_slice())
-                    + round_up_8(std::mem::size_of_val($b.values_slice()))
+                    + round_up_to_8(std::mem::size_of_val($b.values_slice()))
             };
         }
 
@@ -385,14 +385,14 @@ impl ColumnWriter {
         macro_rules! var_width_size {
             ($b:expr) => {
                 validity_size($b.validity_slice())
-                    + round_up_8(std::mem::size_of_val($b.offsets_slice()))
-                    + round_up_8($b.values_slice().len())
+                    + round_up_to_8(std::mem::size_of_val($b.offsets_slice()))
+                    + round_up_to_8($b.values_slice().len())
             };
         }
 
         match &self.inner {
             TypedWriter::Bool(b) => {
-                validity_size(b.validity_slice()) + round_up_8(b.values_slice().len())
+                validity_size(b.validity_slice()) + round_up_to_8(b.values_slice().len())
             }
             TypedWriter::Int8(b) => primitive_size!(b),
             TypedWriter::Int16(b) => primitive_size!(b),
@@ -419,7 +419,7 @@ impl ColumnWriter {
             TypedWriter::String(b) => var_width_size!(b),
             TypedWriter::Bytes(b) => var_width_size!(b),
             TypedWriter::Binary { builder: b, .. } => {
-                validity_size(b.validity_slice()) + round_up_8(b.values_slice().len())
+                validity_size(b.validity_slice()) + round_up_to_8(b.values_slice().len())
             }
         }
     }
