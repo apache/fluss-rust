@@ -26,6 +26,7 @@ Complete API reference for the Fluss Python client.
 | `scanner_log_fetch_wait_max_time_ms`  | `scanner.log.fetch.wait-max-time-ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
 | `scanner_log_fetch_max_bytes_for_bucket` | `scanner.log.fetch.max-bytes-for-bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
+| `request_timeout_ms`                  | `request-timeout`                     | Get/set max time in ms to wait for an RPC response after the request is sent (does not limit request write/send time) |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
 | `security_sasl_username`              | `security.sasl.username`              | Get/set SASL username (required when protocol is `"sasl"`)                              |
