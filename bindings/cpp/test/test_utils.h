@@ -306,7 +306,6 @@ class FlussTestEnvironment : public ::testing::Environment {
             if (result.Ok()) {
                 auto admin_result = connection_.GetAdmin(admin_);
                 if (admin_result.Ok()) {
-                    // check tablet server is available
                     std::vector<fluss::ServerNode> nodes;
                     auto nodes_result = admin_.GetServerNodes(nodes);
                     if (nodes_result.Ok() &&

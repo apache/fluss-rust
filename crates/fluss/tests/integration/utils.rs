@@ -109,12 +109,11 @@ pub async fn wait_for_cluster_ready_with_sasl(cluster: &FlussTestingCluster) {
         let connection = cluster
             .get_fluss_connection_with_sasl(username, password)
             .await;
-        if connection.get_admin().await.is_ok()
-            && connection
-                .get_metadata()
-                .get_cluster()
-                .get_one_available_server()
-                .is_some()
+        if connection
+            .get_metadata()
+            .get_cluster()
+            .get_one_available_server()
+            .is_some()
         {
             return;
         }
