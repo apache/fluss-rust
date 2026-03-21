@@ -28,12 +28,14 @@ mod lookup;
 
 mod log_fetch_buffer;
 mod partition_getter;
+mod reader;
 mod remote_log;
 mod scanner;
 mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
 pub use lookup::{LookupResult, Lookuper, TableLookup};
+pub use reader::{RecordBatchLogReader, SyncRecordBatchLogReader};
 pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
