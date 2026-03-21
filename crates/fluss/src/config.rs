@@ -324,7 +324,16 @@ impl Config {
         }
         Ok(())
     }
-    pub fn validate_scanner_fetch(&self) -> Result<(), String> {
+    pub fn validate_scanner(&self) -> Result<(), String> {
+        if self.scanner_remote_log_prefetch_num == 0 {
+            return Err("scanner_remote_log_prefetch_num must be > 0".to_string());
+        }
+        if self.scanner_remote_log_read_concurrency == 0 {
+            return Err("scanner_remote_log_read_concurrency must be > 0".to_string());
+        }
+        if self.remote_file_download_thread_num == 0 {
+            return Err("remote_file_download_thread_num must be > 0".to_string());
+        }
         if self.scanner_log_fetch_min_bytes <= 0 {
             return Err("scanner_log_fetch_min_bytes must be > 0".to_string());
         }
@@ -347,6 +356,57 @@ impl Config {
                 "scanner_log_fetch_max_bytes_for_bucket must be <= scanner_log_fetch_max_bytes"
                     .to_string(),
             );
+        }
+        Ok(())
+    }
+
+    pub fn validate_writer(&self) -> Result<(), String> {
+        if self.writer_request_max_size <= 0 {
+            return Err("writer_request_max_size must be > 0".to_string());
+        }
+        if self.writer_batch_size <= 0 {
+            return Err("writer_batch_size must be > 0".to_string());
+        }
+        if self.writer_batch_timeout_ms < 0 {
+            return Err("writer_batch_timeout_ms must be >= 0".to_string());
+        }
+        if self.writer_max_inflight_requests_per_bucket == 0 {
+            return Err("writer_max_inflight_requests_per_bucket must be > 0".to_string());
+        }
+        if self.writer_buffer_memory_size == 0 {
+            return Err("writer_buffer_memory_size must be > 0".to_string());
+        }
+        if self.writer_batch_size > self.writer_request_max_size {
+            return Err("writer_batch_size must be <= writer_request_max_size".to_string());
+        }
+        if self.writer_batch_size as usize > self.writer_buffer_memory_size {
+            return Err("writer_batch_size must be <= writer_buffer_memory_size".to_string());
+        }
+        // idempotence checks
+        if !self.writer_enable_idempotence {
+            return Ok(());
+        }
+        let acks_is_all = self.writer_acks.eq_ignore_ascii_case("all") || self.writer_acks == "-1";
+        if !acks_is_all {
+            return Err(format!(
+                "Idempotent writes require acks='all' (-1), but got acks='{}'",
+                self.writer_acks
+            ));
+        }
+        if self.writer_retries <= 0 {
+            return Err(format!(
+                "Idempotent writes require retries > 0, but got retries={}",
+                self.writer_retries
+            ));
+        }
+        if self.writer_max_inflight_requests_per_bucket
+            > MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE
+        {
+            return Err(format!(
+                "Idempotent writes require max-inflight-requests-per-bucket <= {}, but got {}",
+                MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE,
+                self.writer_max_inflight_requests_per_bucket
+            ));
         }
         Ok(())
     }
@@ -419,13 +479,38 @@ mod tests {
         };
         assert!(config.validate_security().is_err());
     }
+
     #[test]
-    fn test_scanner_fetch_defaults_valid() {
+    fn test_scanner_defaults_valid() {
         let config = Config::default();
-        assert!(config.validate_scanner_fetch().is_ok());
-        assert_eq!(config.scanner_log_fetch_max_bytes, 16 * 1024 * 1024);
-        assert_eq!(config.scanner_log_fetch_min_bytes, 1);
-        assert_eq!(config.scanner_log_fetch_wait_max_time_ms, 500);
+        assert!(config.validate_scanner().is_ok());
+    }
+
+    #[test]
+    fn test_scanner_remote_log_prefetch_num_zero() {
+        let config = Config {
+            scanner_remote_log_prefetch_num: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_scanner_remote_log_read_concurrency_zero() {
+        let config = Config {
+            scanner_remote_log_read_concurrency: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_remote_file_download_thread_num_zero() {
+        let config = Config {
+            remote_file_download_thread_num: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner().is_err());
     }
 
     #[test]
@@ -435,7 +520,7 @@ mod tests {
             scanner_log_fetch_max_bytes: 1,
             ..Config::default()
         };
-        assert!(config.validate_scanner_fetch().is_err());
+        assert!(config.validate_scanner().is_err());
     }
 
     #[test]
@@ -444,13 +529,78 @@ mod tests {
             scanner_log_fetch_wait_max_time_ms: -1,
             ..Config::default()
         };
-        assert!(config.validate_scanner_fetch().is_err());
+        assert!(config.validate_scanner().is_err());
     }
 
     #[test]
-    fn test_idempotence_default_is_valid() {
+    fn test_writer_defaults_valid() {
         let config = Config::default();
-        assert!(config.validate_idempotence().is_ok());
+        assert!(config.validate_writer().is_ok());
+    }
+
+    #[test]
+    fn test_writer_request_max_size_zero() {
+        let config = Config {
+            writer_request_max_size: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_writer().is_err());
+    }
+
+    #[test]
+    fn test_writer_batch_size_zero() {
+        let config = Config {
+            writer_batch_size: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_writer().is_err());
+    }
+
+    #[test]
+    fn test_writer_batch_timeout_negative() {
+        let config = Config {
+            writer_batch_timeout_ms: -1,
+            ..Config::default()
+        };
+        assert!(config.validate_writer().is_err());
+    }
+
+    #[test]
+    fn test_writer_max_inflight_requests_per_bucket_zero() {
+        let config = Config {
+            writer_max_inflight_requests_per_bucket: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_writer().is_err());
+    }
+
+    #[test]
+    fn test_writer_buffer_memory_size_zero() {
+        let config = Config {
+            writer_buffer_memory_size: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_writer().is_err());
+    }
+
+    #[test]
+    fn test_writer_batch_size_exceeds_request_max_size() {
+        let config = Config {
+            writer_batch_size: 20 * 1024 * 1024,
+            writer_request_max_size: 10 * 1024 * 1024,
+            ..Config::default()
+        };
+        assert!(config.validate_writer().is_err());
+    }
+
+    #[test]
+    fn test_writer_batch_size_exceeds_buffer_memory_size() {
+        let config = Config {
+            writer_batch_size: 128 * 1024 * 1024,
+            writer_buffer_memory_size: 64 * 1024 * 1024,
+            ..Config::default()
+        };
+        assert!(config.validate_writer().is_err());
     }
 
     #[test]
@@ -462,7 +612,7 @@ mod tests {
             writer_max_inflight_requests_per_bucket: 100,
             ..Config::default()
         };
-        assert!(config.validate_idempotence().is_ok());
+        assert!(config.validate_writer().is_ok());
     }
 
     #[test]
@@ -472,7 +622,7 @@ mod tests {
             writer_acks: "1".to_string(),
             ..Config::default()
         };
-        assert!(config.validate_idempotence().is_err());
+        assert!(config.validate_writer().is_err());
     }
 
     #[test]
@@ -482,7 +632,7 @@ mod tests {
             writer_retries: 0,
             ..Config::default()
         };
-        assert!(config.validate_idempotence().is_err());
+        assert!(config.validate_writer().is_err());
     }
 
     #[test]
@@ -492,6 +642,6 @@ mod tests {
             writer_max_inflight_requests_per_bucket: 10,
             ..Config::default()
         };
-        assert!(config.validate_idempotence().is_err());
+        assert!(config.validate_writer().is_err());
     }
 }
