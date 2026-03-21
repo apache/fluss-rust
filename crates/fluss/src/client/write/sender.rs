@@ -637,6 +637,35 @@ impl Sender {
         message: String,
     ) -> Result<Option<Arc<PhysicalTablePath>>> {
         let physical_table_path = Arc::clone(ready_write_batch.write_batch.physical_table_path());
+
+        if error == FlussError::DuplicateSequenceException {
+            warn!(
+                "Duplicate sequence for {} on bucket {}: {message}",
+                physical_table_path.as_ref(),
+                ready_write_batch.table_bucket.bucket_id()
+            );
+            self.complete_batch(ready_write_batch);
+            return Ok(None);
+        }
+
+        if error == FlussError::OutOfOrderSequenceException
+            && self.idempotence_manager.is_enabled()
+            && self.idempotence_manager.is_already_committed(
+                &ready_write_batch.table_bucket,
+                ready_write_batch.write_batch.batch_sequence(),
+            )
+        {
+            warn!(
+                "Batch for {} on bucket {} with sequence {} received OutOfOrderSequenceException \
+                 but has already been committed. Treating as success due to lost response.",
+                physical_table_path.as_ref(),
+                ready_write_batch.table_bucket.bucket_id(),
+                ready_write_batch.write_batch.batch_sequence(),
+            );
+            self.complete_batch(ready_write_batch);
+            return Ok(None);
+        }
+
         if self.can_retry(&ready_write_batch, error) {
             warn!(
                 "Retrying write batch for {} on bucket {} after error {error:?}: {message}",
@@ -680,18 +709,9 @@ impl Sender {
             return Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path));
         }
 
-        if error == FlussError::DuplicateSequenceException {
-            warn!(
-                "Duplicate sequence for {} on bucket {}: {message}",
-                physical_table_path.as_ref(),
-                ready_write_batch.table_bucket.bucket_id()
-            );
-            self.complete_batch(ready_write_batch);
-            return Ok(None);
-        }
-
-        // Generic error path. handle_failed_batch will detect OutOfOrderSequence /
-        // UnknownWriterId and reset all writer state internally (matching Java).
+        // Generic error path. handle_failed_batch will detect remaining
+        // OutOfOrderSequence (not already committed) / UnknownWriterId cases and
+        // reset all writer state internally (matching Java).
         // For other errors, only adjust sequences if the batch didn't exhaust its retries.
         let can_adjust = ready_write_batch.write_batch.attempts() < self.retries;
         self.fail_batch(
