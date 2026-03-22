@@ -18,6 +18,7 @@
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use crate::row::Decimal;
+use crate::row::GenericRow;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
@@ -68,6 +69,8 @@ pub enum Datum<'a> {
     TimestampNtz(TimestampNtz),
     #[display("{0}")]
     TimestampLtz(TimestampLtz),
+    #[display("{0:?}")]
+    Row(Box<GenericRow<'a>>),
 }
 
 impl Datum<'_> {
@@ -121,6 +124,13 @@ impl Datum<'_> {
         match self {
             Self::TimestampLtz(ts) => *ts,
             _ => panic!("not a timestamp ltz: {self:?}"),
+        }
+    }
+
+    pub fn as_row(&self) -> &GenericRow<'_> {
+        match self {
+            Self::Row(r) => r.as_ref(),
+            _ => panic!("not a row: {self:?}"),
         }
     }
 }
@@ -740,6 +750,11 @@ impl Datum<'_> {
 
                 return Err(RowConvertError {
                     message: "Builder type mismatch for TimestampLtz".to_string(),
+                });
+            }
+            Datum::Row(_) => {
+                return Err(RowConvertError {
+                    message: "append_to is not supported for Row type".to_string(),
                 });
             }
         }

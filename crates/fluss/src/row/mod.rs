@@ -29,6 +29,7 @@ mod row_decoder;
 
 use crate::client::WriteFormat;
 use bytes::Bytes;
+use serde::Serialize;
 pub use column::*;
 pub use compacted::CompactedRow;
 pub use datum::*;
@@ -119,13 +120,20 @@ pub trait InternalRow: Send + Sync {
     /// Returns the binary value at the given position
     fn get_bytes(&self, pos: usize) -> Result<&[u8]>;
 
+    /// Returns the nested row value at the given position
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        Err(crate::error::Error::IllegalArgument {
+            message: format!("get_row not supported at position {pos}"),
+        })
+    }
+
     /// Returns encoded bytes if already encoded
     fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
         None
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GenericRow<'a> {
     pub values: Vec<Datum<'a>>,
 }
@@ -271,6 +279,15 @@ impl<'a> InternalRow for GenericRow<'a> {
             Datum::Blob(b) => Ok(b.as_ref()),
             other => Err(IllegalArgument {
                 message: format!("type mismatch at position {pos}: expected Bytes, got {other:?}"),
+            }),
+        }
+    }
+
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        match self.get_value(pos)? {
+            Datum::Row(r) => Ok(r.as_ref()),
+            other => Err(IllegalArgument {
+                message: format!("type mismatch at position {pos}: expected Row, got {other:?}"),
             }),
         }
     }
