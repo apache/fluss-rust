@@ -407,6 +407,19 @@ Implements the `InternalRow` trait (see below).
 | `fn get_bytes(&self, idx: usize) -> Result<&[u8]>`                                     | Get bytes value                         |
 | `fn get_binary(&self, idx: usize, length: usize) -> Result<&[u8]>`                     | Get fixed-length binary value           |
 | `fn get_char(&self, idx: usize, length: usize) -> Result<&str>`                        | Get fixed-length char value             |
+| `fn get_array(&self, idx: usize) -> Result<FlussArray>`                                | Get array value                         |
+
+## `FlussArray`
+
+`FlussArray` is the Rust row representation for `ARRAY` values. You usually obtain it from `InternalRow::get_array()`.
+
+| Method | Description |
+|--------|-------------|
+| `fn size(&self) -> usize` | Number of elements in the array |
+| `fn is_null_at(&self, pos: usize) -> bool` | Check whether an element is null |
+| `fn as_bytes(&self) -> &[u8]` | Get encoded bytes of the array |
+
+Element getters mirror `InternalRow` typed getters and return `Result<T>`. For example, use `get_int()`, `get_long()`, and `get_double()` for primitive elements, and `get_string()`, `get_binary()`, `get_decimal()`, `get_timestamp_ntz()`, `get_timestamp_ltz()`, and `get_array()` for variable-length or nested elements.
 
 ## `ChangeType`
 
