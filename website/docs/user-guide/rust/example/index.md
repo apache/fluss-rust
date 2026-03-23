@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     let mut config = Config::default();
     config.bootstrap_servers = "127.0.0.1:9123".to_string();
     let conn = FlussConnection::new(config).await?;
-    let admin = conn.get_admin().await?;
+    let admin = conn.get_admin()?;
 
     // Create a log table
     let table_path = TablePath::new("fluss", "quickstart_rust");

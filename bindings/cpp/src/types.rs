@@ -336,7 +336,7 @@ pub fn resolve_row_types(
                     Some(fcore::metadata::DataType::Decimal(dt)) => {
                         let (precision, scale) = (dt.precision(), dt.scale());
                         let bd = bigdecimal::BigDecimal::from_str(cow.as_ref()).map_err(|e| {
-                            anyhow!("Column {idx}: invalid decimal string '{}': {e}", cow)
+                            anyhow!("Column {idx}: invalid decimal string '{cow}': {e}")
                         })?;
                         let decimal = fcore::row::Decimal::from_big_decimal(bd, precision, scale)
                             .map_err(|e| anyhow!("Column {idx}: {e}"))?;

@@ -36,7 +36,6 @@ mod sasl_auth_test {
 
         let admin = connection
             .get_admin()
-            .await
             .expect("Should get admin with valid SASL credentials");
 
         // Perform a basic operation to confirm the connection is fully functional
@@ -69,7 +68,6 @@ mod sasl_auth_test {
 
         let admin = connection
             .get_admin()
-            .await
             .expect("Should get admin with alice credentials");
 
         // Basic operation to confirm functional connection

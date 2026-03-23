@@ -94,7 +94,7 @@ impl<'a> TableScan<'a> {
     ///             .build()?,
     ///         ).build()?;
     ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
-    ///     let admin = conn.get_admin().await?;
+    ///     let admin = conn.get_admin()?;
     ///     admin.create_table(&table_path, &table_descriptor, true)
     ///         .await?;
     ///     let table_info = admin.get_table_info(&table_path).await?;
@@ -169,7 +169,7 @@ impl<'a> TableScan<'a> {
     ///             .build()?,
     ///         ).build()?;
     ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
-    ///     let admin = conn.get_admin().await?;
+    ///     let admin = conn.get_admin()?;
     ///     admin.create_table(&table_path, &table_descriptor, true)
     ///         .await?;
     ///     let table = conn.get_table(&table_path).await?;

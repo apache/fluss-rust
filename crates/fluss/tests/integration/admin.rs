@@ -30,7 +30,7 @@ mod admin_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("should get admin");
+        let admin = connection.get_admin().expect("should get admin");
 
         let db_descriptor = DatabaseDescriptorBuilder::default()
             .comment("test_db")
@@ -73,10 +73,7 @@ mod admin_test {
     async fn test_create_table() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection
-            .get_admin()
-            .await
-            .expect("Failed to get admin client");
+        let admin = connection.get_admin().expect("Failed to get admin client");
 
         let test_db_name = "test_create_table_db";
         let db_descriptor = DatabaseDescriptorBuilder::default()
@@ -202,10 +199,7 @@ mod admin_test {
     async fn test_partition_apis() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection
-            .get_admin()
-            .await
-            .expect("Failed to get admin client");
+        let admin = connection.get_admin().expect("Failed to get admin client");
 
         let test_db_name = "test_partition_apis_db";
         let db_descriptor = DatabaseDescriptorBuilder::default()
@@ -341,10 +335,7 @@ mod admin_test {
     async fn test_fluss_error_response() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection
-            .get_admin()
-            .await
-            .expect("Failed to get admin client");
+        let admin = connection.get_admin().expect("Failed to get admin client");
 
         let table_path = TablePath::new("fluss", "not_exist");
 
@@ -375,7 +366,7 @@ mod admin_test {
     async fn test_error_database_not_exist() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         // get_database_info for non-existent database
         let result = admin.get_database_info("no_such_db").await;
@@ -394,7 +385,7 @@ mod admin_test {
     async fn test_error_database_already_exist() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         let db_name = "test_error_db_already_exist";
         let descriptor = DatabaseDescriptorBuilder::default().build();
@@ -424,7 +415,7 @@ mod admin_test {
     async fn test_error_table_already_exist() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         let db_name = "test_error_tbl_already_exist_db";
         let descriptor = DatabaseDescriptorBuilder::default().build();
@@ -472,7 +463,7 @@ mod admin_test {
     async fn test_error_table_not_exist() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         let table_path = TablePath::new("fluss", "no_such_table");
 
@@ -491,7 +482,7 @@ mod admin_test {
     async fn test_get_server_nodes() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         let nodes = admin
             .get_server_nodes()
@@ -534,7 +525,7 @@ mod admin_test {
     async fn test_error_table_not_partitioned() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         let db_name = "test_error_not_partitioned_db";
         let descriptor = DatabaseDescriptorBuilder::default().build();

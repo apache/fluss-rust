@@ -82,7 +82,7 @@ impl FlussConnection {
         &self.args
     }
 
-    pub async fn get_admin(&self) -> Result<Arc<FlussAdmin>> {
+    pub fn get_admin(&self) -> Result<Arc<FlussAdmin>> {
         // 1. Fast path: return cached instance if already initialized.
         if let Some(admin) = self.admin_client.read().as_ref() {
             return Ok(admin.clone());

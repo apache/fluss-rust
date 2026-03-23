@@ -508,7 +508,6 @@ impl TableScan {
 
             let admin = conn
                 .get_admin()
-                .await
                 .map_err(|e| FlussError::from_core_error(&e))?;
 
             let (projected_schema, projected_row_type) =
