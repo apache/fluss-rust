@@ -106,7 +106,7 @@ To start reading only new records, first resolve the current latest offset via `
 ```rust
 use fluss::rpc::message::OffsetSpec;
 
-let admin = conn.get_admin().await?;
+let admin = conn.get_admin()?;
 let offsets = admin.list_offsets(&table_path, &[0], OffsetSpec::Latest).await?;
 let latest = offsets[&0];
 log_scanner.subscribe(0, latest).await?;

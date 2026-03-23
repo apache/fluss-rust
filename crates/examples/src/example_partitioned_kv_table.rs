@@ -46,7 +46,7 @@ pub async fn main() -> Result<()> {
 
     let table_path = TablePath::new("fluss", "partitioned_kv_example");
 
-    let admin = conn.get_admin().await?;
+    let admin = conn.get_admin()?;
     admin
         .create_table(&table_path, &table_descriptor, true)
         .await?;

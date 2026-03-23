@@ -112,7 +112,7 @@ scanner.unsubscribe(bucket_id=0)
 To only consume new records (skip existing data), first resolve the current latest offset via `list_offsets`, then subscribe at that offset:
 
 ```python
-admin = await conn.get_admin()
+admin = conn.get_admin()
 offsets = await admin.list_offsets(table_path, [0], fluss.OffsetSpec.latest())
 latest = offsets[0]
 

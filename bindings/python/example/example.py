@@ -65,7 +65,7 @@ async def main():
     table_descriptor = fluss.TableDescriptor(fluss_schema)
 
     # Get the admin for Fluss
-    admin = await conn.get_admin()
+    admin = conn.get_admin()
 
     # Create a Fluss table
     table_path = fluss.TablePath("fluss", "sample_table_types")

@@ -12,7 +12,7 @@ use fluss::error::{Error, Result};
 
 // All operations return Result<T>
 let conn = FlussConnection::new(config).await?;
-let admin = conn.get_admin().await?;
+let admin = conn.get_admin()?;
 let table = conn.get_table(&table_path).await?;
 ```
 
@@ -217,7 +217,7 @@ use fluss::error::Result;
 
 async fn my_pipeline() -> Result<()> {
     let conn = FlussConnection::new(config).await?;
-    let admin = conn.get_admin().await?;
+    let admin = conn.get_admin()?;
     let table = conn.get_table(&table_path).await?;
     let writer = table.new_append()?.create_writer()?;
     writer.append(&row)?;

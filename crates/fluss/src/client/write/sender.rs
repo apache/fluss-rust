@@ -268,10 +268,7 @@ impl Sender {
             }
         }
 
-        debug!(
-            "Updated metadata for unknown leader tables: {:?}",
-            unknown_leaders
-        );
+        debug!("Updated metadata for unknown leader tables: {unknown_leaders:?}");
         Ok(())
     }
 

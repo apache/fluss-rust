@@ -4,7 +4,7 @@ sidebar_position: 3
 # Admin Operations
 
 ```python
-admin = await conn.get_admin()
+admin = conn.get_admin()
 ```
 
 ## Databases

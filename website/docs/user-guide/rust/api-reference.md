@@ -35,7 +35,7 @@ Complete API reference for the Fluss Rust client.
 | Method                                                                        | Description                                    |
 |-------------------------------------------------------------------------------|------------------------------------------------|
 | `async fn new(config: Config) -> Result<Self>`                                | Create a new connection to a Fluss cluster     |
-| `async fn get_admin(&self) -> Result<FlussAdmin>`                             | Get the admin interface for cluster management |
+| `fn get_admin(&self) -> Result<Arc<FlussAdmin>>`                              | Get the admin interface for cluster management |
 | `async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>>` | Get a table for read/write operations          |
 | `fn config(&self) -> &Config`                                                 | Get a reference to the connection config       |
 

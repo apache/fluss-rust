@@ -208,7 +208,7 @@ async def _connect_with_retry(bootstrap_servers, timeout=60):
         conn = None
         try:
             conn = await fluss.FlussConnection.create(config)
-            admin = await conn.get_admin()
+            admin = conn.get_admin()
             nodes = await admin.get_server_nodes()
             if any(n.server_type == "TabletServer" for n in nodes):
                 return conn
@@ -281,4 +281,4 @@ def plaintext_bootstrap_servers(fluss_cluster):
 @pytest_asyncio.fixture(scope="session")
 async def admin(connection):
     """Session-scoped admin client."""
-    return await connection.get_admin()
+    return connection.get_admin()

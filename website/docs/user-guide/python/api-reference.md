@@ -36,7 +36,7 @@ Complete API reference for the Fluss Python client.
 | Method                                                    |  Description                          |
 |-----------------------------------------------------------|---------------------------------------|
 | `await FlussConnection.create(config) -> FlussConnection` | Connect to a Fluss cluster            |
-| `await conn.get_admin() -> FlussAdmin`                    | Get admin interface                   |
+| `conn.get_admin() -> FlussAdmin`                        | Get admin interface                   |
 | `await conn.get_table(table_path) -> FlussTable`          | Get a table for read/write operations |
 | `conn.close()`                                            | Close the connection                  |
 

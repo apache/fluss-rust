@@ -712,7 +712,7 @@ unsafe fn delete_connection(conn: *mut Connection) {
 
 impl Connection {
     fn get_admin(&self) -> ffi::FfiPtrResult {
-        let admin_result = RUNTIME.block_on(async { self.inner.get_admin().await });
+        let admin_result = self.inner.get_admin();
 
         match admin_result {
             Ok(admin) => {
