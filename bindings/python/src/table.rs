@@ -1902,7 +1902,7 @@ macro_rules! with_scanner {
 #[pyclass]
 pub struct LogScanner {
     scanner: ScannerKind,
-    admin: fcore::client::FlussAdmin,
+    admin: Arc<fcore::client::FlussAdmin>,
     table_info: fcore::metadata::TableInfo,
     /// The projected Arrow schema to use for empty table creation
     projected_schema: SchemaRef,
@@ -2207,7 +2207,7 @@ impl LogScanner {
 impl LogScanner {
     fn new(
         scanner: ScannerKind,
-        admin: fcore::client::FlussAdmin,
+        admin: Arc<fcore::client::FlussAdmin>,
         table_info: fcore::metadata::TableInfo,
         projected_schema: SchemaRef,
         projected_row_type: fcore::metadata::RowType,
