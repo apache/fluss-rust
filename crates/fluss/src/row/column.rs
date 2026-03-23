@@ -17,8 +17,8 @@
 
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::row::InternalRow;
-use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+use crate::row::{GenericRow, InternalRow};
+use crate::row::datum::{Date, Datum, Time, TimestampLtz, TimestampNtz};
 use arrow::array::{Array, AsArray, BinaryArray, RecordBatch, StringArray};
 use arrow::datatypes::{
     DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
@@ -32,25 +32,33 @@ use std::sync::Arc;
 pub struct ColumnarRow {
     record_batch: Arc<RecordBatch>,
     row_id: usize,
+    nested_rows: Vec<std::sync::OnceLock<GenericRow<'static>>>,
 }
 
 impl ColumnarRow {
     pub fn new(batch: Arc<RecordBatch>) -> Self {
+        let num_cols = batch.num_columns();
         ColumnarRow {
             record_batch: batch,
             row_id: 0,
+            nested_rows: (0..num_cols).map(|_| std::sync::OnceLock::new()).collect(),
         }
     }
 
     pub fn new_with_row_id(bach: Arc<RecordBatch>, row_id: usize) -> Self {
+        let num_cols = bach.num_columns();
         ColumnarRow {
             record_batch: bach,
             row_id,
+            nested_rows: (0..num_cols).map(|_| std::sync::OnceLock::new()).collect(),
         }
     }
 
     pub fn set_row_id(&mut self, row_id: usize) {
-        self.row_id = row_id
+        self.row_id = row_id;
+        for lock in &mut self.nested_rows {
+            *lock = std::sync::OnceLock::new();
+        }
     }
 
     pub fn get_row_id(&self) -> usize {
@@ -206,6 +214,168 @@ impl ColumnarRow {
             }
             other => Err(IllegalArgument {
                 message: format!("expected Time column at position {pos}, got {other:?}"),
+            }),
+        }
+    }
+
+    /// Extract a `GenericRow<'static>` from a column in the RecordBatch at the given row_id.
+    fn extract_struct_at(
+        batch: &RecordBatch,
+        pos: usize,
+        row_id: usize,
+    ) -> Result<GenericRow<'static>> {
+        let col = batch.column(pos);
+        Self::extract_struct_from_array(col.as_ref(), row_id)
+    }
+
+    /// Recursively extract a `GenericRow<'static>` from a `StructArray` at row_id.
+    fn extract_struct_from_array(array: &dyn Array, row_id: usize) -> Result<GenericRow<'static>> {
+        use arrow::array::StructArray;
+        let sa = array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!("expected StructArray, got {:?}", array.data_type()),
+            })?;
+        let mut values = Vec::with_capacity(sa.num_columns());
+        for i in 0..sa.num_columns() {
+            let child = sa.column(i);
+            values.push(Self::arrow_value_to_datum(child.as_ref(), row_id)?);
+        }
+        Ok(GenericRow { values })
+    }
+
+    /// Convert a single element at `row_id` in an Arrow array to a `Datum<'static>`.
+    fn arrow_value_to_datum(array: &dyn Array, row_id: usize) -> Result<Datum<'static>> {
+        use arrow::array::{
+            BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+            Int32Array, Int64Array, Time32MillisecondArray, Time32SecondArray,
+            Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+            TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        };
+        use crate::row::Decimal;
+
+        if array.is_null(row_id) {
+            return Ok(Datum::Null);
+        }
+
+        match array.data_type() {
+            ArrowDataType::Boolean => {
+                let a = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+                Ok(Datum::Bool(a.value(row_id)))
+            }
+            ArrowDataType::Int8 => {
+                let a = array.as_any().downcast_ref::<Int8Array>().unwrap();
+                Ok(Datum::Int8(a.value(row_id)))
+            }
+            ArrowDataType::Int16 => {
+                let a = array.as_any().downcast_ref::<Int16Array>().unwrap();
+                Ok(Datum::Int16(a.value(row_id)))
+            }
+            ArrowDataType::Int32 => {
+                let a = array.as_any().downcast_ref::<Int32Array>().unwrap();
+                Ok(Datum::Int32(a.value(row_id)))
+            }
+            ArrowDataType::Int64 => {
+                let a = array.as_any().downcast_ref::<Int64Array>().unwrap();
+                Ok(Datum::Int64(a.value(row_id)))
+            }
+            ArrowDataType::Float32 => {
+                let a = array.as_any().downcast_ref::<Float32Array>().unwrap();
+                Ok(Datum::Float32(a.value(row_id).into()))
+            }
+            ArrowDataType::Float64 => {
+                let a = array.as_any().downcast_ref::<Float64Array>().unwrap();
+                Ok(Datum::Float64(a.value(row_id).into()))
+            }
+            ArrowDataType::Utf8 => {
+                let a = array.as_any().downcast_ref::<StringArray>().unwrap();
+                Ok(Datum::String(std::borrow::Cow::Owned(a.value(row_id).to_owned())))
+            }
+            ArrowDataType::Binary => {
+                let a = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+                Ok(Datum::Blob(std::borrow::Cow::Owned(a.value(row_id).to_vec())))
+            }
+            ArrowDataType::Decimal128(p, s) => {
+                let (p, s) = (*p, *s);
+                let a = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                let i128_val = a.value(row_id);
+                Ok(Datum::Decimal(Decimal::from_arrow_decimal128(
+                    i128_val,
+                    s as i64,
+                    p as u32,
+                    s as u32,
+                )?))
+            }
+            ArrowDataType::Date32 => {
+                let a = array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
+                Ok(Datum::Date(Date::new(a.value(row_id))))
+            }
+            ArrowDataType::Time32(TimeUnit::Second) => {
+                let a = array.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+                Ok(Datum::Time(Time::new(a.value(row_id) * 1000)))
+            }
+            ArrowDataType::Time32(TimeUnit::Millisecond) => {
+                let a = array.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+                Ok(Datum::Time(Time::new(a.value(row_id))))
+            }
+            ArrowDataType::Time64(TimeUnit::Microsecond) => {
+                let a = array.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+                Ok(Datum::Time(Time::new((a.value(row_id) / 1000) as i32)))
+            }
+            ArrowDataType::Time64(TimeUnit::Nanosecond) => {
+                let a = array.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+                Ok(Datum::Time(Time::new((a.value(row_id) / 1_000_000) as i32)))
+            }
+            ArrowDataType::Timestamp(time_unit, tz) => {
+                let value: i64 = match time_unit {
+                    TimeUnit::Second => {
+                        array.as_any().downcast_ref::<TimestampSecondArray>().unwrap().value(row_id)
+                    }
+                    TimeUnit::Millisecond => {
+                        array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap().value(row_id)
+                    }
+                    TimeUnit::Microsecond => {
+                        array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap().value(row_id)
+                    }
+                    TimeUnit::Nanosecond => {
+                        array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap().value(row_id)
+                    }
+                };
+                let (millis, nanos) = match time_unit {
+                    TimeUnit::Second => (value * 1000, 0i32),
+                    TimeUnit::Millisecond => (value, 0i32),
+                    TimeUnit::Microsecond => {
+                        let millis = value.div_euclid(1000);
+                        let nanos = (value.rem_euclid(1000) * 1000) as i32;
+                        (millis, nanos)
+                    }
+                    TimeUnit::Nanosecond => {
+                        let millis = value.div_euclid(1_000_000);
+                        let nanos = value.rem_euclid(1_000_000) as i32;
+                        (millis, nanos)
+                    }
+                };
+                if tz.is_some() {
+                    if nanos == 0 {
+                        Ok(Datum::TimestampLtz(TimestampLtz::new(millis)))
+                    } else {
+                        Ok(Datum::TimestampLtz(TimestampLtz::from_millis_nanos(millis, nanos)?))
+                    }
+                } else if nanos == 0 {
+                    Ok(Datum::TimestampNtz(TimestampNtz::new(millis)))
+                } else {
+                    Ok(Datum::TimestampNtz(TimestampNtz::from_millis_nanos(millis, nanos)?))
+                }
+            }
+            ArrowDataType::Struct(_) => {
+                let nested = Self::extract_struct_from_array(array, row_id)?;
+                Ok(Datum::Row(Box::new(nested)))
+            }
+            other => Err(IllegalArgument {
+                message: format!(
+                    "unsupported Arrow data type for nested row extraction: {other:?}"
+                ),
             }),
         }
     }
@@ -407,6 +577,18 @@ impl InternalRow for ColumnarRow {
             })?
             .value(self.row_id))
     }
+
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        let lock = self.nested_rows.get(pos).ok_or_else(|| IllegalArgument {
+            message: format!("column index {pos} out of bounds for get_row"),
+        })?;
+        let batch = Arc::clone(&self.record_batch);
+        let row_id = self.row_id;
+        Ok(lock.get_or_init(|| {
+            Self::extract_struct_at(&batch, pos, row_id)
+                .expect("failed to extract nested row from StructArray")
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -414,9 +596,9 @@ mod tests {
     use super::*;
     use arrow::array::{
         BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, StringArray,
+        Int16Array, Int32Array, Int64Array, StringArray, StructArray,
     };
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Fields, Schema};
 
     #[test]
     fn columnar_row_reads_values() {
@@ -532,5 +714,113 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    fn make_struct_batch(
+        field_name: &str,
+        child_fields: Fields,
+        child_arrays: Vec<Arc<dyn Array>>,
+        _num_rows: usize,
+    ) -> Arc<RecordBatch> {
+        let struct_array = StructArray::new(child_fields.clone(), child_arrays, None);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            field_name,
+            DataType::Struct(child_fields),
+            false,
+        )]));
+        Arc::new(
+            RecordBatch::try_new(schema, vec![Arc::new(struct_array)])
+                .expect("record batch"),
+        )
+    }
+
+    #[test]
+    fn columnar_row_reads_nested_row() {
+        // Build a RecordBatch with a Struct column: {i32, string}
+        let child_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, false),
+        ]);
+        let child_arrays: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int32Array::from(vec![42, 99])),
+            Arc::new(StringArray::from(vec!["hello", "world"])),
+        ];
+        let batch = make_struct_batch("nested", child_fields, child_arrays, 2);
+
+        let mut row = ColumnarRow::new(batch);
+
+        // row_id = 0
+        let nested = row.get_row(0).unwrap();
+        assert_eq!(nested.get_field_count(), 2);
+        assert_eq!(nested.get_int(0).unwrap(), 42);
+        assert_eq!(nested.get_string(1).unwrap(), "hello");
+
+        // row_id = 1
+        row.set_row_id(1);
+        let nested = row.get_row(0).unwrap();
+        assert_eq!(nested.get_int(0).unwrap(), 99);
+        assert_eq!(nested.get_string(1).unwrap(), "world");
+    }
+
+    #[test]
+    fn columnar_row_reads_deeply_nested_row() {
+        // Build: outer struct { i32, inner struct { string } }
+        let inner_fields = Fields::from(vec![Field::new("s", DataType::Utf8, false)]);
+        let inner_array = Arc::new(StructArray::new(
+            inner_fields.clone(),
+            vec![Arc::new(StringArray::from(vec!["deep", "deeper"])) as Arc<dyn Array>],
+            None,
+        ));
+
+        let outer_fields = Fields::from(vec![
+            Field::new("n", DataType::Int32, false),
+            Field::new("inner", DataType::Struct(inner_fields), false),
+        ]);
+        let outer_array = Arc::new(StructArray::new(
+            outer_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as Arc<dyn Array>,
+                inner_array as Arc<dyn Array>,
+            ],
+            None,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "outer",
+            DataType::Struct(outer_fields),
+            false,
+        )]));
+        let batch = Arc::new(
+            RecordBatch::try_new(schema, vec![outer_array]).expect("record batch"),
+        );
+
+        let row = ColumnarRow::new(batch);
+
+        // Access outer struct at column 0, row 0
+        let outer = row.get_row(0).unwrap();
+        assert_eq!(outer.get_int(0).unwrap(), 1);
+
+        // Access inner struct (column 1 of outer)
+        let inner = outer.get_row(1).unwrap();
+        assert_eq!(inner.get_string(0).unwrap(), "deep");
+    }
+
+    #[test]
+    fn columnar_row_get_row_cache_invalidated_on_set_row_id() {
+        let child_fields = Fields::from(vec![Field::new("x", DataType::Int32, false)]);
+        let child_arrays: Vec<Arc<dyn Array>> =
+            vec![Arc::new(Int32Array::from(vec![10, 20]))];
+        let batch = make_struct_batch("s", child_fields, child_arrays, 2);
+
+        let mut row = ColumnarRow::new(batch);
+
+        // row_id = 0: nested x = 10
+        let nested_0 = row.get_row(0).unwrap();
+        assert_eq!(nested_0.get_int(0).unwrap(), 10);
+
+        // After set_row_id(1), cache is cleared → nested x = 20
+        row.set_row_id(1);
+        let nested_1 = row.get_row(0).unwrap();
+        assert_eq!(nested_1.get_int(0).unwrap(), 20);
     }
 }

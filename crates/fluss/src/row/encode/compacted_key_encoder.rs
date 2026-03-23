@@ -104,7 +104,7 @@ impl KeyEncoder for CompactedKeyEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::DataTypes;
+    use crate::metadata::{DataType, DataTypes};
     use crate::row::{Datum, GenericRow};
 
     pub fn for_test_row_type(row_type: &RowType) -> CompactedKeyEncoder {
@@ -354,5 +354,51 @@ mod tests {
             expected,
             encoded.iter().as_slice()
         );
+    }
+
+    #[test]
+    fn test_row_as_primary_key() {
+        // ROW<INT, STRING> as a primary key column
+        let inner_row_type = RowType::with_data_types_and_field_names(
+            vec![DataTypes::int(), DataTypes::string()],
+            vec!["x", "label"],
+        );
+        let row_type = RowType::with_data_types_and_field_names(
+            vec![
+                DataTypes::int(),
+                DataType::Row(inner_row_type.clone()),
+            ],
+            vec!["id", "nested"],
+        );
+
+        let mut inner = GenericRow::new(2);
+        inner.set_field(0, 42_i32);
+        inner.set_field(1, "hello");
+
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        row.set_field(1, Datum::Row(Box::new(inner)));
+
+        let mut encoder = for_test_row_type(&row_type);
+        let encoded = encoder.encode_key(&row).unwrap();
+
+        // Verify it encodes without error and produces non-empty bytes
+        assert!(!encoded.is_empty());
+
+        // Encode the same row again to verify determinism
+        let encoded2 = encoder.encode_key(&row).unwrap();
+        assert_eq!(encoded, encoded2);
+
+        // Encode a different nested row and verify different output
+        let mut inner2 = GenericRow::new(2);
+        inner2.set_field(0, 99_i32);
+        inner2.set_field(1, "world");
+
+        let mut row2 = GenericRow::new(2);
+        row2.set_field(0, 1_i32);
+        row2.set_field(1, Datum::Row(Box::new(inner2)));
+
+        let encoded3 = encoder.encode_key(&row2).unwrap();
+        assert_ne!(encoded, encoded3);
     }
 }

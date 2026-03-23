@@ -160,6 +160,18 @@ impl<'a> CompactedRowDeserializer<'a> {
                         (Datum::TimestampLtz(timestamp_ltz), next)
                     }
                 }
+                DataType::Row(row_type) => {
+                    let (nested_bytes, next) = reader.read_bytes(cursor);
+                    let nested_reader = CompactedRowReader::new(
+                        row_type.fields().len(),
+                        nested_bytes,
+                        0,
+                        nested_bytes.len(),
+                    );
+                    let nested_deser = CompactedRowDeserializer::new_from_owned(row_type.clone());
+                    let nested_row = nested_deser.deserialize(&nested_reader);
+                    (Datum::Row(Box::new(nested_row)), next)
+                }
                 _ => {
                     panic!("Unsupported DataType in CompactedRowDeserializer: {dtype:?}");
                 }
@@ -284,5 +296,144 @@ impl<'a> CompactedRowReader<'a> {
         let (bytes, next_pos) = self.read_bytes(pos);
         let s = from_utf8(bytes).expect("Invalid UTF-8 when reading string");
         (s, next_pos)
+    }
+}
+
+#[cfg(test)]
+mod row_type_tests {
+    use crate::metadata::{DataType, DataTypes, RowType};
+    use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
+    use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
+    use crate::row::binary::ValueWriter;
+    use crate::row::field_getter::FieldGetter;
+    use crate::row::{Datum, GenericRow, InternalRow};
+
+    fn round_trip<F>(outer_row_type: &RowType, outer_row: &GenericRow, verify: F)
+    where
+        F: FnOnce(&GenericRow),
+    {
+        // Write
+        let field_getters = FieldGetter::create_field_getters(outer_row_type);
+        let value_writers: Vec<ValueWriter> = outer_row_type
+            .fields()
+            .iter()
+            .map(|f| ValueWriter::create_value_writer(f.data_type(), None).unwrap())
+            .collect();
+        let mut writer = CompactedRowWriter::new(outer_row_type.fields().len());
+        for (i, (getter, vw)) in field_getters.iter().zip(value_writers.iter()).enumerate() {
+            let datum = getter.get_field(outer_row as &dyn InternalRow).unwrap();
+            vw.write_value(&mut writer, i, &datum).unwrap();
+        }
+        let bytes = writer.to_bytes();
+
+        // Read
+        let deser = CompactedRowDeserializer::new(outer_row_type);
+        let reader = CompactedRowReader::new(
+            outer_row_type.fields().len(),
+            bytes.as_ref(),
+            0,
+            bytes.len(),
+        );
+        let result = deser.deserialize(&reader);
+        verify(&result);
+    }
+
+    #[test]
+    fn test_row_simple_nesting() {
+        // ROW<INT, STRING> nested inside an outer row
+        let inner_row_type = RowType::with_data_types_and_field_names(
+            vec![DataTypes::int(), DataTypes::string()],
+            vec!["x", "label"],
+        );
+        let outer_row_type = RowType::with_data_types_and_field_names(
+            vec![DataTypes::int(), DataType::Row(inner_row_type.clone())],
+            vec!["id", "nested"],
+        );
+
+        let mut inner = GenericRow::new(2);
+        inner.set_field(0, 42_i32);
+        inner.set_field(1, "hello");
+
+        let mut outer = GenericRow::new(2);
+        outer.set_field(0, 1_i32);
+        outer.set_field(1, Datum::Row(Box::new(inner)));
+
+        round_trip(&outer_row_type, &outer, |result| {
+            assert_eq!(result.get_int(0).unwrap(), 1);
+            let nested = result.get_row(1).unwrap();
+            assert_eq!(nested.get_int(0).unwrap(), 42);
+            assert_eq!(nested.get_string(1).unwrap(), "hello");
+        });
+    }
+
+    #[test]
+    fn test_row_deep_nesting() {
+        // ROW<ROW<INT>> — two levels of nesting
+        let inner_inner_row_type = RowType::with_data_types_and_field_names(
+            vec![DataTypes::int()],
+            vec!["n"],
+        );
+        let inner_row_type = RowType::with_data_types_and_field_names(
+            vec![DataType::Row(inner_inner_row_type.clone())],
+            vec!["inner"],
+        );
+        let outer_row_type = RowType::with_data_types_and_field_names(
+            vec![DataType::Row(inner_row_type.clone())],
+            vec!["outer"],
+        );
+
+        let mut innermost = GenericRow::new(1);
+        innermost.set_field(0, 99_i32);
+
+        let mut middle = GenericRow::new(1);
+        middle.set_field(0, Datum::Row(Box::new(innermost)));
+
+        let mut outer = GenericRow::new(1);
+        outer.set_field(0, Datum::Row(Box::new(middle)));
+
+        round_trip(&outer_row_type, &outer, |result| {
+            let mid = result.get_row(0).unwrap();
+            let inner = mid.get_row(0).unwrap();
+            assert_eq!(inner.get_int(0).unwrap(), 99);
+        });
+    }
+
+    #[test]
+    fn test_row_with_nullable_fields() {
+        // Outer nullable ROW column; nested row with a nullable STRING field set to null
+        let inner_row_type = RowType::with_data_types_and_field_names(
+            vec![DataTypes::int(), DataTypes::string()],
+            vec!["id", "optional_name"],
+        );
+        let outer_row_type = RowType::with_data_types_and_field_names(
+            vec![DataTypes::int(), DataType::Row(inner_row_type.clone())],
+            vec!["k", "nested"],
+        );
+
+        // Case 1: non-null nested row with a null field inside
+        let mut inner = GenericRow::new(2);
+        inner.set_field(0, 7_i32);
+        inner.set_field(1, Datum::Null);
+
+        let mut outer = GenericRow::new(2);
+        outer.set_field(0, 10_i32);
+        outer.set_field(1, Datum::Row(Box::new(inner)));
+
+        round_trip(&outer_row_type, &outer, |result| {
+            assert_eq!(result.get_int(0).unwrap(), 10);
+            let nested = result.get_row(1).unwrap();
+            assert_eq!(nested.get_int(0).unwrap(), 7);
+            assert!(nested.is_null_at(1).unwrap());
+        });
+
+        // Case 2: outer ROW column is null
+        let mut outer_null = GenericRow::new(2);
+        outer_null.set_field(0, 20_i32);
+        outer_null.set_field(1, Datum::Null);
+
+        round_trip(&outer_row_type, &outer_null, |result2| {
+            assert_eq!(result2.get_int(0).unwrap(), 20);
+            assert!(result2.is_null_at(1).unwrap());
+        });
     }
 }

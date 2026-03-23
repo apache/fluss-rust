@@ -17,7 +17,7 @@
 
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::DataType;
+use crate::metadata::{DataType, RowType};
 use crate::row::Datum;
 use crate::row::binary::BinaryRowFormat;
 
@@ -136,7 +136,7 @@ pub enum InnerValueWriter {
     Time(u32),         // precision (not used in wire format, but kept for consistency)
     TimestampNtz(u32), // precision
     TimestampLtz(u32), // precision
-                       // TODO Array, Row
+    Row(RowType),
 }
 
 /// Accessor for writing the fields/elements of a binary writer during runtime, the
@@ -175,6 +175,7 @@ impl InnerValueWriter {
                 // Validation is done at TimestampLTzType construction time
                 Ok(InnerValueWriter::TimestampLtz(t.precision()))
             }
+            DataType::Row(row_type) => Ok(InnerValueWriter::Row(row_type.clone())),
             _ => unimplemented!(
                 "ValueWriter for DataType {:?} is currently not implemented",
                 data_type
@@ -236,6 +237,26 @@ impl InnerValueWriter {
             }
             (InnerValueWriter::TimestampLtz(p), Datum::TimestampLtz(ts)) => {
                 writer.write_timestamp_ltz(ts, *p);
+            }
+            (InnerValueWriter::Row(row_type), Datum::Row(inner_row)) => {
+                use crate::row::compacted::CompactedRowWriter;
+                let field_count = row_type.fields().len();
+                let mut nested = CompactedRowWriter::new(field_count);
+                for (i, field) in row_type.fields().iter().enumerate() {
+                    let datum = &inner_row.values[i];
+                    if datum.is_null() {
+                        if field.data_type.is_nullable() {
+                            nested.set_null_at(i);
+                        }
+                    } else {
+                        let vw =
+                            InnerValueWriter::create_inner_value_writer(&field.data_type, None)
+                                .expect("create_inner_value_writer failed for nested row field");
+                        vw.write_value(&mut nested, i, datum)
+                            .expect("write_value failed for nested row field");
+                    }
+                }
+                writer.write_bytes(nested.buffer());
             }
             _ => {
                 return Err(IllegalArgument {

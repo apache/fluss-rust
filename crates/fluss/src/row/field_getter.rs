@@ -82,6 +82,7 @@ impl FieldGetter {
                 pos,
                 precision: t.precision(),
             },
+            DataType::Row(_) => InnerFieldGetter::Row { pos },
             _ => unimplemented!("DataType {:?} is currently unimplemented", data_type),
         };
 
@@ -149,6 +150,9 @@ pub enum InnerFieldGetter {
         pos: usize,
         precision: u32,
     },
+    Row {
+        pos: usize,
+    },
 }
 
 impl InnerFieldGetter {
@@ -177,7 +181,8 @@ impl InnerFieldGetter {
             }
             InnerFieldGetter::TimestampLtz { pos, precision } => {
                 Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision)?)
-            } //TODO Array, Map, Row
+            }
+            InnerFieldGetter::Row { pos } => Datum::Row(Box::new(row.get_row(*pos)?.clone())),
         })
     }
 
@@ -198,7 +203,8 @@ impl InnerFieldGetter {
             | Self::Date { pos }
             | Self::Time { pos }
             | Self::Timestamp { pos, .. }
-            | Self::TimestampLtz { pos, .. } => *pos,
+            | Self::TimestampLtz { pos, .. }
+            | Self::Row { pos } => *pos,
         }
     }
 }
