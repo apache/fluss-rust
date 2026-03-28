@@ -292,7 +292,6 @@ impl Lookuper {
         let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
 
         // Find the leader for this bucket
-        let cluster = self.metadata.get_cluster();
         let leader = self
             .metadata
             .leader_for(self.table_path.as_ref(), &table_bucket)
@@ -303,15 +302,7 @@ impl Lookuper {
                 ))
             })?;
 
-        // Get connection to the tablet server
-        let tablet_server = cluster.get_tablet_server(leader.id()).ok_or_else(|| {
-            Error::leader_not_available(format!(
-                "Tablet server {} is not found in metadata cache",
-                leader.id()
-            ))
-        })?;
-
-        let connection = self.rpc_client.get_connection(tablet_server).await?;
+        let connection = self.rpc_client.get_connection(&leader).await?;
 
         // Send lookup request
         let request = LookupRequest::new(table_id, partition_id, bucket_id, vec![pk_bytes_vec]);
