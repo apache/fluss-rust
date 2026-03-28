@@ -21,6 +21,7 @@ sidebar_position: 3
 | `TIMESTAMP_LTZ` | `TimestampLtz` | `get_timestamp_ltz(idx, precision)`  | `set_field(idx, TimestampLtz)` |
 | `BYTES`         | `&[u8]`        | `get_bytes()`                        | `set_field(idx, &[u8])`        |
 | `BINARY(n)`     | `&[u8]`        | `get_binary(idx, length)`            | `set_field(idx, &[u8])`        |
+| `ARRAY<T>`      | `FlussArray`   | `get_array()`                        | `set_field(idx, FlussArray)`   |
 
 ## Constructing Special Types
 
@@ -58,6 +59,29 @@ use fluss::row::{Datum, GenericRow};
 let data: Vec<Datum> = vec![1i32.into(), "hello".into(), Datum::Null];
 let row = GenericRow::from_data(data);
 ```
+
+## Arrays
+
+Use `DataTypes::array(element_type)` in schema definitions. At runtime, read arrays with `row.get_array(idx)?`.
+
+To construct array values for writes, build a `FlussArray` and wrap it with `Datum::Array`:
+
+```rust
+use fluss::metadata::DataTypes;
+use fluss::row::binary_array::FlussArrayWriter;
+use fluss::row::{Datum, GenericRow};
+
+let mut writer = FlussArrayWriter::new(3, &DataTypes::int());
+writer.write_int(0, 10);
+writer.write_int(1, 20);
+writer.set_null_at(2);
+let arr = writer.complete()?;
+
+let mut row = GenericRow::new(1);
+row.set_field(0, Datum::Array(arr));
+```
+
+`ARRAY` is supported for row values and nested row fields. For key encoding, Rust follows Java parity: `ARRAY` can be encoded by the compacted key encoder, while table-level key constraints are validated by the server (which may reject unsupported key types).
 
 ## Reading Row Data
 
