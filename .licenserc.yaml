@@ -27,6 +27,7 @@ header:
     - 'NOTICE'
     - 'DISCLAIMER'
     - 'bindings/python/fluss/py.typed'
+    - '**/mix.lock'
     - 'website/**'
     - '**/*.md'
     - '**/DEPENDENCIES.*.tsv'
