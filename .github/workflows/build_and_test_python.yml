@@ -58,6 +58,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
+      - name: uv Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('bindings/python/uv.lock') }}
+
       - name: Rust Cache
         uses: actions/cache@v4
         with:
