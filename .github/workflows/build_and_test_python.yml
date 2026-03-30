@@ -62,7 +62,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('bindings/python/uv.lock') }}
+          key: uv-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('bindings/python/pyproject.toml') }}
+          restore-keys: |
+            uv-${{ runner.os }}-${{ matrix.python }}-
 
       - name: Rust Cache
         uses: actions/cache@v4
