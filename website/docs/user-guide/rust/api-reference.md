@@ -20,6 +20,10 @@ Complete API reference for the Fluss Rust client.
 | `remote_file_download_thread_num`     | `usize`         | `3`                | Number of threads for remote log downloads                                           |
 | `scanner_remote_log_read_concurrency` | `usize`         | `4`                | Streaming read concurrency within a remote log file                                  |
 | `scanner_log_max_poll_records`        | `usize`         | `500`              | Maximum number of records returned in a single poll()                                |
+| `scanner_log_fetch_max_bytes`         | `i32`           | `16777216` (16 MB) | Maximum bytes per fetch response for LogScanner                                      |
+| `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
+| `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
+| `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
 | `connect_timeout_ms`                  | `u64`           | `120000`           | TCP connect timeout in milliseconds                                                  |
 | `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
@@ -31,7 +35,7 @@ Complete API reference for the Fluss Rust client.
 | Method                                                                        | Description                                    |
 |-------------------------------------------------------------------------------|------------------------------------------------|
 | `async fn new(config: Config) -> Result<Self>`                                | Create a new connection to a Fluss cluster     |
-| `async fn get_admin(&self) -> Result<FlussAdmin>`                             | Get the admin interface for cluster management |
+| `fn get_admin(&self) -> Result<Arc<FlussAdmin>>`                              | Get the admin interface for cluster management |
 | `async fn get_table(&self, table_path: &TablePath) -> Result<FlussTable<'_>>` | Get a table for read/write operations          |
 | `fn config(&self) -> &Config`                                                 | Get a reference to the connection config       |
 
@@ -225,7 +229,8 @@ for record in records {
 | Method                                                         |  Description                     |
 |----------------------------------------------------------------|----------------------------------|
 | `fn get_single_row(&self) -> Result<Option<impl InternalRow>>` | Get a single row from the result |
-| `fn get_rows(&self) -> Vec<impl InternalRow>`                  | Get all rows from the result     |
+| `fn get_rows(&self) -> Result<Vec<impl InternalRow>>`          | Get all rows from the result     |
+| `fn to_record_batch(&self) -> Result<RecordBatch>`             | Convert all rows to an Arrow `RecordBatch` for DataFusion or other Arrow-based tools    |
 
 ## `WriteResultFuture`
 
@@ -402,6 +407,19 @@ Implements the `InternalRow` trait (see below).
 | `fn get_bytes(&self, idx: usize) -> Result<&[u8]>`                                     | Get bytes value                         |
 | `fn get_binary(&self, idx: usize, length: usize) -> Result<&[u8]>`                     | Get fixed-length binary value           |
 | `fn get_char(&self, idx: usize, length: usize) -> Result<&str>`                        | Get fixed-length char value             |
+| `fn get_array(&self, idx: usize) -> Result<FlussArray>`                                | Get array value                         |
+
+## `FlussArray`
+
+`FlussArray` is the Rust row representation for `ARRAY` values. You usually obtain it from `InternalRow::get_array()`.
+
+| Method | Description |
+|--------|-------------|
+| `fn size(&self) -> usize` | Number of elements in the array |
+| `fn is_null_at(&self, pos: usize) -> bool` | Check whether an element is null |
+| `fn as_bytes(&self) -> &[u8]` | Get encoded bytes of the array |
+
+Element getters mirror `InternalRow` typed getters and return `Result<T>`. For example, use `get_int()`, `get_long()`, and `get_double()` for primitive elements, and `get_string()`, `get_binary()`, `get_decimal()`, `get_timestamp_ntz()`, `get_timestamp_ltz()`, and `get_array()` for variable-length or nested elements.
 
 ## `ChangeType`
 

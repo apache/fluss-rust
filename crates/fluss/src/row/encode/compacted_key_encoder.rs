@@ -64,8 +64,12 @@ impl CompactedKeyEncoder {
 
         for pos in &encode_field_pos {
             let data_type = row_type.fields().get(*pos).unwrap().data_type();
-            field_getters.push(FieldGetter::create(data_type, *pos));
-            field_encoders.push(CompactedKeyWriter::create_value_writer(data_type)?);
+            // Validate key type support first, so unsupported types return a
+            // typed error instead of panicking in FieldGetter::create.
+            let field_encoder = CompactedKeyWriter::create_value_writer(data_type)?;
+            let field_getter = FieldGetter::create(data_type, *pos);
+            field_getters.push(field_getter);
+            field_encoders.push(field_encoder);
         }
 
         Ok(CompactedKeyEncoder {
@@ -82,18 +86,19 @@ impl KeyEncoder for CompactedKeyEncoder {
         self.compacted_encoder.reset();
 
         // iterate all the fields of the row, and encode each field
-        for (pos, field_getter) in self.field_getters.iter().enumerate() {
+        for (pos, (field_getter, field_encoder)) in self
+            .field_getters
+            .iter()
+            .zip(self.field_encoders.iter())
+            .enumerate()
+        {
             match &field_getter.get_field(row)? {
                 Datum::Null => {
                     return Err(IllegalArgument {
                         message: format!("Cannot encode key with null value at position: {pos:?}"),
                     });
                 }
-                value => self.field_encoders.get(pos).unwrap().write_value(
-                    &mut self.compacted_encoder,
-                    pos,
-                    value,
-                )?,
+                value => field_encoder.write_value(&mut self.compacted_encoder, pos, value)?,
             }
         }
 
@@ -105,7 +110,54 @@ impl KeyEncoder for CompactedKeyEncoder {
 mod tests {
     use super::*;
     use crate::metadata::DataTypes;
+    use crate::row::binary_array::FlussArrayWriter;
     use crate::row::{Datum, GenericRow};
+
+    fn build_int_array(values: &[i32]) -> crate::row::FlussArray {
+        let mut w = FlussArrayWriter::new(values.len(), &DataTypes::int());
+        for (i, v) in values.iter().enumerate() {
+            w.write_int(i, *v);
+        }
+        w.complete().unwrap()
+    }
+
+    fn build_nullable_int_array(values: &[Option<i32>]) -> crate::row::FlussArray {
+        let mut w = FlussArrayWriter::new(values.len(), &DataTypes::int());
+        for (i, v) in values.iter().enumerate() {
+            match v {
+                Some(value) => w.write_int(i, *value),
+                None => w.set_null_at(i),
+            }
+        }
+        w.complete().unwrap()
+    }
+
+    fn build_float_array(values: &[f32]) -> crate::row::FlussArray {
+        let mut w = FlussArrayWriter::new(values.len(), &DataTypes::float().as_non_nullable());
+        for (i, v) in values.iter().enumerate() {
+            w.write_float(i, *v);
+        }
+        w.complete().unwrap()
+    }
+
+    fn build_nested_string_array() -> crate::row::FlussArray {
+        let mut inner_1 = FlussArrayWriter::new(3, &DataTypes::string());
+        inner_1.write_string(0, "a");
+        inner_1.set_null_at(1);
+        inner_1.write_string(2, "c");
+        let inner_1 = inner_1.complete().unwrap();
+
+        let mut inner_2 = FlussArrayWriter::new(2, &DataTypes::string());
+        inner_2.write_string(0, "hello");
+        inner_2.write_string(1, "world");
+        let inner_2 = inner_2.complete().unwrap();
+
+        let mut outer = FlussArrayWriter::new(3, &DataTypes::array(DataTypes::string()));
+        outer.write_array(0, &inner_1);
+        outer.set_null_at(1);
+        outer.write_array(2, &inner_2);
+        outer.complete().unwrap()
+    }
 
     pub fn for_test_row_type(row_type: &RowType) -> CompactedKeyEncoder {
         CompactedKeyEncoder::new(row_type, (0..row_type.fields().len()).collect())
@@ -238,6 +290,51 @@ mod tests {
     }
 
     #[test]
+    fn test_array_type_allowed_as_key() {
+        // Java's CompactedKeyEncoder allows Array as a key column type
+        // (the server rejects unsupported key types at table-creation time).
+        let row_type =
+            RowType::with_data_types(vec![DataTypes::int(), DataTypes::array(DataTypes::int())]);
+        let mut encoder = CompactedKeyEncoder::new(&row_type, vec![0, 1]).unwrap();
+
+        let row_a = GenericRow::from_data(vec![
+            Datum::Int32(42),
+            Datum::Array(build_int_array(&[10, 20])),
+        ]);
+        let row_b = GenericRow::from_data(vec![
+            Datum::Int32(42),
+            Datum::Array(build_int_array(&[10, 30])),
+        ]);
+
+        let encoded_a = encoder.encode_key(&row_a).unwrap();
+        let encoded_b = encoder.encode_key(&row_b).unwrap();
+
+        assert!(!encoded_a.is_empty());
+        assert_ne!(
+            encoded_a.iter().as_slice(),
+            encoded_b.iter().as_slice(),
+            "Array key payload should affect compacted key encoding"
+        );
+    }
+
+    #[test]
+    fn test_map_type_rejected_as_key() {
+        let row_type = RowType::with_data_types(vec![
+            DataTypes::int(),
+            DataTypes::map(DataTypes::int(), DataTypes::string()),
+        ]);
+        match CompactedKeyEncoder::new(&row_type, vec![0, 1]) {
+            Ok(_) => panic!("Expected error when using Map as key type"),
+            Err(err) => {
+                assert!(
+                    err.to_string().contains("Cannot use"),
+                    "Expected 'Cannot use' error, got: {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_all_data_types_java_compatible() {
         // Test encoding compatibility with Java using reference from:
         // https://github.com/apache/fluss/blob/main/fluss-common/src/test/resources/encoding/encoded_key.hex
@@ -263,9 +360,11 @@ mod tests {
             DataType::Timestamp(TimestampType::with_nullable(false, 5).unwrap()), // TIMESTAMP(5)
             DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 1).unwrap()), // TIMESTAMP_LTZ(1)
             DataType::TimestampLTz(TimestampLTzType::with_nullable(false, 5).unwrap()), // TIMESTAMP_LTZ(5)
-                                                                                        // TODO: Add support for ARRAY type
-                                                                                        // TODO: Add support for MAP type
-                                                                                        // TODO: Add support for ROW type
+            DataTypes::array(DataTypes::int()), // ARRAY<INT>
+            DataTypes::array(DataTypes::float().as_non_nullable()), // ARRAY<FLOAT NOT NULL>
+            DataTypes::array(DataTypes::array(DataTypes::string())), // ARRAY<ARRAY<STRING>>
+                                                // TODO: Add support for MAP type
+                                                // TODO: Add support for ROW type
         ]);
 
         // Exact values from Java's IndexedRowTest.genRecordForAllTypes()
@@ -296,6 +395,26 @@ mod tests {
             Datum::TimestampNtz(crate::row::datum::TimestampNtz::new(1698235273182)), // TIMESTAMP(5)
             Datum::TimestampLtz(crate::row::datum::TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(1)
             Datum::TimestampLtz(crate::row::datum::TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(5)
+            Datum::Array(build_nullable_int_array(&[
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(-11),
+                None,
+                Some(444),
+                Some(102234),
+            ])), // ARRAY<INT>: GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234)
+            Datum::Array(build_float_array(&[
+                0.1_f32,
+                1.1_f32,
+                -0.5_f32,
+                6.6_f32,
+                f32::MAX,
+                f32::from_bits(1),
+            ])), // ARRAY<FLOAT NOT NULL>: GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, MAX, MIN)
+            Datum::Array(build_nested_string_array()), // ARRAY<ARRAY<STRING>>
         ]);
 
         // Expected bytes from Java's encoded_key.hex reference file
@@ -339,6 +458,25 @@ mod tests {
             0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31,
             // TIMESTAMP_LTZ(5): 1698235273182
             0xDE, 0x9F, 0xD7, 0xB5, 0xB6, 0x31, 0x00,
+            // ARRAY<INT>: GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234)
+            0x30, 0x09, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00,
+            0x00, 0x05, 0x00, 0x00, 0x00, 0xF5, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0xBC, 0x01, 0x00, 0x00, 0x5A, 0x8F, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x00,
+            // ARRAY<FLOAT NOT NULL>: GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, MAX, MIN)
+            0x20, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xCD, 0xCC, 0xCC,
+            0x3D, 0xCD, 0xCC, 0x8C, 0x3F, 0x00, 0x00, 0x00, 0xBF, 0x33, 0x33, 0xD3,
+            0x40, 0xFF, 0xFF, 0x7F, 0x7F, 0x01, 0x00, 0x00, 0x00,
+            // ARRAY<ARRAY<STRING>>
+            0x58, 0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+            0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x18, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00,
+            0x00, 0x02, 0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x63, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x81, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x00, 0x00, 0x85, 0x77, 0x6F, 0x72,
+            0x6C, 0x64, 0x00, 0x00, 0x85,
         ];
 
         let mut encoder = for_test_row_type(&row_type);

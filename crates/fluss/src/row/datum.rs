@@ -18,12 +18,14 @@
 use crate::error::Error::RowConvertError;
 use crate::error::Result;
 use crate::row::Decimal;
+use crate::row::binary_array::FlussArray;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
-    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
-    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
+    Int32Builder, Int64Builder, ListBuilder, StringBuilder, Time32MillisecondBuilder,
+    Time32SecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
+    TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
+    TimestampSecondBuilder,
 };
 use arrow::datatypes as arrow_schema;
 use arrow::error::ArrowError;
@@ -68,6 +70,8 @@ pub enum Datum<'a> {
     TimestampNtz(TimestampNtz),
     #[display("{0}")]
     TimestampLtz(TimestampLtz),
+    #[display("{0}")]
+    Array(FlussArray),
 }
 
 impl Datum<'_> {
@@ -121,6 +125,13 @@ impl Datum<'_> {
         match self {
             Self::TimestampLtz(ts) => *ts,
             _ => panic!("not a timestamp ltz: {self:?}"),
+        }
+    }
+
+    pub fn as_array(&self) -> &FlussArray {
+        match self {
+            Self::Array(a) => a,
+            _ => panic!("not an array: {self:?}"),
         }
     }
 }
@@ -388,6 +399,13 @@ impl<'a> From<TimestampLtz> for Datum<'a> {
     }
 }
 
+impl<'a> From<FlussArray> for Datum<'a> {
+    #[inline]
+    fn from(arr: FlussArray) -> Datum<'a> {
+        Datum::Array(arr)
+    }
+}
+
 pub trait ToArrow {
     fn append_to(
         &self,
@@ -397,13 +415,13 @@ pub trait ToArrow {
 }
 
 // Time unit conversion constants
-const MILLIS_PER_SECOND: i64 = 1_000;
-const MICROS_PER_MILLI: i64 = 1_000;
-const NANOS_PER_MILLI: i64 = 1_000_000;
+pub(crate) const MILLIS_PER_SECOND: i64 = 1_000;
+pub(crate) const MICROS_PER_MILLI: i64 = 1_000;
+pub(crate) const NANOS_PER_MILLI: i64 = 1_000_000;
 
 /// Converts milliseconds and nanoseconds-within-millisecond to total microseconds.
 /// Returns an error if the conversion would overflow.
-fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
+pub(crate) fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
     let millis_micros = millis
         .checked_mul(MICROS_PER_MILLI)
         .ok_or_else(|| RowConvertError {
@@ -423,7 +441,7 @@ fn millis_nanos_to_micros(millis: i64, nanos: i32) -> Result<i64> {
 
 /// Converts milliseconds and nanoseconds-within-millisecond to total nanoseconds.
 /// Returns an error if the conversion would overflow.
-fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
+pub(crate) fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
     let millis_nanos = millis
         .checked_mul(NANOS_PER_MILLI)
         .ok_or_else(|| RowConvertError {
@@ -438,6 +456,42 @@ fn millis_nanos_to_nanos(millis: i64, nanos: i32) -> Result<i64> {
                 "Timestamp overflow when adding nanoseconds: {millis_nanos} + {nanos}"
             ),
         })
+}
+
+/// Rescales a [`Decimal`] to the given Arrow target precision/scale and appends
+/// the resulting i128 to the builder.
+pub(crate) fn append_decimal_to_builder(
+    decimal: &Decimal,
+    target_precision: u32,
+    target_scale: i64,
+    builder: &mut Decimal128Builder,
+) -> Result<()> {
+    use bigdecimal::RoundingMode;
+
+    let bd = decimal.to_big_decimal();
+    let rescaled = bd.with_scale_round(target_scale, RoundingMode::HalfUp);
+    let (unscaled, _) = rescaled.as_bigint_and_exponent();
+
+    let actual_precision = Decimal::compute_precision(&unscaled);
+    if actual_precision > target_precision as usize {
+        return Err(RowConvertError {
+            message: format!(
+                "Decimal precision overflow: value has {actual_precision} digits but Arrow expects {target_precision} (value: {rescaled})"
+            ),
+        });
+    }
+
+    let i128_val: i128 = match unscaled.try_into() {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(RowConvertError {
+                message: format!("Decimal value exceeds i128 range: {rescaled}"),
+            });
+        }
+    };
+
+    builder.append_value(i128_val);
+    Ok(())
 }
 
 trait AppendResult {
@@ -456,6 +510,89 @@ impl AppendResult for std::result::Result<(), ArrowError> {
             message: format!("Failed to append value: {e}"),
         })
     }
+}
+
+fn append_fluss_array_to_list_builder(
+    arr: &FlussArray,
+    builder: &mut dyn ArrayBuilder,
+    data_type: &arrow_schema::DataType,
+) -> Result<()> {
+    use crate::record::from_arrow_type;
+
+    let list_builder = builder
+        .as_any_mut()
+        .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
+        .ok_or_else(|| RowConvertError {
+            message: "Builder type mismatch for Array: expected ListBuilder".to_string(),
+        })?;
+
+    let element_arrow_type = match data_type {
+        arrow_schema::DataType::List(field) => field.data_type().clone(),
+        _ => {
+            return Err(RowConvertError {
+                message: format!("Expected List Arrow type for Array datum, got: {data_type:?}"),
+            });
+        }
+    };
+
+    let element_fluss_type = from_arrow_type(&element_arrow_type)?;
+    let values_builder = list_builder.values();
+
+    for i in 0..arr.size() {
+        if arr.is_null_at(i) {
+            // TODO: Datum::Null triggers a chain of downcast attempts in append_to.
+            // For sparse arrays with many nulls, call append_null directly on the
+            // typed inner builder to avoid the overhead.
+            let null_datum = Datum::Null;
+            null_datum.append_to(values_builder, &element_arrow_type)?;
+        } else {
+            let datum = read_datum_from_fluss_array(arr, i, &element_fluss_type)?;
+            datum.append_to(values_builder, &element_arrow_type)?;
+        }
+    }
+    list_builder.append(true);
+    Ok(())
+}
+
+fn read_datum_from_fluss_array<'a>(
+    arr: &FlussArray,
+    pos: usize,
+    element_type: &crate::metadata::DataType,
+) -> Result<Datum<'a>> {
+    use crate::metadata::DataType;
+
+    Ok(match element_type {
+        DataType::Boolean(_) => Datum::Bool(arr.get_boolean(pos)?),
+        DataType::TinyInt(_) => Datum::Int8(arr.get_byte(pos)?),
+        DataType::SmallInt(_) => Datum::Int16(arr.get_short(pos)?),
+        DataType::Int(_) => Datum::Int32(arr.get_int(pos)?),
+        DataType::BigInt(_) => Datum::Int64(arr.get_long(pos)?),
+        DataType::Float(_) => Datum::Float32(arr.get_float(pos)?.into()),
+        DataType::Double(_) => Datum::Float64(arr.get_double(pos)?.into()),
+        DataType::Char(_) | DataType::String(_) => {
+            Datum::String(Cow::Owned(arr.get_string(pos)?.to_string()))
+        }
+        DataType::Binary(_) | DataType::Bytes(_) => {
+            Datum::Blob(Cow::Owned(arr.get_binary(pos)?.to_vec()))
+        }
+        DataType::Decimal(dt) => {
+            Datum::Decimal(arr.get_decimal(pos, dt.precision(), dt.scale())?)
+        }
+        DataType::Date(_) => Datum::Date(arr.get_date(pos)?),
+        DataType::Time(_) => Datum::Time(arr.get_time(pos)?),
+        DataType::Timestamp(t) => Datum::TimestampNtz(arr.get_timestamp_ntz(pos, t.precision())?),
+        DataType::TimestampLTz(t) => {
+            Datum::TimestampLtz(arr.get_timestamp_ltz(pos, t.precision())?)
+        }
+        DataType::Array(_) => Datum::Array(arr.get_array(pos)?),
+        _ => {
+            return Err(RowConvertError {
+                message: format!(
+                    "Unsupported element type for FlussArray → Arrow conversion: {element_type:?}"
+                ),
+            });
+        }
+    })
 }
 
 impl Datum<'_> {
@@ -504,6 +641,18 @@ impl Datum<'_> {
                 append_null_to_arrow!(TimestampMillisecondBuilder);
                 append_null_to_arrow!(TimestampMicrosecondBuilder);
                 append_null_to_arrow!(TimestampNanosecondBuilder);
+                if let arrow_schema::DataType::List(_) = data_type {
+                    let b = builder
+                        .as_any_mut()
+                        .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
+                        .ok_or_else(|| RowConvertError {
+                            message:
+                                "Expected ListBuilder<Box<dyn ArrayBuilder>> for List Arrow type"
+                                    .to_string(),
+                        })?;
+                    b.append_null();
+                    return Ok(());
+                }
             }
             Datum::Bool(v) => append_value_to_arrow!(BooleanBuilder, *v),
             Datum::Int8(v) => append_value_to_arrow!(Int8Builder, *v),
@@ -539,45 +688,14 @@ impl Datum<'_> {
                     }
                 };
 
-                // Validate scale is non-negative (Fluss doesn't support negative scales)
                 if s < 0 {
                     return Err(RowConvertError {
                         message: format!("Negative decimal scale {s} is not supported"),
                     });
                 }
 
-                let target_precision = p as u32;
-                let target_scale = s as i64; // Safe now: 0..127 → 0i64..127i64
-
                 if let Some(b) = builder.as_any_mut().downcast_mut::<Decimal128Builder>() {
-                    use bigdecimal::RoundingMode;
-
-                    // Rescale the decimal to match Arrow's target scale
-                    let bd = decimal.to_big_decimal();
-                    let rescaled = bd.with_scale_round(target_scale, RoundingMode::HalfUp);
-                    let (unscaled, _) = rescaled.as_bigint_and_exponent();
-
-                    // Validate precision
-                    let actual_precision = Decimal::compute_precision(&unscaled);
-                    if actual_precision > target_precision as usize {
-                        return Err(RowConvertError {
-                            message: format!(
-                                "Decimal precision overflow: value has {actual_precision} digits but Arrow expects {target_precision} (value: {rescaled})"
-                            ),
-                        });
-                    }
-
-                    // Convert to i128 for Arrow
-                    let i128_val: i128 = match unscaled.try_into() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            return Err(RowConvertError {
-                                message: format!("Decimal value exceeds i128 range: {rescaled}"),
-                            });
-                        }
-                    };
-
-                    b.append_value(i128_val);
+                    append_decimal_to_builder(decimal, p as u32, s as i64, b)?;
                     return Ok(());
                 }
 
@@ -736,6 +854,9 @@ impl Datum<'_> {
                 return Err(RowConvertError {
                     message: "Builder type mismatch for TimestampLtz".to_string(),
                 });
+            }
+            Datum::Array(arr) => {
+                return append_fluss_array_to_list_builder(arr, builder, data_type);
             }
         }
 

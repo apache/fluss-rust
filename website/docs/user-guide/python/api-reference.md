@@ -21,6 +21,10 @@ Complete API reference for the Fluss Python client.
 | `remote_file_download_thread_num`     | `remote-file.download-thread-num`     | Get/set number of threads for remote log downloads                                      |
 | `scanner_remote_log_read_concurrency` | `scanner.remote-log.read-concurrency` | Get/set streaming read concurrency within a remote log file                             |
 | `scanner_log_max_poll_records`        | `scanner.log.max-poll-records`        | Get/set max number of records returned in a single poll()                               |
+| `scanner_log_fetch_max_bytes`         | `scanner.log.fetch.max-bytes`         | Get/set maximum bytes per fetch response for LogScanner                                 |
+| `scanner_log_fetch_min_bytes`         | `scanner.log.fetch.min-bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |
+| `scanner_log_fetch_wait_max_time_ms`  | `scanner.log.fetch.wait-max-time-ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
+| `scanner_log_fetch_max_bytes_for_bucket` | `scanner.log.fetch.max-bytes-for-bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
@@ -32,7 +36,7 @@ Complete API reference for the Fluss Python client.
 | Method                                                    |  Description                          |
 |-----------------------------------------------------------|---------------------------------------|
 | `await FlussConnection.create(config) -> FlussConnection` | Connect to a Fluss cluster            |
-| `await conn.get_admin() -> FlussAdmin`                    | Get admin interface                   |
+| `conn.get_admin() -> FlussAdmin`                        | Get admin interface                   |
 | `await conn.get_table(table_path) -> FlussTable`          | Get a table for read/write operations |
 | `conn.close()`                                            | Close the connection                  |
 
@@ -241,6 +245,8 @@ for record in scan_records:
 | `Schema(schema: pa.Schema, primary_keys=None)` | Create from PyArrow schema |
 | `.get_column_names() -> list[str]`             | Get column names           |
 | `.get_column_types() -> list[str]`             | Get column type names      |
+| `.get_columns() -> list[tuple[str, str]]`      | Get `(name, type)` pairs   |
+| `.get_primary_keys() -> list[str]`             | Get primary key columns    |
 
 ## `TableDescriptor`
 

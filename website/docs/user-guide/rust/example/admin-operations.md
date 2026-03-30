@@ -6,7 +6,7 @@ sidebar_position: 3
 ## Get Admin Interface
 
 ```rust
-let admin = conn.get_admin().await?;
+let admin = conn.get_admin()?;
 ```
 
 ## Database Operations

@@ -954,7 +954,7 @@ impl RowType {
             .iter()
             .map(|name| {
                 self.get_field_index(name).ok_or_else(|| IllegalArgument {
-                    message: format!("Field '{}' does not exist in the row type", name),
+                    message: format!("Field '{name}' does not exist in the row type"),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1522,7 +1522,7 @@ fn test_time_valid_precision() {
     // Test all valid precision values 0 through 9
     for precision in 0..=9 {
         let result = TimeType::with_nullable(true, precision);
-        assert!(result.is_ok(), "precision {} should be valid", precision);
+        assert!(result.is_ok(), "precision {precision} should be valid");
         let time = result.unwrap();
         assert_eq!(time.precision(), precision);
     }
@@ -1550,7 +1550,7 @@ fn test_timestamp_valid_precision() {
     // Test all valid precision values 0 through 9
     for precision in 0..=9 {
         let result = TimestampType::with_nullable(true, precision);
-        assert!(result.is_ok(), "precision {} should be valid", precision);
+        assert!(result.is_ok(), "precision {precision} should be valid");
         let timestamp_type = result.unwrap();
         assert_eq!(timestamp_type.precision(), precision);
     }

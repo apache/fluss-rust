@@ -65,7 +65,7 @@ For partitioned tables, use partition-aware subscribe methods.
 use std::time::Duration;
 
 let table = conn.get_table(&table_path).await?;
-let admin = conn.get_admin().await?;
+let admin = conn.get_admin()?;
 let partitions = admin.list_partition_infos(&table_path).await?;
 
 let log_scanner = table.new_scan().create_log_scanner()?;

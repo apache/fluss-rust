@@ -48,7 +48,15 @@ mod ffi {
         remote_file_download_thread_num: usize,
         scanner_remote_log_read_concurrency: usize,
         scanner_log_max_poll_records: usize,
+        scanner_log_fetch_max_bytes: i32,
+        scanner_log_fetch_min_bytes: i32,
+        scanner_log_fetch_wait_max_time_ms: i32,
+        scanner_log_fetch_max_bytes_for_bucket: i32,
         writer_batch_timeout_ms: i64,
+        writer_enable_idempotence: bool,
+        writer_max_inflight_requests_per_bucket: usize,
+        writer_buffer_memory_size: usize,
+        writer_buffer_wait_timeout_ms: u64,
         connect_timeout_ms: u64,
         security_protocol: String,
         security_sasl_mechanism: String,
@@ -548,7 +556,7 @@ pub struct Connection {
 }
 
 pub struct Admin {
-    inner: fcore::client::FlussAdmin,
+    inner: Arc<fcore::client::FlussAdmin>,
 }
 
 pub struct Table {
@@ -668,6 +676,14 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         remote_file_download_thread_num: config.remote_file_download_thread_num,
         scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
+        scanner_log_fetch_max_bytes: config.scanner_log_fetch_max_bytes,
+        scanner_log_fetch_min_bytes: config.scanner_log_fetch_min_bytes,
+        scanner_log_fetch_wait_max_time_ms: config.scanner_log_fetch_wait_max_time_ms,
+        scanner_log_fetch_max_bytes_for_bucket: config.scanner_log_fetch_max_bytes_for_bucket,
+        writer_enable_idempotence: config.writer_enable_idempotence,
+        writer_max_inflight_requests_per_bucket: config.writer_max_inflight_requests_per_bucket,
+        writer_buffer_memory_size: config.writer_buffer_memory_size,
+        writer_buffer_wait_timeout_ms: config.writer_buffer_wait_timeout_ms,
         connect_timeout_ms: config.connect_timeout_ms,
         security_protocol: config.security_protocol.to_string(),
         security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
@@ -696,7 +712,7 @@ unsafe fn delete_connection(conn: *mut Connection) {
 
 impl Connection {
     fn get_admin(&self) -> ffi::FfiPtrResult {
-        let admin_result = RUNTIME.block_on(async { self.inner.get_admin().await });
+        let admin_result = self.inner.get_admin();
 
         match admin_result {
             Ok(admin) => {

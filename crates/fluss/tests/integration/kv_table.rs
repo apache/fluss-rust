@@ -33,7 +33,7 @@ mod kv_table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         let table_path = TablePath::new("fluss", "test_upsert_and_lookup");
 
@@ -172,7 +172,7 @@ mod kv_table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.unwrap();
+        let admin = connection.get_admin().unwrap();
 
         let table_path = TablePath::new("fluss", "test_composite_pk");
 
@@ -282,7 +282,7 @@ mod kv_table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_partial_update");
 
@@ -403,7 +403,7 @@ mod kv_table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_partitioned_kv_table");
 
@@ -573,7 +573,7 @@ mod kv_table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_all_datatypes");
 

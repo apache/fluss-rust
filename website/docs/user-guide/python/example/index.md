@@ -14,7 +14,7 @@ async def main():
     # Connect
     config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
     conn = await fluss.FlussConnection.create(config)
-    admin = await conn.get_admin()
+    admin = conn.get_admin()
 
     # Create a log table
     schema = fluss.Schema(pa.schema([

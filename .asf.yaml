@@ -38,10 +38,10 @@ github:
     squash:  true
     merge:   false
     rebase:  true
-
 notifications:
   commits:      commits@fluss.apache.org
   issues:       issues@fluss.apache.org
   pullrequests: issues@fluss.apache.org
   jobs:         builds@fluss.apache.org
   discussions:  issues@fluss.apache.org
+

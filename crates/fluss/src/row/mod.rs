@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod binary_array;
 mod column;
 
-mod datum;
+pub(crate) mod datum;
 mod decimal;
 
 pub mod binary;
+pub(crate) mod column_writer;
 pub mod compacted;
 pub mod encode;
 pub mod field_getter;
 mod row_decoder;
 
 use crate::client::WriteFormat;
+pub use binary_array::FlussArray;
 use bytes::Bytes;
 pub use column::*;
 pub use compacted::CompactedRow;
@@ -117,6 +120,9 @@ pub trait InternalRow: Send + Sync {
 
     /// Returns the binary value at the given position
     fn get_bytes(&self, pos: usize) -> Result<&[u8]>;
+
+    /// Returns the array value at the given position
+    fn get_array(&self, pos: usize) -> Result<FlussArray>;
 
     /// Returns encoded bytes if already encoded
     fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
@@ -270,6 +276,15 @@ impl<'a> InternalRow for GenericRow<'a> {
             Datum::Blob(b) => Ok(b.as_ref()),
             other => Err(IllegalArgument {
                 message: format!("type mismatch at position {pos}: expected Bytes, got {other:?}"),
+            }),
+        }
+    }
+
+    fn get_array(&self, pos: usize) -> Result<FlussArray> {
+        match self.get_value(pos)? {
+            Datum::Array(a) => Ok(a.clone()),
+            other => Err(IllegalArgument {
+                message: format!("type mismatch at position {pos}: expected Array, got {other:?}"),
             }),
         }
     }
