@@ -632,8 +632,8 @@ mod kv_table_test {
         let col_smallint = 32767i16;
         let col_int = 2147483647i32;
         let col_bigint = 9223372036854775807i64;
-        let col_float = 3.14f32;
-        let col_double = 2.718281828459045f64;
+        let col_float = std::f32::consts::PI;
+        let col_double = std::f64::consts::E;
         let col_char = "hello";
         let col_string = "world of fluss rust client";
         let col_decimal = Decimal::from_unscaled_long(12345, 10, 2).unwrap(); // 123.45

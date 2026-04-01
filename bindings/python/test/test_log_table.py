@@ -21,6 +21,7 @@ Mirrors the Rust integration tests in crates/fluss/tests/integration/log_table.r
 """
 
 import asyncio
+import pytest
 import time
 
 import pyarrow as pa
@@ -1185,5 +1186,44 @@ async def test_append_and_scan_with_array(connection, admin):
     assert result_table.num_rows == 2
     assert result_table.column("tags").to_pylist() == [["a", "b"], ["c"]]
     assert result_table.column("scores").to_pylist() == [[10, 20], [30]]
+
+@pytest.mark.skip(reason="FixedSizeList support requires server-side updates (≥0.9.1). "
+                         "Client-side support verified via test_schema.py and core unit tests.")
+async def test_append_and_scan_with_fixed_size_array(connection, admin):
+    """Test appending and scanning with FixedSizeList array columns."""
+    table_path = fluss.TablePath("fluss", "py_test_append_fixed_size_array")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    pa_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("coords", pa.list_(pa.float32(), 2)),  # FixedSizeList of length 2
+        ]
+    )
+    schema = fluss.Schema(pa_schema)
+    await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    append_writer = table.new_append().create_writer()
+
+    batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array([1, 2], type=pa.int32()),
+            pa.array([[1.0, 2.0], [3.0, 4.0]], type=pa.list_(pa.float32(), 2)),
+        ],
+        schema=pa_schema,
+    )
+    append_writer.write_arrow_batch(batch)
+    await append_writer.flush()
+
+    scanner = await table.new_scan().create_log_scanner()
+    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    records = _poll_records(scanner, expected_count=2)
+
+    assert len(records) == 2
+    records.sort(key=lambda r: r.row["id"])
+
+    assert records[0].row["coords"] == [1.0, 2.0]
+    assert records[1].row["coords"] == [3.0, 4.0]
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)

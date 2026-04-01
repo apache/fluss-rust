@@ -18,6 +18,7 @@
 use crate::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
+use std::fmt;
 
 /// Represents the type of change for a record in a log
 #[pyclass(eq, eq_int)]
@@ -773,18 +774,25 @@ pub struct DataType {
     pub(crate) inner: fcore::metadata::DataType,
 }
 
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", Utils::datatype_to_string(&self.inner))
+    }
+}
+
 #[pymethods]
 impl DataType {
     pub fn __str__(&self) -> String {
-        Utils::datatype_to_string(&self.inner)
+        self.to_string()
     }
 
     pub fn __repr__(&self) -> String {
-        format!("DataType({})", self.__str__())
+        format!("DataType({})", self)
     }
 
-    pub fn to_string(&self) -> String {
-        self.__str__()
+    #[pyo3(name = "to_string")]
+    pub fn to_string_py(&self) -> String {
+        self.to_string()
     }
 }
 

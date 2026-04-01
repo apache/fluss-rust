@@ -69,5 +69,12 @@ def test_schema_with_large_array():
     schema = fluss.Schema(fields)
     assert schema.get_column_names() == ["id", "large_tags"]
     assert schema.get_column_types() == ["int", "array<string>"]
-
-
+def test_schema_with_fixed_size_array():
+    pa_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("coords", pa.list_(pa.float32(), 3)),  # FixedSizeList
+        ]
+    )
+    schema = fluss.Schema(pa_schema)
+    assert schema.get_column_types() == ["int", "array<float>"]

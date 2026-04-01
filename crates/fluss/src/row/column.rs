@@ -20,8 +20,8 @@ use crate::error::Result;
 use crate::row::InternalRow;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use arrow::array::{
-    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, LargeListArray, ListArray,
-    RecordBatch, StringArray,
+    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
+    LargeListArray, ListArray, RecordBatch, StringArray,
 };
 use arrow::datatypes::{
     DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
@@ -420,10 +420,14 @@ impl InternalRow for ColumnarRow {
             list_arr.value(self.row_id)
         } else if let Some(large_list_arr) = column.as_any().downcast_ref::<LargeListArray>() {
             large_list_arr.value(self.row_id)
+        } else if let Some(fixed_size_list_arr) =
+            column.as_any().downcast_ref::<FixedSizeListArray>()
+        {
+            fixed_size_list_arr.value(self.row_id)
         } else {
             return Err(IllegalArgument {
                 message: format!(
-                    "expected List or LargeList array at position {pos}, got {:?}",
+                    "expected List, LargeList, or FixedSizeList array at position {pos}, got {:?}",
                     column.data_type()
                 ),
             });
@@ -612,7 +616,9 @@ fn write_arrow_values_to_fluss_array(
         }
         DataType::Array(_) => {
             for i in 0..len {
-                let nested_values = if let Some(list_arr) = values.as_any().downcast_ref::<ListArray>() {
+                let nested_values = if let Some(list_arr) =
+                    values.as_any().downcast_ref::<ListArray>()
+                {
                     if list_arr.is_null(i) {
                         writer.set_null_at(i);
                         continue;
@@ -626,13 +632,24 @@ fn write_arrow_values_to_fluss_array(
                         continue;
                     }
                     large_list_arr.value(i)
+                } else if let Some(fixed_size_list_arr) =
+                    values.as_any().downcast_ref::<FixedSizeListArray>()
+                {
+                    if fixed_size_list_arr.is_null(i) {
+                        writer.set_null_at(i);
+                        continue;
+                    }
+                    fixed_size_list_arr.value(i)
                 } else {
                     return Err(IllegalArgument {
-                        message: format!("Expected ListArray or LargeListArray for {element_type:?} element, got {:?}", values.data_type()),
+                        message: format!(
+                            "Expected ListArray, LargeListArray, or FixedSizeListArray for {element_type:?} element, got {:?}",
+                            values.data_type()
+                        ),
                     });
                 };
 
-                let nested_element_type = from_arrow_type(&nested_values.data_type())?;
+                let nested_element_type = from_arrow_type(nested_values.data_type())?;
                 let mut nested_writer =
                     FlussArrayWriter::new(nested_values.len(), &nested_element_type);
                 write_arrow_values_to_fluss_array(
