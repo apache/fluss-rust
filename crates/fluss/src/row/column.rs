@@ -999,7 +999,7 @@ mod tests {
         let row = single_column_row(array);
         let err = row.get_array(0).unwrap_err();
         assert!(
-            err.to_string().contains("expected List array"),
+            err.to_string().contains("expected List, LargeList, or FixedSizeList array"),
             "unexpected error: {err}"
         );
     }
