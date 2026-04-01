@@ -20,8 +20,8 @@ use crate::error::Result;
 use crate::row::InternalRow;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use arrow::array::{
-    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, ListArray, RecordBatch,
-    StringArray,
+    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, LargeListArray, ListArray,
+    RecordBatch, StringArray,
 };
 use arrow::datatypes::{
     DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
@@ -416,15 +416,19 @@ impl InternalRow for ColumnarRow {
         use crate::row::binary_array::FlussArrayWriter;
 
         let column = self.column(pos)?;
-        let list_array =
-            column
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .ok_or_else(|| IllegalArgument {
-                    message: format!("expected List array at position {pos}"),
-                })?;
+        let values = if let Some(list_arr) = column.as_any().downcast_ref::<ListArray>() {
+            list_arr.value(self.row_id)
+        } else if let Some(large_list_arr) = column.as_any().downcast_ref::<LargeListArray>() {
+            large_list_arr.value(self.row_id)
+        } else {
+            return Err(IllegalArgument {
+                message: format!(
+                    "expected List or LargeList array at position {pos}, got {:?}",
+                    column.data_type()
+                ),
+            });
+        };
 
-        let values = list_array.value(self.row_id);
         let element_fluss_type = from_arrow_type(values.data_type())?;
         let mut writer = FlussArrayWriter::new(values.len(), &element_fluss_type);
 
@@ -607,29 +611,37 @@ fn write_arrow_values_to_fluss_array(
             )?;
         }
         DataType::Array(_) => {
-            let list_arr =
-                values
-                    .as_any()
-                    .downcast_ref::<ListArray>()
-                    .ok_or_else(|| IllegalArgument {
-                        message: format!("Expected ListArray for {element_type:?} element"),
-                    })?;
-            let nested_element_type = from_arrow_type(&list_arr.value_type())?;
             for i in 0..len {
-                if list_arr.is_null(i) {
-                    writer.set_null_at(i);
+                let nested_values = if let Some(list_arr) = values.as_any().downcast_ref::<ListArray>() {
+                    if list_arr.is_null(i) {
+                        writer.set_null_at(i);
+                        continue;
+                    }
+                    list_arr.value(i)
+                } else if let Some(large_list_arr) =
+                    values.as_any().downcast_ref::<LargeListArray>()
+                {
+                    if large_list_arr.is_null(i) {
+                        writer.set_null_at(i);
+                        continue;
+                    }
+                    large_list_arr.value(i)
                 } else {
-                    let nested_values = list_arr.value(i);
-                    let mut nested_writer =
-                        FlussArrayWriter::new(nested_values.len(), &nested_element_type);
-                    write_arrow_values_to_fluss_array(
-                        &*nested_values,
-                        &nested_element_type,
-                        &mut nested_writer,
-                    )?;
-                    let nested_array = nested_writer.complete()?;
-                    writer.write_array(i, &nested_array);
-                }
+                    return Err(IllegalArgument {
+                        message: format!("Expected ListArray or LargeListArray for {element_type:?} element, got {:?}", values.data_type()),
+                    });
+                };
+
+                let nested_element_type = from_arrow_type(&nested_values.data_type())?;
+                let mut nested_writer =
+                    FlussArrayWriter::new(nested_values.len(), &nested_element_type);
+                write_arrow_values_to_fluss_array(
+                    &*nested_values,
+                    &nested_element_type,
+                    &mut nested_writer,
+                )?;
+                let nested_array = nested_writer.complete()?;
+                writer.write_array(i, &nested_array);
             }
         }
         _ => {

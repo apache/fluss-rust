@@ -621,6 +621,79 @@ impl FlussArrayWriter {
     }
 }
 
+impl crate::row::InternalRow for FlussArray {
+    fn get_field_count(&self) -> usize {
+        self.size()
+    }
+
+    fn is_null_at(&self, pos: usize) -> Result<bool> {
+        Ok(self.is_null_at(pos))
+    }
+
+    fn get_boolean(&self, pos: usize) -> Result<bool> {
+        self.get_boolean(pos)
+    }
+    fn get_byte(&self, pos: usize) -> Result<i8> {
+        self.get_byte(pos)
+    }
+    fn get_short(&self, pos: usize) -> Result<i16> {
+        self.get_short(pos)
+    }
+    fn get_int(&self, pos: usize) -> Result<i32> {
+        self.get_int(pos)
+    }
+    fn get_long(&self, pos: usize) -> Result<i64> {
+        self.get_long(pos)
+    }
+    fn get_float(&self, pos: usize) -> Result<f32> {
+        self.get_float(pos)
+    }
+    fn get_double(&self, pos: usize) -> Result<f64> {
+        self.get_double(pos)
+    }
+
+    fn get_char(&self, pos: usize, _length: usize) -> Result<&str> {
+        self.get_string(pos)
+    }
+
+    fn get_string(&self, pos: usize) -> Result<&str> {
+        self.get_string(pos)
+    }
+
+    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Result<Decimal> {
+        self.get_decimal(pos, precision as u32, scale as u32)
+    }
+
+    fn get_date(&self, pos: usize) -> Result<Date> {
+        self.get_date(pos)
+    }
+    fn get_time(&self, pos: usize) -> Result<Time> {
+        self.get_time(pos)
+    }
+    fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz> {
+        self.get_timestamp_ntz(pos, precision)
+    }
+    fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz> {
+        self.get_timestamp_ltz(pos, precision)
+    }
+
+    fn get_binary(&self, pos: usize, _length: usize) -> Result<&[u8]> {
+        self.get_binary(pos)
+    }
+
+    fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
+        self.get_binary(pos)
+    }
+
+    fn get_array(&self, pos: usize) -> Result<FlussArray> {
+        self.get_array(pos)
+    }
+
+    fn as_encoded_bytes(&self, _write_format: crate::client::WriteFormat) -> Option<&[u8]> {
+        Some(self.as_bytes())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

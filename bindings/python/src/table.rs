@@ -1372,6 +1372,20 @@ pub fn datum_to_python_value(
                 .map_err(|e| FlussError::from_core_error(&e))?;
             rust_timestamp_ltz_to_python(py, ts)
         }
+        DataType::Array(array_type) => {
+            let array_data = row
+                .get_array(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?;
+
+            let element_type = array_type.get_element_type();
+            let py_list = pyo3::types::PyList::empty(py);
+
+            for i in 0..array_data.size() {
+                let py_val = datum_to_python_value(py, &array_data, i, element_type)?;
+                py_list.append(py_val)?;
+            }
+            Ok(py_list.into_any().unbind())
+        }
         _ => Err(FlussError::new_err(format!(
             "Unsupported data type for conversion to Python: {data_type}"
         ))),

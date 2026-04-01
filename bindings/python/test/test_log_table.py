@@ -1132,3 +1132,58 @@ def _poll_arrow_ids(scanner, expected_count, timeout_s=10):
             all_ids.extend(arrow_table.column("id").to_pylist())
     return all_ids
 
+
+async def test_append_and_scan_with_array(connection, admin):
+    """Test appending and scanning with array columns."""
+    table_path = fluss.TablePath("fluss", "py_test_append_and_scan_with_array")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    pa_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("tags", pa.list_(pa.string())),
+            pa.field("scores", pa.list_(pa.int32())),
+        ]
+    )
+    schema = fluss.Schema(pa_schema)
+    table_descriptor = fluss.TableDescriptor(schema)
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    append_writer = table.new_append().create_writer()
+
+    # Batch 1: Testing both standard and large lists
+    batch1 = pa.RecordBatch.from_arrays(
+        [
+            pa.array([1, 2], type=pa.int32()),
+            pa.array([["a", "b"], ["c"]], type=pa.list_(pa.string())),
+            pa.array([[10, 20], [30]], type=pa.list_(pa.int32())),
+        ],
+        schema=pa_schema,
+    )
+    append_writer.write_arrow_batch(batch1)
+    await append_writer.flush()
+
+    # Verify via LogScanner (record-by-record)
+    scanner = await table.new_scan().create_log_scanner()
+    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    records = _poll_records(scanner, expected_count=2)
+
+    assert len(records) == 2
+    records.sort(key=lambda r: r.row["id"])
+
+    assert records[0].row["tags"] == ["a", "b"]
+    assert records[0].row["scores"] == [10, 20]
+    assert records[1].row["tags"] == ["c"]
+    assert records[1].row["scores"] == [30]
+
+    # Verify via to_arrow (batch-based)
+    scanner2 = await table.new_scan().create_record_batch_log_scanner()
+    scanner2.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    result_table = scanner2.to_arrow()
+
+    assert result_table.num_rows == 2
+    assert result_table.column("tags").to_pylist() == [["a", "b"], ["c"]]
+    assert result_table.column("scores").to_pylist() == [[10, 20], [30]]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)

@@ -35,3 +35,39 @@ def test_get_primary_keys():
     assert schema_without_pk.get_primary_keys() == []
 
 
+def test_datatype_generation():
+    assert fluss.DataTypes.int().to_string() == "int"
+    assert fluss.DataTypes.string().to_string() == "string"
+    assert fluss.DataTypes.array(fluss.DataTypes.int()).to_string() == "array<int>"
+    assert (
+        fluss.DataTypes.array(fluss.DataTypes.array(fluss.DataTypes.string())).to_string()
+        == "array<array<string>>"
+    )
+
+
+def test_schema_with_array():
+    # Test that a schema can be constructed from a pyarrow schema containing a list
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("tags", pa.list_(pa.string())),
+        ]
+    )
+    schema = fluss.Schema(fields)
+    assert schema.get_column_names() == ["id", "tags"]
+    assert schema.get_column_types() == ["int", "array<string>"]
+
+
+def test_schema_with_large_array():
+    # Test that a schema can be constructed from a pyarrow schema containing a large list
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("large_tags", pa.large_list(pa.string())),
+        ]
+    )
+    schema = fluss.Schema(fields)
+    assert schema.get_column_names() == ["id", "large_tags"]
+    assert schema.get_column_types() == ["int", "array<string>"]
+
+
