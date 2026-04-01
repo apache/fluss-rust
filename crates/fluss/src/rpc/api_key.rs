@@ -38,6 +38,7 @@ pub enum ApiKey {
     GetFileSystemSecurityToken, // 1025
     InitWriter,                 // 1026
     GetLatestLakeSnapshot,      // 1032
+    LimitScan,                  // 1033
     GetDatabaseInfo,            // 1035
     CreatePartition,            // 1036
     DropPartition,              // 1037
@@ -67,6 +68,7 @@ impl From<i16> for ApiKey {
             1025 => ApiKey::GetFileSystemSecurityToken,
             1026 => ApiKey::InitWriter,
             1032 => ApiKey::GetLatestLakeSnapshot,
+            1033 => ApiKey::LimitScan,
             1035 => ApiKey::GetDatabaseInfo,
             1036 => ApiKey::CreatePartition,
             1037 => ApiKey::DropPartition,
@@ -99,6 +101,7 @@ impl From<ApiKey> for i16 {
             ApiKey::GetFileSystemSecurityToken => 1025,
             ApiKey::InitWriter => 1026,
             ApiKey::GetLatestLakeSnapshot => 1032,
+            ApiKey::LimitScan => 1033,
             ApiKey::GetDatabaseInfo => 1035,
             ApiKey::CreatePartition => 1036,
             ApiKey::DropPartition => 1037,
@@ -134,6 +137,7 @@ mod tests {
             (1025, ApiKey::GetFileSystemSecurityToken),
             (1026, ApiKey::InitWriter),
             (1032, ApiKey::GetLatestLakeSnapshot),
+            (1033, ApiKey::LimitScan),
             (1035, ApiKey::GetDatabaseInfo),
             (1036, ApiKey::CreatePartition),
             (1037, ApiKey::DropPartition),
