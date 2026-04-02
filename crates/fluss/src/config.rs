@@ -270,34 +270,7 @@ impl Config {
     /// Validates idempotence configuration. Returns `Ok(())` when the config is
     /// consistent, or an error message when idempotence is enabled but other
     /// settings are incompatible.
-    pub fn validate_idempotence(&self) -> Result<(), String> {
-        if !self.writer_enable_idempotence {
-            return Ok(());
-        }
-        let acks_is_all = self.writer_acks.eq_ignore_ascii_case("all") || self.writer_acks == "-1";
-        if !acks_is_all {
-            return Err(format!(
-                "Idempotent writes require acks='all' (-1), but got acks='{}'",
-                self.writer_acks
-            ));
-        }
-        if self.writer_retries <= 0 {
-            return Err(format!(
-                "Idempotent writes require retries > 0, but got retries={}",
-                self.writer_retries
-            ));
-        }
-        if self.writer_max_inflight_requests_per_bucket
-            > MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE
-        {
-            return Err(format!(
-                "Idempotent writes require max-inflight-requests-per-bucket <= {}, but got {}",
-                MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE,
-                self.writer_max_inflight_requests_per_bucket
-            ));
-        }
-        Ok(())
-    }
+
 
     /// Validates security configuration. Returns `Ok(())` when the config is
     /// consistent, or an error message when SASL is enabled but the config is
