@@ -19,8 +19,7 @@
 # Trigger: push tag only (e.g. v0.1.0).
 # Pre-release tags (containing '-') publish to TestPyPI; release tags publish to PyPI.
 #
-# Token auth: set repo variable PYPI_USE_TOKEN_AUTH = 'true' and add secrets PYPI_API_TOKEN / TEST_PYPI_API_TOKEN.
-# Trusted Publishing (OIDC): leave PYPI_USE_TOKEN_AUTH unset; do not pass password so the action uses OIDC.
+# Token auth: add secrets PYPI_API_TOKEN / TEST_PYPI_API_TOKEN for publishing.
 
 name: Release Python
 
@@ -149,7 +148,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     needs: [version-check, sdist, wheels]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -159,34 +157,19 @@ jobs:
           merge-multiple: true
           path: bindings/python/dist
 
-      - name: Publish to TestPyPI (token)
-        if: contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to TestPyPI
+        if: contains(github.ref, '-')
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
           packages-dir: bindings/python/dist
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
-      - name: Publish to TestPyPI (Trusted Publishing)
-        if: contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH != 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-          packages-dir: bindings/python/dist
-
-      - name: Publish to PyPI (token)
-        if: ${{ !contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH == 'true' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to PyPI
+        if: ${{ !contains(github.ref, '-') }}
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
         with:
           skip-existing: true
           packages-dir: bindings/python/dist
           password: ${{ secrets.PYPI_API_TOKEN }}
-
-      - name: Publish to PyPI (Trusted Publishing)
-        if: ${{ !contains(github.ref, '-') && vars.PYPI_USE_TOKEN_AUTH != 'true' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
-          packages-dir: bindings/python/dist
