@@ -486,6 +486,39 @@ macro_rules! write_downcast_elements {
     }};
 }
 
+/// Downcast via `downcast_ref` to a List array type, then loop with null checks.
+macro_rules! write_list_elements {
+    ($values:expr, $list_array_type:ty, $len:expr, $element_type:expr, $writer:expr) => {{
+        let arr = $values
+            .as_any()
+            .downcast_ref::<$list_array_type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "Expected {} for {:?} element",
+                    stringify!($list_array_type),
+                    $element_type
+                ),
+            })?;
+        let nested_element_type = from_arrow_type(&arr.value_type())?;
+        for i in 0..$len {
+            if arr.is_null(i) {
+                $writer.set_null_at(i);
+            } else {
+                let nested_values = arr.value(i);
+                let mut nested_writer =
+                    FlussArrayWriter::new(nested_values.len(), &nested_element_type);
+                write_arrow_values_to_fluss_array(
+                    &*nested_values,
+                    &nested_element_type,
+                    &mut nested_writer,
+                )?;
+                let nested_array = nested_writer.complete()?;
+                $writer.write_array(i, &nested_array);
+            }
+        }
+    }};
+}
+
 /// Converts all elements of an Arrow array into a `FlussArrayWriter`, downcasting
 /// the Arrow array once per call rather than per element.
 fn write_arrow_values_to_fluss_array(
@@ -615,50 +648,19 @@ fn write_arrow_values_to_fluss_array(
             )?;
         }
         DataType::Array(_) => {
-            for i in 0..len {
-                let nested_values = if let Some(list_arr) =
-                    values.as_any().downcast_ref::<ListArray>()
-                {
-                    if list_arr.is_null(i) {
-                        writer.set_null_at(i);
-                        continue;
-                    }
-                    list_arr.value(i)
-                } else if let Some(large_list_arr) =
-                    values.as_any().downcast_ref::<LargeListArray>()
-                {
-                    if large_list_arr.is_null(i) {
-                        writer.set_null_at(i);
-                        continue;
-                    }
-                    large_list_arr.value(i)
-                } else if let Some(fixed_size_list_arr) =
-                    values.as_any().downcast_ref::<FixedSizeListArray>()
-                {
-                    if fixed_size_list_arr.is_null(i) {
-                        writer.set_null_at(i);
-                        continue;
-                    }
-                    fixed_size_list_arr.value(i)
-                } else {
-                    return Err(IllegalArgument {
-                        message: format!(
-                            "Expected ListArray, LargeListArray, or FixedSizeListArray for {element_type:?} element, got {:?}",
-                            values.data_type()
-                        ),
-                    });
-                };
-
-                let nested_element_type = from_arrow_type(nested_values.data_type())?;
-                let mut nested_writer =
-                    FlussArrayWriter::new(nested_values.len(), &nested_element_type);
-                write_arrow_values_to_fluss_array(
-                    &*nested_values,
-                    &nested_element_type,
-                    &mut nested_writer,
-                )?;
-                let nested_array = nested_writer.complete()?;
-                writer.write_array(i, &nested_array);
+            if values.as_any().is::<ListArray>() {
+                write_list_elements!(values, ListArray, len, element_type, writer);
+            } else if values.as_any().is::<LargeListArray>() {
+                write_list_elements!(values, LargeListArray, len, element_type, writer);
+            } else if values.as_any().is::<FixedSizeListArray>() {
+                write_list_elements!(values, FixedSizeListArray, len, element_type, writer);
+            } else {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Expected ListArray, LargeListArray, or FixedSizeListArray for {element_type:?} element, got {:?}",
+                        values.data_type()
+                    ),
+                });
             }
         }
         _ => {
