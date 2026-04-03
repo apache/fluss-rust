@@ -21,7 +21,6 @@ Mirrors the Rust integration tests in crates/fluss/tests/integration/log_table.r
 """
 
 import asyncio
-import pytest
 import time
 
 import pyarrow as pa
@@ -1187,8 +1186,7 @@ async def test_append_and_scan_with_array(connection, admin):
     assert result_table.column("tags").to_pylist() == [["a", "b"], ["c"]]
     assert result_table.column("scores").to_pylist() == [[10, 20], [30]]
 
-@pytest.mark.skip(reason="FixedSizeList support requires server-side updates (≥0.9.1). "
-                         "Client-side support verified via test_schema.py and core unit tests.")
+
 async def test_append_and_scan_with_fixed_size_array(connection, admin):
     """Test appending and scanning with FixedSizeList array columns."""
     table_path = fluss.TablePath("fluss", "py_test_append_fixed_size_array")
