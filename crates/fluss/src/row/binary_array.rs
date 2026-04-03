@@ -688,10 +688,6 @@ impl crate::row::InternalRow for FlussArray {
     fn get_array(&self, pos: usize) -> Result<FlussArray> {
         self.get_array(pos)
     }
-
-    fn as_encoded_bytes(&self, _write_format: crate::client::WriteFormat) -> Option<&[u8]> {
-        Some(self.as_bytes())
-    }
 }
 
 #[cfg(test)]
