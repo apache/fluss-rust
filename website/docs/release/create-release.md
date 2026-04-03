@@ -39,10 +39,13 @@ Anybody can propose a release (e.g. on the dev [mailing list](https://fluss.apac
 
 Before your first release, perform one-time configuration. See **[Release Manager Preparation](https://fluss.apache.org/community/how-to-release/release-manager-preparation/)** (GPG key, etc.). For fluss-rust you do **not** need Nexus/Maven; you only need GPG for signing the source archive and (optionally) git signing.
 
+For GitHub Actions publishing, configure the repository secret `CARGO_REGISTRY_TOKEN` with a crates.io API token from an account allowed to publish `fluss-rs`. The `Release Rust` workflow uses this secret directly when a release tag is pushed.
+
 **Checklist (one-time)**
 
 - [ ] GPG key set up and published to [KEYS](https://downloads.apache.org/incubator/fluss/KEYS) or Apache account
 - [ ] Git configured to use your GPG key for signing tags
+- [ ] GitHub Actions secret `CARGO_REGISTRY_TOKEN` configured for crates.io publishing
 
 ### 1. Install Rust (and optional: just)
 

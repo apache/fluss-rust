@@ -19,8 +19,7 @@
 # Trigger: push tag only (e.g. v0.1.0).
 # Pre-release tags (containing '-') do not publish; release tags publish to crates.io.
 #
-# Token auth: set repo variable CARGO_USE_TOKEN_AUTH = 'true' and add secret CARGO_REGISTRY_TOKEN.
-# Trusted Publishing (OIDC): leave CARGO_USE_TOKEN_AUTH unset; token is obtained via OIDC (no secret).
+# Token auth: add secret CARGO_REGISTRY_TOKEN for crates.io publishing.
 
 name: Release Rust
 
@@ -34,7 +33,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -46,15 +44,8 @@ jobs:
       - name: Dry run (crates/fluss)
         run: cargo publish -p fluss-rs --dry-run
 
-      - name: Get crates.io token (OIDC)
-        if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-') && vars.CARGO_USE_TOKEN_AUTH != 'true'
-        uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-        with:
-          token-type: publish
-
       - name: Publish fluss-rs to crates.io
         if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')
         run: cargo publish -p fluss-rs
         env:
-          CARGO_REGISTRY_TOKEN: "${{ vars.CARGO_USE_TOKEN_AUTH == 'true' && secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}"
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
