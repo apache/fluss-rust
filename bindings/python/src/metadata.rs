@@ -18,7 +18,6 @@
 use crate::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
-use std::fmt;
 
 /// Represents the type of change for a record in a log
 #[pyclass(eq, eq_int)]
@@ -764,118 +763,5 @@ impl DatabaseInfo {
 impl DatabaseInfo {
     pub fn from_core(info: fcore::metadata::DatabaseInfo) -> Self {
         Self { __info: info }
-    }
-}
-
-/// Represents a Fluss data type
-#[pyclass]
-#[derive(Clone)]
-pub struct DataType {
-    pub(crate) inner: fcore::metadata::DataType,
-}
-
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", Utils::datatype_to_string(&self.inner))
-    }
-}
-
-#[pymethods]
-impl DataType {
-    pub fn __str__(&self) -> String {
-        self.to_string()
-    }
-
-    pub fn __repr__(&self) -> String {
-        format!("DataType({})", self)
-    }
-
-    #[pyo3(name = "to_string")]
-    pub fn to_string_py(&self) -> String {
-        self.to_string()
-    }
-}
-
-/// Factory for creating Fluss data types
-#[pyclass]
-pub struct DataTypes;
-
-#[pymethods]
-impl DataTypes {
-    #[staticmethod]
-    pub fn boolean() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::boolean(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn tinyint() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::tinyint(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn smallint() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::smallint(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn int() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::int(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn bigint() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::bigint(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn float() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::float(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn double() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::double(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn string() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::string(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn bytes() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::bytes(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn date() -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::date(),
-        }
-    }
-
-    #[staticmethod]
-    pub fn array(element_type: &DataType) -> DataType {
-        DataType {
-            inner: fcore::metadata::DataTypes::array(element_type.inner.clone()),
-        }
     }
 }

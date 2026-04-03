@@ -130,8 +130,6 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<WriteResultHandle>()?;
     m.add_class::<DatabaseDescriptor>()?;
     m.add_class::<DatabaseInfo>()?;
-    m.add_class::<DataType>()?;
-    m.add_class::<DataTypes>()?;
 
     // Register constants
     m.add("EARLIEST_OFFSET", fcore::client::EARLIEST_OFFSET)?;
