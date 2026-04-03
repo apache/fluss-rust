@@ -24,6 +24,7 @@ import asyncio
 import time
 
 import pyarrow as pa
+import pytest
 
 import fluss
 
@@ -1120,8 +1121,6 @@ def _poll_records(scanner, expected_count, timeout_s=10):
     return collected
 
 
-
-
 def _poll_arrow_ids(scanner, expected_count, timeout_s=10):
     """Poll a batch scanner and extract 'id' column values."""
     all_ids = []
@@ -1224,4 +1223,108 @@ async def test_append_and_scan_with_fixed_size_array(connection, admin):
     assert records[0].row["coords"] == [1.0, 2.0]
     assert records[1].row["coords"] == [3.0, 4.0]
 
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_append_rows_with_array(connection, admin):
+    """Test appending rows with array data as Python lists and scanning."""
+    table_path = fluss.TablePath("fluss", "py_test_append_rows_with_array")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    pa_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("tags", pa.list_(pa.string())),
+            pa.field("scores", pa.list_(pa.int32())),
+        ]
+    )
+    schema = fluss.Schema(pa_schema)
+    table_descriptor = fluss.TableDescriptor(schema)
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    append_writer = table.new_append().create_writer()
+
+    # Append rows using dicts with lists
+    append_writer.append({"id": 1, "tags": ["a", "b"], "scores": [10, 20]})
+    append_writer.append({"id": 2, "tags": ["c"], "scores": [30]})
+    # Append row using list with nested list (null handling)
+    append_writer.append([3, None, [40, None, 60]])
+    
+    await append_writer.flush()
+
+    scanner = await table.new_scan().create_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+    records = _poll_records(scanner, expected_count=3)
+    assert len(records) == 3
+
+    rows = sorted([r.row for r in records], key=lambda r: r["id"])
+    assert rows[0] == {"id": 1, "tags": ["a", "b"], "scores": [10, 20]}
+    assert rows[1] == {"id": 2, "tags": ["c"], "scores": [30]}
+    # Note: records[2].row["tags"] will be None, records[2].row["scores"] will be [40, None, 60]
+    assert rows[2]["id"] == 3
+    assert rows[2]["tags"] is None
+    assert rows[2]["scores"] == [40, None, 60]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_append_rows_with_nested_array(connection, admin):
+    """Test appending rows with nested array data (ARRAY<ARRAY<INT>>) and scanning."""
+    table_path = fluss.TablePath("fluss", "py_test_append_rows_with_nested_array")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    pa_schema = pa.schema([
+        pa.field("id", pa.int32()),
+        pa.field("matrix", pa.list_(pa.list_(pa.int32()))),
+    ])
+    schema = fluss.Schema(pa_schema)
+    await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    append_writer = table.new_append().create_writer()
+
+    # Append nested lists
+    append_writer.append({"id": 1, "matrix": [[1, 2], [3, 4]]})
+    append_writer.append({"id": 2, "matrix": [[], [5], [6, 7, 8]]})
+    append_writer.append({"id": 3, "matrix": None})
+    
+    await append_writer.flush()
+
+    scanner = await table.new_scan().create_log_scanner()
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+    records = _poll_records(scanner, expected_count=3)
+    assert len(records) == 3
+
+    rows = sorted([r.row for r in records], key=lambda r: r["id"])
+    assert rows[0] == {"id": 1, "matrix": [[1, 2], [3, 4]]}
+    assert rows[1] == {"id": 2, "matrix": [[], [5], [6, 7, 8]]}
+    assert rows[2] == {"id": 3, "matrix": None}
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_append_rows_with_invalid_array(connection, admin):
+    """Test that appending invalid data to an array column raises an error."""
+    table_path = fluss.TablePath("fluss", "py_test_append_rows_with_invalid_array")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    pa_schema = pa.schema([
+        pa.field("id", pa.int32()),
+        pa.field("tags", pa.list_(pa.string())),
+    ])
+    schema = fluss.Schema(pa_schema)
+    await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    append_writer = table.new_append().create_writer()
+
+    # Appending a string instead of a list should raise an error
+    with pytest.raises(Exception, match="Expected sequence for Array column"):
+        append_writer.append({"id": 4, "tags": "not_a_list"})
+    
     await admin.drop_table(table_path, ignore_if_not_exists=False)
