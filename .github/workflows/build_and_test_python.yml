@@ -65,7 +65,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.toml') }}
+          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             python-test-${{ runner.os }}-${{ matrix.python }}-
 
