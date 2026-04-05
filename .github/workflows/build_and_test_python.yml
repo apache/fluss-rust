@@ -65,7 +65,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
+          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            python-test-${{ runner.os }}-${{ matrix.python }}-
 
       - name: Build Python bindings
         working-directory: bindings/python

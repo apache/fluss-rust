@@ -62,7 +62,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cpp-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cpp-test-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cpp-test-${{ runner.os }}-
 
       - name: Build C++ bindings and tests
         working-directory: bindings/cpp

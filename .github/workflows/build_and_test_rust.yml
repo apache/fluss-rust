@@ -65,7 +65,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
 
       - name: Build
         run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp
