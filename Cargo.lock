@@ -1099,6 +1099,7 @@ dependencies = [
  "crc32c",
  "dashmap",
  "delegate",
+ "fluss-test-cluster",
  "futures",
  "jiff",
  "linked-hash-map",
@@ -1117,11 +1118,22 @@ dependencies = [
  "strum",
  "strum_macros",
  "tempfile",
- "testcontainers",
  "thiserror 1.0.69",
  "tokio",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "fluss-test-cluster"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "fluss-rs",
+ "serde",
+ "serde_json",
+ "testcontainers",
+ "tokio",
 ]
 
 [[package]]

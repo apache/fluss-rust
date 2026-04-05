@@ -80,7 +80,6 @@ jiff = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
 fluss-test-cluster = { path = "../fluss-test-cluster" }
-test-env-helpers = "0.2.2"
 
 [build-dependencies]
 prost-build = "0.14"
