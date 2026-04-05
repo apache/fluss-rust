@@ -225,6 +225,10 @@ impl BinaryWriter for IcebergBinaryRowWriter {
         self.write_raw(&micros.to_le_bytes());
     }
 
+    fn write_array(&mut self, _value: &[u8]) {
+        panic!("Iceberg key columns do not support array values");
+    }
+
     fn complete(&mut self) {
         // No finalization needed for Iceberg key encoding
     }
