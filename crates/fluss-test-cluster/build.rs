@@ -15,4 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use fluss_test_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
+fn main() {
+    println!("cargo:rerun-if-changed=test-images.env");
+    for line in std::fs::read_to_string("test-images.env")
+        .expect("test-images.env not found")
+        .lines()
+    {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            println!("cargo:rustc-env={}={}", key.trim(), value.trim());
+        }
+    }
+}

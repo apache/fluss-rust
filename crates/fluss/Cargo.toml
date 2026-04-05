@@ -79,7 +79,8 @@ strum_macros = "0.26"
 jiff = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
-testcontainers = "0.27.2"
+fluss-test-cluster = { path = "../fluss-test-cluster" }
+test-env-helpers = "0.2.2"
 
 [build-dependencies]
 prost-build = "0.14"

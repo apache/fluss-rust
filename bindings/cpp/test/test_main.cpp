@@ -22,20 +22,14 @@
 #include "test_utils.h"
 
 int main(int argc, char** argv) {
-    // --cleanup: stop Docker containers and exit (used by ctest FIXTURES_CLEANUP).
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--cleanup") {
-            const char* env = std::getenv("FLUSS_BOOTSTRAP_SERVERS");
-            if (env && std::strlen(env) > 0) return 0;
             fluss_test::FlussTestCluster::StopAll();
             return 0;
         }
     }
 
     ::testing::InitGoogleTest(&argc, argv);
-
-    // Register the global test environment (manages the Fluss cluster lifecycle).
     ::testing::AddGlobalTestEnvironment(fluss_test::FlussTestEnvironment::Instance());
-
     return RUN_ALL_TESTS();
 }
