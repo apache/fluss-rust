@@ -71,8 +71,6 @@ jobs:
           restore-keys: |
             python-test-${{ runner.os }}-${{ matrix.python }}-
 
-      - uses: ./.github/actions/docker-cache
-
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
 

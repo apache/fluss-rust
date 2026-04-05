@@ -68,8 +68,6 @@ jobs:
           restore-keys: |
             cpp-test-${{ runner.os }}-
 
-      - uses: ./.github/actions/docker-cache
-
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
 

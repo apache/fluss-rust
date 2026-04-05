@@ -99,8 +99,6 @@ jobs:
           restore-keys: |
             rust-${{ runner.os }}-
 
-      - uses: ./.github/actions/docker-cache
-
       - name: Integration Test
         run: cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp
         env:
