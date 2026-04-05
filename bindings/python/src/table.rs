@@ -45,6 +45,7 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 const MICROS_PER_DAY: i64 = 86_400_000_000;
 const NANOS_PER_MILLI: i64 = 1_000_000;
 const NANOS_PER_MICRO: i64 = 1_000;
+const DEFAULT_POLL_INTERVAL_MS: i64 = 1000;
 
 /// Represents a single scan record with metadata.
 ///
@@ -1902,7 +1903,7 @@ macro_rules! with_scanner {
 #[pyclass]
 pub struct LogScanner {
     kind: Arc<ScannerKind>,
-    admin: fcore::client::FlussAdmin,
+    admin: Arc<fcore::client::FlussAdmin>,
     table_info: fcore::metadata::TableInfo,
     /// The projected Arrow schema to use for empty table creation
     projected_schema: SchemaRef,
@@ -2206,11 +2207,11 @@ impl LogScanner {
         let gen_fn = ASYNC_GEN_FN.get_or_init(py, || {
             let code = pyo3::ffi::c_str!(
                 r#"
-async def _async_scan_generic(scanner, method_name, timeout_ms=1000):
+async def _async_scan_generic(scanner, method_name):
     # Dynamically resolve the polling method (e.g., _async_poll or _async_poll_batches)
     poll_method = getattr(scanner, method_name)
     while True:
-        items = await poll_method(timeout_ms)
+        items = await poll_method()
         if items:
             for item in items:
                 yield item
@@ -2218,7 +2219,11 @@ async def _async_scan_generic(scanner, method_name, timeout_ms=1000):
             );
             let globals = pyo3::types::PyDict::new(py);
             py.run(code, Some(&globals), None).unwrap();
-            globals.get_item("_async_scan_generic").unwrap().unwrap().unbind()
+            globals
+                .get_item("_async_scan_generic")
+                .unwrap()
+                .unwrap()
+                .unbind()
         });
 
         // Determine which internal method to call based on the scanner kind
@@ -2228,37 +2233,26 @@ async def _async_scan_generic(scanner, method_name, timeout_ms=1000):
         };
 
         // Instantiate the generator with the scanner instance and the target method name
-        gen_fn.bind(py).call1((slf.into_bound_py_any(py)?, method_name))
+        gen_fn
+            .bind(py)
+            .call1((slf.into_bound_py_any(py)?, method_name))
     }
 
     /// Perform a single bounded poll and return a list of ScanRecord objects.
     ///
-    /// This is the async building block used by `__aiter__` to implement
-    /// `async for`. Each call does exactly one network poll (bounded by
-    /// `timeout_ms`), converts any results to Python objects, and returns
-    /// them as a list. An empty list signals a timeout (no data yet), not
+    /// This is the async building block used by `__aiter__` (record mode) to
+    /// implement `async for`. Each call does exactly one network poll (bounded
+    /// by `DEFAULT_POLL_INTERVAL_MS`), converts any results to Python ScanRecord objects,
+    /// and returns them as a list. An empty list signals a timeout (no data yet), not
     /// end-of-stream.
-    ///
-    /// Args:
-    ///     timeout_ms: Timeout in milliseconds for the network poll (default: 1000)
     ///
     /// Returns:
     ///     Awaitable that resolves to a list of ScanRecord objects
-    fn _async_poll<'py>(
-        &self,
-        py: Python<'py>,
-        timeout_ms: Option<i64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = timeout_ms.unwrap_or(1000);
-        if timeout_ms < 0 {
-            return Err(FlussError::new_err(format!(
-                "timeout_ms must be non-negative, got: {timeout_ms}"
-            )));
-        }
+    fn _async_poll<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let timeout = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64);
 
         let scanner = Arc::clone(&self.kind);
         let projected_row_type = self.projected_row_type.clone();
-        let timeout = Duration::from_millis(timeout_ms as u64);
 
         future_into_py(py, async move {
             let core_scanner = match scanner.as_ref() {
@@ -2295,29 +2289,16 @@ async def _async_scan_generic(scanner, method_name, timeout_ms=1000):
     ///
     /// This is the async building block used by `__aiter__` (batch mode) to
     /// implement `async for`. Each call does exactly one network poll (bounded
-    /// by `timeout_ms`), converts any results to Python RecordBatch objects,
+    /// by `DEFAULT_POLL_INTERVAL_MS`), converts any results to Python RecordBatch objects,
     /// and returns them as a list. An empty list signals a timeout (no data
     /// yet), not end-of-stream.
     ///
-    /// Args:
-    ///     timeout_ms: Timeout in milliseconds for the network poll (default: 1000)
-    ///
     /// Returns:
     ///     Awaitable that resolves to a list of RecordBatch objects
-    fn _async_poll_batches<'py>(
-        &self,
-        py: Python<'py>,
-        timeout_ms: Option<i64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = timeout_ms.unwrap_or(1000);
-        if timeout_ms < 0 {
-            return Err(FlussError::new_err(format!(
-                "timeout_ms must be non-negative, got: {timeout_ms}"
-            )));
-        }
+    fn _async_poll_batches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let timeout = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64);
 
         let scanner = Arc::clone(&self.kind);
-        let timeout = Duration::from_millis(timeout_ms as u64);
 
         future_into_py(py, async move {
             let core_scanner = match scanner.as_ref() {
