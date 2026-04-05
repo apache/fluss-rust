@@ -72,7 +72,7 @@ jobs:
       - name: Build Python bindings
         working-directory: bindings/python
         run: |
-          uv sync --extra dev
+          uv sync --extra dev --no-install-project
           uv run maturin develop
 
       - name: Run Python integration tests (parallel)
