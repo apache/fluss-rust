@@ -330,9 +330,9 @@ impl ColumnWriter {
             DataType::Array(array_type) => {
                 let element_type = array_type.get_element_type();
                 let arrow_element_type = match arrow_type {
-                    ArrowDataType::List(field) | ArrowDataType::LargeList(field) => {
-                        field.data_type()
-                    }
+                    ArrowDataType::List(field)
+                    | ArrowDataType::LargeList(field)
+                    | ArrowDataType::FixedSizeList(field, _) => field.data_type(),
                     _ => {
                         return Err(Error::IllegalArgument {
                             message: format!(
@@ -697,7 +697,9 @@ fn create_builder(
         DataType::Array(array_type) => {
             let element_type = array_type.get_element_type();
             let arrow_element_type = match arrow_type {
-                ArrowDataType::List(field) | ArrowDataType::LargeList(field) => field.data_type(),
+                ArrowDataType::List(field)
+                | ArrowDataType::LargeList(field)
+                | ArrowDataType::FixedSizeList(field, _) => field.data_type(),
                 _ => {
                     return Err(Error::IllegalArgument {
                         message: format!("Expected List Arrow type for Array, got: {arrow_type:?}"),
