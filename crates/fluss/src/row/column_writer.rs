@@ -26,11 +26,11 @@ use crate::row::datum::{
     MICROS_PER_MILLI, MILLIS_PER_SECOND, NANOS_PER_MILLI, append_decimal_to_builder,
     millis_nanos_to_micros, millis_nanos_to_nanos,
 };
-use crate::row::{FlussArray, InternalRow};
+use crate::row::InternalRow;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, ListBuilder, StringBuilder, Time32MillisecondBuilder,
+    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder,
     Time32SecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
     TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
     TimestampSecondBuilder,
@@ -113,8 +113,9 @@ enum TypedWriter {
         builder: TimestampNanosecondBuilder,
     },
     List {
-        element_type: DataType,
-        builder: ListBuilder<Box<dyn ArrayBuilder>>,
+        element_writer: Box<ColumnWriter>,
+        offsets: Vec<i32>,
+        validity: Vec<bool>,
     },
 }
 
@@ -148,7 +149,7 @@ macro_rules! with_builder {
             TypedWriter::TimestampLtzMillisecond { builder: $b, .. } => $body,
             TypedWriter::TimestampLtzMicrosecond { builder: $b, .. } => $body,
             TypedWriter::TimestampLtzNanosecond { builder: $b, .. } => $body,
-            TypedWriter::List { builder: $b, .. } => $body,
+            TypedWriter::List { .. } => panic!("List variant not supported in with_builder!"),
         }
     };
 }
@@ -330,9 +331,7 @@ impl ColumnWriter {
             DataType::Array(array_type) => {
                 let element_type = array_type.get_element_type();
                 let arrow_element_type = match arrow_type {
-                    ArrowDataType::List(field)
-                    | ArrowDataType::LargeList(field)
-                    | ArrowDataType::FixedSizeList(field, _) => field.data_type(),
+                    ArrowDataType::List(field) => field.data_type(),
                     _ => {
                         return Err(Error::IllegalArgument {
                             message: format!(
@@ -341,10 +340,12 @@ impl ColumnWriter {
                         });
                     }
                 };
-                let element_builder = create_builder(element_type, arrow_element_type, capacity)?;
+                let element_writer =
+                    ColumnWriter::create(element_type, arrow_element_type, 0, capacity)?;
                 TypedWriter::List {
-                    element_type: element_type.clone(),
-                    builder: ListBuilder::with_capacity(element_builder, capacity),
+                    element_writer: Box::new(element_writer),
+                    offsets: vec![0],
+                    validity: Vec::with_capacity(capacity),
                 }
             }
             _ => {
@@ -365,41 +366,66 @@ impl ColumnWriter {
     /// directly to the concrete Arrow builder.
     #[inline]
     pub fn write_field(&mut self, row: &dyn InternalRow) -> Result<()> {
-        if self.nullable && row.is_null_at(self.pos)? {
+        self.write_field_at(row, self.pos)
+    }
+
+    /// Read one value from `row` at position `pos` and append it
+    /// directly to the concrete Arrow builder.
+    #[inline]
+    pub fn write_field_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
+        if self.nullable && row.is_null_at(pos)? {
             self.append_null();
             return Ok(());
         }
-        self.write_non_null(row)
+        self.write_non_null_at(row, pos)
     }
 
     /// Finish the builder, producing the final Arrow array.
     pub fn finish(&mut self) -> ArrayRef {
-        self.as_builder_mut().finish()
+        match &mut self.inner {
+            TypedWriter::List {
+                element_writer,
+                offsets,
+                validity,
+            } => {
+                let values = element_writer.finish();
+                finish_list_array(values, offsets, validity)
+            }
+            _ => with_builder!(&mut self.inner, b => (b as &mut dyn ArrayBuilder).finish()),
+        }
     }
 
     /// Clone-finish the builder for size estimation (does not reset the builder).
     pub fn finish_cloned(&self) -> ArrayRef {
-        self.as_builder_ref().finish_cloned()
+        match &self.inner {
+            TypedWriter::List {
+                element_writer,
+                offsets,
+                validity,
+            } => {
+                let values = element_writer.finish_cloned();
+                finish_list_array(values, offsets, validity)
+            }
+            _ => with_builder!(&self.inner, b => (b as &dyn ArrayBuilder).finish_cloned()),
+        }
     }
 
     fn append_null(&mut self) {
-        with_builder!(&mut self.inner, b => b.append_null());
+        match &mut self.inner {
+            TypedWriter::List {
+                offsets, validity, ..
+            } => {
+                let last = *offsets.last().unwrap_or(&0);
+                offsets.push(last);
+                validity.push(false);
+            }
+            _ => with_builder!(&mut self.inner, b => b.append_null()),
+        }
     }
 
-    /// Returns a trait-object reference to the inner builder.
-    /// Used for type-agnostic operations (`finish`, `finish_cloned`).
-    fn as_builder_mut(&mut self) -> &mut dyn ArrayBuilder {
-        with_builder!(&mut self.inner, b => b)
-    }
-
-    fn as_builder_ref(&self) -> &dyn ArrayBuilder {
-        with_builder!(&self.inner, b => b)
-    }
 
     #[inline]
-    fn write_non_null(&mut self, row: &dyn InternalRow) -> Result<()> {
-        let pos = self.pos;
-
+    fn write_non_null_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
         match &mut self.inner {
             TypedWriter::Bool(b) => {
                 b.append_value(row.get_boolean(pos)?);
@@ -577,500 +603,39 @@ impl ColumnWriter {
                 Ok(())
             }
             TypedWriter::List {
-                element_type,
-                builder,
+                element_writer,
+                offsets,
+                validity,
             } => {
                 let array = row.get_array(pos)?;
-                let values_builder = builder.values();
                 for i in 0..array.size() {
-                    append_element_to_builder(values_builder, &array, i, element_type)?;
+                    element_writer.write_field_at(&array, i)?;
                 }
-                builder.append(true);
+                let last = *offsets.last().unwrap();
+                offsets.push(last + i32::try_from(array.size()).map_err(|_| {
+                    RowConvertError {
+                        message: format!("Array size {} exceeds i32 range", array.size()),
+                    }
+                })?);
+                validity.push(true);
                 Ok(())
             }
         }
     }
 }
 
-fn create_builder(
-    fluss_type: &DataType,
-    arrow_type: &ArrowDataType,
-    capacity: usize,
-) -> Result<Box<dyn ArrayBuilder>> {
-    match fluss_type {
-        DataType::Boolean(_) => Ok(Box::new(BooleanBuilder::with_capacity(capacity))),
-        DataType::TinyInt(_) => Ok(Box::new(Int8Builder::with_capacity(capacity))),
-        DataType::SmallInt(_) => Ok(Box::new(Int16Builder::with_capacity(capacity))),
-        DataType::Int(_) => Ok(Box::new(Int32Builder::with_capacity(capacity))),
-        DataType::BigInt(_) => Ok(Box::new(Int64Builder::with_capacity(capacity))),
-        DataType::Float(_) => Ok(Box::new(Float32Builder::with_capacity(capacity))),
-        DataType::Double(_) => Ok(Box::new(Float64Builder::with_capacity(capacity))),
-        DataType::Char(_) | DataType::String(_) => Ok(Box::new(StringBuilder::with_capacity(
-            capacity,
-            capacity.saturating_mul(VARIABLE_WIDTH_AVG_BYTES),
-        ))),
-        DataType::Bytes(_) => Ok(Box::new(BinaryBuilder::with_capacity(
-            capacity,
-            capacity.saturating_mul(VARIABLE_WIDTH_AVG_BYTES),
-        ))),
-        DataType::Binary(t) => {
-            let arrow_len: i32 = t.length().try_into().map_err(|_| Error::IllegalArgument {
-                message: format!(
-                    "Binary length {} exceeds Arrow's maximum (i32::MAX)",
-                    t.length()
-                ),
-            })?;
-            Ok(Box::new(FixedSizeBinaryBuilder::with_capacity(
-                capacity, arrow_len,
-            )))
-        }
-        DataType::Decimal(_) => {
-            let (p, s) = match arrow_type {
-                ArrowDataType::Decimal128(p, s) => (*p, *s),
-                _ => {
-                    return Err(Error::IllegalArgument {
-                        message: format!(
-                            "Expected Decimal128 Arrow type for Decimal, got: {arrow_type:?}"
-                        ),
-                    });
-                }
-            };
-            let builder = Decimal128Builder::with_capacity(capacity)
-                .with_precision_and_scale(p, s)
-                .map_err(|e| Error::IllegalArgument {
-                    message: format!("Invalid decimal precision {p} or scale {s}: {e}"),
-                })?;
-            Ok(Box::new(builder))
-        }
-        DataType::Date(_) => Ok(Box::new(Date32Builder::with_capacity(capacity))),
-        DataType::Time(_) => match arrow_type {
-            ArrowDataType::Time32(arrow_schema::TimeUnit::Second) => {
-                Ok(Box::new(Time32SecondBuilder::with_capacity(capacity)))
-            }
-            ArrowDataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
-                Ok(Box::new(Time32MillisecondBuilder::with_capacity(capacity)))
-            }
-            ArrowDataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
-                Ok(Box::new(Time64MicrosecondBuilder::with_capacity(capacity)))
-            }
-            ArrowDataType::Time64(arrow_schema::TimeUnit::Nanosecond) => {
-                Ok(Box::new(Time64NanosecondBuilder::with_capacity(capacity)))
-            }
-            _ => Err(Error::IllegalArgument {
-                message: format!("Unsupported Arrow type for Time: {arrow_type:?}"),
-            }),
-        },
-        DataType::Timestamp(_) => match arrow_type {
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, _) => {
-                Ok(Box::new(TimestampSecondBuilder::with_capacity(capacity)))
-            }
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => Ok(Box::new(
-                TimestampMillisecondBuilder::with_capacity(capacity),
-            )),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => Ok(Box::new(
-                TimestampMicrosecondBuilder::with_capacity(capacity),
-            )),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => Ok(Box::new(
-                TimestampNanosecondBuilder::with_capacity(capacity),
-            )),
-            _ => Err(Error::IllegalArgument {
-                message: format!("Unsupported Arrow type for Timestamp: {arrow_type:?}"),
-            }),
-        },
-        DataType::TimestampLTz(_) => match arrow_type {
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, _) => {
-                Ok(Box::new(TimestampSecondBuilder::with_capacity(capacity)))
-            }
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => Ok(Box::new(
-                TimestampMillisecondBuilder::with_capacity(capacity),
-            )),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => Ok(Box::new(
-                TimestampMicrosecondBuilder::with_capacity(capacity),
-            )),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => Ok(Box::new(
-                TimestampNanosecondBuilder::with_capacity(capacity),
-            )),
-            _ => Err(Error::IllegalArgument {
-                message: format!("Unsupported Arrow type for TimestampLTz: {arrow_type:?}"),
-            }),
-        },
-        DataType::Array(array_type) => {
-            let element_type = array_type.get_element_type();
-            let arrow_element_type = match arrow_type {
-                ArrowDataType::List(field)
-                | ArrowDataType::LargeList(field)
-                | ArrowDataType::FixedSizeList(field, _) => field.data_type(),
-                _ => {
-                    return Err(Error::IllegalArgument {
-                        message: format!("Expected List Arrow type for Array, got: {arrow_type:?}"),
-                    });
-                }
-            };
-            let element_builder = create_builder(element_type, arrow_element_type, capacity)?;
-            Ok(Box::new(ListBuilder::with_capacity(
-                element_builder,
-                capacity,
-            )))
-        }
-        _ => Err(Error::IllegalArgument {
-            message: format!("Unsupported Fluss DataType for builder: {fluss_type:?}"),
-        }),
-    }
-}
+fn finish_list_array(values: ArrayRef, offsets: &[i32], validity: &[bool]) -> ArrayRef {
+    use arrow::array::ListArray;
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{Field, FieldRef};
+    use std::sync::Arc;
 
-fn append_element_to_builder(
-    builder: &mut dyn ArrayBuilder,
-    array: &FlussArray,
-    pos: usize,
-    element_type: &DataType,
-) -> Result<()> {
-    match element_type {
-        DataType::Boolean(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<BooleanBuilder>()
-                .expect("Failed to downcast to BooleanBuilder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_boolean(pos)?);
-            }
-        }
-        DataType::TinyInt(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Int8Builder>()
-                .expect("Failed to downcast to Int8Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_byte(pos)?);
-            }
-        }
-        DataType::SmallInt(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Int16Builder>()
-                .expect("Failed to downcast to Int16Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_short(pos)?);
-            }
-        }
-        DataType::Int(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Int32Builder>()
-                .expect("Failed to downcast to Int32Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_int(pos)?);
-            }
-        }
-        DataType::BigInt(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Int64Builder>()
-                .expect("Failed to downcast to Int64Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_long(pos)?);
-            }
-        }
-        DataType::Float(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Float32Builder>()
-                .expect("Failed to downcast to Float32Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_float(pos)?);
-            }
-        }
-        DataType::Double(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Float64Builder>()
-                .expect("Failed to downcast to Float64Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_double(pos)?);
-            }
-        }
-        DataType::Char(_) | DataType::String(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<StringBuilder>()
-                .expect("Failed to downcast to StringBuilder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_string(pos)?);
-            }
-        }
-        DataType::Bytes(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<BinaryBuilder>()
-                .expect("Failed to downcast to BinaryBuilder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_binary(pos)?);
-            }
-        }
-        DataType::Binary(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<FixedSizeBinaryBuilder>()
-                .expect("Failed to downcast to FixedSizeBinaryBuilder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_binary(pos)?)
-                    .map_err(|e| RowConvertError {
-                        message: format!("Failed to append binary value: {e}"),
-                    })?;
-            }
-        }
-        DataType::Decimal(dt) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Decimal128Builder>()
-                .expect("Failed to downcast to Decimal128Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                let decimal = array.get_decimal(pos, dt.precision(), dt.scale())?;
-                append_decimal_to_builder(&decimal, dt.precision(), dt.scale() as i64, b)?;
-            }
-        }
-        DataType::Date(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Date32Builder>()
-                .expect("Failed to downcast to Date32Builder");
-            if array.is_null_at(pos) {
-                b.append_null();
-            } else {
-                b.append_value(array.get_date(pos)?.get_inner());
-            }
-        }
-        DataType::Time(_) => {
-            if array.is_null_at(pos) {
-                // We don't know the exact time unit builder here without re-matching type,
-                // but we can try to downcast to any of them just for append_null.
-                if let Some(b) = builder.as_any_mut().downcast_mut::<Time32SecondBuilder>() {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<Time32MillisecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<Time64MicrosecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<Time64NanosecondBuilder>()
-                {
-                    b.append_null();
-                } else {
-                    return Err(RowConvertError {
-                        message: "Failed to downcast to any TimeBuilder for null".to_string(),
-                    });
-                }
-            } else if let Some(b) = builder.as_any_mut().downcast_mut::<Time32SecondBuilder>() {
-                let millis = array.get_time(pos)?.get_inner();
-                b.append_value(millis / MILLIS_PER_SECOND as i32);
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<Time32MillisecondBuilder>()
-            {
-                b.append_value(array.get_time(pos)?.get_inner());
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<Time64MicrosecondBuilder>()
-            {
-                let millis = array.get_time(pos)?.get_inner();
-                b.append_value(millis as i64 * MICROS_PER_MILLI);
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<Time64NanosecondBuilder>()
-            {
-                let millis = array.get_time(pos)?.get_inner();
-                b.append_value(millis as i64 * NANOS_PER_MILLI);
-            } else {
-                return Err(RowConvertError {
-                    message: "Failed to downcast to any TimeBuilder".to_string(),
-                });
-            }
-        }
-        DataType::Timestamp(dt) => {
-            let precision = dt.precision();
-            if array.is_null_at(pos) {
-                if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampSecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampMillisecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampMicrosecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampNanosecondBuilder>()
-                {
-                    b.append_null();
-                } else {
-                    return Err(RowConvertError {
-                        message: "Failed to downcast to any TimestampBuilder for null".to_string(),
-                    });
-                }
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampSecondBuilder>()
-            {
-                let ts = array.get_timestamp_ntz(pos, precision)?;
-                b.append_value(ts.get_millisecond() / MILLIS_PER_SECOND);
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMillisecondBuilder>()
-            {
-                let ts = array.get_timestamp_ntz(pos, precision)?;
-                b.append_value(ts.get_millisecond());
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMicrosecondBuilder>()
-            {
-                let ts = array.get_timestamp_ntz(pos, precision)?;
-                b.append_value(millis_nanos_to_micros(
-                    ts.get_millisecond(),
-                    ts.get_nano_of_millisecond(),
-                )?);
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampNanosecondBuilder>()
-            {
-                let ts = array.get_timestamp_ntz(pos, precision)?;
-                b.append_value(millis_nanos_to_nanos(
-                    ts.get_millisecond(),
-                    ts.get_nano_of_millisecond(),
-                )?);
-            } else {
-                return Err(RowConvertError {
-                    message: "Failed to downcast to any TimestampBuilder".to_string(),
-                });
-            }
-        }
-        DataType::TimestampLTz(dt) => {
-            let precision = dt.precision();
-            if array.is_null_at(pos) {
-                if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampSecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampMillisecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampMicrosecondBuilder>()
-                {
-                    b.append_null();
-                } else if let Some(b) = builder
-                    .as_any_mut()
-                    .downcast_mut::<TimestampNanosecondBuilder>()
-                {
-                    b.append_null();
-                } else {
-                    return Err(RowConvertError {
-                        message: "Failed to downcast to any TimestampLTzBuilder for null"
-                            .to_string(),
-                    });
-                }
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampSecondBuilder>()
-            {
-                let ts = array.get_timestamp_ltz(pos, precision)?;
-                b.append_value(ts.get_epoch_millisecond() / MILLIS_PER_SECOND);
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMillisecondBuilder>()
-            {
-                let ts = array.get_timestamp_ltz(pos, precision)?;
-                b.append_value(ts.get_epoch_millisecond());
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMicrosecondBuilder>()
-            {
-                let ts = array.get_timestamp_ltz(pos, precision)?;
-                b.append_value(millis_nanos_to_micros(
-                    ts.get_epoch_millisecond(),
-                    ts.get_nano_of_millisecond(),
-                )?);
-            } else if let Some(b) = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampNanosecondBuilder>()
-            {
-                let ts = array.get_timestamp_ltz(pos, precision)?;
-                b.append_value(millis_nanos_to_nanos(
-                    ts.get_epoch_millisecond(),
-                    ts.get_nano_of_millisecond(),
-                )?);
-            } else {
-                return Err(RowConvertError {
-                    message: "Failed to downcast to any TimestampLTzBuilder".to_string(),
-                });
-            }
-        }
-        DataType::Array(array_type) => {
-            let element_type = array_type.get_element_type();
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
-                .expect("Failed to downcast to ListBuilder");
-            if array.is_null_at(pos) {
-                b.append(false);
-            } else {
-                let nested_array = array.get_array(pos)?;
-                let nested_values_builder = b.values();
-                for i in 0..nested_array.size() {
-                    append_element_to_builder(
-                        nested_values_builder,
-                        &nested_array,
-                        i,
-                        element_type,
-                    )?;
-                }
-                b.append(true);
-            }
-        }
-        _ => {
-            return Err(Error::IllegalArgument {
-                message: format!("Unsupported element type for Array datum: {element_type:?}"),
-            });
-        }
-    }
-    Ok(())
+    let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets.to_vec()));
+    let null_buffer = NullBuffer::from(validity.to_vec());
+    let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+    let field_ref: FieldRef = field;
+
+    Arc::new(ListArray::new(field_ref, offsets_buffer, values, Some(null_buffer)))
 }
 
 #[cfg(test)]

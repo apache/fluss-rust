@@ -1147,9 +1147,7 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
                 DataTypes::timestamp_with_precision(precision)
             }
         }
-        ArrowDataType::List(field)
-        | ArrowDataType::LargeList(field)
-        | ArrowDataType::FixedSizeList(field, _) => {
+        ArrowDataType::List(field) => {
             DataTypes::array(from_arrow_type(field.data_type())?)
         }
         other => {
@@ -1605,16 +1603,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_from_arrow_type_fixed_size_list() {
-        use arrow::datatypes::Field;
-        let arrow_type = ArrowDataType::FixedSizeList(
-            Arc::new(Field::new("item", ArrowDataType::Int32, true)),
-            3,
-        );
-        let fluss_type = from_arrow_type(&arrow_type).unwrap();
-        assert_eq!(fluss_type, DataTypes::array(DataTypes::int()));
-    }
 
     #[test]
     fn test_parse_ipc_message() {

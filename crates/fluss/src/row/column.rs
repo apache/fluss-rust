@@ -20,8 +20,8 @@ use crate::error::Result;
 use crate::row::InternalRow;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use arrow::array::{
-    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
-    LargeListArray, ListArray, RecordBatch, StringArray,
+    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, ListArray, RecordBatch,
+    StringArray,
 };
 use arrow::datatypes::{
     DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
@@ -418,16 +418,10 @@ impl InternalRow for ColumnarRow {
         let column = self.column(pos)?;
         let values = if let Some(list_arr) = column.as_any().downcast_ref::<ListArray>() {
             list_arr.value(self.row_id)
-        } else if let Some(large_list_arr) = column.as_any().downcast_ref::<LargeListArray>() {
-            large_list_arr.value(self.row_id)
-        } else if let Some(fixed_size_list_arr) =
-            column.as_any().downcast_ref::<FixedSizeListArray>()
-        {
-            fixed_size_list_arr.value(self.row_id)
         } else {
             return Err(IllegalArgument {
                 message: format!(
-                    "expected List, LargeList, or FixedSizeList array at position {pos}, got {:?}",
+                    "expected List array at position {pos}, got {:?}",
                     column.data_type()
                 ),
             });
@@ -650,14 +644,10 @@ fn write_arrow_values_to_fluss_array(
         DataType::Array(_) => {
             if values.as_any().is::<ListArray>() {
                 write_list_elements!(values, ListArray, len, element_type, writer);
-            } else if values.as_any().is::<LargeListArray>() {
-                write_list_elements!(values, LargeListArray, len, element_type, writer);
-            } else if values.as_any().is::<FixedSizeListArray>() {
-                write_list_elements!(values, FixedSizeListArray, len, element_type, writer);
             } else {
                 return Err(IllegalArgument {
                     message: format!(
-                        "Expected ListArray, LargeListArray, or FixedSizeListArray for {element_type:?} element, got {:?}",
+                        "Expected ListArray for {element_type:?} element, got {:?}",
                         values.data_type()
                     ),
                 });
@@ -1002,7 +992,7 @@ mod tests {
         let err = row.get_array(0).unwrap_err();
         assert!(
             err.to_string()
-                .contains("expected List, LargeList, or FixedSizeList array"),
+                .contains("expected List array"),
             "unexpected error: {err}"
         );
     }
