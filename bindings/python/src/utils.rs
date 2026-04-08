@@ -95,9 +95,7 @@ impl Utils {
             ArrowDataType::Decimal128(precision, scale) => {
                 DataTypes::decimal(*precision as u32, *scale as u32)
             }
-            ArrowDataType::List(field)
-            | ArrowDataType::LargeList(field)
-            | ArrowDataType::FixedSizeList(field, _) => {
+            ArrowDataType::List(field) => {
                 let element_type = Utils::arrow_type_to_fluss_type(field.data_type())?;
                 DataTypes::array(element_type)
             }

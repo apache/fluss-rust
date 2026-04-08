@@ -1151,7 +1151,7 @@ async def test_append_and_scan_with_array(connection, admin):
     table = await connection.get_table(table_path)
     append_writer = table.new_append().create_writer()
 
-    # Batch 1: Testing both standard and large lists
+    # Batch 1: Testing standard lists
     batch1 = pa.RecordBatch.from_arrays(
         [
             pa.array([1, 2], type=pa.int32()),
@@ -1222,93 +1222,6 @@ async def test_append_and_scan_with_array(connection, admin):
     ]
 
 
-@pytest.mark.skip(reason="Server currently only accepts ListVector. LargeList causes IPC mismatch until server supports it.")
-async def test_append_and_scan_with_large_list_array(connection, admin):
-    """Test appending and scanning with LargeList array columns."""
-    table_path = fluss.TablePath("fluss", "py_test_append_large_list_array")
-    await admin.drop_table(table_path, ignore_if_not_exists=True)
-
-    pa_schema = pa.schema(
-        [
-            pa.field("id", pa.int32()),
-            pa.field("tags", pa.large_list(pa.string())), 
-        ]
-    )
-    schema = fluss.Schema(pa_schema)
-    await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=False)
-
-    table = await connection.get_table(table_path)
-    append_writer = table.new_append().create_writer()
-
-    # Added more edge cases: inner nulls, completely null list, and empty list
-    batch = pa.RecordBatch.from_arrays(
-        [
-            pa.array([1, 2, 3, 4], type=pa.int32()),
-            pa.array([["a", "b"], ["c", None], None, []], type=pa.large_list(pa.string())),
-        ],
-        schema=pa_schema,
-    )
-    append_writer.write_arrow_batch(batch)
-    await append_writer.flush()
-
-    scanner = await table.new_scan().create_log_scanner()
-    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
-    records = _poll_records(scanner, expected_count=4)
-
-    assert len(records) == 4
-    
-    # Sort and verify the actual values like in the FixedSizeList test
-    records.sort(key=lambda r: r.row["id"])
-
-    assert records[0].row["tags"] == ["a", "b"]
-    assert records[1].row["tags"] == ["c", None]
-    assert records[2].row["tags"] is None
-    assert records[3].row["tags"] == []
-
-    await admin.drop_table(table_path, ignore_if_not_exists=False)
-
-
-@pytest.mark.skip(reason="Server currently only accepts ListVector. FixedSizeList causes IPC mismatch until server supports it.")
-async def test_append_and_scan_with_fixed_size_array(connection, admin):
-    """Test appending and scanning with FixedSizeList array columns."""
-    table_path = fluss.TablePath("fluss", "py_test_append_fixed_size_array")
-    await admin.drop_table(table_path, ignore_if_not_exists=True)
-
-    pa_schema = pa.schema(
-        [
-            pa.field("id", pa.int32()),
-            pa.field("coords", pa.list_(pa.float32(), 2)),  # FixedSizeList of length 2
-        ]
-    )
-    schema = fluss.Schema(pa_schema)
-    await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=False)
-
-    table = await connection.get_table(table_path)
-    append_writer = table.new_append().create_writer()
-
-    batch = pa.RecordBatch.from_arrays(
-        [
-            pa.array([1, 2, 3, 4], type=pa.int32()),
-            pa.array([[1.0, 2.0], [None, 4.0], [5.0, None], None], type=pa.list_(pa.float32(), 2)),
-        ],
-        schema=pa_schema,
-    )
-    append_writer.write_arrow_batch(batch)
-    await append_writer.flush()
-
-    scanner = await table.new_scan().create_log_scanner()
-    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
-    records = _poll_records(scanner, expected_count=4)
-
-    assert len(records) == 4
-    records.sort(key=lambda r: r.row["id"])
-
-    assert records[0].row["coords"] == [1.0, 2.0]
-    assert records[1].row["coords"] == [None, 4.0]
-    assert records[2].row["coords"] == [5.0, None]
-    assert records[3].row["coords"] is None
-
-    await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
 async def test_append_rows_with_array(connection, admin):

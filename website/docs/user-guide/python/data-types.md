@@ -18,8 +18,6 @@ The Python client uses PyArrow types for schema definitions:
 | `pa.timestamp("us", tz="UTC")`                  | TimestampLTZ                      | `datetime.datetime` |
 | `pa.decimal128(precision, scale)`               | Decimal                           | `decimal.Decimal`   |
 | `pa.list_(type)`                                  | Array                             | `list`              |
-| `pa.large_list(type)`                             | Array                             | `list`              |
-| `pa.fixed_size_list(type, size)`                  | Array                             | `list`              |
 
 All Python native types (`date`, `time`, `datetime`, `Decimal`) work when appending rows via dicts.
 
