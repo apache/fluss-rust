@@ -29,13 +29,15 @@
 //! - STRING / CHAR are encoded as UTF-8 bytes with **no** length prefix.
 //! - BYTES / BINARY are encoded as raw bytes with **no** length prefix.
 
-use crate::error::Error::IllegalArgument;
+use crate::error::Error::{IllegalArgument, UnsupportedOperation};
 use crate::error::Result;
 use crate::metadata::{DataType, RowType};
 use crate::row::encode::KeyEncoder;
 use crate::row::field_getter::FieldGetter;
 use crate::row::{Datum, InternalRow};
 use bytes::Bytes;
+
+const MICROS_PER_MILLI: i64 = 1000;
 
 #[allow(dead_code)]
 pub struct IcebergKeyEncoder {
@@ -93,6 +95,24 @@ impl IcebergKeyEncoder {
             | DataType::Binary(_)
             | DataType::Bytes(_) => Ok(()),
 
+            DataType::Boolean(_) => Err(UnsupportedOperation {
+                message: "Boolean types are not supported for Iceberg bucket keys.".to_string(),
+            }),
+            DataType::TinyInt(_) => Err(UnsupportedOperation {
+                message: "TinyInt types are not supported for Iceberg bucket keys.".to_string(),
+            }),
+            DataType::SmallInt(_) => Err(UnsupportedOperation {
+                message: "SmallInt types are not supported for Iceberg bucket keys.".to_string(),
+            }),
+            DataType::TimestampLTz(_) => Err(UnsupportedOperation {
+                message: "TimestampLTz types are not supported for Iceberg bucket keys."
+                    .to_string(),
+            }),
+            DataType::Row(_) => Err(UnsupportedOperation {
+                message:
+                    "Row types cannot be used as bucket keys. Bucket keys must be scalar types."
+                        .to_string(),
+            }),
             DataType::Array(_) => Err(IllegalArgument {
                 message:
                     "Array types cannot be used as bucket keys. Bucket keys must be scalar types."
@@ -103,9 +123,6 @@ impl IcebergKeyEncoder {
                     "Map types cannot be used as bucket keys. Bucket keys must be scalar types."
                         .to_string(),
             }),
-            other => Err(IllegalArgument {
-                message: format!("Unsupported type for Iceberg key encoder: {other}"),
-            }),
         }
     }
 }
@@ -113,7 +130,7 @@ impl IcebergKeyEncoder {
 #[allow(dead_code)]
 impl KeyEncoder for IcebergKeyEncoder {
     fn encode_key(&mut self, row: &dyn InternalRow) -> Result<Bytes> {
-        let value = self.field_getter.get_field(row);
+        let value = self.field_getter.get_field(row)?;
         if value.is_null() {
             return Err(IllegalArgument {
                 message: "Cannot encode Iceberg key with null value".to_string(),
@@ -125,7 +142,7 @@ impl KeyEncoder for IcebergKeyEncoder {
             (DataType::Date(_), Datum::Date(v)) => (v.get_inner() as i64).to_le_bytes().to_vec(),
 
             (DataType::Time(_), Datum::Time(v)) => {
-                let micros = v.get_inner() as i64 * 1000;
+                let micros = (v.get_inner() as i64).wrapping_mul(MICROS_PER_MILLI);
                 micros.to_le_bytes().to_vec()
             }
 
@@ -134,8 +151,11 @@ impl KeyEncoder for IcebergKeyEncoder {
             (DataType::Double(_), Datum::Float64(v)) => v.0.to_le_bytes().to_vec(),
 
             (DataType::Timestamp(_), Datum::TimestampNtz(ts)) => {
-                let micros =
-                    ts.get_millisecond() * 1000 + (ts.get_nano_of_millisecond() as i64 / 1000);
+                // Use wrapping arithmetic to match Java's behavior on overflow
+                let micros = ts
+                    .get_millisecond()
+                    .wrapping_mul(MICROS_PER_MILLI)
+                    .wrapping_add((ts.get_nano_of_millisecond() as i64) / MICROS_PER_MILLI);
                 micros.to_le_bytes().to_vec()
             }
 
@@ -144,6 +164,30 @@ impl KeyEncoder for IcebergKeyEncoder {
             (DataType::Char(_), Datum::String(s)) => s.as_bytes().to_vec(),
             (DataType::Binary(_), Datum::Blob(b)) => b.as_ref().to_vec(),
             (DataType::Bytes(_), Datum::Blob(b)) => b.as_ref().to_vec(),
+
+            // Explicitly unsupported types (should have been caught in validation)
+            (DataType::Boolean(_), Datum::Bool(_)) => {
+                return Err(UnsupportedOperation {
+                    message: "Boolean types are not supported for Iceberg bucket keys.".to_string(),
+                });
+            }
+            (DataType::TinyInt(_), Datum::Int8(_)) => {
+                return Err(UnsupportedOperation {
+                    message: "TinyInt types are not supported for Iceberg bucket keys.".to_string(),
+                });
+            }
+            (DataType::SmallInt(_), Datum::Int16(_)) => {
+                return Err(UnsupportedOperation {
+                    message: "SmallInt types are not supported for Iceberg bucket keys."
+                        .to_string(),
+                });
+            }
+            (DataType::TimestampLTz(_), Datum::TimestampLtz(_)) => {
+                return Err(UnsupportedOperation {
+                    message: "TimestampLTz types are not supported for Iceberg bucket keys."
+                        .to_string(),
+                });
+            }
 
             // FieldGetter uses Datum::String for CHAR, Datum::Blob for BINARY/BYTES.
             (expected_type, actual) => {
