@@ -1147,9 +1147,7 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
                 DataTypes::timestamp_with_precision(precision)
             }
         }
-        ArrowDataType::List(field) => {
-            DataTypes::array(from_arrow_type(field.data_type())?)
-        }
+        ArrowDataType::List(field) => DataTypes::array(from_arrow_type(field.data_type())?),
         other => {
             return Err(Error::IllegalArgument {
                 message: format!("Cannot convert Arrow type to Fluss type: {other:?}"),
@@ -1602,7 +1600,6 @@ mod tests {
             ]))
         );
     }
-
 
     #[test]
     fn test_parse_ipc_message() {

@@ -22,18 +22,17 @@
 use crate::error::Error::RowConvertError;
 use crate::error::{Error, Result};
 use crate::metadata::DataType;
+use crate::row::InternalRow;
 use crate::row::datum::{
     MICROS_PER_MILLI, MILLIS_PER_SECOND, NANOS_PER_MILLI, append_decimal_to_builder,
     millis_nanos_to_micros, millis_nanos_to_nanos,
 };
-use crate::row::InternalRow;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder,
-    Time32SecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
-    TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
-    TimestampSecondBuilder,
+    Int32Builder, Int64Builder, StringBuilder, Time32MillisecondBuilder, Time32SecondBuilder,
+    Time64MicrosecondBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    TimestampMillisecondBuilder, TimestampNanosecondBuilder, TimestampSecondBuilder,
 };
 use arrow_schema::DataType as ArrowDataType;
 
@@ -423,7 +422,6 @@ impl ColumnWriter {
         }
     }
 
-
     #[inline]
     fn write_non_null_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
         match &mut self.inner {
@@ -612,11 +610,11 @@ impl ColumnWriter {
                     element_writer.write_field_at(&array, i)?;
                 }
                 let last = *offsets.last().unwrap();
-                offsets.push(last + i32::try_from(array.size()).map_err(|_| {
-                    RowConvertError {
+                offsets.push(
+                    last + i32::try_from(array.size()).map_err(|_| RowConvertError {
                         message: format!("Array size {} exceeds i32 range", array.size()),
-                    }
-                })?);
+                    })?,
+                );
                 validity.push(true);
                 Ok(())
             }
@@ -635,7 +633,12 @@ fn finish_list_array(values: ArrayRef, offsets: &[i32], validity: &[bool]) -> Ar
     let field = Arc::new(Field::new("item", values.data_type().clone(), true));
     let field_ref: FieldRef = field;
 
-    Arc::new(ListArray::new(field_ref, offsets_buffer, values, Some(null_buffer)))
+    Arc::new(ListArray::new(
+        field_ref,
+        offsets_buffer,
+        values,
+        Some(null_buffer),
+    ))
 }
 
 #[cfg(test)]
