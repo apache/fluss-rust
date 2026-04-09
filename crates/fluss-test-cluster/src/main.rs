@@ -86,13 +86,13 @@ async fn main() {
                     }
                 }
                 if start.elapsed() >= Duration::from_secs(60) {
-                    eprintln!("Cluster did not become ready within 60s");
+                    eprintln!("TIMEOUT: cluster did not become ready within 60s");
                     std::process::exit(1);
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
             eprintln!("Cluster ready.");
-            println!("{}", serde_json::to_string(&info).unwrap());
+            println!("CLUSTER_JSON: {}", serde_json::to_string(&info).unwrap());
         }
         Command::Stop { name } => {
             eprintln!("Stopping Fluss test cluster '{}'...", name);

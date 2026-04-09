@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -74,21 +75,32 @@ inline std::string CliStartCmd() {
     return FindCliBinary() + " start --sasl --name " + kClusterName;
 }
 
+constexpr const char* kClusterJsonPrefix = "CLUSTER_JSON: ";
+
 inline bool ParseClusterJson(const std::string& output, std::string& bootstrap,
                              std::string& sasl_bootstrap) {
-    // Last non-empty line is the JSON (progress goes to stderr).
-    auto last_nl = output.rfind('\n', output.size() - 2);
-    std::string line = (last_nl != std::string::npos) ? output.substr(last_nl + 1) : output;
-    try {
-        auto info = nlohmann::json::parse(line);
-        bootstrap = info.at("bootstrap_servers").get<std::string>();
-        if (info.contains("sasl_bootstrap_servers") && !info["sasl_bootstrap_servers"].is_null()) {
-            sasl_bootstrap = info["sasl_bootstrap_servers"].get<std::string>();
+    // Look for the CLUSTER_JSON: token in output lines.
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.rfind(kClusterJsonPrefix, 0) != 0) continue;
+        std::string json_str = line.substr(std::strlen(kClusterJsonPrefix));
+        try {
+            auto info = nlohmann::json::parse(json_str);
+            bootstrap = info.at("bootstrap_servers").get<std::string>();
+            if (info.contains("sasl_bootstrap_servers") &&
+                !info["sasl_bootstrap_servers"].is_null()) {
+                sasl_bootstrap = info["sasl_bootstrap_servers"].get<std::string>();
+            }
+            return true;
+        } catch (const nlohmann::json::exception& e) {
+            std::cerr << "Failed to parse cluster JSON: " << e.what() << "\n"
+                      << "Line: " << line << std::endl;
+            return false;
         }
-        return true;
-    } catch (const nlohmann::json::exception&) {
-        return false;
     }
+    std::cerr << "No CLUSTER_JSON token found in output:\n" << output << std::endl;
+    return false;
 }
 
 class FlussTestCluster {

@@ -67,8 +67,14 @@ def _start_cluster():
             raise RuntimeError(
                 f"fluss-test-cluster start failed:\n{result.stderr}\n{result.stdout}"
             )
-        info = json.loads(result.stdout.strip().split("\n")[-1])
-        return info["bootstrap_servers"], info.get("sasl_bootstrap_servers")
+        prefix = "CLUSTER_JSON: "
+        for line in result.stdout.strip().split("\n"):
+            if line.startswith(prefix):
+                info = json.loads(line[len(prefix) :])
+                return info["bootstrap_servers"], info.get("sasl_bootstrap_servers")
+        raise RuntimeError(
+            f"No CLUSTER_JSON token in output:\n{result.stdout}\n{result.stderr}"
+        )
 
 
 def _stop_cluster():

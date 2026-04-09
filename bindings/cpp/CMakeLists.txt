@@ -25,7 +25,7 @@ project(fluss-cpp LANGUAGES CXX)
 
 include(FetchContent)
 set(FLUSS_GOOGLETEST_VERSION 1.15.2 CACHE STRING "version of GoogleTest")
-set(FLUSS_NLOHMANN_JSON_VERSION 3.11.3 CACHE STRING "version of nlohmann/json")
+set(FLUSS_NLOHMANN_JSON_VERSION 3.12.0 CACHE STRING "version of nlohmann/json")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(FLUSS_CPP_DEP_MODE "system" CACHE STRING "Dependency provisioning mode for fluss-cpp (system|build)")
@@ -262,7 +262,7 @@ if (FLUSS_ENABLE_TESTING)
         FetchContent_Declare(
             nlohmann_json
             URL https://github.com/nlohmann/json/archive/refs/tags/v${FLUSS_NLOHMANN_JSON_VERSION}.tar.gz
-            URL_HASH SHA256=0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406
+            URL_HASH SHA256=4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187
         )
         FetchContent_MakeAvailable(nlohmann_json)
     endif()
