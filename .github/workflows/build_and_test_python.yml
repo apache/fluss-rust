@@ -61,15 +61,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Rust Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            python-test-${{ runner.os }}-${{ matrix.python }}-
+        uses: Swatinem/rust-cache@v2
 
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
