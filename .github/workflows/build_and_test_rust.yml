@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test-rust:
+  build-and-unit-test:
     timeout-minutes: 60
     runs-on: ${{ matrix.os }}
     strategy:
@@ -78,10 +78,29 @@ jobs:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
 
-      - name: Integration Test (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp
+  integration-test:
+    needs: build-and-unit-test
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Rust Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-${{ runner.os }}-
+
+      - name: Integration Test
+        run: cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

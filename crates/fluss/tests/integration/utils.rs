@@ -53,7 +53,7 @@ static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
             );
 
             let cluster =
-                FlussTestingClusterBuilder::new_with_cluster_conf("shared-test", &cluster_conf)
+                FlussTestingClusterBuilder::new_with_cluster_conf("rust-test", &cluster_conf)
                     .with_sasl(vec![
                         ("admin".to_string(), "admin-secret".to_string()),
                         ("alice".to_string(), "alice-secret".to_string()),

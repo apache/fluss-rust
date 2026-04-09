@@ -15,20 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+[package]
+name = "fluss-test-cluster"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
 
-  paths-ignore:
-    - '.gitignore'
-    - 'Cargo.lock'
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'bindings/python/fluss/py.typed'
-    - 'website/**'
-    - '**/*.md'
-    - '**/DEPENDENCIES.*.tsv'
-    - '**/*.env'
-  comment: on-failure
+[[bin]]
+name = "fluss-test-cluster"
+path = "src/main.rs"
+
+[dependencies]
+fluss = { workspace = true }
+testcontainers = "0.27.2"
+tokio = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

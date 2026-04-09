@@ -38,12 +38,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test-python:
+  build-and-test:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python: ["3.9", "3.10", "3.11", "3.12"]
+    env:
+      FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/target/debug/fluss-test-cluster
     steps:
       - uses: actions/checkout@v4
 
@@ -69,13 +71,16 @@ jobs:
           restore-keys: |
             python-test-${{ runner.os }}-${{ matrix.python }}-
 
+      - name: Build fluss-test-cluster binary
+        run: cargo build -p fluss-test-cluster
+
       - name: Build Python bindings
         working-directory: bindings/python
         run: |
           uv sync --extra dev --no-install-project
           uv run maturin develop
 
-      - name: Run Python integration tests (parallel)
+      - name: Run tests (parallel)
         working-directory: bindings/python
         run: uv run pytest test/ -v -n auto
         env:
