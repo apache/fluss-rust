@@ -70,11 +70,11 @@ jobs:
         working-directory: bindings/python
         run: |
           uv sync --extra dev --no-install-project
-          uv run maturin develop
+          maturin develop
 
       - name: Run tests (parallel)
         working-directory: bindings/python
-        run: uv run pytest test/ -v -n auto
+        run: uv run --no-sync pytest test/ -v -n auto
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
