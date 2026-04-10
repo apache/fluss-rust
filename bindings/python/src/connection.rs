@@ -104,6 +104,28 @@ impl FlussConnection {
         Ok(false)
     }
 
+    // Enter the async runtime context (for 'async with' statement)
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_slf = slf.into_pyobject(py)?.unbind();
+        future_into_py(py, async move { Ok(py_slf) })
+    }
+
+    // Exit the async runtime context (for 'async with' statement)
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &mut self,
+        py: Python<'py>,
+        _exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            // In the future, we could call an async close on the core connection here
+            // e.g., client.close().await;
+            Ok(false)
+        })
+    }
+
     fn __repr__(&self) -> String {
         "FlussConnection()".to_string()
     }

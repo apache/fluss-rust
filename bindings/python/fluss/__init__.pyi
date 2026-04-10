@@ -253,6 +253,13 @@ class FlussConnection:
         exc_value: Optional[BaseException],
         traceback: Optional[TracebackType],
     ) -> bool: ...
+    async def __aenter__(self) -> FlussConnection: ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool: ...
     def __repr__(self) -> str: ...
 
 class ServerNode:
@@ -611,6 +618,37 @@ class AppendWriter:
     def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle: ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...
     async def flush(self) -> None: ...
+    async def __aenter__(self) -> AppendWriter:
+        """
+        Enter the async context manager.
+
+        Returns:
+            The AppendWriter instance.
+        """
+        ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """
+        Exit the async context manager.
+
+        On successful exit, the writer is automatically flushed to ensure
+        all pending records are sent and acknowledged.
+
+        Note on Exceptions:
+            If an exception occurs inside the `async with` block, `flush()` is
+            bypassed to return control to the event loop immediately. However,
+            any records already passed to `append()` prior to the exception
+            reside in a shared background buffer and will still be transmitted
+            to the server.
+
+            To achieve true atomicity, buffer your records in a Python list and
+            write them in a single batch at the end of your logic.
+        """
+        ...
     def __repr__(self) -> str: ...
 
 class UpsertWriter:
@@ -643,6 +681,37 @@ class UpsertWriter:
         ...
     async def flush(self) -> None:
         """Flush all pending upsert/delete operations to the server."""
+        ...
+    async def __aenter__(self) -> UpsertWriter:
+        """
+        Enter the async context manager.
+
+        Returns:
+            The UpsertWriter instance.
+        """
+        ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """
+        Exit the async context manager.
+
+        On successful exit, the writer is automatically flushed to ensure
+        all pending records are sent and acknowledged.
+
+        Note on Exceptions:
+            If an exception occurs inside the `async with` block, `flush()` is
+            bypassed to return control to the event loop immediately. However,
+            any records already passed to `upsert()` or `delete()` prior to the
+            exception reside in a shared background buffer and will still be
+            transmitted to the server.
+
+            To achieve true atomicity, buffer your records in a Python list and
+            write them in a single batch at the end of your logic.
+        """
         ...
     def __repr__(self) -> str: ...
 
@@ -807,6 +876,15 @@ class LogScanner:
 
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
+        ...
+    def close(self) -> None: ...
+    async def __aenter__(self) -> LogScanner: ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool: ...
     def __repr__(self) -> str: ...
     def __aiter__(self) -> AsyncIterator[Union[ScanRecord, RecordBatch]]: ...
 

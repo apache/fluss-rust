@@ -97,6 +97,7 @@ impl UpsertWriter {
     ///
     /// Returns:
     ///     None on success
+    /// Flush any pending data
     pub fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let writer = self.writer.clone();
 
@@ -105,6 +106,37 @@ impl UpsertWriter {
                 .flush()
                 .await
                 .map_err(|e| FlussError::from_core_error(&e))
+        })
+    }
+
+    // Enter the async runtime context (for 'async with' statement)
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_slf = slf.into_pyobject(py)?.unbind();
+        future_into_py(py, async move { Ok(py_slf) })
+    }
+
+    // Exit the async runtime context (for 'async with' statement)
+    /// On successful exit, the writer is automatically flushed.
+    /// If an exception occurs, the flush is skipped to allow immediate error
+    /// propagation, though pending records may still be sent in the background.
+    #[pyo3(signature = (exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let has_error = exc_type.is_some();
+        let writer = self.writer.clone();
+        future_into_py(py, async move {
+            if !has_error {
+                writer
+                    .flush()
+                    .await
+                    .map_err(|e| FlussError::from_core_error(&e))?;
+            }
+            Ok(false)
         })
     }
 

@@ -989,6 +989,37 @@ impl AppendWriter {
         })
     }
 
+    // Enter the async runtime context (for 'async with' statement)
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_slf = slf.into_pyobject(py)?.unbind();
+        future_into_py(py, async move { Ok(py_slf) })
+    }
+
+    // Exit the async runtime context (for 'async with' statement)
+    /// On successful exit, the writer is automatically flushed.
+    /// If an exception occurs, the flush is skipped to allow immediate error
+    /// propagation, though pending records may still be sent in the background.
+    #[pyo3(signature = (exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let has_error = exc_type.is_some();
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            if !has_error {
+                inner
+                    .flush()
+                    .await
+                    .map_err(|e| FlussError::from_core_error(&e))?;
+            }
+            Ok(false)
+        })
+    }
+
     fn __repr__(&self) -> String {
         "AppendWriter()".to_string()
     }
@@ -2330,6 +2361,32 @@ async def _async_scan_generic(scanner, method_name):
 
     fn __repr__(&self) -> String {
         format!("LogScanner(table={})", self.table_info.table_path)
+    }
+
+    /// Close the scanner
+    pub fn close(&self) -> PyResult<()> {
+        Ok(())
+    }
+
+    // Enter the async runtime context (for 'async with' statement)
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_slf = slf.into_pyobject(py)?.unbind();
+        future_into_py(py, async move { Ok(py_slf) })
+    }
+
+    // Exit the async runtime context (for 'async with' statement)
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        _exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(py, async move {
+            // In the future, we can call an async close on the core scanner here
+            Ok(false)
+        })
     }
 }
 
