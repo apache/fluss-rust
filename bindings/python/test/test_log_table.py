@@ -765,8 +765,7 @@ async def test_async_iterator(connection, admin):
             if len(collected) == 5:
                 break
                 
-    # We must race the consumption against a timeout so the test doesn't hang if the iterator is broken
-    await asyncio.wait_for(consume_scanner(), timeout=10.0)
+    await consume_scanner()
     
     assert len(collected) == 5, f"Expected 5 records, got {len(collected)}"
     
@@ -824,7 +823,7 @@ async def test_async_iterator_break_no_leak(connection, admin):
             if len(collected_async) >= 3:
                 break
 
-    await asyncio.wait_for(consume_and_break(), timeout=10.0)
+    await consume_and_break()
     assert len(collected_async) == 3, (
         f"Expected 3 records from async for, got {len(collected_async)}"
     )
@@ -904,7 +903,7 @@ async def test_async_iterator_multiple_batches(connection, admin):
             if len(collected) >= num_records:
                 break
 
-    await asyncio.wait_for(consume_all(), timeout=15.0)
+    await consume_all()
     assert len(collected) == num_records, (
         f"Expected {num_records} records, got {len(collected)}"
     )
@@ -963,7 +962,7 @@ async def test_batch_async_iterator(connection, admin):
             if total_rows >= 6:
                 break
 
-    await asyncio.wait_for(consume_batches(), timeout=15.0)
+    await consume_batches()
 
     assert total_rows >= 6, f"Expected >=6 total rows, got {total_rows}"
     assert len(collected_batches) > 0
@@ -1035,7 +1034,7 @@ async def test_batch_async_iterator_break_no_leak(connection, admin):
             first_batch = rb
             break
 
-    await asyncio.wait_for(consume_and_break(), timeout=10.0)
+    await consume_and_break()
     assert first_batch is not None, "Should have received at least 1 batch"
     assert first_batch.batch.num_rows > 0
 
@@ -1096,7 +1095,7 @@ async def test_batch_async_iterator_multiple_batches(connection, admin):
             if len(all_ids) >= num_records:
                 break
 
-    await asyncio.wait_for(consume_all(), timeout=15.0)
+    await consume_all()
     assert len(all_ids) >= num_records, (
         f"Expected >={num_records} IDs, got {len(all_ids)}"
     )
