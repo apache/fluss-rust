@@ -54,10 +54,7 @@ defmodule Fluss.Native do
   def schema_builder_column(_builder, _name, _data_type), do: :erlang.nif_error(:nif_not_loaded)
   def schema_builder_primary_key(_builder, _keys), do: :erlang.nif_error(:nif_not_loaded)
   def schema_builder_build(_builder), do: :erlang.nif_error(:nif_not_loaded)
-  def table_descriptor_new(_schema), do: :erlang.nif_error(:nif_not_loaded)
-  def table_descriptor_with_bucket_count(_schema, _count), do: :erlang.nif_error(:nif_not_loaded)
-
-  def table_descriptor_with_properties(_schema, _properties),
+  def table_descriptor_new(_schema, _bucket_count, _properties),
     do: :erlang.nif_error(:nif_not_loaded)
 
   # Table

@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::RUNTIME;
 use crate::atoms::to_nif_err;
 use crate::config::ConfigResource;
-use crate::RUNTIME;
 use fluss::client::FlussConnection;
 use rustler::ResourceArc;
 use std::sync::Arc;

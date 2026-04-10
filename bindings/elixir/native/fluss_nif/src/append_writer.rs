@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::RUNTIME;
 use crate::atoms::{self, to_nif_err};
 use crate::row_convert;
 use crate::table::TableResource;
 use crate::write_handle::WriteHandleResource;
-use crate::RUNTIME;
 use fluss::client::AppendWriter;
 use fluss::metadata::Column;
 use rustler::{Atom, Env, ResourceArc, Term};

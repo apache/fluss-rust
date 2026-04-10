@@ -120,18 +120,23 @@ defmodule Fluss.Integration.LogTableTest do
   end
 
   describe "multiple data types" do
-    test "int, bigint, float, double, string, boolean", %{conn: conn, admin: admin} do
+    test "tinyint, smallint, int, bigint, float, double, string, boolean", %{
+      conn: conn,
+      admin: admin
+    } do
       table_name = "ex_test_data_types_#{:rand.uniform(100_000)}"
       cleanup_table(admin, table_name)
 
       schema =
         Fluss.Schema.build()
-        |> Fluss.Schema.column("a_int", :int)
-        |> Fluss.Schema.column("b_bigint", :bigint)
-        |> Fluss.Schema.column("c_float", :float)
-        |> Fluss.Schema.column("d_double", :double)
-        |> Fluss.Schema.column("e_string", :string)
-        |> Fluss.Schema.column("f_bool", :boolean)
+        |> Fluss.Schema.column("a_tinyint", :tinyint)
+        |> Fluss.Schema.column("b_smallint", :smallint)
+        |> Fluss.Schema.column("c_int", :int)
+        |> Fluss.Schema.column("d_bigint", :bigint)
+        |> Fluss.Schema.column("e_float", :float)
+        |> Fluss.Schema.column("f_double", :double)
+        |> Fluss.Schema.column("g_string", :string)
+        |> Fluss.Schema.column("h_bool", :boolean)
         |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
@@ -142,6 +147,8 @@ defmodule Fluss.Integration.LogTableTest do
 
       {:ok, _} =
         Fluss.AppendWriter.append(writer, [
+          127,
+          32_000,
           42,
           1_000_000_000_000,
           3.14,
@@ -150,7 +157,9 @@ defmodule Fluss.Integration.LogTableTest do
           true
         ])
 
-      {:ok, _} = Fluss.AppendWriter.append(writer, [-1, -999, 0.0, -1.5, "", false])
+      {:ok, _} =
+        Fluss.AppendWriter.append(writer, [-128, -32_000, -1, -999, 0.0, -1.5, "", false])
+
       :ok = Fluss.AppendWriter.flush(writer)
 
       scanner = Fluss.LogScanner.new!(table)
@@ -159,19 +168,23 @@ defmodule Fluss.Integration.LogTableTest do
       records = poll_records(scanner, 2)
       assert length(records) == 2
 
-      sorted = Enum.sort_by(records, fn r -> r[:row][:a_int] end)
+      sorted = Enum.sort_by(records, fn r -> r[:row][:c_int] end)
       row1 = Enum.at(sorted, 0)[:row]
       row2 = Enum.at(sorted, 1)[:row]
 
-      assert row1[:a_int] == -1
-      assert row1[:b_bigint] == -999
-      assert row1[:e_string] == ""
-      assert row1[:f_bool] == false
+      assert row1[:a_tinyint] == -128
+      assert row1[:b_smallint] == -32_000
+      assert row1[:c_int] == -1
+      assert row1[:d_bigint] == -999
+      assert row1[:g_string] == ""
+      assert row1[:h_bool] == false
 
-      assert row2[:a_int] == 42
-      assert row2[:b_bigint] == 1_000_000_000_000
-      assert row2[:e_string] == "hello"
-      assert row2[:f_bool] == true
+      assert row2[:a_tinyint] == 127
+      assert row2[:b_smallint] == 32_000
+      assert row2[:c_int] == 42
+      assert row2[:d_bigint] == 1_000_000_000_000
+      assert row2[:g_string] == "hello"
+      assert row2[:h_bool] == true
 
       cleanup_table(admin, table_name)
     end

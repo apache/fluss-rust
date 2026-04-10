@@ -27,8 +27,10 @@ impl rustler::Resource for ConfigResource {}
 
 #[rustler::nif]
 fn config_new(bootstrap_servers: String) -> ResourceArc<ConfigResource> {
-    let mut config = Config::default();
-    config.bootstrap_servers = bootstrap_servers;
+    let config = Config {
+        bootstrap_servers,
+        ..Config::default()
+    };
     ResourceArc::new(ConfigResource(config))
 }
 

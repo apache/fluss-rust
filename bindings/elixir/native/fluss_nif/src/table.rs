@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::RUNTIME;
 use crate::atoms::to_nif_err;
 use crate::connection::ConnectionResource;
-use crate::RUNTIME;
 use fluss::client::{FlussConnection, FlussTable, Metadata};
 use fluss::metadata::{Column, TableInfo, TablePath};
 use rustler::ResourceArc;

@@ -17,9 +17,10 @@
 
 [package]
 name = "fluss_nif"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "fluss_nif"
@@ -27,7 +28,7 @@ path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-fluss = { package = "fluss-rs", path = "../../../../crates/fluss" }
-bigdecimal = "0.4"
+bigdecimal = { workspace = true }
+fluss = { workspace = true }
 rustler = "0.37"
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }

@@ -24,6 +24,12 @@ use rustler::{Encoder, Env, Term};
 
 use crate::atoms;
 
+/// Convert column names to BEAM atoms for use as map keys.
+///
+/// Note: BEAM atoms are never garbage-collected. This is safe because column
+/// names come from server-defined table schemas (bounded set), not arbitrary
+/// user input. The BEAM deduplicates atoms, so repeated calls with the same
+/// column names do not grow the atom table.
 pub fn intern_column_atoms<'a>(env: Env<'a>, columns: &[Column]) -> Vec<rustler::Atom> {
     columns
         .iter()
@@ -162,12 +168,11 @@ pub fn term_to_row<'a>(
 
     let mut row = GenericRow::new(columns.len());
     for (i, (term, col)) in list.iter().zip(columns.iter()).enumerate() {
-        if term.is_atom() {
-            if let Ok(atom) = term.decode::<rustler::Atom>() {
-                if atom == atoms::nil() {
-                    continue; // leave as null
-                }
-            }
+        if term.is_atom()
+            && let Ok(atom) = term.decode::<rustler::Atom>()
+            && atom == atoms::nil()
+        {
+            continue; // leave as null
         }
         set_field_from_term(env, &mut row, i, *term, col.data_type())?;
     }
@@ -191,9 +196,7 @@ fn set_field_from_term<'a>(
             row.set_field(pos, v);
         }
         DataType::SmallInt(_) => {
-            let v: i16 = term
-                .decode()
-                .map_err(|_| "expected integer for smallint")?;
+            let v: i16 = term.decode().map_err(|_| "expected integer for smallint")?;
             row.set_field(pos, v);
         }
         DataType::Int(_) => {
@@ -205,11 +208,15 @@ fn set_field_from_term<'a>(
             row.set_field(pos, v);
         }
         DataType::Date(_) => {
-            let v: i32 = term.decode().map_err(|_| "expected integer (days since epoch)")?;
+            let v: i32 = term
+                .decode()
+                .map_err(|_| "expected integer (days since epoch)")?;
             row.set_field(pos, Date::new(v));
         }
         DataType::Time(_) => {
-            let v: i32 = term.decode().map_err(|_| "expected integer (millis since midnight)")?;
+            let v: i32 = term
+                .decode()
+                .map_err(|_| "expected integer (millis since midnight)")?;
             row.set_field(pos, Time::new(v));
         }
         DataType::Timestamp(_) => {

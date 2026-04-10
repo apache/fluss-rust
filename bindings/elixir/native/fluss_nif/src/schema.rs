@@ -94,7 +94,9 @@ fn schema_builder_column(
     data_type: DataType,
 ) -> Result<ResourceArc<SchemaBuilderResource>, rustler::Error> {
     let mut guard = builder.0.lock().unwrap();
-    let b = guard.take().ok_or_else(|| to_nif_err("schema builder already consumed"))?;
+    let b = guard
+        .take()
+        .ok_or_else(|| to_nif_err("schema builder already consumed"))?;
     *guard = Some(b.column(&name, to_fluss_type(&data_type)));
     drop(guard);
     Ok(builder)
@@ -106,7 +108,9 @@ fn schema_builder_primary_key(
     keys: Vec<String>,
 ) -> Result<ResourceArc<SchemaBuilderResource>, rustler::Error> {
     let mut guard = builder.0.lock().unwrap();
-    let b = guard.take().ok_or_else(|| to_nif_err("schema builder already consumed"))?;
+    let b = guard
+        .take()
+        .ok_or_else(|| to_nif_err("schema builder already consumed"))?;
     *guard = Some(b.primary_key(keys));
     drop(guard);
     Ok(builder)
@@ -117,7 +121,9 @@ fn schema_builder_build(
     builder: ResourceArc<SchemaBuilderResource>,
 ) -> Result<ResourceArc<SchemaResource>, rustler::Error> {
     let mut guard = builder.0.lock().unwrap();
-    let b = guard.take().ok_or_else(|| to_nif_err("schema builder already consumed"))?;
+    let b = guard
+        .take()
+        .ok_or_else(|| to_nif_err("schema builder already consumed"))?;
     let schema = b.build().map_err(to_nif_err)?;
     Ok(ResourceArc::new(SchemaResource(schema)))
 }
@@ -125,33 +131,13 @@ fn schema_builder_build(
 #[rustler::nif]
 fn table_descriptor_new(
     schema: ResourceArc<SchemaResource>,
-) -> Result<ResourceArc<TableDescriptorResource>, rustler::Error> {
-    let descriptor = TableDescriptor::builder()
-        .schema(schema.0.clone())
-        .build()
-        .map_err(to_nif_err)?;
-    Ok(ResourceArc::new(TableDescriptorResource(descriptor)))
-}
-
-#[rustler::nif]
-fn table_descriptor_with_bucket_count(
-    schema: ResourceArc<SchemaResource>,
-    bucket_count: i32,
-) -> Result<ResourceArc<TableDescriptorResource>, rustler::Error> {
-    let descriptor = TableDescriptor::builder()
-        .schema(schema.0.clone())
-        .distributed_by(Some(bucket_count), vec![])
-        .build()
-        .map_err(to_nif_err)?;
-    Ok(ResourceArc::new(TableDescriptorResource(descriptor)))
-}
-
-#[rustler::nif]
-fn table_descriptor_with_properties(
-    schema: ResourceArc<SchemaResource>,
+    bucket_count: Option<i32>,
     properties: Vec<(String, String)>,
 ) -> Result<ResourceArc<TableDescriptorResource>, rustler::Error> {
     let mut builder = TableDescriptor::builder().schema(schema.0.clone());
+    if let Some(count) = bucket_count {
+        builder = builder.distributed_by(Some(count), vec![]);
+    }
     for (key, value) in properties {
         builder = builder.property(&key, &value);
     }

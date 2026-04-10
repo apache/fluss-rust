@@ -34,19 +34,10 @@ defmodule Fluss.TableDescriptor do
 
   @spec new!(Fluss.Schema.t(), keyword()) :: t()
   def new!(schema, opts \\ []) do
-    result =
-      cond do
-        Keyword.has_key?(opts, :bucket_count) ->
-          Native.table_descriptor_with_bucket_count(schema, opts[:bucket_count])
+    bucket_count = Keyword.get(opts, :bucket_count)
+    properties = Keyword.get(opts, :properties, [])
 
-        Keyword.has_key?(opts, :properties) ->
-          Native.table_descriptor_with_properties(schema, opts[:properties])
-
-        true ->
-          Native.table_descriptor_new(schema)
-      end
-
-    case result do
+    case Native.table_descriptor_new(schema, bucket_count, properties) do
       {:error, reason} -> raise "failed to create table descriptor: #{reason}"
       ref -> ref
     end

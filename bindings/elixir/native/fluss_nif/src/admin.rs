@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::RUNTIME;
 use crate::atoms::{self, to_nif_err};
 use crate::connection::ConnectionResource;
 use crate::schema::TableDescriptorResource;
-use crate::RUNTIME;
 use fluss::client::FlussAdmin;
 use fluss::metadata::TablePath;
 use rustler::{Atom, ResourceArc};
@@ -32,7 +32,9 @@ impl std::panic::RefUnwindSafe for AdminResource {}
 impl rustler::Resource for AdminResource {}
 
 #[rustler::nif]
-fn admin_new(conn: ResourceArc<ConnectionResource>) -> Result<ResourceArc<AdminResource>, rustler::Error> {
+fn admin_new(
+    conn: ResourceArc<ConnectionResource>,
+) -> Result<ResourceArc<AdminResource>, rustler::Error> {
     let admin = conn.0.get_admin().map_err(to_nif_err)?;
     Ok(ResourceArc::new(AdminResource(admin)))
 }
@@ -44,7 +46,11 @@ fn admin_create_database(
     ignore_if_exists: bool,
 ) -> Result<Atom, rustler::Error> {
     RUNTIME
-        .block_on(admin.0.create_database(&database_name, None, ignore_if_exists))
+        .block_on(
+            admin
+                .0
+                .create_database(&database_name, None, ignore_if_exists),
+        )
         .map_err(to_nif_err)?;
     Ok(atoms::ok())
 }
@@ -56,7 +62,11 @@ fn admin_drop_database(
     ignore_if_not_exists: bool,
 ) -> Result<Atom, rustler::Error> {
     RUNTIME
-        .block_on(admin.0.drop_database(&database_name, ignore_if_not_exists, false))
+        .block_on(
+            admin
+                .0
+                .drop_database(&database_name, ignore_if_not_exists, false),
+        )
         .map_err(to_nif_err)?;
     Ok(atoms::ok())
 }

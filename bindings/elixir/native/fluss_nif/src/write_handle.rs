@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::atoms::{self, to_nif_err};
 use crate::RUNTIME;
+use crate::atoms::{self, to_nif_err};
 use fluss::client::WriteResultFuture;
 use rustler::{Atom, ResourceArc};
 use std::sync::Mutex;

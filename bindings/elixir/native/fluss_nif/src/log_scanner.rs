@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::RUNTIME;
 use crate::atoms::{self, to_nif_err};
 use crate::row_convert;
 use crate::table::TableResource;
-use crate::RUNTIME;
 use fluss::client::LogScanner;
 use fluss::metadata::Column;
 use fluss::record::ChangeType;
@@ -44,10 +44,7 @@ fn log_scanner_new(
 ) -> Result<ResourceArc<LogScannerResource>, rustler::Error> {
     let _guard = RUNTIME.enter();
     let (scanner, columns) = table.with_table(|t| {
-        let scanner = t
-            .new_scan()
-            .create_log_scanner()
-            .map_err(to_nif_err)?;
+        let scanner = t.new_scan().create_log_scanner().map_err(to_nif_err)?;
         Ok((scanner, t.get_table_info().schema.columns().to_vec()))
     })?;
     Ok(ResourceArc::new(LogScannerResource { scanner, columns }))
@@ -89,16 +86,15 @@ fn log_scanner_unsubscribe(
 }
 
 #[rustler::nif]
-fn log_scanner_poll(
-    env: Env,
-    scanner: ResourceArc<LogScannerResource>,
-    timeout_ms: u64,
-) -> Atom {
+fn log_scanner_poll(env: Env, scanner: ResourceArc<LogScannerResource>, timeout_ms: u64) -> Atom {
     let pid = env.pid();
     let scanner = scanner.clone();
 
-    std::thread::spawn(move || {
-        let result = RUNTIME.block_on(scanner.scanner.poll(Duration::from_millis(timeout_ms)));
+    RUNTIME.spawn(async move {
+        let result = scanner
+            .scanner
+            .poll(Duration::from_millis(timeout_ms))
+            .await;
         send_poll_result(&pid, result, &scanner.columns);
     });
 
@@ -115,8 +111,10 @@ fn send_poll_result(
     match result {
         Ok(scan_records) => {
             let _ = msg_env.send_and_clear(pid, |env| {
-                let records = encode_scan_records(env, scan_records, columns);
-                (atoms::fluss_records(), records).encode(env)
+                match encode_scan_records(env, scan_records, columns) {
+                    Ok(records) => (atoms::fluss_records(), records).encode(env),
+                    Err(e) => (atoms::fluss_poll_error(), e).encode(env),
+                }
             });
         }
         Err(e) => {
@@ -131,15 +129,13 @@ fn encode_scan_records<'a>(
     env: Env<'a>,
     scan_records: fluss::record::ScanRecords,
     columns: &[Column],
-) -> rustler::Term<'a> {
+) -> Result<rustler::Term<'a>, String> {
     let column_atoms = row_convert::intern_column_atoms(env, columns);
     let mut result = Vec::new();
 
     for record in scan_records {
-        let row_map = match row_convert::row_to_term(env, record.row(), columns, &column_atoms) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
+        let row_map = row_convert::row_to_term(env, record.row(), columns, &column_atoms)
+            .map_err(|e| format!("failed to convert row at offset {}: {e}", record.offset()))?;
         let change_type_atom = match record.change_type() {
             ChangeType::AppendOnly => atoms::append_only().encode(env),
             ChangeType::Insert => atoms::insert().encode(env),
@@ -148,20 +144,23 @@ fn encode_scan_records<'a>(
             ChangeType::Delete => atoms::delete().encode(env),
         };
 
-        if let Ok(record_map) = rustler::Term::map_from_pairs(
+        let record_map = rustler::Term::map_from_pairs(
             env,
             &[
                 (atoms::offset().encode(env), record.offset().encode(env)),
-                (atoms::timestamp().encode(env), record.timestamp().encode(env)),
+                (
+                    atoms::timestamp().encode(env),
+                    record.timestamp().encode(env),
+                ),
                 (atoms::change_type().encode(env), change_type_atom),
                 (atoms::row().encode(env), row_map),
             ],
-        ) {
-            result.push(record_map);
-        }
+        )
+        .map_err(|_| "failed to create record map".to_string())?;
+        result.push(record_map);
     }
 
-    result.encode(env)
+    Ok(result.encode(env))
 }
 
 #[rustler::nif]
