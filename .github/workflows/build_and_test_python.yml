@@ -70,7 +70,7 @@ jobs:
         working-directory: bindings/python
         run: |
           uv sync --extra dev --no-install-project
-          maturin develop
+          uv run --no-sync maturin develop --uv
 
       - name: Run tests (parallel)
         working-directory: bindings/python
