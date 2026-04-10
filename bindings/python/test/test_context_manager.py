@@ -133,3 +133,54 @@ async def test_log_scanner_context_manager(connection, admin):
         # Verifies it works and closes properly
         res = scanner.poll(100)
         assert len(res) == 0
+
+@pytest.mark.asyncio
+async def test_connection_context_manager_exception(plaintext_bootstrap_servers):
+    config = fluss.Config({"bootstrap.servers": plaintext_bootstrap_servers})
+    class TestException(Exception): pass
+    
+    try:
+        async with await fluss.FlussConnection.create(config) as conn:
+            raise TestException("connection error")
+    except TestException:
+        pass
+    # If we reach here without hanging, the connection __aexit__ gracefully handled the error
+
+@pytest.mark.asyncio
+async def test_record_batch_scanner_context_manager(connection, admin):
+    table_path = fluss.TablePath("fluss", "test_batch_scanner_ctx")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+    schema = fluss.Schema(pa.schema([pa.field("a", pa.int32())]))
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+    table = await connection.get_table(table_path)
+    
+    async with await table.new_scan().create_record_batch_log_scanner() as scanner:
+        scanner.subscribe(0, fluss.EARLIEST_OFFSET)
+        res = scanner.poll_arrow(100)
+        assert res.num_rows == 0
+
+@pytest.mark.asyncio
+async def test_scanner_exception_propagation(connection, admin):
+    table_path = fluss.TablePath("fluss", "test_scanner_ctx_fail")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+    schema = fluss.Schema(pa.schema([pa.field("a", pa.int32())]))
+    await admin.create_table(table_path, fluss.TableDescriptor(schema))
+    table = await connection.get_table(table_path)
+    
+    class TestException(Exception): pass
+    
+    # Test record scanner exception
+    try:
+        async with await table.new_scan().create_log_scanner() as scanner:
+            scanner.subscribe(0, fluss.EARLIEST_OFFSET)
+            raise TestException("scanner error")
+    except TestException:
+        pass
+
+    # Test batch scanner exception
+    try:
+        async with await table.new_scan().create_record_batch_log_scanner() as scanner:
+            scanner.subscribe(0, fluss.EARLIEST_OFFSET)
+            raise TestException("batch scanner error")
+    except TestException:
+        pass
