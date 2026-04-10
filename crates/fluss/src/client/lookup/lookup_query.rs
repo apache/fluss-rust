@@ -19,7 +19,6 @@
 
 use crate::metadata::{TableBucket, TablePath};
 use bytes::Bytes;
-use std::sync::atomic::{AtomicI32, Ordering};
 use tokio::sync::oneshot;
 
 /// Represents a single lookup query that will be batched and sent to the server.
@@ -33,7 +32,7 @@ pub struct LookupQuery {
     /// Channel to send the result back to the caller
     result_tx: Option<oneshot::Sender<Result<Option<Vec<u8>>, crate::error::Error>>>,
     /// Number of retry attempts
-    retries: AtomicI32,
+    retries: i32,
 }
 
 impl LookupQuery {
@@ -49,7 +48,7 @@ impl LookupQuery {
             table_bucket,
             key,
             result_tx: Some(result_tx),
-            retries: AtomicI32::new(0),
+            retries: 0,
         }
     }
 
@@ -70,12 +69,12 @@ impl LookupQuery {
 
     /// Returns the current retry count.
     pub fn retries(&self) -> i32 {
-        self.retries.load(Ordering::Acquire)
+        self.retries
     }
 
     /// Increments the retry counter.
-    pub fn increment_retries(&self) {
-        self.retries.fetch_add(1, Ordering::AcqRel);
+    pub fn increment_retries(&mut self) {
+        self.retries += 1;
     }
 
     /// Completes the lookup with a result.

@@ -25,9 +25,11 @@ use crate::client::metadata::Metadata;
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::{TableBucket, TablePath};
 use crate::proto::LookupResponse;
+use crate::rpc::ServerConnection;
 use crate::rpc::message::LookupRequest;
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
+use futures::stream::{FuturesUnordered, StreamExt};
 use log::{debug, error, warn};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -245,9 +247,11 @@ impl LookupSender {
         }
 
         // Send batches to each destination
+        let mut pending = FuturesUnordered::new();
         for (destination, batches) in lookup_batches {
-            self.send_lookup_request(destination, batches).await;
+            pending.push(self.send_lookup_request(destination, batches));
         }
+        while let Some(()) = pending.next().await {}
 
         Ok(())
     }
@@ -336,10 +340,8 @@ impl LookupSender {
             }
         };
 
-        // Send requests for each table
+        let mut pending = FuturesUnordered::new();
         for (table_id, mut batches) in batches_by_table {
-            // Build the request with all buckets for this table
-            // Use std::mem::take to move keys instead of cloning to avoid deep copy overhead
             let mut all_keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)> =
                 Vec::new();
             for batch in &mut batches {
@@ -350,32 +352,49 @@ impl LookupSender {
                 ));
             }
 
-            // Create lookup request for all buckets in this table
             let request = LookupRequest::new_batched(table_id, all_keys_by_bucket);
+            let conn = connection.clone();
+            pending.push(self.send_single_table_lookup(
+                table_id,
+                destination,
+                conn,
+                request,
+                batches,
+            ));
+        }
 
-            // Acquire semaphore permit
-            let _permit = match self.inflight_semaphore.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => {
-                    error!("Semaphore closed during lookup");
-                    for batch in &mut batches {
-                        batch.complete_exceptionally("Lookup sender shutdown");
-                    }
-                    return;
-                }
-            };
+        while let Some(()) = pending.next().await {}
+    }
 
-            // Send request and handle response
-            match connection.request(request).await {
-                Ok(response) => {
-                    self.handle_lookup_response(destination, response, &mut batches);
+    /// Sends a single lookup request for one table and handles the response.
+    async fn send_single_table_lookup(
+        &self,
+        table_id: TableId,
+        destination: i32,
+        connection: ServerConnection,
+        request: LookupRequest,
+        mut batches: Vec<LookupBatch>,
+    ) {
+        let _permit = match self.inflight_semaphore.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                error!("Semaphore closed during lookup");
+                for batch in &mut batches {
+                    batch.complete_exceptionally("Lookup sender shutdown");
                 }
-                Err(e) => {
-                    let err_msg = format!("Lookup request failed: {}", e);
-                    let is_retriable = Self::is_retriable_error(&e);
-                    for batch in &mut batches {
-                        self.handle_lookup_error(&err_msg, is_retriable, batch);
-                    }
+                return;
+            }
+        };
+
+        match connection.request(request).await {
+            Ok(response) => {
+                self.handle_lookup_response(table_id, destination, response, &mut batches);
+            }
+            Err(e) => {
+                let err_msg = format!("Lookup request failed: {}", e);
+                let is_retriable = Self::is_retriable_error(&e);
+                for batch in &mut batches {
+                    self.handle_lookup_error(&err_msg, is_retriable, batch);
                 }
             }
         }
@@ -395,23 +414,27 @@ impl LookupSender {
     /// Handles the lookup response.
     fn handle_lookup_response(
         &self,
+        table_id: TableId,
         destination: i32,
         response: LookupResponse,
         batches: &mut [LookupBatch],
     ) {
-        // Create a map from bucket_id to batch index for quick lookup
-        let bucket_to_index: HashMap<BucketId, usize> = batches
+        let bucket_to_index: HashMap<TableBucket, usize> = batches
             .iter()
             .enumerate()
-            .map(|(idx, batch)| (batch.table_bucket.bucket_id(), idx))
+            .map(|(idx, batch)| (batch.table_bucket.clone(), idx))
             .collect();
 
         // Track which batches have been processed
         let mut processed_batches = vec![false; batches.len()];
 
         for bucket_resp in response.buckets_resp {
-            let bucket_id = bucket_resp.bucket_id;
-            if let Some(&batch_idx) = bucket_to_index.get(&bucket_id) {
+            let table_bucket = TableBucket::new_with_partition(
+                table_id,
+                bucket_resp.partition_id,
+                bucket_resp.bucket_id,
+            );
+            if let Some(&batch_idx) = bucket_to_index.get(&table_bucket) {
                 processed_batches[batch_idx] = true;
                 let batch = &mut batches[batch_idx];
 
@@ -421,7 +444,7 @@ impl LookupSender {
                     if fluss_error != FlussError::None {
                         let err_msg = format!(
                             "Lookup error for bucket {}: code={}, message={}",
-                            bucket_id,
+                            table_bucket,
                             error_code,
                             bucket_resp.error_message.unwrap_or_default()
                         );
@@ -442,7 +465,7 @@ impl LookupSender {
             } else {
                 error!(
                     "Received response for unknown bucket {} from server {}",
-                    bucket_id, destination
+                    table_bucket, destination
                 );
             }
         }
@@ -472,12 +495,6 @@ impl LookupSender {
 
         for lookup in batch.lookups.drain(..) {
             if is_retriable && lookup.retries() < self.max_retries && !lookup.is_done() {
-                warn!(
-                    "Lookup error for bucket {}, retrying ({} attempts left): {}",
-                    batch.table_bucket,
-                    self.max_retries - lookup.retries(),
-                    error_msg
-                );
                 lookups_to_retry.push(lookup);
             } else {
                 lookups_to_complete.push(lookup);
@@ -485,21 +502,33 @@ impl LookupSender {
         }
 
         // Re-enqueue retriable lookups
-        for lookup in lookups_to_retry {
-            lookup.increment_retries();
-            self.re_enqueue_lookup(lookup);
+        if !lookups_to_retry.is_empty() {
+            warn!(
+                "Lookup error for bucket {}, retrying {} lookups: {}",
+                batch.table_bucket,
+                lookups_to_retry.len(),
+                error_msg
+            );
+            for mut lookup in lookups_to_retry {
+                lookup.increment_retries();
+                self.re_enqueue_lookup(lookup);
+            }
         }
 
         // Complete non-retriable lookups with error
-        for mut lookup in lookups_to_complete {
+        if !lookups_to_complete.is_empty() {
             warn!(
-                "Lookup failed for bucket {}: {}",
-                batch.table_bucket, error_msg
+                "Lookup failed for bucket {} ({} lookups): {}",
+                batch.table_bucket,
+                lookups_to_complete.len(),
+                error_msg
             );
-            lookup.complete(Err(Error::UnexpectedError {
-                message: error_msg.to_string(),
-                source: None,
-            }));
+            for mut lookup in lookups_to_complete {
+                lookup.complete(Err(Error::UnexpectedError {
+                    message: error_msg.to_string(),
+                    source: None,
+                }));
+            }
         }
     }
 

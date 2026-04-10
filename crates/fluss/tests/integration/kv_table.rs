@@ -887,15 +887,129 @@ mod kv_table_test {
             .expect("Failed to drop table");
     }
 
+    /// Integration test for concurrent batched lookups across partitions.
+    #[tokio::test]
+    async fn batched_concurrent_lookups_partitioned() {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_batched_lookups_partitioned");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("region", DataTypes::string())
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["region", "id"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US", "EU", "APAC"]).await;
+
+        let connection = cluster.get_fluss_connection().await;
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // Insert records across all partitions
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        let regions = ["US", "EU", "APAC"];
+        for region in &regions {
+            for id in 0..5i32 {
+                let mut row = GenericRow::new(3);
+                row.set_field(0, *region);
+                row.set_field(1, id);
+                row.set_field(2, format!("{}-{}", region, id));
+                writer.upsert(&row).expect("Failed to upsert");
+            }
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let mut lookupers: Vec<_> = (0..regions.len() * 5)
+            .map(|_| {
+                table
+                    .new_lookup()
+                    .expect("Failed to create lookup")
+                    .create_lookuper()
+                    .expect("Failed to create lookuper")
+            })
+            .collect();
+
+        let mut futures = FuturesUnordered::new();
+        for (i, lookuper) in lookupers.iter_mut().enumerate() {
+            let region = regions[i / 5];
+            let id = (i % 5) as i32;
+
+            futures.push(async move {
+                let mut key = GenericRow::new(3);
+                key.set_field(0, region);
+                key.set_field(1, id);
+
+                let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+                let row = result
+                    .get_single_row()
+                    .expect("Failed to get row")
+                    .expect("Row should exist");
+
+                let actual_region = row.get_string(0).unwrap();
+                let actual_id = row.get_int(1).unwrap();
+                let actual_name = row.get_string(2).unwrap();
+
+                assert_eq!(actual_region, region, "region mismatch");
+                assert_eq!(actual_id, id, "id mismatch");
+                assert_eq!(actual_name, format!("{}-{}", region, id), "name mismatch");
+
+                (region.to_string(), id)
+            });
+        }
+
+        let mut results = Vec::new();
+        while let Some(result) = futures.next().await {
+            results.push(result);
+        }
+
+        assert_eq!(
+            results.len(),
+            regions.len() * 5,
+            "Not all lookups completed"
+        );
+
+        // Verify we got results from all partitions
+        for region in &regions {
+            let count = results.iter().filter(|(r, _)| r == region).count();
+            assert_eq!(count, 5, "Expected 5 results for region {}", region);
+        }
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
     /// Integration test for concurrent batched lookups.
     #[tokio::test]
     async fn batched_concurrent_lookups() {
         use futures::stream::{FuturesUnordered, StreamExt};
 
-        let cluster = get_fluss_cluster();
+        let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss".to_string(), "test_batched_lookups".to_string());
 
@@ -925,7 +1039,7 @@ mod kv_table_test {
         let num_records = 100i32;
         let mut upsert_futures = FuturesUnordered::new();
         for i in (0..num_records).step_by(2) {
-            let mut writer = table_upsert
+            let writer = table_upsert
                 .create_writer()
                 .expect("Failed to create writer");
             upsert_futures.push(async move {
@@ -933,7 +1047,7 @@ mod kv_table_test {
                 row.set_field(0, i);
                 row.set_field(1, format!("name_{}", i));
                 row.set_field(2, (i * 100) as i64);
-                writer.upsert(&row).await.expect("Failed to upsert");
+                writer.upsert(&row).expect("Failed to upsert");
             });
         }
         // Wait for all upserts to complete
@@ -965,15 +1079,15 @@ mod kv_table_test {
 
                 if expects_result {
                     let row = row_opt.unwrap_or_else(|| panic!("Row {} should exist", id));
-                    assert_eq!(row.get_int(0), id, "id mismatch for key {}", id);
+                    assert_eq!(row.get_int(0).unwrap(), id, "id mismatch for key {}", id);
                     assert_eq!(
-                        row.get_string(1),
+                        row.get_string(1).unwrap(),
                         format!("name_{}", id),
                         "name mismatch for key {}",
                         id
                     );
                     assert_eq!(
-                        row.get_long(2),
+                        row.get_long(2).unwrap(),
                         (id * 100) as i64,
                         "value mismatch for key {}",
                         id
