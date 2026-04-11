@@ -893,13 +893,38 @@ mod tests {
 
     #[test]
     fn write_non_nullable_array_type() {
-        let element_type = DataTypes::int().not_null();
+        // 1. Define an array of non-nullable integers
+        let element_type = DataTypes::int().as_non_nullable();
         let array_type = DataTypes::array(element_type);
-        let writer = writer_for(&array_type, 4);
-        if let TypedWriter::List { element_writer, .. } = &writer.inner {
-            assert!(!element_writer.nullable);
-        } else {
-            panic!("Expected List writer");
-        }
+
+        // 2. Create the writer
+        let mut writer = writer_for(&array_type, 4);
+
+        // (Optional but good practice) Write a dummy row containing an empty array
+        // to ensure the builder processes it without panicking.
+        let array_writer = FlussArrayWriter::new(0, &DataTypes::int().as_non_nullable());
+        let fluss_array = array_writer.complete().unwrap();
+        writer
+            .write_field(&GenericRow::from_data(vec![Datum::Array(fluss_array)]))
+            .unwrap();
+
+        // 3. FINISH the array to get the actual Arrow output
+        let arrow_array = writer.finish();
+
+        // 4. Assert against the actual Arrow schema!
+        let list_array = arrow_array
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("Expected ListArray");
+        let list_field = match list_array.data_type() {
+            ArrowDataType::List(field) => field,
+            _ => panic!("Expected List type"),
+        };
+
+        // This is the true test: Did the Arrow field get marked as NOT NULL?
+        assert!(
+            !list_field.is_nullable(),
+            "Arrow field inside the list should be non-nullable"
+        );
     }
 }
