@@ -387,8 +387,11 @@ impl ColumnWriter {
                 offsets,
                 validity,
             } => {
+                let item_nullable = element_writer.nullable;
                 let values = element_writer.finish();
-                finish_list_array(values, offsets, validity)
+                let taken_offsets = std::mem::replace(offsets, vec![0]);
+                let taken_validity = std::mem::take(validity);
+                finish_list_array(values, item_nullable, &taken_offsets, &taken_validity)
             }
             _ => with_builder!(&mut self.inner, b => (b as &mut dyn ArrayBuilder).finish()),
         }
@@ -402,8 +405,9 @@ impl ColumnWriter {
                 offsets,
                 validity,
             } => {
+                let item_nullable = element_writer.nullable;
                 let values = element_writer.finish_cloned();
-                finish_list_array(values, offsets, validity)
+                finish_list_array(values, item_nullable, offsets, validity)
             }
             _ => with_builder!(&self.inner, b => (b as &dyn ArrayBuilder).finish_cloned()),
         }
@@ -622,7 +626,12 @@ impl ColumnWriter {
     }
 }
 
-fn finish_list_array(values: ArrayRef, offsets: &[i32], validity: &[bool]) -> ArrayRef {
+fn finish_list_array(
+    values: ArrayRef,
+    item_nullable: bool,
+    offsets: &[i32],
+    validity: &[bool],
+) -> ArrayRef {
     use arrow::array::ListArray;
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{Field, FieldRef};
@@ -630,7 +639,7 @@ fn finish_list_array(values: ArrayRef, offsets: &[i32], validity: &[bool]) -> Ar
 
     let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets.to_vec()));
     let null_buffer = NullBuffer::from(validity.to_vec());
-    let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+    let field = Arc::new(Field::new("item", values.data_type().clone(), item_nullable));
     let field_ref: FieldRef = field;
 
     Arc::new(ListArray::new(
@@ -876,5 +885,17 @@ mod tests {
         let fluss_type = DataTypes::map(DataTypes::int(), DataTypes::string());
         let arrow_type = ArrowDataType::Boolean; // Any arrow type
         assert!(ColumnWriter::create(&fluss_type, &arrow_type, 0, 4).is_err());
+    }
+
+    #[test]
+    fn write_non_nullable_array_type() {
+        let element_type = DataTypes::int().not_null();
+        let array_type = DataTypes::array(element_type);
+        let writer = writer_for(&array_type, 4);
+        if let TypedWriter::List { element_writer, .. } = &writer.inner {
+            assert!(!element_writer.nullable);
+        } else {
+            panic!("Expected List writer");
+        }
     }
 }
