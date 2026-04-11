@@ -119,6 +119,7 @@ impl FlussConnection {
         _exc_value: Option<Bound<'py, PyAny>>,
         _traceback: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        self.close()?;
         future_into_py(py, async move {
             // In the future, we could call an async close on the core connection here
             // e.g., client.close().await;
