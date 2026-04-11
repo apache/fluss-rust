@@ -639,7 +639,11 @@ fn finish_list_array(
 
     let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets.to_vec()));
     let null_buffer = NullBuffer::from(validity.to_vec());
-    let field = Arc::new(Field::new("item", values.data_type().clone(), item_nullable));
+    let field = Arc::new(Field::new(
+        "item",
+        values.data_type().clone(),
+        item_nullable,
+    ));
     let field_ref: FieldRef = field;
 
     Arc::new(ListArray::new(
