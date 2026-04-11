@@ -97,7 +97,6 @@ impl UpsertWriter {
     ///
     /// Returns:
     ///     None on success
-    /// Flush any pending data
     pub fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let writer = self.writer.clone();
 
