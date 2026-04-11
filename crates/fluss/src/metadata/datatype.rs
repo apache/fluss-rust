@@ -93,6 +93,38 @@ impl DataType {
             DataType::Bytes(v) => DataType::Bytes(v.as_non_nullable()),
         }
     }
+
+    pub fn as_nullable(&self) -> Self {
+        match self {
+            DataType::Boolean(v) => DataType::Boolean(v.as_nullable()),
+            DataType::TinyInt(v) => DataType::TinyInt(v.as_nullable()),
+            DataType::SmallInt(v) => DataType::SmallInt(v.as_nullable()),
+            DataType::Int(v) => DataType::Int(v.as_nullable()),
+            DataType::BigInt(v) => DataType::BigInt(v.as_nullable()),
+            DataType::Decimal(v) => DataType::Decimal(v.as_nullable()),
+            DataType::Double(v) => DataType::Double(v.as_nullable()),
+            DataType::Float(v) => DataType::Float(v.as_nullable()),
+            DataType::Binary(v) => DataType::Binary(v.as_nullable()),
+            DataType::Char(v) => DataType::Char(v.as_nullable()),
+            DataType::String(v) => DataType::String(v.as_nullable()),
+            DataType::Date(v) => DataType::Date(v.as_nullable()),
+            DataType::TimestampLTz(v) => DataType::TimestampLTz(v.as_nullable()),
+            DataType::Time(v) => DataType::Time(v.as_nullable()),
+            DataType::Timestamp(v) => DataType::Timestamp(v.as_nullable()),
+            DataType::Array(v) => DataType::Array(v.as_nullable()),
+            DataType::Map(v) => DataType::Map(v.as_nullable()),
+            DataType::Row(v) => DataType::Row(v.as_nullable()),
+            DataType::Bytes(v) => DataType::Bytes(v.as_nullable()),
+        }
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Display for DataType {
@@ -144,6 +176,18 @@ impl BooleanType {
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
     }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Display for BooleanType {
@@ -178,6 +222,18 @@ impl TinyIntType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -214,6 +270,18 @@ impl SmallIntType {
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
     }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Display for SmallIntType {
@@ -248,6 +316,18 @@ impl IntType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -284,6 +364,18 @@ impl BigIntType {
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
     }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Display for BigIntType {
@@ -318,6 +410,18 @@ impl FloatType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -354,6 +458,18 @@ impl DoubleType {
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
     }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Display for DoubleType {
@@ -383,6 +499,18 @@ impl CharType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(self.length, false)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(self.length, true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 
     pub fn length(&self) -> u32 {
@@ -428,6 +556,18 @@ impl StringType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -507,6 +647,19 @@ impl DecimalType {
         Self::with_nullable(false, self.precision, self.scale)
             .expect("Invalid decimal precision or scale")
     }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true, self.precision, self.scale)
+            .expect("Invalid decimal precision or scale")
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Default for DecimalType {
@@ -548,6 +701,18 @@ impl DateType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -610,6 +775,18 @@ impl TimeType {
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.precision).expect("Invalid time precision")
     }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true, self.precision).expect("Invalid time precision")
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Display for TimeType {
@@ -670,6 +847,18 @@ impl TimestampType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.precision).expect("Invalid timestamp precision")
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true, self.precision).expect("Invalid timestamp precision")
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -734,6 +923,19 @@ impl TimestampLTzType {
         Self::with_nullable(false, self.precision)
             .expect("Invalid timestamp with local time zone precision")
     }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true, self.precision)
+            .expect("Invalid timestamp with local time zone precision")
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
 }
 
 impl Display for TimestampLTzType {
@@ -768,6 +970,18 @@ impl BytesType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -808,6 +1022,18 @@ impl BinaryType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.length)
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true, self.length)
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 }
 
@@ -850,6 +1076,21 @@ impl ArrayType {
             nullable: false,
             element_type: self.element_type.clone(),
         }
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self {
+            nullable: true,
+            element_type: self.element_type.clone(),
+        }
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 
     pub fn get_element_type(&self) -> &DataType {
@@ -895,6 +1136,22 @@ impl MapType {
         }
     }
 
+    pub fn as_nullable(&self) -> Self {
+        Self {
+            nullable: true,
+            key_type: self.key_type.clone(),
+            value_type: self.value_type.clone(),
+        }
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
+    }
+
     pub fn key_type(&self) -> &DataType {
         &self.key_type
     }
@@ -931,6 +1188,18 @@ impl RowType {
 
     pub fn as_non_nullable(&self) -> Self {
         Self::with_nullable(false, self.fields.clone())
+    }
+
+    pub fn as_nullable(&self) -> Self {
+        Self::with_nullable(true, self.fields.clone())
+    }
+
+    pub fn not_null(&self) -> Self {
+        self.as_non_nullable()
+    }
+
+    pub fn nullable(&self) -> Self {
+        self.as_nullable()
     }
 
     pub fn fields(&self) -> &Vec<DataField> {
