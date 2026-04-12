@@ -383,7 +383,8 @@ defmodule Fluss.Integration.LogTableTest do
         {:fluss_records, records} ->
           do_poll(scanner, expected_count, deadline, acc ++ records)
 
-        {:fluss_poll_error, _reason} ->
+        {:fluss_poll_error, reason} ->
+          IO.warn("poll error during test: #{inspect(reason)}")
           do_poll(scanner, expected_count, deadline, acc)
       after
         min(6_000, remaining) ->

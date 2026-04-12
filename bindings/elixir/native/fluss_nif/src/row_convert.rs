@@ -192,11 +192,15 @@ fn set_field_from_term<'a>(
             row.set_field(pos, v);
         }
         DataType::TinyInt(_) => {
-            let v: i8 = term.decode().map_err(|_| "expected integer for tinyint")?;
+            let v: i8 = term
+                .decode()
+                .map_err(|_| "expected integer in range -128..127 for tinyint")?;
             row.set_field(pos, v);
         }
         DataType::SmallInt(_) => {
-            let v: i16 = term.decode().map_err(|_| "expected integer for smallint")?;
+            let v: i16 = term
+                .decode()
+                .map_err(|_| "expected integer in range -32768..32767 for smallint")?;
             row.set_field(pos, v);
         }
         DataType::Int(_) => {
