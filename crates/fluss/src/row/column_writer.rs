@@ -111,6 +111,11 @@ enum TypedWriter {
         precision: u32,
         builder: TimestampNanosecondBuilder,
     },
+    List {
+        element_writer: Box<ColumnWriter>,
+        offsets: Vec<i32>,
+        validity: Vec<bool>,
+    },
 }
 
 /// Dispatch to the inner builder across all `TypedWriter` variants.
@@ -143,6 +148,7 @@ macro_rules! with_builder {
             TypedWriter::TimestampLtzMillisecond { builder: $b, .. } => $body,
             TypedWriter::TimestampLtzMicrosecond { builder: $b, .. } => $body,
             TypedWriter::TimestampLtzNanosecond { builder: $b, .. } => $body,
+            TypedWriter::List { .. } => panic!("List variant not supported in with_builder!"),
         }
     };
 }
@@ -321,6 +327,26 @@ impl ColumnWriter {
                     }
                 }
             }
+            DataType::Array(array_type) => {
+                let element_type = array_type.get_element_type();
+                let arrow_element_type = match arrow_type {
+                    ArrowDataType::List(field) => field.data_type(),
+                    _ => {
+                        return Err(Error::IllegalArgument {
+                            message: format!(
+                                "Expected List Arrow type for Array, got: {arrow_type:?}"
+                            ),
+                        });
+                    }
+                };
+                let element_writer =
+                    ColumnWriter::create(element_type, arrow_element_type, 0, capacity)?;
+                TypedWriter::List {
+                    element_writer: Box::new(element_writer),
+                    offsets: vec![0],
+                    validity: Vec::with_capacity(capacity),
+                }
+            }
             _ => {
                 return Err(Error::IllegalArgument {
                     message: format!("Unsupported Fluss DataType: {fluss_type:?}"),
@@ -339,41 +365,69 @@ impl ColumnWriter {
     /// directly to the concrete Arrow builder.
     #[inline]
     pub fn write_field(&mut self, row: &dyn InternalRow) -> Result<()> {
-        if self.nullable && row.is_null_at(self.pos)? {
+        self.write_field_at(row, self.pos)
+    }
+
+    /// Read one value from `row` at position `pos` and append it
+    /// directly to the concrete Arrow builder.
+    #[inline]
+    pub fn write_field_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
+        if self.nullable && row.is_null_at(pos)? {
             self.append_null();
             return Ok(());
         }
-        self.write_non_null(row)
+        self.write_non_null_at(row, pos)
     }
 
     /// Finish the builder, producing the final Arrow array.
     pub fn finish(&mut self) -> ArrayRef {
-        self.as_builder_mut().finish()
+        match &mut self.inner {
+            TypedWriter::List {
+                element_writer,
+                offsets,
+                validity,
+            } => {
+                let item_nullable = element_writer.nullable;
+                let values = element_writer.finish();
+                let taken_offsets = std::mem::replace(offsets, vec![0]);
+                let taken_validity = std::mem::take(validity);
+                finish_list_array(values, item_nullable, &taken_offsets, &taken_validity)
+            }
+            _ => with_builder!(&mut self.inner, b => (b as &mut dyn ArrayBuilder).finish()),
+        }
     }
 
     /// Clone-finish the builder for size estimation (does not reset the builder).
     pub fn finish_cloned(&self) -> ArrayRef {
-        self.as_builder_ref().finish_cloned()
+        match &self.inner {
+            TypedWriter::List {
+                element_writer,
+                offsets,
+                validity,
+            } => {
+                let item_nullable = element_writer.nullable;
+                let values = element_writer.finish_cloned();
+                finish_list_array(values, item_nullable, offsets, validity)
+            }
+            _ => with_builder!(&self.inner, b => (b as &dyn ArrayBuilder).finish_cloned()),
+        }
     }
 
     fn append_null(&mut self) {
-        with_builder!(&mut self.inner, b => b.append_null());
-    }
-
-    /// Returns a trait-object reference to the inner builder.
-    /// Used for type-agnostic operations (`finish`, `finish_cloned`).
-    fn as_builder_mut(&mut self) -> &mut dyn ArrayBuilder {
-        with_builder!(&mut self.inner, b => b)
-    }
-
-    fn as_builder_ref(&self) -> &dyn ArrayBuilder {
-        with_builder!(&self.inner, b => b)
+        match &mut self.inner {
+            TypedWriter::List {
+                offsets, validity, ..
+            } => {
+                let last = *offsets.last().unwrap_or(&0);
+                offsets.push(last);
+                validity.push(false);
+            }
+            _ => with_builder!(&mut self.inner, b => b.append_null()),
+        }
     }
 
     #[inline]
-    fn write_non_null(&mut self, row: &dyn InternalRow) -> Result<()> {
-        let pos = self.pos;
-
+    fn write_non_null_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
         match &mut self.inner {
             TypedWriter::Bool(b) => {
                 b.append_value(row.get_boolean(pos)?);
@@ -550,8 +604,54 @@ impl ColumnWriter {
                 )?);
                 Ok(())
             }
+            TypedWriter::List {
+                element_writer,
+                offsets,
+                validity,
+            } => {
+                let array = row.get_array(pos)?;
+                for i in 0..array.size() {
+                    element_writer.write_field_at(&array, i)?;
+                }
+                let last = *offsets.last().unwrap();
+                offsets.push(
+                    last + i32::try_from(array.size()).map_err(|_| RowConvertError {
+                        message: format!("Array size {} exceeds i32 range", array.size()),
+                    })?,
+                );
+                validity.push(true);
+                Ok(())
+            }
         }
     }
+}
+
+fn finish_list_array(
+    values: ArrayRef,
+    item_nullable: bool,
+    offsets: &[i32],
+    validity: &[bool],
+) -> ArrayRef {
+    use arrow::array::ListArray;
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{Field, FieldRef};
+    use std::sync::Arc;
+
+    let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets.to_vec()));
+    let null_buffer = NullBuffer::from(validity.to_vec());
+    let field = Arc::new(Field::new(
+        "item",
+        values.data_type().clone(),
+        item_nullable,
+    ));
+    let field_ref: FieldRef = field;
+
+    Arc::new(ListArray::new(
+        field_ref,
+        offsets_buffer,
+        values,
+        Some(null_buffer),
+    ))
 }
 
 #[cfg(test)]
@@ -559,6 +659,7 @@ mod tests {
     use super::*;
     use crate::metadata::DataTypes;
     use crate::record::to_arrow_type;
+    use crate::row::binary_array::FlussArrayWriter;
     use crate::row::{Date, Datum, GenericRow, Time, TimestampLtz, TimestampNtz};
     use arrow::array::*;
     use bigdecimal::BigDecimal;
@@ -761,11 +862,69 @@ mod tests {
     }
 
     #[test]
+    fn write_array_type() {
+        let element_type = DataTypes::int();
+        let mut array_writer = FlussArrayWriter::new(3, &element_type);
+        array_writer.write_int(0, 10);
+        array_writer.set_null_at(1);
+        array_writer.write_int(2, 30);
+        let fluss_array = array_writer.complete().unwrap();
+
+        let fluss_type = DataTypes::array(element_type);
+
+        let arr = write_one(&fluss_type, Datum::Array(fluss_array));
+        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list_arr.len(), 1);
+        let values = list_arr.value(0);
+        let int_values = values.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int_values.len(), 3);
+        assert_eq!(int_values.value(0), 10);
+        assert!(int_values.is_null(1));
+        assert_eq!(int_values.value(2), 30);
+    }
+
+    #[test]
     fn unsupported_type_returns_error() {
-        let fluss_type = DataTypes::array(DataTypes::int());
-        let arrow_type = ArrowDataType::List(arrow_schema::FieldRef::new(
-            arrow_schema::Field::new("item", ArrowDataType::Int32, true),
-        ));
+        // Map is currently unsupported in ColumnWriter
+        let fluss_type = DataTypes::map(DataTypes::int(), DataTypes::string());
+        let arrow_type = ArrowDataType::Boolean; // Any arrow type
         assert!(ColumnWriter::create(&fluss_type, &arrow_type, 0, 4).is_err());
+    }
+
+    #[test]
+    fn write_non_nullable_array_type() {
+        // 1. Define an array of non-nullable integers
+        let element_type = DataTypes::int().as_non_nullable();
+        let array_type = DataTypes::array(element_type);
+
+        // 2. Create the writer
+        let mut writer = writer_for(&array_type, 4);
+
+        // (Optional but good practice) Write a dummy row containing an empty array
+        // to ensure the builder processes it without panicking.
+        let array_writer = FlussArrayWriter::new(0, &DataTypes::int().as_non_nullable());
+        let fluss_array = array_writer.complete().unwrap();
+        writer
+            .write_field(&GenericRow::from_data(vec![Datum::Array(fluss_array)]))
+            .unwrap();
+
+        // 3. FINISH the array to get the actual Arrow output
+        let arrow_array = writer.finish();
+
+        // 4. Assert against the actual Arrow schema!
+        let list_array = arrow_array
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("Expected ListArray");
+        let list_field = match list_array.data_type() {
+            ArrowDataType::List(field) => field,
+            _ => panic!("Expected List type"),
+        };
+
+        // This is the true test: Did the Arrow field get marked as NOT NULL?
+        assert!(
+            !list_field.is_nullable(),
+            "Arrow field inside the list should be non-nullable"
+        );
     }
 }

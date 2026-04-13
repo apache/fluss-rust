@@ -35,3 +35,16 @@ def test_get_primary_keys():
     assert schema_without_pk.get_primary_keys() == []
 
 
+def test_schema_with_array():
+    # Test that a schema can be constructed from a pyarrow schema containing a list
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("tags", pa.list_(pa.string())),
+        ]
+    )
+    schema = fluss.Schema(fields)
+    assert schema.get_column_names() == ["id", "tags"]
+    assert schema.get_column_types() == ["int", "array<string>"]
+
+

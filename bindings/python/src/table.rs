@@ -28,8 +28,8 @@ use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError};
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{
     IntoPyDict, PyBool, PyByteArray, PyBytes, PyDate, PyDateAccess, PyDateTime, PyDelta,
-    PyDeltaAccess, PyDict, PyList, PySequence, PySlice, PyTime, PyTimeAccess, PyTuple, PyType,
-    PyTzInfo,
+    PyDeltaAccess, PyDict, PyList, PySequence, PySlice, PyString, PyTime, PyTimeAccess, PyTuple,
+    PyType, PyTzInfo,
 };
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
@@ -1240,6 +1240,68 @@ fn python_value_to_datum(
         fcore::metadata::DataType::Time(_) => python_time_to_datum(value),
         fcore::metadata::DataType::Timestamp(_) => python_datetime_to_timestamp_ntz(value),
         fcore::metadata::DataType::TimestampLTz(_) => python_datetime_to_timestamp_ltz(value),
+        fcore::metadata::DataType::Array(array_type) => {
+            let element_type = array_type.get_element_type();
+            if value.is_instance_of::<PyString>() {
+                return Err(FlussError::new_err(format!(
+                    "Expected sequence for Array column, got {}",
+                    get_type_name(value)
+                )));
+            }
+            let seq = value.downcast::<PySequence>().map_err(|_| {
+                FlussError::new_err(format!(
+                    "Expected sequence for Array column, got {}",
+                    get_type_name(value)
+                ))
+            })?;
+
+            let len = seq.len()?;
+            let mut writer = fcore::row::binary_array::FlussArrayWriter::new(len, element_type);
+
+            for i in 0..len {
+                let item = seq.get_item(i)?;
+                if item.is_none() {
+                    writer.set_null_at(i);
+                } else {
+                    let val_datum = python_value_to_datum(&item, element_type)?;
+                    match val_datum {
+                        Datum::Null => writer.set_null_at(i),
+                        Datum::Bool(v) => writer.write_boolean(i, v),
+                        Datum::Int8(v) => writer.write_byte(i, v),
+                        Datum::Int16(v) => writer.write_short(i, v),
+                        Datum::Int32(v) => writer.write_int(i, v),
+                        Datum::Int64(v) => writer.write_long(i, v),
+                        Datum::Float32(v) => writer.write_float(i, v.into_inner()),
+                        Datum::Float64(v) => writer.write_double(i, v.into_inner()),
+                        Datum::String(v) => writer.write_string(i, &v),
+                        Datum::Blob(v) => writer.write_binary_bytes(i, v.as_ref()),
+                        Datum::Decimal(v) => {
+                            if let fcore::metadata::DataType::Decimal(dt) = element_type {
+                                writer.write_decimal(i, &v, dt.precision());
+                            }
+                        }
+                        Datum::Date(v) => writer.write_date(i, v),
+                        Datum::Time(v) => writer.write_time(i, v),
+                        Datum::TimestampNtz(v) => {
+                            if let fcore::metadata::DataType::Timestamp(dt) = element_type {
+                                writer.write_timestamp_ntz(i, &v, dt.precision());
+                            }
+                        }
+                        Datum::TimestampLtz(v) => {
+                            if let fcore::metadata::DataType::TimestampLTz(dt) = element_type {
+                                writer.write_timestamp_ltz(i, &v, dt.precision());
+                            }
+                        }
+                        Datum::Array(v) => writer.write_array(i, &v),
+                    }
+                }
+            }
+
+            let array = writer
+                .complete()
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            Ok(Datum::Array(array))
+        }
         _ => Err(FlussError::new_err(format!(
             "Unsupported data type for row-level operations: {data_type}"
         ))),
@@ -1371,6 +1433,20 @@ pub fn datum_to_python_value(
                 .get_timestamp_ltz(pos, ts_type.precision())
                 .map_err(|e| FlussError::from_core_error(&e))?;
             rust_timestamp_ltz_to_python(py, ts)
+        }
+        DataType::Array(array_type) => {
+            let array_data = row
+                .get_array(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?;
+
+            let element_type = array_type.get_element_type();
+            let py_list = pyo3::types::PyList::empty(py);
+
+            for i in 0..array_data.size() {
+                let py_val = datum_to_python_value(py, &array_data, i, element_type)?;
+                py_list.append(py_val)?;
+            }
+            Ok(py_list.into_any().unbind())
         }
         _ => Err(FlussError::new_err(format!(
             "Unsupported data type for conversion to Python: {data_type}"
