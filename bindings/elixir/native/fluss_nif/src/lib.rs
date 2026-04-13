@@ -25,6 +25,7 @@
 
 mod admin;
 mod append_writer;
+mod async_nif;
 mod atoms;
 mod config;
 mod connection;

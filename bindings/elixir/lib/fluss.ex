@@ -26,10 +26,9 @@ defmodule Fluss do
       admin = Fluss.Admin.new!(conn)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("ts", :bigint)
         |> Fluss.Schema.column("message", :string)
-        |> Fluss.Schema.build!()
 
       :ok = Fluss.Admin.create_table(admin, "my_db", "events", Fluss.TableDescriptor.new!(schema))
 

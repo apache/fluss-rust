@@ -16,60 +16,29 @@
 // under the License.
 
 use fluss::config::Config;
-use rustler::ResourceArc;
+use rustler::NifStruct;
 
-pub struct ConfigResource(pub Config);
-
-impl std::panic::RefUnwindSafe for ConfigResource {}
-
-#[rustler::resource_impl]
-impl rustler::Resource for ConfigResource {}
-
-#[rustler::nif]
-fn config_new(bootstrap_servers: String) -> ResourceArc<ConfigResource> {
-    let config = Config {
-        bootstrap_servers,
-        ..Config::default()
-    };
-    ResourceArc::new(ConfigResource(config))
+/// Decoded from `%Fluss.Config{}` Elixir struct.
+#[derive(NifStruct)]
+#[module = "Fluss.Config"]
+pub struct NifConfig {
+    pub bootstrap_servers: String,
+    pub writer_batch_size: Option<i32>,
+    pub writer_batch_timeout_ms: Option<i64>,
 }
 
-#[rustler::nif]
-fn config_default() -> ResourceArc<ConfigResource> {
-    ResourceArc::new(ConfigResource(Config::default()))
-}
-
-#[rustler::nif]
-fn config_set_bootstrap_servers(
-    config: ResourceArc<ConfigResource>,
-    servers: String,
-) -> ResourceArc<ConfigResource> {
-    let mut new_config = config.0.clone();
-    new_config.bootstrap_servers = servers;
-    ResourceArc::new(ConfigResource(new_config))
-}
-
-#[rustler::nif]
-fn config_set_writer_batch_size(
-    config: ResourceArc<ConfigResource>,
-    size: i32,
-) -> ResourceArc<ConfigResource> {
-    let mut new_config = config.0.clone();
-    new_config.writer_batch_size = size;
-    ResourceArc::new(ConfigResource(new_config))
-}
-
-#[rustler::nif]
-fn config_set_writer_batch_timeout_ms(
-    config: ResourceArc<ConfigResource>,
-    timeout_ms: i64,
-) -> ResourceArc<ConfigResource> {
-    let mut new_config = config.0.clone();
-    new_config.writer_batch_timeout_ms = timeout_ms;
-    ResourceArc::new(ConfigResource(new_config))
-}
-
-#[rustler::nif]
-fn config_get_bootstrap_servers(config: ResourceArc<ConfigResource>) -> String {
-    config.0.bootstrap_servers.clone()
+impl NifConfig {
+    pub fn into_core(self) -> Config {
+        let mut config = Config {
+            bootstrap_servers: self.bootstrap_servers,
+            ..Config::default()
+        };
+        if let Some(size) = self.writer_batch_size {
+            config.writer_batch_size = size;
+        }
+        if let Some(ms) = self.writer_batch_timeout_ms {
+            config.writer_batch_timeout_ms = ms;
+        }
+        config
+    }
 }

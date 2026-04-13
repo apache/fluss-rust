@@ -33,7 +33,7 @@ defmodule Fluss.TableDescriptor do
   @type t :: reference()
 
   @spec new!(Fluss.Schema.t(), keyword()) :: t()
-  def new!(schema, opts \\ []) do
+  def new!(%Fluss.Schema{} = schema, opts \\ []) do
     bucket_count = Keyword.get(opts, :bucket_count)
     properties = Keyword.get(opts, :properties, [])
 

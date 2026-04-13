@@ -56,26 +56,35 @@ defmodule Fluss.LogScanner do
 
   @spec new!(Fluss.Table.t()) :: t()
   def new!(table) do
-    case Native.log_scanner_new(table) do
+    case new(table) do
+      {:ok, s} -> s
       {:error, reason} -> raise "failed to create log scanner: #{reason}"
-      s -> s
     end
   end
 
   @spec subscribe(t(), integer(), integer()) :: :ok | {:error, String.t()}
-  def subscribe(scanner, bucket, offset),
-    do: Native.log_scanner_subscribe(scanner, bucket, offset)
+  def subscribe(scanner, bucket, offset) do
+    scanner
+    |> Native.log_scanner_subscribe(bucket, offset)
+    |> Native.await_nif()
+  end
 
   @doc """
   Subscribes to multiple buckets. Takes a list of `{bucket_id, offset}` tuples.
   """
   @spec subscribe_buckets(t(), [{integer(), integer()}]) :: :ok | {:error, String.t()}
-  def subscribe_buckets(scanner, bucket_offsets) when is_list(bucket_offsets),
-    do: Native.log_scanner_subscribe_buckets(scanner, bucket_offsets)
+  def subscribe_buckets(scanner, bucket_offsets) when is_list(bucket_offsets) do
+    scanner
+    |> Native.log_scanner_subscribe_buckets(bucket_offsets)
+    |> Native.await_nif()
+  end
 
   @spec unsubscribe(t(), integer()) :: :ok | {:error, String.t()}
-  def unsubscribe(scanner, bucket),
-    do: Native.log_scanner_unsubscribe(scanner, bucket)
+  def unsubscribe(scanner, bucket) do
+    scanner
+    |> Native.log_scanner_unsubscribe(bucket)
+    |> Native.await_nif()
+  end
 
   @doc """
   Starts a non-blocking poll. Returns `:ok` immediately.

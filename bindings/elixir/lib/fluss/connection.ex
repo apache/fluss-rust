@@ -19,6 +19,10 @@ defmodule Fluss.Connection do
   @moduledoc """
   A connection to a Fluss cluster.
 
+  Errors are per-operation, not per-connection. If the server becomes
+  unreachable, individual calls fail but the connection recovers
+  transparently — there is no need to recreate it.
+
   ## Examples
 
       config = Fluss.Config.new("localhost:9123")
@@ -31,18 +35,17 @@ defmodule Fluss.Connection do
   @type t :: reference()
 
   @spec new(Fluss.Config.t()) :: {:ok, t()} | {:error, String.t()}
-  def new(config) do
-    case Native.connection_new(config) do
-      {:error, _} = err -> err
-      conn -> {:ok, conn}
-    end
+  def new(%Fluss.Config{} = config) do
+    config
+    |> Native.connection_new()
+    |> Native.await_nif()
   end
 
   @spec new!(Fluss.Config.t()) :: t()
-  def new!(config) do
-    case Native.connection_new(config) do
+  def new!(%Fluss.Config{} = config) do
+    case new(config) do
+      {:ok, conn} -> conn
       {:error, reason} -> raise "failed to connect to Fluss: #{reason}"
-      conn -> conn
     end
   end
 end

@@ -16,13 +16,14 @@
 // under the License.
 
 use crate::RUNTIME;
-use crate::atoms::{self, to_nif_err};
+use crate::async_nif;
+use crate::atoms::to_nif_err;
 use crate::row_convert;
 use crate::table::TableResource;
 use crate::write_handle::WriteHandleResource;
 use fluss::client::AppendWriter;
 use fluss::metadata::Column;
-use rustler::{Atom, Env, ResourceArc, Term};
+use rustler::{Env, ResourceArc, Term};
 
 pub struct AppendWriterResource {
     pub writer: AppendWriter,
@@ -62,10 +63,7 @@ fn append_writer_append<'a>(
     Ok(ResourceArc::new(WriteHandleResource::new(future)))
 }
 
-#[rustler::nif(schedule = "DirtyIo")]
-fn append_writer_flush(writer: ResourceArc<AppendWriterResource>) -> Result<Atom, rustler::Error> {
-    RUNTIME
-        .block_on(writer.writer.flush())
-        .map_err(to_nif_err)?;
-    Ok(atoms::ok())
+#[rustler::nif]
+fn append_writer_flush<'a>(env: Env<'a>, writer: ResourceArc<AppendWriterResource>) -> Term<'a> {
+    async_nif::spawn_task(env, async move { writer.writer.flush().await })
 }

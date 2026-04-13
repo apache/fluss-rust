@@ -17,6 +17,7 @@
 
 rustler::atoms! {
     ok,
+    error,
     nil,
 
     // Change types

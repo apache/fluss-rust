@@ -52,9 +52,9 @@ defmodule Fluss.AppendWriter do
 
   @spec new!(Fluss.Table.t()) :: t()
   def new!(table) do
-    case Native.append_writer_new(table) do
+    case new(table) do
+      {:ok, w} -> w
       {:error, reason} -> raise "failed to create append writer: #{reason}"
-      w -> w
     end
   end
 
@@ -67,5 +67,9 @@ defmodule Fluss.AppendWriter do
   end
 
   @spec flush(t()) :: :ok | {:error, String.t()}
-  def flush(writer), do: Native.append_writer_flush(writer)
+  def flush(writer) do
+    writer
+    |> Native.append_writer_flush()
+    |> Native.await_nif()
+  end
 end

@@ -15,26 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::RUNTIME;
-use crate::atoms::to_nif_err;
-use crate::config::ConfigResource;
+use crate::async_nif;
+use crate::config::NifConfig;
 use fluss::client::FlussConnection;
-use rustler::ResourceArc;
+use rustler::{Env, ResourceArc, Term};
 use std::sync::Arc;
 
-pub struct ConnectionResource(pub Arc<FlussConnection>);
+pub struct ConnectionResource {
+    pub inner: Arc<FlussConnection>,
+}
 
 impl std::panic::RefUnwindSafe for ConnectionResource {}
 
 #[rustler::resource_impl]
 impl rustler::Resource for ConnectionResource {}
 
-#[rustler::nif(schedule = "DirtyIo")]
-fn connection_new(
-    config: ResourceArc<ConfigResource>,
-) -> Result<ResourceArc<ConnectionResource>, rustler::Error> {
-    let conn = RUNTIME
-        .block_on(FlussConnection::new(config.0.clone()))
-        .map_err(to_nif_err)?;
-    Ok(ResourceArc::new(ConnectionResource(Arc::new(conn))))
+#[rustler::nif]
+fn connection_new<'a>(env: Env<'a>, config: NifConfig) -> Term<'a> {
+    let core_config = config.into_core();
+    async_nif::spawn_task_with_result(env, async move {
+        FlussConnection::new(core_config).await.map(|conn| {
+            ResourceArc::new(ConnectionResource {
+                inner: Arc::new(conn),
+            })
+        })
+    })
 }

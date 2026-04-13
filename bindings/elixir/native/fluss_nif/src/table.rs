@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::RUNTIME;
-use crate::atoms::to_nif_err;
+use crate::async_nif;
 use crate::connection::ConnectionResource;
 use fluss::client::{FlussConnection, FlussTable, Metadata};
+use fluss::error::Error;
 use fluss::metadata::{Column, TableInfo, TablePath};
-use rustler::ResourceArc;
+use rustler::{Env, ResourceArc, Term};
 use std::sync::Arc;
 
 /// Holds the data needed to reconstruct FlussTable (which has a lifetime
@@ -52,22 +52,26 @@ impl TableResource {
     }
 }
 
-#[rustler::nif(schedule = "DirtyIo")]
-fn table_get(
+#[rustler::nif]
+fn table_get<'a>(
+    env: Env<'a>,
     conn: ResourceArc<ConnectionResource>,
     database_name: String,
     table_name: String,
-) -> Result<ResourceArc<TableResource>, rustler::Error> {
-    let path = TablePath::new(&database_name, &table_name);
-    let table = RUNTIME
-        .block_on(conn.0.get_table(&path))
-        .map_err(to_nif_err)?;
-
-    Ok(ResourceArc::new(TableResource {
-        connection: conn.0.clone(),
-        metadata: table.metadata().clone(),
-        table_info: table.get_table_info().clone(),
-    }))
+) -> Term<'a> {
+    let conn_arc = conn.inner.clone();
+    async_nif::spawn_task_with_result(env, async move {
+        let path = TablePath::new(&database_name, &table_name);
+        let (metadata, table_info) = {
+            let table = conn_arc.get_table(&path).await?;
+            (table.metadata().clone(), table.get_table_info().clone())
+        };
+        Ok::<_, Error>(ResourceArc::new(TableResource {
+            connection: conn_arc,
+            metadata,
+            table_info,
+        }))
+    })
 }
 
 #[rustler::nif]

@@ -19,14 +19,6 @@ defmodule Fluss.Native do
   @moduledoc false
   use Rustler, otp_app: :fluss, crate: "fluss_nif"
 
-  # Config
-  def config_new(_bootstrap_servers), do: :erlang.nif_error(:nif_not_loaded)
-  def config_default, do: :erlang.nif_error(:nif_not_loaded)
-  def config_set_bootstrap_servers(_config, _servers), do: :erlang.nif_error(:nif_not_loaded)
-  def config_set_writer_batch_size(_config, _size), do: :erlang.nif_error(:nif_not_loaded)
-  def config_set_writer_batch_timeout_ms(_config, _ms), do: :erlang.nif_error(:nif_not_loaded)
-  def config_get_bootstrap_servers(_config), do: :erlang.nif_error(:nif_not_loaded)
-
   # Connection
   def connection_new(_config), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -49,11 +41,7 @@ defmodule Fluss.Native do
 
   def admin_list_tables(_admin, _database), do: :erlang.nif_error(:nif_not_loaded)
 
-  # Schema
-  def schema_builder_new, do: :erlang.nif_error(:nif_not_loaded)
-  def schema_builder_column(_builder, _name, _data_type), do: :erlang.nif_error(:nif_not_loaded)
-  def schema_builder_primary_key(_builder, _keys), do: :erlang.nif_error(:nif_not_loaded)
-  def schema_builder_build(_builder), do: :erlang.nif_error(:nif_not_loaded)
+  # Schema / TableDescriptor
   def table_descriptor_new(_schema, _bucket_count, _properties),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -82,4 +70,11 @@ defmodule Fluss.Native do
 
   # Constants
   def earliest_offset, do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc false
+  def await_nif(ref) do
+    receive do
+      {^ref, result} -> result
+    end
+  end
 end

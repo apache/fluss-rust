@@ -17,7 +17,7 @@
 
 defmodule Fluss.Schema do
   @moduledoc """
-  Schema builder for defining table columns and primary keys.
+  Schema definition for a Fluss table.
 
   Simple types: `:boolean`, `:tinyint`, `:smallint`, `:int`, `:bigint`,
   `:float`, `:double`, `:string`, `:bytes`, `:date`, `:time`, `:timestamp`, `:timestamp_ltz`
@@ -27,18 +27,14 @@ defmodule Fluss.Schema do
   ## Examples
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("id", :int)
         |> Fluss.Schema.column("name", :string)
         |> Fluss.Schema.column("amount", {:decimal, 10, 2})
-        |> Fluss.Schema.build!()
 
   """
 
-  alias Fluss.Native
-
-  @type t :: reference()
-  @type builder :: reference()
+  defstruct columns: [], primary_key: []
 
   @type data_type ::
           :boolean
@@ -58,30 +54,21 @@ defmodule Fluss.Schema do
           | {:char, non_neg_integer()}
           | {:binary, non_neg_integer()}
 
-  @spec build() :: builder()
-  def build, do: Native.schema_builder_new()
+  @type t :: %__MODULE__{
+          columns: [{String.t(), data_type()}],
+          primary_key: [String.t()]
+        }
 
-  @spec column(builder(), String.t(), data_type()) :: builder()
-  def column(builder, name, data_type) do
-    case Native.schema_builder_column(builder, name, data_type) do
-      {:error, reason} -> raise "failed to add column: #{reason}"
-      ref -> ref
-    end
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @spec column(t(), String.t(), data_type()) :: t()
+  def column(%__MODULE__{} = schema, name, data_type) when is_binary(name) do
+    %{schema | columns: schema.columns ++ [{name, data_type}]}
   end
 
-  @spec primary_key(builder(), [String.t()]) :: builder()
-  def primary_key(builder, keys) do
-    case Native.schema_builder_primary_key(builder, keys) do
-      {:error, reason} -> raise "failed to set primary key: #{reason}"
-      ref -> ref
-    end
-  end
-
-  @spec build!(builder()) :: t()
-  def build!(builder) do
-    case Native.schema_builder_build(builder) do
-      {:error, reason} -> raise "failed to build schema: #{reason}"
-      ref -> ref
-    end
+  @spec primary_key(t(), [String.t()]) :: t()
+  def primary_key(%__MODULE__{} = schema, keys) when is_list(keys) do
+    %{schema | primary_key: keys}
   end
 end

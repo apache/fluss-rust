@@ -28,7 +28,11 @@ defmodule Fluss.WriteHandle do
   @type t :: reference()
 
   @spec wait(t()) :: :ok | {:error, String.t()}
-  def wait(handle), do: Native.write_handle_wait(handle)
+  def wait(handle) do
+    handle
+    |> Native.write_handle_wait()
+    |> Native.await_nif()
+  end
 
   @spec wait!(t()) :: :ok
   def wait!(handle) do

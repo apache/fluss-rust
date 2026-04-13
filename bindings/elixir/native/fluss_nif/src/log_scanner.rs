@@ -16,15 +16,17 @@
 // under the License.
 
 use crate::RUNTIME;
+use crate::async_nif;
 use crate::atoms::{self, to_nif_err};
 use crate::row_convert;
 use crate::table::TableResource;
-use fluss::client::LogScanner;
+use fluss::client::{EARLIEST_OFFSET, LogScanner};
+use fluss::error::Error;
 use fluss::metadata::Column;
-use fluss::record::ChangeType;
+use fluss::record::{ChangeType, ScanRecords};
 use rustler::env::OwnedEnv;
 use rustler::types::LocalPid;
-use rustler::{Atom, Encoder, Env, ResourceArc};
+use rustler::{Atom, Encoder, Env, ResourceArc, Term};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -50,39 +52,41 @@ fn log_scanner_new(
     Ok(ResourceArc::new(LogScannerResource { scanner, columns }))
 }
 
-#[rustler::nif(schedule = "DirtyIo")]
-fn log_scanner_subscribe(
+#[rustler::nif]
+fn log_scanner_subscribe<'a>(
+    env: Env<'a>,
     scanner: ResourceArc<LogScannerResource>,
     bucket: i32,
     offset: i64,
-) -> Result<Atom, rustler::Error> {
-    RUNTIME
-        .block_on(scanner.scanner.subscribe(bucket, offset))
-        .map_err(to_nif_err)?;
-    Ok(atoms::ok())
+) -> Term<'a> {
+    async_nif::spawn_task(env, async move {
+        scanner.scanner.subscribe(bucket, offset).await
+    })
 }
 
-#[rustler::nif(schedule = "DirtyIo")]
-fn log_scanner_subscribe_buckets(
+#[rustler::nif]
+fn log_scanner_subscribe_buckets<'a>(
+    env: Env<'a>,
     scanner: ResourceArc<LogScannerResource>,
     bucket_offsets: Vec<(i32, i64)>,
-) -> Result<Atom, rustler::Error> {
+) -> Term<'a> {
     let map: HashMap<i32, i64> = bucket_offsets.into_iter().collect();
-    RUNTIME
-        .block_on(scanner.scanner.subscribe_buckets(&map))
-        .map_err(to_nif_err)?;
-    Ok(atoms::ok())
+    async_nif::spawn_task(
+        env,
+        async move { scanner.scanner.subscribe_buckets(&map).await },
+    )
 }
 
-#[rustler::nif(schedule = "DirtyIo")]
-fn log_scanner_unsubscribe(
+#[rustler::nif]
+fn log_scanner_unsubscribe<'a>(
+    env: Env<'a>,
     scanner: ResourceArc<LogScannerResource>,
     bucket: i32,
-) -> Result<Atom, rustler::Error> {
-    RUNTIME
-        .block_on(scanner.scanner.unsubscribe(bucket))
-        .map_err(to_nif_err)?;
-    Ok(atoms::ok())
+) -> Term<'a> {
+    async_nif::spawn_task(
+        env,
+        async move { scanner.scanner.unsubscribe(bucket).await },
+    )
 }
 
 #[rustler::nif]
@@ -101,11 +105,7 @@ fn log_scanner_poll(env: Env, scanner: ResourceArc<LogScannerResource>, timeout_
     atoms::ok()
 }
 
-fn send_poll_result(
-    pid: &LocalPid,
-    result: Result<fluss::record::ScanRecords, fluss::error::Error>,
-    columns: &[Column],
-) {
+fn send_poll_result(pid: &LocalPid, result: Result<ScanRecords, Error>, columns: &[Column]) {
     let mut msg_env = OwnedEnv::new();
 
     match result {
@@ -127,7 +127,7 @@ fn send_poll_result(
 
 fn encode_scan_records<'a>(
     env: Env<'a>,
-    scan_records: fluss::record::ScanRecords,
+    scan_records: ScanRecords,
     columns: &[Column],
 ) -> Result<rustler::Term<'a>, String> {
     let column_atoms = row_convert::intern_column_atoms(env, columns);
@@ -165,5 +165,5 @@ fn encode_scan_records<'a>(
 
 #[rustler::nif]
 fn earliest_offset() -> i64 {
-    fluss::client::EARLIEST_OFFSET
+    EARLIEST_OFFSET
 }

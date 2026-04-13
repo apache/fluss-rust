@@ -45,10 +45,9 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("c1", :int)
         |> Fluss.Schema.column("c2", :string)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
@@ -90,10 +89,9 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("id", :int)
         |> Fluss.Schema.column("name", :string)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
@@ -128,7 +126,7 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("a_tinyint", :tinyint)
         |> Fluss.Schema.column("b_smallint", :smallint)
         |> Fluss.Schema.column("c_int", :int)
@@ -137,7 +135,6 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("f_double", :double)
         |> Fluss.Schema.column("g_string", :string)
         |> Fluss.Schema.column("h_bool", :boolean)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
@@ -196,10 +193,9 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("id", :int)
         |> Fluss.Schema.column("val", :string)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 3)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
@@ -249,9 +245,8 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("id", :int)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
@@ -267,10 +262,9 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("id", :int)
         |> Fluss.Schema.column("name", :string)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
@@ -289,9 +283,8 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("id", :int)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
@@ -325,10 +318,9 @@ defmodule Fluss.Integration.LogTableTest do
       cleanup_table(admin, table_name)
 
       schema =
-        Fluss.Schema.build()
+        Fluss.Schema.new()
         |> Fluss.Schema.column("id", :int)
         |> Fluss.Schema.column("batch", :string)
-        |> Fluss.Schema.build!()
 
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)

@@ -19,40 +19,49 @@ defmodule Fluss.Config do
   @moduledoc """
   Client configuration for connecting to a Fluss cluster.
 
+  Fields left as `nil` use the client's defaults.
+
   ## Examples
 
       config = Fluss.Config.new("localhost:9123")
 
       config =
-        Fluss.Config.default()
-        |> Fluss.Config.set_bootstrap_servers("host1:9123,host2:9123")
+        Fluss.Config.new("host1:9123,host2:9123")
         |> Fluss.Config.set_writer_batch_size(1_048_576)
 
   """
 
-  alias Fluss.Native
+  @enforce_keys [:bootstrap_servers]
+  defstruct bootstrap_servers: nil,
+            writer_batch_size: nil,
+            writer_batch_timeout_ms: nil
 
-  @type t :: reference()
+  @type t :: %__MODULE__{
+          bootstrap_servers: String.t(),
+          writer_batch_size: non_neg_integer() | nil,
+          writer_batch_timeout_ms: non_neg_integer() | nil
+        }
 
   @spec new(String.t()) :: t()
   def new(bootstrap_servers) when is_binary(bootstrap_servers) do
-    Native.config_new(bootstrap_servers)
+    %__MODULE__{bootstrap_servers: bootstrap_servers}
   end
 
   @spec default() :: t()
-  def default, do: Native.config_default()
+  def default, do: %__MODULE__{bootstrap_servers: ""}
 
   @spec set_bootstrap_servers(t(), String.t()) :: t()
-  def set_bootstrap_servers(config, servers),
-    do: Native.config_set_bootstrap_servers(config, servers)
+  def set_bootstrap_servers(%__MODULE__{} = config, servers) when is_binary(servers),
+    do: %{config | bootstrap_servers: servers}
 
-  @spec set_writer_batch_size(t(), integer()) :: t()
-  def set_writer_batch_size(config, size), do: Native.config_set_writer_batch_size(config, size)
+  @spec set_writer_batch_size(t(), non_neg_integer()) :: t()
+  def set_writer_batch_size(%__MODULE__{} = config, size) when is_integer(size),
+    do: %{config | writer_batch_size: size}
 
-  @spec set_writer_batch_timeout_ms(t(), integer()) :: t()
-  def set_writer_batch_timeout_ms(config, ms),
-    do: Native.config_set_writer_batch_timeout_ms(config, ms)
+  @spec set_writer_batch_timeout_ms(t(), non_neg_integer()) :: t()
+  def set_writer_batch_timeout_ms(%__MODULE__{} = config, ms) when is_integer(ms),
+    do: %{config | writer_batch_timeout_ms: ms}
 
   @spec get_bootstrap_servers(t()) :: String.t()
-  def get_bootstrap_servers(config), do: Native.config_get_bootstrap_servers(config)
+  def get_bootstrap_servers(%__MODULE__{bootstrap_servers: servers}), do: servers
 end

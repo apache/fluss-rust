@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::RUNTIME;
-use crate::atoms::{self, to_nif_err};
+use crate::async_nif;
 use fluss::client::WriteResultFuture;
-use rustler::{Atom, ResourceArc};
+use rustler::{Env, ResourceArc, Term};
 use std::sync::Mutex;
 
-pub struct WriteHandleResource(Mutex<Option<WriteResultFuture>>);
+pub struct WriteHandleResource {
+    inner: Mutex<Option<WriteResultFuture>>,
+}
 
 impl std::panic::RefUnwindSafe for WriteHandleResource {}
 
@@ -30,19 +31,17 @@ impl rustler::Resource for WriteHandleResource {}
 
 impl WriteHandleResource {
     pub fn new(future: WriteResultFuture) -> Self {
-        Self(Mutex::new(Some(future)))
+        Self {
+            inner: Mutex::new(Some(future)),
+        }
     }
 }
 
-#[rustler::nif(schedule = "DirtyIo")]
-fn write_handle_wait(handle: ResourceArc<WriteHandleResource>) -> Result<Atom, rustler::Error> {
-    let future = handle
-        .0
-        .lock()
-        .map_err(|e| to_nif_err(format!("lock poisoned: {e}")))?
-        .take()
-        .ok_or_else(|| to_nif_err("WriteHandle already consumed"))?;
-
-    RUNTIME.block_on(future).map_err(to_nif_err)?;
-    Ok(atoms::ok())
+#[rustler::nif]
+fn write_handle_wait<'a>(env: Env<'a>, handle: ResourceArc<WriteHandleResource>) -> Term<'a> {
+    let future = handle.inner.lock().unwrap().take();
+    match future {
+        Some(f) => async_nif::spawn_task(env, f),
+        None => async_nif::send_error(env, "WriteHandle already consumed"),
+    }
 }

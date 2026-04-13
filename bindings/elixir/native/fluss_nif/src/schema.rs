@@ -16,23 +16,14 @@
 // under the License.
 
 use crate::atoms::to_nif_err;
-use fluss::metadata::{DataTypes, Schema, SchemaBuilder, TableDescriptor};
-use rustler::{NifTaggedEnum, ResourceArc};
-use std::sync::Mutex;
+use fluss::metadata::{self, DataTypes, Schema, TableDescriptor};
+use rustler::{NifStruct, NifTaggedEnum, ResourceArc};
 
-pub struct SchemaBuilderResource(pub Mutex<Option<SchemaBuilder>>);
-pub struct SchemaResource(pub Schema);
-pub struct TableDescriptorResource(pub TableDescriptor);
+pub struct TableDescriptorResource {
+    pub inner: TableDescriptor,
+}
 
-impl std::panic::RefUnwindSafe for SchemaBuilderResource {}
-impl std::panic::RefUnwindSafe for SchemaResource {}
 impl std::panic::RefUnwindSafe for TableDescriptorResource {}
-
-#[rustler::resource_impl]
-impl rustler::Resource for SchemaBuilderResource {}
-
-#[rustler::resource_impl]
-impl rustler::Resource for SchemaResource {}
 
 #[rustler::resource_impl]
 impl rustler::Resource for TableDescriptorResource {}
@@ -61,7 +52,7 @@ pub enum DataType {
     Binary(usize),
 }
 
-fn to_fluss_type(dt: &DataType) -> fluss::metadata::DataType {
+fn to_fluss_type(dt: &DataType) -> metadata::DataType {
     match dt {
         DataType::Boolean => DataTypes::boolean(),
         DataType::Tinyint => DataTypes::tinyint(),
@@ -82,59 +73,30 @@ fn to_fluss_type(dt: &DataType) -> fluss::metadata::DataType {
     }
 }
 
-#[rustler::nif]
-fn schema_builder_new() -> ResourceArc<SchemaBuilderResource> {
-    ResourceArc::new(SchemaBuilderResource(Mutex::new(Some(Schema::builder()))))
-}
-
-#[rustler::nif]
-fn schema_builder_column(
-    builder: ResourceArc<SchemaBuilderResource>,
-    name: String,
-    data_type: DataType,
-) -> Result<ResourceArc<SchemaBuilderResource>, rustler::Error> {
-    let mut guard = builder.0.lock().unwrap();
-    let b = guard
-        .take()
-        .ok_or_else(|| to_nif_err("schema builder already consumed"))?;
-    *guard = Some(b.column(&name, to_fluss_type(&data_type)));
-    drop(guard);
-    Ok(builder)
-}
-
-#[rustler::nif]
-fn schema_builder_primary_key(
-    builder: ResourceArc<SchemaBuilderResource>,
-    keys: Vec<String>,
-) -> Result<ResourceArc<SchemaBuilderResource>, rustler::Error> {
-    let mut guard = builder.0.lock().unwrap();
-    let b = guard
-        .take()
-        .ok_or_else(|| to_nif_err("schema builder already consumed"))?;
-    *guard = Some(b.primary_key(keys));
-    drop(guard);
-    Ok(builder)
-}
-
-#[rustler::nif]
-fn schema_builder_build(
-    builder: ResourceArc<SchemaBuilderResource>,
-) -> Result<ResourceArc<SchemaResource>, rustler::Error> {
-    let mut guard = builder.0.lock().unwrap();
-    let b = guard
-        .take()
-        .ok_or_else(|| to_nif_err("schema builder already consumed"))?;
-    let schema = b.build().map_err(to_nif_err)?;
-    Ok(ResourceArc::new(SchemaResource(schema)))
+/// Decoded from `%Fluss.Schema{}` Elixir struct.
+#[derive(NifStruct)]
+#[module = "Fluss.Schema"]
+pub struct NifSchema {
+    pub columns: Vec<(String, DataType)>,
+    pub primary_key: Vec<String>,
 }
 
 #[rustler::nif]
 fn table_descriptor_new(
-    schema: ResourceArc<SchemaResource>,
+    schema: NifSchema,
     bucket_count: Option<i32>,
     properties: Vec<(String, String)>,
 ) -> Result<ResourceArc<TableDescriptorResource>, rustler::Error> {
-    let mut builder = TableDescriptor::builder().schema(schema.0.clone());
+    let mut schema_builder = Schema::builder();
+    for (name, dt) in &schema.columns {
+        schema_builder = schema_builder.column(name, to_fluss_type(dt));
+    }
+    if !schema.primary_key.is_empty() {
+        schema_builder = schema_builder.primary_key(schema.primary_key);
+    }
+    let built_schema = schema_builder.build().map_err(to_nif_err)?;
+
+    let mut builder = TableDescriptor::builder().schema(built_schema);
     if let Some(count) = bucket_count {
         builder = builder.distributed_by(Some(count), vec![]);
     }
@@ -142,5 +104,7 @@ fn table_descriptor_new(
         builder = builder.property(&key, &value);
     }
     let descriptor = builder.build().map_err(to_nif_err)?;
-    Ok(ResourceArc::new(TableDescriptorResource(descriptor)))
+    Ok(ResourceArc::new(TableDescriptorResource {
+        inner: descriptor,
+    }))
 }

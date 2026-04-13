@@ -26,17 +26,16 @@ defmodule Fluss.Table do
 
   @spec get(Fluss.Connection.t(), String.t(), String.t()) :: {:ok, t()} | {:error, String.t()}
   def get(conn, database, table) do
-    case Native.table_get(conn, database, table) do
-      {:error, _} = err -> err
-      t -> {:ok, t}
-    end
+    conn
+    |> Native.table_get(database, table)
+    |> Native.await_nif()
   end
 
   @spec get!(Fluss.Connection.t(), String.t(), String.t()) :: t()
   def get!(conn, database, table) do
-    case Native.table_get(conn, database, table) do
+    case get(conn, database, table) do
+      {:ok, t} -> t
       {:error, reason} -> raise "failed to get table: #{reason}"
-      t -> t
     end
   end
 

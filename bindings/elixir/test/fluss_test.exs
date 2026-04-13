@@ -18,89 +18,43 @@
 defmodule FlussTest do
   use ExUnit.Case
 
-  describe "Config" do
-    test "creates config with bootstrap servers" do
-      config = Fluss.Config.new("localhost:9123")
-      assert Fluss.Config.get_bootstrap_servers(config) == "localhost:9123"
-    end
-
-    test "default config uses localhost" do
-      config = Fluss.Config.default()
-      assert Fluss.Config.get_bootstrap_servers(config) == "127.0.0.1:9123"
-    end
-
-    test "config chaining" do
-      config =
-        Fluss.Config.default()
-        |> Fluss.Config.set_bootstrap_servers("host1:9123,host2:9123")
-
-      assert Fluss.Config.get_bootstrap_servers(config) == "host1:9123,host2:9123"
-    end
-  end
-
-  describe "Schema" do
-    test "builds a simple log table schema" do
-      schema =
-        Fluss.Schema.build()
-        |> Fluss.Schema.column("ts", :bigint)
-        |> Fluss.Schema.column("message", :string)
-        |> Fluss.Schema.build!()
-
-      assert is_reference(schema)
-    end
-
-    test "builds a schema with all simple types" do
-      schema =
-        Fluss.Schema.build()
-        |> Fluss.Schema.column("a", :boolean)
-        |> Fluss.Schema.column("b", :tinyint)
-        |> Fluss.Schema.column("c", :smallint)
-        |> Fluss.Schema.column("d", :int)
-        |> Fluss.Schema.column("e", :bigint)
-        |> Fluss.Schema.column("f", :float)
-        |> Fluss.Schema.column("g", :double)
-        |> Fluss.Schema.column("h", :string)
-        |> Fluss.Schema.column("i", :bytes)
-        |> Fluss.Schema.column("j", :date)
-        |> Fluss.Schema.column("k", :time)
-        |> Fluss.Schema.column("l", :timestamp)
-        |> Fluss.Schema.column("m", :timestamp_ltz)
-        |> Fluss.Schema.build!()
-
-      assert is_reference(schema)
-    end
-
-    test "builds a schema with parameterized types" do
-      schema =
-        Fluss.Schema.build()
-        |> Fluss.Schema.column("amount", {:decimal, 10, 2})
-        |> Fluss.Schema.column("code", {:char, 5})
-        |> Fluss.Schema.column("data", {:binary, 16})
-        |> Fluss.Schema.build!()
-
-      assert is_reference(schema)
-    end
-  end
-
   describe "TableDescriptor" do
     test "creates descriptor from schema" do
-      schema =
-        Fluss.Schema.build()
-        |> Fluss.Schema.column("id", :int)
-        |> Fluss.Schema.build!()
-
-      descriptor = Fluss.TableDescriptor.new!(schema)
-      assert is_reference(descriptor)
+      Fluss.Schema.new()
+      |> Fluss.Schema.column("id", :int)
+      |> Fluss.TableDescriptor.new!()
     end
 
     test "creates descriptor with bucket count" do
-      schema =
-        Fluss.Schema.build()
-        |> Fluss.Schema.column("id", :int)
-        |> Fluss.Schema.build!()
+      Fluss.Schema.new()
+      |> Fluss.Schema.column("id", :int)
+      |> Fluss.TableDescriptor.new!(bucket_count: 3)
+    end
 
-      descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 3)
-      assert is_reference(descriptor)
+    test "accepts all simple data types" do
+      Fluss.Schema.new()
+      |> Fluss.Schema.column("a", :boolean)
+      |> Fluss.Schema.column("b", :tinyint)
+      |> Fluss.Schema.column("c", :smallint)
+      |> Fluss.Schema.column("d", :int)
+      |> Fluss.Schema.column("e", :bigint)
+      |> Fluss.Schema.column("f", :float)
+      |> Fluss.Schema.column("g", :double)
+      |> Fluss.Schema.column("h", :string)
+      |> Fluss.Schema.column("i", :bytes)
+      |> Fluss.Schema.column("j", :date)
+      |> Fluss.Schema.column("k", :time)
+      |> Fluss.Schema.column("l", :timestamp)
+      |> Fluss.Schema.column("m", :timestamp_ltz)
+      |> Fluss.TableDescriptor.new!()
+    end
+
+    test "accepts parameterized data types" do
+      Fluss.Schema.new()
+      |> Fluss.Schema.column("amount", {:decimal, 10, 2})
+      |> Fluss.Schema.column("code", {:char, 5})
+      |> Fluss.Schema.column("data", {:binary, 16})
+      |> Fluss.TableDescriptor.new!()
     end
   end
 
