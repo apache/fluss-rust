@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 pub struct LogScannerResource {
-    pub scanner: LogScanner,
+    pub inner: LogScanner,
     pub columns: Vec<Column>,
 }
 
@@ -45,11 +45,11 @@ fn log_scanner_new(
     table: ResourceArc<TableResource>,
 ) -> Result<ResourceArc<LogScannerResource>, rustler::Error> {
     let _guard = RUNTIME.enter();
-    let (scanner, columns) = table.with_table(|t| {
-        let scanner = t.new_scan().create_log_scanner().map_err(to_nif_err)?;
-        Ok((scanner, t.get_table_info().schema.columns().to_vec()))
+    let (inner, columns) = table.with_table(|t| {
+        let inner = t.new_scan().create_log_scanner().map_err(to_nif_err)?;
+        Ok((inner, t.get_table_info().schema.columns().to_vec()))
     })?;
-    Ok(ResourceArc::new(LogScannerResource { scanner, columns }))
+    Ok(ResourceArc::new(LogScannerResource { inner, columns }))
 }
 
 #[rustler::nif]
@@ -59,9 +59,10 @@ fn log_scanner_subscribe<'a>(
     bucket: i32,
     offset: i64,
 ) -> Term<'a> {
-    async_nif::spawn_task(env, async move {
-        scanner.scanner.subscribe(bucket, offset).await
-    })
+    async_nif::spawn_task(
+        env,
+        async move { scanner.inner.subscribe(bucket, offset).await },
+    )
 }
 
 #[rustler::nif]
@@ -73,7 +74,7 @@ fn log_scanner_subscribe_buckets<'a>(
     let map: HashMap<i32, i64> = bucket_offsets.into_iter().collect();
     async_nif::spawn_task(
         env,
-        async move { scanner.scanner.subscribe_buckets(&map).await },
+        async move { scanner.inner.subscribe_buckets(&map).await },
     )
 }
 
@@ -83,10 +84,7 @@ fn log_scanner_unsubscribe<'a>(
     scanner: ResourceArc<LogScannerResource>,
     bucket: i32,
 ) -> Term<'a> {
-    async_nif::spawn_task(
-        env,
-        async move { scanner.scanner.unsubscribe(bucket).await },
-    )
+    async_nif::spawn_task(env, async move { scanner.inner.unsubscribe(bucket).await })
 }
 
 #[rustler::nif]
@@ -95,10 +93,7 @@ fn log_scanner_poll(env: Env, scanner: ResourceArc<LogScannerResource>, timeout_
     let scanner = scanner.clone();
 
     RUNTIME.spawn(async move {
-        let result = scanner
-            .scanner
-            .poll(Duration::from_millis(timeout_ms))
-            .await;
+        let result = scanner.inner.poll(Duration::from_millis(timeout_ms)).await;
         send_poll_result(&pid, result, &scanner.columns);
     });
 

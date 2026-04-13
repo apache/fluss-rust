@@ -26,7 +26,7 @@ use fluss::metadata::Column;
 use rustler::{Env, ResourceArc, Term};
 
 pub struct AppendWriterResource {
-    pub writer: AppendWriter,
+    pub inner: AppendWriter,
     pub columns: Vec<Column>,
 }
 
@@ -41,15 +41,15 @@ fn append_writer_new(
 ) -> Result<ResourceArc<AppendWriterResource>, rustler::Error> {
     // WriterClient::new() calls tokio::spawn internally.
     let _guard = RUNTIME.enter();
-    let (writer, columns) = table.with_table(|t| {
-        let writer = t
+    let (inner, columns) = table.with_table(|t| {
+        let inner = t
             .new_append()
             .map_err(to_nif_err)?
             .create_writer()
             .map_err(to_nif_err)?;
-        Ok((writer, t.get_table_info().schema.columns().to_vec()))
+        Ok((inner, t.get_table_info().schema.columns().to_vec()))
     })?;
-    Ok(ResourceArc::new(AppendWriterResource { writer, columns }))
+    Ok(ResourceArc::new(AppendWriterResource { inner, columns }))
 }
 
 #[rustler::nif]
@@ -59,11 +59,11 @@ fn append_writer_append<'a>(
     values: Term<'a>,
 ) -> Result<ResourceArc<WriteHandleResource>, rustler::Error> {
     let row = row_convert::term_to_row(env, values, &writer.columns).map_err(to_nif_err)?;
-    let future = writer.writer.append(&row).map_err(to_nif_err)?;
+    let future = writer.inner.append(&row).map_err(to_nif_err)?;
     Ok(ResourceArc::new(WriteHandleResource::new(future)))
 }
 
 #[rustler::nif]
 fn append_writer_flush<'a>(env: Env<'a>, writer: ResourceArc<AppendWriterResource>) -> Term<'a> {
-    async_nif::spawn_task(env, async move { writer.writer.flush().await })
+    async_nif::spawn_task(env, async move { writer.inner.flush().await })
 }
