@@ -15,46 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: License and Formatting Check
+name: Security Audit
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'website/**'
-      - '**/*.md'
-  pull_request:
-    branches:
-      - main
+  schedule:
+    - cron: '0 8 * * 1'  # Every Monday at 08:00 UTC
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
-
 jobs:
-  check-license-and-formatting:
+  audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Check License Header
-        uses: apache/skywalking-eyes/header@v0.6.0
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.14.22
 
-      - name: Check dependency licenses (Apache-compatible)
-        run: cargo deny check licenses
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Format
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --workspace -- -D warnings
+      - name: Check advisories
+        run: cargo deny check advisories
