@@ -404,22 +404,6 @@ impl ColumnWriter {
         }
     }
 
-    /// Clone-finish the builder for size estimation (does not reset the builder).
-    pub fn finish_cloned(&self) -> ArrayRef {
-        match &self.inner {
-            TypedWriter::List {
-                element_writer,
-                offsets,
-                validity,
-            } => {
-                let item_nullable = element_writer.nullable;
-                let values = element_writer.finish_cloned();
-                finish_list_array(values, item_nullable, offsets, validity)
-            }
-            _ => with_builder!(&self.inner, b => (b as &dyn ArrayBuilder).finish_cloned()),
-        }
-    }
-
     /// Returns the total buffer size in bytes, rounded up to 8-byte alignment
     /// per buffer. Reads buffer lengths directly from the builders — O(1), no
     /// allocation. Analogous to Java's `ArrowUtils.estimateArrowBodyLength()`
