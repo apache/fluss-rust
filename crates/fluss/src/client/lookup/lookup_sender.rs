@@ -392,22 +392,11 @@ impl LookupSender {
             }
             Err(e) => {
                 let err_msg = format!("Lookup request failed: {}", e);
-                let is_retriable = Self::is_retriable_error(&e);
+                let is_retriable = e.is_retriable();
                 for batch in &mut batches {
                     self.handle_lookup_error(&err_msg, is_retriable, batch);
                 }
             }
-        }
-    }
-
-    /// Checks if an error is retriable.
-    fn is_retriable_error(error: &Error) -> bool {
-        match error {
-            Error::FlussAPIError { api_error } => {
-                let fluss_error = FlussError::for_code(api_error.code);
-                fluss_error.is_retriable()
-            }
-            _ => false,
         }
     }
 
