@@ -16,5 +16,7 @@
 // under the License.
 
 mod arrow_compression;
+mod arrow_compression_ratio_estimator;
 
 pub use arrow_compression::*;
+pub use arrow_compression_ratio_estimator::*;
