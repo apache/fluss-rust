@@ -488,8 +488,8 @@ impl ColumnWriter {
                 offsets,
                 validity,
             } => {
-                let validity_bytes = round_up_8((validity.len() + 7) / 8);
-                let offsets_bytes = round_up_8(offsets.len() * std::mem::size_of::<i32>());
+                let validity_bytes = round_up_to_8(validity.len().div_ceil(8));
+                let offsets_bytes = round_up_to_8(offsets.len() * std::mem::size_of::<i32>());
                 validity_bytes + offsets_bytes + element_writer.buffer_size()
             }
         }
