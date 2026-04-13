@@ -23,6 +23,9 @@ defmodule Fluss.Admin do
 
       admin = Fluss.Admin.new!(conn)
       :ok = Fluss.Admin.create_database(admin, "my_db")
+
+      schema = Fluss.Schema.new() |> Fluss.Schema.column("ts", :bigint)
+      descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, "my_db", "events", descriptor)
 
   """
