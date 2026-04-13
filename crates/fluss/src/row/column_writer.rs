@@ -508,12 +508,6 @@ impl ColumnWriter {
         }
     }
 
-    /// Returns a trait-object reference to the inner builder.
-    /// Used for type-agnostic operations (`finish`).
-    fn as_builder_mut(&mut self) -> &mut dyn ArrayBuilder {
-        with_builder!(&mut self.inner, b => b)
-    }
-
     #[inline]
     fn write_non_null_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
         match &mut self.inner {
