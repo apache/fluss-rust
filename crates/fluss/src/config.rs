@@ -271,7 +271,6 @@ impl Config {
     /// consistent, or an error message when idempotence is enabled but other
     /// settings are incompatible.
 
-
     /// Validates security configuration. Returns `Ok(())` when the config is
     /// consistent, or an error message when SASL is enabled but the config is
     /// incomplete or uses an unsupported mechanism.
@@ -307,6 +306,8 @@ impl Config {
         if self.remote_file_download_thread_num == 0 {
             return Err("remote_file_download_thread_num must be > 0".to_string());
         }
+        // scanner_log_max_poll_records: validation intentionally omitted to match Java behavior.
+        // Java allows 0 — tracked in https://github.com/apache/fluss/issues/3068
         if self.scanner_log_fetch_min_bytes <= 0 {
             return Err("scanner_log_fetch_min_bytes must be > 0".to_string());
         }
