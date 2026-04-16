@@ -15,21 +15,30 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+defmodule Fluss.WriteHandle do
+  @moduledoc """
+  Handle for a pending write operation.
 
-  paths-ignore:
-    - '.gitignore'
-    - 'Cargo.lock'
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'bindings/python/fluss/py.typed'
-    - '**/mix.lock'
-    - 'website/**'
-    - '**/*.md'
-    - '**/DEPENDENCIES.*.tsv'
-    - '**/*.env'
-  comment: on-failure
+  Returned by `Fluss.AppendWriter.append/2`. Drop for fire-and-forget,
+  or call `wait/1` for per-record server acknowledgment.
+  """
+
+  alias Fluss.Native
+
+  @type t :: reference()
+
+  @spec wait(t()) :: :ok | {:error, String.t()}
+  def wait(handle) do
+    handle
+    |> Native.write_handle_wait()
+    |> Native.await_nif()
+  end
+
+  @spec wait!(t()) :: :ok
+  def wait!(handle) do
+    case wait(handle) do
+      :ok -> :ok
+      {:error, reason} -> raise "write failed: #{reason}"
+    end
+  end
+end

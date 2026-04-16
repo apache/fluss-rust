@@ -15,21 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+[package]
+name = "fluss_nif"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 
-  paths-ignore:
-    - '.gitignore'
-    - 'Cargo.lock'
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'bindings/python/fluss/py.typed'
-    - '**/mix.lock'
-    - 'website/**'
-    - '**/*.md'
-    - '**/DEPENDENCIES.*.tsv'
-    - '**/*.env'
-  comment: on-failure
+[lib]
+name = "fluss_nif"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+bigdecimal = { workspace = true }
+fluss = { workspace = true }
+rustler = "0.37"
+tokio = { workspace = true }

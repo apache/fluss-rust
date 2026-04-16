@@ -15,21 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
-
-  paths-ignore:
-    - '.gitignore'
-    - 'Cargo.lock'
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'bindings/python/fluss/py.typed'
-    - '**/mix.lock'
-    - 'website/**'
-    - '**/*.md'
-    - '**/DEPENDENCIES.*.tsv'
-    - '**/*.env'
-  comment: on-failure
+[
+  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
+]

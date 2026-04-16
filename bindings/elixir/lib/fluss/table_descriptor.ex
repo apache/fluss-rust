@@ -15,21 +15,31 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+defmodule Fluss.TableDescriptor do
+  @moduledoc """
+  Descriptor for creating a Fluss table.
 
-  paths-ignore:
-    - '.gitignore'
-    - 'Cargo.lock'
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'bindings/python/fluss/py.typed'
-    - '**/mix.lock'
-    - 'website/**'
-    - '**/*.md'
-    - '**/DEPENDENCIES.*.tsv'
-    - '**/*.env'
-  comment: on-failure
+  Options: `:bucket_count`, `:properties` (list of `{key, value}` string tuples).
+
+  ## Examples
+
+      Fluss.TableDescriptor.new!(schema)
+      Fluss.TableDescriptor.new!(schema, bucket_count: 3)
+
+  """
+
+  alias Fluss.Native
+
+  @type t :: reference()
+
+  @spec new!(Fluss.Schema.t(), keyword()) :: t()
+  def new!(%Fluss.Schema{} = schema, opts \\ []) do
+    bucket_count = Keyword.get(opts, :bucket_count)
+    properties = Keyword.get(opts, :properties, [])
+
+    case Native.table_descriptor_new(schema, bucket_count, properties) do
+      {:error, reason} -> raise "failed to create table descriptor: #{reason}"
+      ref -> ref
+    end
+  end
+end

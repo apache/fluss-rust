@@ -15,21 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
+# Exclude integration tests by default (they need a Docker cluster).
+# Run with: mix test --include integration
+ExUnit.start(exclude: [:integration])
 
-  paths-ignore:
-    - '.gitignore'
-    - 'Cargo.lock'
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'bindings/python/fluss/py.typed'
-    - '**/mix.lock'
-    - 'website/**'
-    - '**/*.md'
-    - '**/DEPENDENCIES.*.tsv'
-    - '**/*.env'
-  comment: on-failure
+# Stop Docker containers after all tests finish (matches Python's pytest_unconfigure).
+ExUnit.after_suite(fn _ ->
+  unless System.get_env("FLUSS_BOOTSTRAP_SERVERS") do
+    Fluss.Test.Cluster.stop()
+  end
+end)
