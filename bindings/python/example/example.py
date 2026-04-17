@@ -263,8 +263,8 @@ async def main():
         print("\n--- Scanning table (batch scanner) ---")
         try:
             # Use new_scan().create_record_batch_log_scanner() for batch-based operations
-            async with await table.new_scan().create_record_batch_log_scanner() as batch_scanner:
-                print(f"Created batch scanner: {batch_scanner}")
+            batch_scanner = await table.new_scan().create_record_batch_log_scanner()
+            print(f"Created batch scanner: {batch_scanner}")
 
             # Subscribe to buckets (required before to_arrow/to_pandas)
             # Use subscribe_buckets to subscribe all buckets from EARLIEST_OFFSET
@@ -283,15 +283,15 @@ async def main():
                 print(f"Could not convert to PyArrow: {e}")
 
             # Create a new batch scanner for to_pandas() test
-            async with await table.new_scan().create_record_batch_log_scanner() as batch_scanner2:
-                batch_scanner2.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+            batch_scanner2 = await table.new_scan().create_record_batch_log_scanner()
+            batch_scanner2.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-                # Try to get as Pandas DataFrame
-                try:
-                    df_result = batch_scanner2.to_pandas()
-                    print(f"\nAs Pandas DataFrame:\n{df_result}")
-                except Exception as e:
-                    print(f"Could not convert to Pandas: {e}")
+            # Try to get as Pandas DataFrame
+            try:
+                df_result = batch_scanner2.to_pandas()
+                print(f"\nAs Pandas DataFrame:\n{df_result}")
+            except Exception as e:
+                print(f"Could not convert to Pandas: {e}")
 
             # TODO: support to_arrow_batch_reader()
             # which is reserved for streaming use cases
@@ -300,43 +300,43 @@ async def main():
 
             # Test poll_arrow() method for incremental reading as Arrow Table
             print("\n--- Testing poll_arrow() method ---")
-            async with await table.new_scan().create_record_batch_log_scanner() as batch_scanner3:
-                batch_scanner3.subscribe(bucket_id=0, start_offset=fluss.EARLIEST_OFFSET)
-                print(f"Subscribed to bucket 0 at EARLIEST_OFFSET ({fluss.EARLIEST_OFFSET})")
+            batch_scanner3 = await table.new_scan().create_record_batch_log_scanner()
+            batch_scanner3.subscribe(bucket_id=0, start_offset=fluss.EARLIEST_OFFSET)
+            print(f"Subscribed to bucket 0 at EARLIEST_OFFSET ({fluss.EARLIEST_OFFSET})")
 
-                # Poll with a timeout of 5000ms (5 seconds)
-                # Note: poll_arrow() returns an empty table (not an error) on timeout
-                try:
-                    poll_result = batch_scanner3.poll_arrow(5000)
-                    print(f"Number of rows: {poll_result.num_rows}")
+            # Poll with a timeout of 5000ms (5 seconds)
+            # Note: poll_arrow() returns an empty table (not an error) on timeout
+            try:
+                poll_result = batch_scanner3.poll_arrow(5000)
+                print(f"Number of rows: {poll_result.num_rows}")
 
-                    if poll_result.num_rows > 0:
-                        poll_df = poll_result.to_pandas()
-                        print(f"Polled data:\n{poll_df}")
-                    else:
-                        print("Empty result (no records available)")
-                        # Empty table still has schema - this is useful!
-                        print(f"Schema: {poll_result.schema}")
+                if poll_result.num_rows > 0:
+                    poll_df = poll_result.to_pandas()
+                    print(f"Polled data:\n{poll_df}")
+                else:
+                    print("Empty result (no records available)")
+                    # Empty table still has schema - this is useful!
+                    print(f"Schema: {poll_result.schema}")
 
-                except Exception as e:
-                    print(f"Error during poll_arrow: {e}")
+            except Exception as e:
+                print(f"Error during poll_arrow: {e}")
 
             # Test poll_record_batch() method for batches with metadata
             print("\n--- Testing poll_record_batch() method ---")
-            async with await table.new_scan().create_record_batch_log_scanner() as batch_scanner4:
-                batch_scanner4.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+            batch_scanner4 = await table.new_scan().create_record_batch_log_scanner()
+            batch_scanner4.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-                try:
-                    batches = batch_scanner4.poll_record_batch(5000)
-                    print(f"Number of batches: {len(batches)}")
+            try:
+                batches = batch_scanner4.poll_record_batch(5000)
+                print(f"Number of batches: {len(batches)}")
 
-                    for i, batch in enumerate(batches):
-                        print(f"  Batch {i}: bucket={batch.bucket}, "
-                              f"offsets={batch.base_offset}-{batch.last_offset}, "
-                              f"rows={batch.batch.num_rows}")
+                for i, batch in enumerate(batches):
+                    print(f"  Batch {i}: bucket={batch.bucket}, "
+                          f"offsets={batch.base_offset}-{batch.last_offset}, "
+                          f"rows={batch.batch.num_rows}")
 
-                except Exception as e:
-                    print(f"Error during poll_record_batch: {e}")
+            except Exception as e:
+                print(f"Error during poll_record_batch: {e}")
 
         except Exception as e:
             print(f"Error during batch scanning: {e}")
@@ -345,34 +345,34 @@ async def main():
         print("\n--- Scanning table (record scanner) ---")
         try:
             # Use new_scan().create_log_scanner() for record-based operations
-            async with await table.new_scan().create_log_scanner() as record_scanner:
-                print(f"Created record scanner: {record_scanner}")
+            record_scanner = await table.new_scan().create_log_scanner()
+            print(f"Created record scanner: {record_scanner}")
 
-                record_scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+            record_scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-                # Poll returns ScanRecords — records grouped by bucket
-                print("\n--- Testing poll() method (record-by-record) ---")
-                try:
-                    scan_records = record_scanner.poll(5000)
-                    print(f"Total records: {scan_records.count()}, buckets: {len(scan_records.buckets())}")
+            # Poll returns ScanRecords — records grouped by bucket
+            print("\n--- Testing poll() method (record-by-record) ---")
+            try:
+                scan_records = record_scanner.poll(5000)
+                print(f"Total records: {scan_records.count()}, buckets: {len(scan_records.buckets())}")
 
-                    # Flat iteration over all records (regardless of bucket)
-                    print(f"  Flat iteration: {scan_records.count()} records")
-                    for record in scan_records:
-                        print(f"    offset={record.offset}, timestamp={record.timestamp}")
+                # Flat iteration over all records (regardless of bucket)
+                print(f"  Flat iteration: {scan_records.count()} records")
+                for record in scan_records:
+                    print(f"    offset={record.offset}, timestamp={record.timestamp}")
 
-                    # Per-bucket access
-                    for bucket in scan_records.buckets():
-                        bucket_recs = scan_records.records(bucket)
-                        print(f"  Bucket {bucket}: {len(bucket_recs)} records")
-                        for record in bucket_recs[:3]:
-                            print(f"    offset={record.offset}, "
-                                  f"timestamp={record.timestamp}, "
-                                  f"change_type={record.change_type}, "
-                                  f"row={record.row}")
+                # Per-bucket access
+                for bucket in scan_records.buckets():
+                    bucket_recs = scan_records.records(bucket)
+                    print(f"  Bucket {bucket}: {len(bucket_recs)} records")
+                    for record in bucket_recs[:3]:
+                        print(f"    offset={record.offset}, "
+                              f"timestamp={record.timestamp}, "
+                              f"change_type={record.change_type}, "
+                              f"row={record.row}")
 
-                except Exception as e:
-                    print(f"Error during poll: {e}")
+            except Exception as e:
+                print(f"Error during poll: {e}")
 
         except Exception as e:
             print(f"Error during record scanning: {e}")
@@ -380,14 +380,14 @@ async def main():
         # Demo: unsubscribe — unsubscribe from a bucket (non-partitioned tables)
         print("\n--- Testing unsubscribe ---")
         try:
-            async with await table.new_scan().create_record_batch_log_scanner() as unsub_scanner:
-                unsub_scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
-                print(f"Subscribed to {num_buckets} buckets")
-                # Unsubscribe from bucket 0 — future polls will skip this bucket
-                unsub_scanner.unsubscribe(bucket_id=0)
-                print("Unsubscribed from bucket 0")
-                remaining = unsub_scanner.poll_arrow(5000)
-                print(f"After unsubscribe, got {remaining.num_rows} records (from remaining buckets)")
+            unsub_scanner = await table.new_scan().create_record_batch_log_scanner()
+            unsub_scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+            print(f"Subscribed to {num_buckets} buckets")
+            # Unsubscribe from bucket 0 — future polls will skip this bucket
+            unsub_scanner.unsubscribe(bucket_id=0)
+            print("Unsubscribed from bucket 0")
+            remaining = unsub_scanner.poll_arrow(5000)
+            print(f"After unsubscribe, got {remaining.num_rows} records (from remaining buckets)")
         except Exception as e:
             print(f"Error during unsubscribe test: {e}")
 
@@ -934,7 +934,7 @@ async def main():
             traceback.print_exc()
 
         # Close connection
-        conn.close()
+        await conn.close()
         print("\nConnection closed")
 
 
