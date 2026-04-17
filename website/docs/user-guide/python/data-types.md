@@ -55,7 +55,7 @@ handle = writer.append(row)
 ## Reading Data
 
 ```python
-records = scanner.poll(timeout_ms=1000)
+records = await scanner.poll(timeout_ms=1000)
 for record in records:
     row = record.row  # dict[str, Any]
     print(row["user_id"])     # int

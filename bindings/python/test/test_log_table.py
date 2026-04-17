@@ -64,7 +64,7 @@ async def test_append_and_scan(connection, admin):
     num_buckets = (await admin.get_table_info(table_path)).num_buckets
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    records = _poll_records(scanner, expected_count=6)
+    records = await _poll_records(scanner, expected_count=6)
 
     assert len(records) == 6, f"Expected 6 records, got {len(records)}"
 
@@ -107,7 +107,7 @@ async def test_append_dict_rows(connection, admin):
     num_buckets = (await admin.get_table_info(table_path)).num_buckets
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    records = _poll_records(scanner, expected_count=3)
+    records = await _poll_records(scanner, expected_count=3)
     assert len(records) == 3
 
     rows = sorted([r.row for r in records], key=lambda r: r["id"])
@@ -238,7 +238,7 @@ async def test_project(connection, admin):
     scanner = await scan.create_log_scanner()
     scanner.subscribe_buckets({0: 0})
 
-    records = _poll_records(scanner, expected_count=3)
+    records = await _poll_records(scanner, expected_count=3)
     assert len(records) == 3
 
     records.sort(key=lambda r: r.row["col_c"])
@@ -254,7 +254,7 @@ async def test_project(connection, admin):
     scanner2 = await table.new_scan().project([1, 0]).create_log_scanner()
     scanner2.subscribe_buckets({0: 0})
 
-    records2 = _poll_records(scanner2, expected_count=3)
+    records2 = await _poll_records(scanner2, expected_count=3)
     assert len(records2) == 3
 
     records2.sort(key=lambda r: r.row["col_a"])
@@ -284,7 +284,7 @@ async def test_poll_batches(connection, admin):
     scanner.subscribe(bucket_id=0, start_offset=0)
 
     # Empty table should return empty result
-    result = scanner.poll_arrow(500)
+    result = await scanner.poll_arrow(500)
     assert result.num_rows == 0
 
     writer = table.new_append().create_writer()
@@ -310,7 +310,7 @@ async def test_poll_batches(connection, admin):
     await writer.flush()
 
     # Poll until we get all 6 records
-    all_ids = _poll_arrow_ids(scanner, expected_count=6)
+    all_ids = await _poll_arrow_ids(scanner, expected_count=6)
     assert all_ids == [1, 2, 3, 4, 5, 6]
 
     # Append more and verify offset continuation (no duplicates)
@@ -322,14 +322,14 @@ async def test_poll_batches(connection, admin):
     )
     await writer.flush()
 
-    new_ids = _poll_arrow_ids(scanner, expected_count=2)
+    new_ids = await _poll_arrow_ids(scanner, expected_count=2)
     assert new_ids == [7, 8]
 
     # Subscribe from mid-offset should truncate (skip earlier records)
     trunc_scanner = await table.new_scan().create_record_batch_log_scanner()
     trunc_scanner.subscribe(bucket_id=0, start_offset=3)
 
-    trunc_ids = _poll_arrow_ids(trunc_scanner, expected_count=5)
+    trunc_ids = await _poll_arrow_ids(trunc_scanner, expected_count=5)
     assert trunc_ids == [4, 5, 6, 7, 8]
 
     # Projection with batch scanner
@@ -339,7 +339,7 @@ async def test_poll_batches(connection, admin):
         .create_record_batch_log_scanner()
     )
     proj_scanner.subscribe(bucket_id=0, start_offset=0)
-    batches = proj_scanner.poll_record_batch(10000)
+    batches = await proj_scanner.poll_record_batch(10000)
     assert len(batches) > 0
     assert batches[0].batch.num_columns == 1
 
@@ -374,14 +374,14 @@ async def test_to_arrow_and_to_pandas(connection, admin):
     # to_arrow()
     scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
-    arrow_table = scanner.to_arrow()
+    arrow_table = await scanner.to_arrow()
     assert arrow_table.num_rows == 3
     assert arrow_table.schema.names == ["id", "name"]
 
     # to_pandas()
     scanner2 = await table.new_scan().create_record_batch_log_scanner()
     scanner2.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
-    df = scanner2.to_pandas()
+    df = await scanner2.to_pandas()
     assert len(df) == 3
     assert list(df.columns) == ["id", "name"]
 
@@ -499,7 +499,7 @@ async def test_partitioned_table_append_scan(connection, admin):
     all_records = []
     deadline = time.monotonic() + 10
     while len(all_records) < 8 and time.monotonic() < deadline:
-        scan_records = scanner.poll(5000)
+        scan_records = await scanner.poll(5000)
         for bucket, bucket_records in scan_records.items():
             assert bucket.partition_id is not None, "Partitioned table should have partition_id"
             # All records in a bucket should belong to the same partition
@@ -524,7 +524,7 @@ async def test_partitioned_table_append_scan(connection, admin):
         unsub_scanner.subscribe_partition(p.partition_id, 0, 0)
     unsub_scanner.unsubscribe_partition(eu_partition_id, 0)
 
-    remaining = _poll_records(unsub_scanner, expected_count=4, timeout_s=5)
+    remaining = await _poll_records(unsub_scanner, expected_count=4, timeout_s=5)
     assert len(remaining) == 4
     assert all(r.row["region"] == "US" for r in remaining)
 
@@ -535,7 +535,7 @@ async def test_partitioned_table_append_scan(connection, admin):
     }
     batch_scanner.subscribe_partition_buckets(partition_bucket_offsets)
 
-    batch_records = _poll_records(batch_scanner, expected_count=8)
+    batch_records = await _poll_records(batch_scanner, expected_count=8)
     assert len(batch_records) == 8
     batch_collected = sorted(
         [(r.row["id"], r.row["region"], r.row["value"]) for r in batch_records],
@@ -575,7 +575,7 @@ async def test_write_arrow(connection, admin):
     scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    result = scanner.to_arrow()
+    result = await scanner.to_arrow()
     assert result.num_rows == 5
 
     ids = sorted(result.column("id").to_pylist())
@@ -615,7 +615,7 @@ async def test_write_pandas(connection, admin):
     scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    result = scanner.to_pandas()
+    result = await scanner.to_pandas()
     assert len(result) == 3
 
     result_sorted = result.sort_values("id").reset_index(drop=True)
@@ -660,7 +660,7 @@ async def test_partitioned_table_to_arrow(connection, admin):
     for p in partition_infos:
         scanner.subscribe_partition(p.partition_id, 0, fluss.EARLIEST_OFFSET)
 
-    arrow_table = scanner.to_arrow()
+    arrow_table = await scanner.to_arrow()
     assert arrow_table.num_rows == 2
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
@@ -695,7 +695,7 @@ async def test_scan_records_indexing_and_slicing(connection, admin):
     sr = None
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        sr = scanner.poll(5000)
+        sr = await scanner.poll(5000)
         if len(sr) >= 2:
             break
     assert sr is not None and len(sr) >= 2, "Expected at least 2 records"
@@ -834,7 +834,7 @@ async def test_async_iterator_break_no_leak(connection, admin):
     # records in one batch. After break, the un-yielded records from that
     # batch are lost. So sync poll may return 0 records — the key assertion
     # is that poll() completes without deadlock (returns within timeout).
-    remaining = scanner.poll(2000)
+    remaining = await scanner.poll(2000)
     assert remaining is not None, "poll() should return (not deadlock)"
 
     # If we got records, verify no duplicates
@@ -1040,7 +1040,7 @@ async def test_batch_async_iterator_break_no_leak(connection, admin):
     assert first_batch.batch.num_rows > 0
 
     # Phase 2: sync poll_record_batch() must still work — proves no leak
-    remaining = batch_scanner.poll_record_batch(2000)
+    remaining = await batch_scanner.poll_record_batch(2000)
     assert remaining is not None, "poll_record_batch() should return (not deadlock)"
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
@@ -1110,22 +1110,22 @@ async def test_batch_async_iterator_multiple_batches(connection, admin):
 # ---------------------------------------------------------------------------
 
 
-def _poll_records(scanner, expected_count, timeout_s=10):
+async def _poll_records(scanner, expected_count, timeout_s=10):
     """Poll a record-based scanner until expected_count records are collected."""
     collected = []
     deadline = time.monotonic() + timeout_s
     while len(collected) < expected_count and time.monotonic() < deadline:
-        records = scanner.poll(5000)
+        records = await scanner.poll(5000)
         collected.extend(records)
     return collected
 
 
-def _poll_arrow_ids(scanner, expected_count, timeout_s=10):
+async def _poll_arrow_ids(scanner, expected_count, timeout_s=10):
     """Poll a batch scanner and extract 'id' column values."""
     all_ids = []
     deadline = time.monotonic() + timeout_s
     while len(all_ids) < expected_count and time.monotonic() < deadline:
-        arrow_table = scanner.poll_arrow(5000)
+        arrow_table = await scanner.poll_arrow(5000)
         if arrow_table.num_rows > 0:
             all_ids.extend(arrow_table.column("id").to_pylist())
     return all_ids
@@ -1176,7 +1176,7 @@ async def test_append_and_scan_with_array(connection, admin):
     # Verify via LogScanner (record-by-record)
     scanner = await table.new_scan().create_log_scanner()
     scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
-    records = _poll_records(scanner, expected_count=6)
+    records = await _poll_records(scanner, expected_count=6)
 
     assert len(records) == 6
     records.sort(key=lambda r: r.row["id"])
@@ -1200,7 +1200,7 @@ async def test_append_and_scan_with_array(connection, admin):
     # Verify via to_arrow (batch-based)
     scanner2 = await table.new_scan().create_record_batch_log_scanner()
     scanner2.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
-    result_table = scanner2.to_arrow()
+    result_table = await scanner2.to_arrow()
 
     assert result_table.num_rows == 6
     assert result_table.column("tags").to_pylist() == [
@@ -1254,7 +1254,7 @@ async def test_append_rows_with_array(connection, admin):
     num_buckets = (await admin.get_table_info(table_path)).num_buckets
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    records = _poll_records(scanner, expected_count=3)
+    records = await _poll_records(scanner, expected_count=3)
     assert len(records) == 3
 
     rows = sorted([r.row for r in records], key=lambda r: r["id"])
@@ -1296,7 +1296,7 @@ async def test_append_rows_with_nested_array(connection, admin):
     num_buckets = (await admin.get_table_info(table_path)).num_buckets
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    records = _poll_records(scanner, expected_count=5)
+    records = await _poll_records(scanner, expected_count=5)
     assert len(records) == 5
 
     rows = sorted([r.row for r in records], key=lambda r: r["id"])
