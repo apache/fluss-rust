@@ -124,12 +124,16 @@ def fluss_cluster():
     yield (plaintext_addr, sasl_addr or plaintext_addr)
 
 
-@pytest_asyncio.fixture(scope="session")
+_cached_connection = None
+
+
+@pytest_asyncio.fixture
 async def connection(fluss_cluster):
-    plaintext_addr, _sasl_addr = fluss_cluster
-    conn = await _connect(plaintext_addr)
-    yield conn
-    conn.close()
+    global _cached_connection
+    if _cached_connection is None:
+        plaintext_addr, _sasl_addr = fluss_cluster
+        _cached_connection = await _connect(plaintext_addr)
+    yield _cached_connection
 
 
 @pytest.fixture(scope="session")
@@ -144,6 +148,6 @@ def plaintext_bootstrap_servers(fluss_cluster):
     return plaintext_addr
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def admin(connection):
     return connection.get_admin()
