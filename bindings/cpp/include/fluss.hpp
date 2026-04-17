@@ -1039,6 +1039,16 @@ struct Configuration {
     std::string security_sasl_username;
     // SASL password (required when security_protocol is "sasl")
     std::string security_sasl_password;
+    // Maximum number of pending lookup operations
+    size_t lookup_queue_size{25600};
+    // Maximum batch size of merging lookup operations to one lookup request
+    size_t lookup_max_batch_size{128};
+    // Maximum time to wait for the lookup batch to fill (in milliseconds)
+    uint64_t lookup_batch_timeout_ms{100};
+    // Maximum number of unacknowledged lookup requests
+    size_t lookup_max_inflight_requests{128};
+    // Maximum number of lookup retries
+    int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
 };
 
 class Connection {

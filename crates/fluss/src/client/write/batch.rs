@@ -17,7 +17,7 @@
 
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
-use crate::compression::ArrowCompressionInfo;
+use crate::compression::{ArrowCompressionInfo, ArrowCompressionRatioEstimator};
 use crate::error::{Error, Result};
 use crate::metadata::{KvFormat, PhysicalTablePath, RowType};
 use crate::record::MemoryLogRecordsArrowBuilder;
@@ -230,6 +230,8 @@ impl ArrowLogWriteBatch {
         row_type: &RowType,
         create_ms: i64,
         to_append_record_batch: bool,
+        write_limit: usize,
+        compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
     ) -> Result<Self> {
         let base = InnerWriteBatch::new(batch_id, physical_table_path, create_ms);
         Ok(Self {
@@ -239,6 +241,8 @@ impl ArrowLogWriteBatch {
                 row_type,
                 to_append_record_batch,
                 arrow_compression_info,
+                write_limit,
+                compression_ratio_estimator,
             )?,
             built_records: None,
         })
@@ -464,6 +468,8 @@ mod tests {
                 &row_type,
                 0,
                 false,
+                2 * 1024 * 1024,
+                Arc::new(ArrowCompressionRatioEstimator::default()),
             )
             .unwrap();
 
@@ -487,7 +493,7 @@ mod tests {
             let built_data = batch.build().unwrap();
             let actual_size = built_data.len();
 
-            let diff = actual_size - estimated_size;
+            let diff = actual_size.abs_diff(estimated_size);
             let threshold = actual_size / 10; // 10% tolerance
             assert!(
                 diff <= threshold,
@@ -508,6 +514,8 @@ mod tests {
                 &row_type,
                 0,
                 true,
+                2 * 1024 * 1024,
+                Arc::new(ArrowCompressionRatioEstimator::default()),
             )
             .unwrap();
 
@@ -538,7 +546,7 @@ mod tests {
             let built_data = batch.build().unwrap();
             let actual_size = built_data.len();
 
-            let diff = actual_size - estimated_size;
+            let diff = actual_size.abs_diff(estimated_size);
             let threshold = actual_size / 10; // 10% tolerance
             assert!(
                 diff <= threshold,
@@ -585,6 +593,198 @@ mod tests {
         assert_eq!(
             actual_size, estimated_size,
             "estimated size {estimated_size} is not equal to actual size"
+        );
+    }
+
+    /// Verifies byte-size-based fullness:
+    /// 1. Actual built size stays within the configured limit (no compression).
+    /// 2. Old 256-record cap is gone — large batches accept >256 small rows.
+    /// 3. Compression feedback loop: shared estimator updates after build(),
+    ///    second batch with same estimator accepts more records.
+    #[test]
+    fn test_arrow_batch_byte_size_fullness() {
+        use crate::client::WriteRecord;
+        use crate::compression::{
+            ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
+            DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+        };
+        use crate::metadata::{DataField, DataTypes, RowType};
+        use crate::row::GenericRow;
+        use std::sync::Arc;
+
+        let row_type = RowType::new(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        // --- Part 1: actual built size stays within limit (uncompressed) ---
+        let write_limit: usize = 16 * 1024;
+        let mut batch = ArrowLogWriteBatch::new(
+            1,
+            Arc::clone(&physical_table_path),
+            1,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            &row_type,
+            0,
+            false,
+            write_limit,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )
+        .unwrap();
+
+        let mut appended = 0;
+        for i in 0..100_000 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, i);
+            row.set_field(1, "hello_world");
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_table_path),
+                1,
+                &row,
+            );
+            match batch.try_append(&record).unwrap() {
+                Some(_) => appended += 1,
+                None => break,
+            }
+        }
+
+        assert!(
+            appended > 0 && appended < 100_000,
+            "batch should have filled, appended: {appended}"
+        );
+        let built = batch.build().unwrap();
+        assert!(
+            built.len() <= write_limit * 120 / 100,
+            "actual size {} exceeds write_limit {write_limit} by more than 20%",
+            built.len()
+        );
+
+        // --- Part 2: old 256-record cap is gone ---
+        let row_type_small = RowType::new(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let mut batch = ArrowLogWriteBatch::new(
+            2,
+            Arc::clone(&physical_table_path),
+            1,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            &row_type_small,
+            0,
+            false,
+            2 * 1024 * 1024,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )
+        .unwrap();
+
+        let mut appended = 0;
+        for i in 0..1000 {
+            let mut row = GenericRow::new(1);
+            row.set_field(0, i);
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_table_path),
+                1,
+                &row,
+            );
+            match batch.try_append(&record).unwrap() {
+                Some(_) => appended += 1,
+                None => break,
+            }
+        }
+        assert_eq!(appended, 1000, "2MB batch should fit 1000 tiny rows");
+
+        // --- Part 3: compression feedback loop ---
+        let estimator = Arc::new(ArrowCompressionRatioEstimator::default());
+        assert_eq!(estimator.estimation(), 1.0);
+
+        let write_limit = 64 * 1024;
+        let compression = ArrowCompressionInfo {
+            compression_type: ArrowCompressionType::Zstd,
+            compression_level: 3,
+        };
+
+        // First batch: fill and build with ZSTD.
+        let mut batch1 = ArrowLogWriteBatch::new(
+            3,
+            Arc::clone(&physical_table_path),
+            1,
+            compression.clone(),
+            &row_type,
+            0,
+            false,
+            write_limit,
+            Arc::clone(&estimator),
+        )
+        .unwrap();
+
+        for i in 0..500 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, i);
+            row.set_field(1, "aaaaaaaaaaaaaaaa");
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_table_path),
+                1,
+                &row,
+            );
+            if batch1.try_append(&record).unwrap().is_none() {
+                break;
+            }
+        }
+        batch1.build().unwrap();
+
+        // Estimator should have decreased (ZSTD compresses repeated data well).
+        assert!(
+            estimator.estimation() < 1.0,
+            "ratio should decrease after compressed build, got: {}",
+            estimator.estimation()
+        );
+
+        // Second batch: same estimator → knows data compresses well → accepts more rows.
+        let mut batch2 = ArrowLogWriteBatch::new(
+            4,
+            Arc::clone(&physical_table_path),
+            1,
+            compression,
+            &row_type,
+            0,
+            false,
+            write_limit,
+            Arc::clone(&estimator),
+        )
+        .unwrap();
+
+        let mut appended2 = 0;
+        for i in 0..10_000 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, i);
+            row.set_field(1, "aaaaaaaaaaaaaaaa");
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_table_path),
+                1,
+                &row,
+            );
+            match batch2.try_append(&record).unwrap() {
+                Some(_) => appended2 += 1,
+                None => break,
+            }
+        }
+        assert!(
+            appended2 > 500,
+            "second batch should accept more records with updated ratio, got: {appended2}"
         );
     }
 }

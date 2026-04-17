@@ -165,6 +165,30 @@ pub struct Config {
     #[arg(long, default_value_t = String::new())]
     #[serde(skip_serializing)]
     pub security_sasl_password: String,
+    /// Maximum number of pending lookup operations
+    /// Default: 25600 (matching Java CLIENT_LOOKUP_QUEUE_SIZE)
+    #[arg(long, default_value_t = 25600)]
+    pub lookup_queue_size: usize,
+
+    /// Maximum batch size of merging lookup operations to one lookup request
+    /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_BATCH_SIZE)
+    #[arg(long, default_value_t = 128)]
+    pub lookup_max_batch_size: usize,
+
+    /// Maximum time to wait for the lookup batch to fill (in milliseconds)
+    /// Default: 100 (matching Java CLIENT_LOOKUP_BATCH_TIMEOUT)
+    #[arg(long, default_value_t = 100)]
+    pub lookup_batch_timeout_ms: u64,
+
+    /// Maximum number of unacknowledged lookup requests
+    /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_INFLIGHT_SIZE)
+    #[arg(long, default_value_t = 128)]
+    pub lookup_max_inflight_requests: usize,
+
+    /// Maximum number of lookup retries
+    /// Default: i32::MAX (matching Java CLIENT_LOOKUP_MAX_RETRIES)
+    #[arg(long, default_value_t = i32::MAX)]
+    pub lookup_max_retries: i32,
 }
 
 impl std::fmt::Debug for Config {
@@ -223,6 +247,14 @@ impl std::fmt::Debug for Config {
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
             .field("security_sasl_username", &self.security_sasl_username)
             .field("security_sasl_password", &"[REDACTED]")
+            .field("lookup_queue_size", &self.lookup_queue_size)
+            .field("lookup_max_batch_size", &self.lookup_max_batch_size)
+            .field("lookup_batch_timeout_ms", &self.lookup_batch_timeout_ms)
+            .field(
+                "lookup_max_inflight_requests",
+                &self.lookup_max_inflight_requests,
+            )
+            .field("lookup_max_retries", &self.lookup_max_retries)
             .finish()
     }
 }
@@ -255,6 +287,11 @@ impl Default for Config {
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
             security_sasl_username: String::new(),
             security_sasl_password: String::new(),
+            lookup_queue_size: 25600,
+            lookup_max_batch_size: 128,
+            lookup_batch_timeout_ms: 100,
+            lookup_max_inflight_requests: 128,
+            lookup_max_retries: i32::MAX,
         }
     }
 }

@@ -17,6 +17,7 @@ The Python client uses PyArrow types for schema definitions:
 | `pa.timestamp("us")`                            | Timestamp (NTZ)                   | `datetime.datetime` |
 | `pa.timestamp("us", tz="UTC")`                  | TimestampLTZ                      | `datetime.datetime` |
 | `pa.decimal128(precision, scale)`               | Decimal                           | `decimal.Decimal`   |
+| `pa.list_(type)`                                  | Array                             | `list`              |
 
 All Python native types (`date`, `time`, `datetime`, `Decimal`) work when appending rows via dicts.
 
@@ -38,6 +39,8 @@ row = {
     "login_time": time(9, 30, 0),
     "created_at": datetime(2024, 1, 1, 0, 0, 0),
     "nickname": None,  # null value
+    "tags": ["active", "premium"],  # Array of strings
+    "scores": [10, None, 30],       # Array with null values
 }
 handle = writer.append(row)
 ```

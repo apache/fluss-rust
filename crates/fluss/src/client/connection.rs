@@ -17,6 +17,7 @@
 
 use crate::client::WriterClient;
 use crate::client::admin::FlussAdmin;
+use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
 use crate::client::table::FlussTable;
 use crate::config::Config;
@@ -33,6 +34,7 @@ pub struct FlussConnection {
     args: Config,
     writer_client: RwLock<Option<Arc<WriterClient>>>,
     admin_client: RwLock<Option<Arc<FlussAdmin>>>,
+    lookup_client: RwLock<Option<Arc<LookupClient>>>,
 }
 
 impl FlussConnection {
@@ -63,6 +65,7 @@ impl FlussConnection {
             args: arg.clone(),
             writer_client: Default::default(),
             admin_client: RwLock::new(None),
+            lookup_client: Default::default(),
         })
     }
 
@@ -134,6 +137,30 @@ impl FlussConnection {
 
         // 5. Store and return the newly created client.
         *writer_guard = Some(new_client.clone());
+        Ok(new_client)
+    }
+
+    /// Gets or creates a lookup client for batched lookup operations.
+    pub fn get_or_create_lookup_client(&self) -> Result<Arc<LookupClient>> {
+        // 1. Fast path: Attempt to acquire a read lock to check if the client already exists.
+        if let Some(client) = self.lookup_client.read().as_ref() {
+            return Ok(client.clone());
+        }
+
+        // 2. Slow path: Acquire the write lock.
+        let mut lookup_guard = self.lookup_client.write();
+
+        // 3. Double-check: Another thread might have initialized the client
+        // while this thread was waiting for the write lock.
+        if let Some(client) = lookup_guard.as_ref() {
+            return Ok(client.clone());
+        }
+
+        // 4. Initialize the client since we are certain it doesn't exist yet.
+        let new_client = Arc::new(LookupClient::new(&self.args, self.metadata.clone()));
+
+        // 5. Store and return the newly created client.
+        *lookup_guard = Some(new_client.clone());
         Ok(new_client)
     }
 

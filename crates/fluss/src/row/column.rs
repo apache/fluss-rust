@@ -416,15 +416,17 @@ impl InternalRow for ColumnarRow {
         use crate::row::binary_array::FlussArrayWriter;
 
         let column = self.column(pos)?;
-        let list_array =
-            column
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .ok_or_else(|| IllegalArgument {
-                    message: format!("expected List array at position {pos}"),
-                })?;
+        let values = if let Some(list_arr) = column.as_any().downcast_ref::<ListArray>() {
+            list_arr.value(self.row_id)
+        } else {
+            return Err(IllegalArgument {
+                message: format!(
+                    "expected List array at position {pos}, got {:?}",
+                    column.data_type()
+                ),
+            });
+        };
 
-        let values = list_array.value(self.row_id);
         let element_fluss_type = from_arrow_type(values.data_type())?;
         let mut writer = FlussArrayWriter::new(values.len(), &element_fluss_type);
 
@@ -473,6 +475,39 @@ macro_rules! write_downcast_elements {
                 $writer.set_null_at(i);
             } else {
                 $writer.$write_method(i, arr.value(i));
+            }
+        }
+    }};
+}
+
+/// Downcast via `downcast_ref` to a List array type, then loop with null checks.
+macro_rules! write_list_elements {
+    ($values:expr, $list_array_type:ty, $len:expr, $element_type:expr, $writer:expr) => {{
+        let arr = $values
+            .as_any()
+            .downcast_ref::<$list_array_type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "Expected {} for {:?} element",
+                    stringify!($list_array_type),
+                    $element_type
+                ),
+            })?;
+        let nested_element_type = from_arrow_type(&arr.value_type())?;
+        for i in 0..$len {
+            if arr.is_null(i) {
+                $writer.set_null_at(i);
+            } else {
+                let nested_values = arr.value(i);
+                let mut nested_writer =
+                    FlussArrayWriter::new(nested_values.len(), &nested_element_type);
+                write_arrow_values_to_fluss_array(
+                    &*nested_values,
+                    &nested_element_type,
+                    &mut nested_writer,
+                )?;
+                let nested_array = nested_writer.complete()?;
+                $writer.write_array(i, &nested_array);
             }
         }
     }};
@@ -607,29 +642,15 @@ fn write_arrow_values_to_fluss_array(
             )?;
         }
         DataType::Array(_) => {
-            let list_arr =
-                values
-                    .as_any()
-                    .downcast_ref::<ListArray>()
-                    .ok_or_else(|| IllegalArgument {
-                        message: format!("Expected ListArray for {element_type:?} element"),
-                    })?;
-            let nested_element_type = from_arrow_type(&list_arr.value_type())?;
-            for i in 0..len {
-                if list_arr.is_null(i) {
-                    writer.set_null_at(i);
-                } else {
-                    let nested_values = list_arr.value(i);
-                    let mut nested_writer =
-                        FlussArrayWriter::new(nested_values.len(), &nested_element_type);
-                    write_arrow_values_to_fluss_array(
-                        &*nested_values,
-                        &nested_element_type,
-                        &mut nested_writer,
-                    )?;
-                    let nested_array = nested_writer.complete()?;
-                    writer.write_array(i, &nested_array);
-                }
+            if values.as_any().is::<ListArray>() {
+                write_list_elements!(values, ListArray, len, element_type, writer);
+            } else {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Expected ListArray for {element_type:?} element, got {:?}",
+                        values.data_type()
+                    ),
+                });
             }
         }
         _ => {

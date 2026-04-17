@@ -47,10 +47,10 @@ jobs:
     env:
       FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/target/debug/fluss-test-cluster
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
 
@@ -61,15 +61,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Rust Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: python-test-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            python-test-${{ runner.os }}-${{ matrix.python }}-
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
@@ -78,11 +70,11 @@ jobs:
         working-directory: bindings/python
         run: |
           uv sync --extra dev --no-install-project
-          uv run maturin develop
+          uv run --no-sync maturin develop --uv
 
       - name: Run tests (parallel)
         working-directory: bindings/python
-        run: uv run pytest test/ -v -n auto
+        run: uv run --no-sync pytest test/ -v -n auto
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
