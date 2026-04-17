@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::bucketing::BucketingFunction;
+use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
 use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
@@ -25,9 +26,6 @@ use crate::record::kv::SCHEMA_ID_LENGTH;
 use crate::row::InternalRow;
 use crate::row::compacted::CompactedRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
-use crate::rpc::ApiError;
-use crate::rpc::RpcClient;
-use crate::rpc::message::LookupRequest;
 use arrow::array::RecordBatch;
 use std::sync::Arc;
 
@@ -148,19 +146,19 @@ impl LookupResult {
 // TODO: Add lookup_by(column_names) for prefix key lookups (PrefixKeyLookuper)
 // TODO: Add create_typed_lookuper<T>() for typed lookups with POJO mapping
 pub struct TableLookup {
-    rpc_client: Arc<RpcClient>,
+    lookup_client: Arc<LookupClient>,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
 }
 
 impl TableLookup {
     pub(super) fn new(
-        rpc_client: Arc<RpcClient>,
+        lookup_client: Arc<LookupClient>,
         table_info: TableInfo,
         metadata: Arc<Metadata>,
     ) -> Self {
         Self {
-            rpc_client,
+            lookup_client,
             table_info,
             metadata,
         }
@@ -170,6 +168,10 @@ impl TableLookup {
     ///
     /// The lookuper will automatically encode the key and compute the bucket
     /// for each lookup using the appropriate bucketing function.
+    ///
+    /// The lookuper uses a shared `LookupClient` that batches multiple lookup
+    /// operations together to reduce network round trips. This achieves parity
+    /// with the Java client implementation for improved throughput.
     pub fn create_lookuper(self) -> Result<Lookuper> {
         let num_buckets = self.table_info.get_num_buckets();
 
@@ -206,12 +208,13 @@ impl TableLookup {
         };
 
         let row_type = Arc::new(self.table_info.row_type().clone());
+
         Ok(Lookuper {
-            rpc_client: self.rpc_client,
             table_path: Arc::new(self.table_info.table_path.clone()),
             row_type,
             table_info: self.table_info,
             metadata: self.metadata,
+            lookup_client: self.lookup_client,
             bucketing_function,
             primary_key_encoder,
             bucket_key_encoder,
@@ -224,7 +227,7 @@ impl TableLookup {
 /// Performs key-based lookups against a primary key table.
 ///
 /// The `Lookuper` automatically encodes the lookup key, computes the target
-/// bucket, finds the appropriate tablet server, and retrieves the value.
+/// bucket, and retrieves the value using the batched `LookupClient`.
 ///
 /// # Example
 /// ```ignore
@@ -233,11 +236,11 @@ impl TableLookup {
 /// let result = lookuper.lookup(&row).await?;
 /// ```
 pub struct Lookuper {
-    rpc_client: Arc<RpcClient>,
+    table_path: Arc<TablePath>,
     table_info: TableInfo,
     row_type: Arc<RowType>,
-    table_path: Arc<TablePath>,
     metadata: Arc<Metadata>,
+    lookup_client: Arc<LookupClient>,
     bucketing_function: Box<dyn BucketingFunction>,
     primary_key_encoder: Box<dyn KeyEncoder>,
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
@@ -249,7 +252,8 @@ impl Lookuper {
     /// Looks up a value by its primary key.
     ///
     /// The key is encoded and the bucket is automatically computed using
-    /// the table's bucketing function.
+    /// the table's bucketing function. The lookup is queued and batched
+    /// with other lookups for improved throughput.
     ///
     /// # Arguments
     /// * `row` - The row containing the primary key field values
@@ -258,12 +262,10 @@ impl Lookuper {
     /// * `Ok(LookupResult)` - The lookup result (may be empty if key not found)
     /// * `Err(Error)` - If the lookup fails
     pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
-        // todo: support batch lookup
         let pk_bytes = self.primary_key_encoder.encode_key(row)?;
-        let pk_bytes_vec = pk_bytes.to_vec();
         let bk_bytes = match &mut self.bucket_key_encoder {
-            Some(encoder) => &encoder.encode_key(row)?,
-            None => &pk_bytes,
+            Some(encoder) => encoder.encode_key(row)?,
+            None => pk_bytes.clone(),
         };
 
         let partition_id = if let Some(ref partition_getter) = self.partition_getter {
@@ -286,53 +288,24 @@ impl Lookuper {
 
         let bucket_id = self
             .bucketing_function
-            .bucketing(bk_bytes, self.num_buckets)?;
+            .bucketing(&bk_bytes, self.num_buckets)?;
 
         let table_id = self.table_info.get_table_id();
         let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
 
-        // Find the leader for this bucket
-        let leader = self
-            .metadata
-            .leader_for(self.table_path.as_ref(), &table_bucket)
-            .await?
-            .ok_or_else(|| {
-                Error::leader_not_available(format!(
-                    "No leader found for table bucket: {table_bucket}"
-                ))
-            })?;
+        // Use the batched lookup client
+        let result = self
+            .lookup_client
+            .lookup(self.table_path.as_ref().clone(), table_bucket, pk_bytes)
+            .await?;
 
-        let connection = self.rpc_client.get_connection(&leader).await?;
-
-        // Send lookup request
-        let request = LookupRequest::new(table_id, partition_id, bucket_id, vec![pk_bytes_vec]);
-        let response = connection.request(request).await?;
-
-        // Extract the values from response
-        if let Some(bucket_resp) = response.buckets_resp.into_iter().next() {
-            // Check for errors
-            if let Some(error_code) = bucket_resp.error_code {
-                if error_code != 0 {
-                    return Err(Error::FlussAPIError {
-                        api_error: ApiError {
-                            code: error_code,
-                            message: bucket_resp.error_message.unwrap_or_default(),
-                        },
-                    });
-                }
-            }
-
-            // Collect all values
-            let rows: Vec<Vec<u8>> = bucket_resp
-                .values
-                .into_iter()
-                .filter_map(|pb_value| pb_value.values)
-                .collect();
-
-            return Ok(LookupResult::new(rows, Arc::clone(&self.row_type)));
+        match result {
+            Some(value_bytes) => Ok(LookupResult::new(
+                vec![value_bytes],
+                Arc::clone(&self.row_type),
+            )),
+            None => Ok(LookupResult::empty(Arc::clone(&self.row_type))),
         }
-
-        Ok(LookupResult::empty(Arc::clone(&self.row_type)))
     }
 
     /// Returns a reference to the table info.
