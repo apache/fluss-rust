@@ -1047,10 +1047,14 @@ mod kv_table_test {
                 row.set_field(0, i);
                 row.set_field(1, format!("name_{}", i));
                 row.set_field(2, (i * 100) as i64);
-                writer.upsert(&row).expect("Failed to upsert");
+                writer
+                    .upsert(&row)
+                    .expect("Failed to upsert")
+                    .await
+                    .expect("Failed to await upsert ack");
             });
         }
-        // Wait for all upserts to complete
+        // Wait for all upserts to be acknowledged
         while upsert_futures.next().await.is_some() {}
 
         // Create multiple lookupers for concurrent lookups
