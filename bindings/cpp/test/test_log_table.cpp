@@ -1192,8 +1192,9 @@ TEST_F(LogTableTest, ArrayApiValidationErrors) {
     auto append_writer = table.NewAppend().CreateWriter();
     auto row = table.NewRow();
     row.Set("id", 1);
-    fluss::ArrayWriter vals(1, fluss::DataType::Int());
+    fluss::ArrayWriter vals(2, fluss::DataType::Int());
     vals.SetInt32(0, 7);
+    vals.SetNull(1);
     row.SetArray(1, std::move(vals));
     ASSERT_OK(append_writer.AppendRow(row));
     ASSERT_OK(append_writer.Flush());
@@ -1216,6 +1217,42 @@ TEST_F(LogTableTest, ArrayApiValidationErrors) {
         oob_threw = true;
     }
     EXPECT_TRUE(oob_threw);
+
+    bool wrong_type_threw = false;
+    try {
+        (void)rec.row.GetArrayInt64(1, 0);
+    } catch (const std::exception&) {
+        wrong_type_threw = true;
+    }
+    EXPECT_TRUE(wrong_type_threw);
+
+    bool null_typed_getter_threw = false;
+    try {
+        (void)rec.row.GetArrayInt32(1, 1);
+    } catch (const std::exception&) {
+        null_typed_getter_threw = true;
+    }
+    EXPECT_TRUE(null_typed_getter_threw);
+
+    auto view = rec.row.GetArrayView(1);
+    EXPECT_EQ(view.Size(), 2u);
+    EXPECT_TRUE(view.IsNull(1));
+
+    bool view_wrong_type_threw = false;
+    try {
+        (void)view.GetInt64(0);
+    } catch (const std::exception&) {
+        view_wrong_type_threw = true;
+    }
+    EXPECT_TRUE(view_wrong_type_threw);
+
+    bool view_null_typed_getter_threw = false;
+    try {
+        (void)view.GetInt32(1);
+    } catch (const std::exception&) {
+        view_null_typed_getter_threw = true;
+    }
+    EXPECT_TRUE(view_null_typed_getter_threw);
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }

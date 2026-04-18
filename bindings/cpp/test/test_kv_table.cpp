@@ -234,6 +234,86 @@ TEST_F(KvTableTest, LookupWithNestedArrayArrayView) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
+TEST_F(KvTableTest, LookupArrayValidationErrors) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_lookup_array_validation_errors_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("vals", fluss::DataType::Array(fluss::DataType::Int()))
+                      .SetPrimaryKeys({"id"})
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto upsert = table.NewUpsert();
+    fluss::UpsertWriter writer;
+    ASSERT_OK(upsert.CreateWriter(writer));
+
+    auto row = table.NewRow();
+    row.Set("id", 1);
+    fluss::ArrayWriter vals(2, fluss::DataType::Int());
+    vals.SetInt32(0, 99);
+    vals.SetNull(1);
+    row.SetArray("vals", std::move(vals));
+    ASSERT_OK(writer.Upsert(row));
+    ASSERT_OK(writer.Flush());
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+
+    auto key = table.NewRow();
+    key.Set("id", 1);
+    fluss::LookupResult result;
+    ASSERT_OK(lookuper.Lookup(key, result));
+    ASSERT_TRUE(result.Found());
+
+    bool wrong_type_threw = false;
+    try {
+        (void)result.GetArrayInt64("vals", 0);
+    } catch (const std::exception&) {
+        wrong_type_threw = true;
+    }
+    EXPECT_TRUE(wrong_type_threw);
+
+    bool null_typed_getter_threw = false;
+    try {
+        (void)result.GetArrayInt32("vals", 1);
+    } catch (const std::exception&) {
+        null_typed_getter_threw = true;
+    }
+    EXPECT_TRUE(null_typed_getter_threw);
+
+    auto view = result.GetArrayView("vals");
+    EXPECT_EQ(view.Size(), 2u);
+    EXPECT_TRUE(view.IsNull(1));
+
+    bool view_wrong_type_threw = false;
+    try {
+        (void)view.GetInt64(0);
+    } catch (const std::exception&) {
+        view_wrong_type_threw = true;
+    }
+    EXPECT_TRUE(view_wrong_type_threw);
+
+    bool view_null_typed_getter_threw = false;
+    try {
+        (void)view.GetInt32(1);
+    } catch (const std::exception&) {
+        view_null_typed_getter_threw = true;
+    }
+    EXPECT_TRUE(view_null_typed_getter_threw);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
 TEST_F(KvTableTest, CompositePrimaryKeys) {
     auto& adm = admin();
     auto& conn = connection();

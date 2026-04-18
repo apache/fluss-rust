@@ -2093,11 +2093,9 @@ impl GenericRowInner {
     fn gr_set_array(&mut self, idx: usize, writer: &mut ArrayWriterInner) -> Result<(), String> {
         self.ensure_size(idx);
         writer.complete_if_needed()?;
-        // After `complete_if_needed()?` succeeds, `completed` is guaranteed `Some`.
-        let arr = writer
-            .completed
-            .take()
-            .expect("ArrayWriterInner::completed should be populated after complete_if_needed");
+        let arr = writer.completed.take().ok_or_else(|| {
+            "ArrayWriter invariant violation: completed array missing after finalize".to_string()
+        })?;
         self.row.set_field(idx, fcore::row::Datum::Array(arr));
         Ok(())
     }
@@ -2447,8 +2445,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<bool, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_bool(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_bool(&arr, elem, element)
     }
 
     pub fn get_array_i32(
@@ -2467,8 +2465,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<i64, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_i64(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_i64(&arr, elem, element)
     }
 
     pub fn get_array_f32(
@@ -2477,8 +2475,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<f32, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_f32(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_f32(&arr, elem, element)
     }
 
     pub fn get_array_f64(
@@ -2487,8 +2485,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<f64, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_f64(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_f64(&arr, elem, element)
     }
 
     pub fn get_array_str(
@@ -2497,8 +2495,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<String, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_str(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_str(&arr, elem, element)
     }
 
     pub fn get_array_bytes(
@@ -2507,8 +2505,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<Vec<u8>, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_bytes(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_bytes(&arr, elem, element)
     }
 
     pub fn get_array_date_days(
@@ -2517,8 +2515,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<i32, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_date_days(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_date_days(&arr, elem, element)
     }
 
     pub fn get_array_time_millis(
@@ -2527,8 +2525,8 @@ mod row_reader {
         field: usize,
         element: usize,
     ) -> Result<i32, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::get_time_millis(&arr, element)
+        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
+        array_reader::get_time_millis(&arr, elem, element)
     }
 
     pub fn get_array_ts_millis(
@@ -2575,8 +2573,8 @@ mod row_reader {
 //
 // Shared by the top-level `row_reader::get_array_*` wrappers and by
 // `ArrayViewInner` (which exposes recursive/nested access to C++). Keeping
-// one implementation here guarantees identical bounds-checking, error
-// messages, and type dispatch across flat and nested reads.
+// one implementation here guarantees identical bounds-checking, null
+// validation, type checking, and type dispatch across flat and nested reads.
 // ============================================================================
 
 mod array_reader {
@@ -2597,6 +2595,48 @@ mod array_reader {
         }
     }
 
+    fn ensure_non_null(
+        arr: &fcore::row::binary_array::FlussArray,
+        element: usize,
+        op: &str,
+    ) -> Result<(), String> {
+        if arr.is_null_at(element) {
+            Err(format!(
+                "{op}: element at index {element} is null; call array_is_null first"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_type(
+        elem_type: &fcore::metadata::DataType,
+        op: &str,
+        expected: &str,
+        allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
+    ) -> Result<(), String> {
+        if allowed(elem_type) {
+            Ok(())
+        } else {
+            Err(format!(
+                "{op}: element type is {elem_type}, expected {expected}"
+            ))
+        }
+    }
+
+    fn ensure_readable(
+        arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
+        element: usize,
+        op: &str,
+        expected: &str,
+        allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
+    ) -> Result<(), String> {
+        validate_index(arr, element, op)?;
+        ensure_type(elem_type, op, expected, allowed)?;
+        ensure_non_null(arr, element, op)
+    }
+
     pub fn is_null(
         arr: &fcore::row::binary_array::FlussArray,
         element: usize,
@@ -2607,9 +2647,12 @@ mod array_reader {
 
     pub fn get_bool(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<bool, String> {
-        validate_index(arr, element, "array_bool")?;
+        ensure_readable(arr, elem_type, element, "array_bool", "BOOLEAN", |dt| {
+            matches!(dt, fcore::metadata::DataType::Boolean(_))
+        })?;
         arr.get_boolean(element).map_err(|e| e.to_string())
     }
 
@@ -2618,7 +2661,21 @@ mod array_reader {
         elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<i32, String> {
-        validate_index(arr, element, "array_i32")?;
+        ensure_readable(
+            arr,
+            elem_type,
+            element,
+            "array_i32",
+            "TINYINT/SMALLINT/INT",
+            |dt| {
+                matches!(
+                    dt,
+                    fcore::metadata::DataType::TinyInt(_)
+                        | fcore::metadata::DataType::SmallInt(_)
+                        | fcore::metadata::DataType::Int(_)
+                )
+            },
+        )?;
         match elem_type {
             fcore::metadata::DataType::TinyInt(_) => arr
                 .get_byte(element)
@@ -2628,39 +2685,55 @@ mod array_reader {
                 .get_short(element)
                 .map(|v| v as i32)
                 .map_err(|e| e.to_string()),
-            _ => arr.get_int(element).map_err(|e| e.to_string()),
+            fcore::metadata::DataType::Int(_) => arr.get_int(element).map_err(|e| e.to_string()),
+            _ => unreachable!("type validated by ensure_readable"),
         }
     }
 
     pub fn get_i64(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<i64, String> {
-        validate_index(arr, element, "array_i64")?;
+        ensure_readable(arr, elem_type, element, "array_i64", "BIGINT", |dt| {
+            matches!(dt, fcore::metadata::DataType::BigInt(_))
+        })?;
         arr.get_long(element).map_err(|e| e.to_string())
     }
 
     pub fn get_f32(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<f32, String> {
-        validate_index(arr, element, "array_f32")?;
+        ensure_readable(arr, elem_type, element, "array_f32", "FLOAT", |dt| {
+            matches!(dt, fcore::metadata::DataType::Float(_))
+        })?;
         arr.get_float(element).map_err(|e| e.to_string())
     }
 
     pub fn get_f64(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<f64, String> {
-        validate_index(arr, element, "array_f64")?;
+        ensure_readable(arr, elem_type, element, "array_f64", "DOUBLE", |dt| {
+            matches!(dt, fcore::metadata::DataType::Double(_))
+        })?;
         arr.get_double(element).map_err(|e| e.to_string())
     }
 
     pub fn get_str(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<String, String> {
-        validate_index(arr, element, "array_str")?;
+        ensure_readable(arr, elem_type, element, "array_str", "STRING/CHAR", |dt| {
+            matches!(
+                dt,
+                fcore::metadata::DataType::String(_) | fcore::metadata::DataType::Char(_)
+            )
+        })?;
         arr.get_string(element)
             .map(|s| s.to_string())
             .map_err(|e| e.to_string())
@@ -2668,9 +2741,22 @@ mod array_reader {
 
     pub fn get_bytes(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<Vec<u8>, String> {
-        validate_index(arr, element, "array_bytes")?;
+        ensure_readable(
+            arr,
+            elem_type,
+            element,
+            "array_bytes",
+            "BYTES/BINARY",
+            |dt| {
+                matches!(
+                    dt,
+                    fcore::metadata::DataType::Bytes(_) | fcore::metadata::DataType::Binary(_)
+                )
+            },
+        )?;
         arr.get_binary(element)
             .map(|b| b.to_vec())
             .map_err(|e| e.to_string())
@@ -2678,9 +2764,12 @@ mod array_reader {
 
     pub fn get_date_days(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<i32, String> {
-        validate_index(arr, element, "array_date")?;
+        ensure_readable(arr, elem_type, element, "array_date", "DATE", |dt| {
+            matches!(dt, fcore::metadata::DataType::Date(_))
+        })?;
         arr.get_date(element)
             .map(|d| d.get_inner())
             .map_err(|e| e.to_string())
@@ -2688,9 +2777,12 @@ mod array_reader {
 
     pub fn get_time_millis(
         arr: &fcore::row::binary_array::FlussArray,
+        elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<i32, String> {
-        validate_index(arr, element, "array_time")?;
+        ensure_readable(arr, elem_type, element, "array_time", "TIME", |dt| {
+            matches!(dt, fcore::metadata::DataType::Time(_))
+        })?;
         arr.get_time(element)
             .map(|t| t.get_inner())
             .map_err(|e| e.to_string())
@@ -2701,7 +2793,20 @@ mod array_reader {
         elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<i64, String> {
-        validate_index(arr, element, "array_ts_millis")?;
+        ensure_readable(
+            arr,
+            elem_type,
+            element,
+            "array_ts_millis",
+            "TIMESTAMP/TIMESTAMP_LTZ",
+            |dt| {
+                matches!(
+                    dt,
+                    fcore::metadata::DataType::Timestamp(_)
+                        | fcore::metadata::DataType::TimestampLTz(_)
+                )
+            },
+        )?;
         match elem_type {
             fcore::metadata::DataType::TimestampLTz(ts) => arr
                 .get_timestamp_ltz(element, ts.precision())
@@ -2711,9 +2816,7 @@ mod array_reader {
                 .get_timestamp_ntz(element, ts.precision())
                 .map(|v| v.get_millisecond())
                 .map_err(|e| e.to_string()),
-            dt => Err(format!(
-                "array_ts_millis: element type is {dt}, not timestamp"
-            )),
+            _ => unreachable!("type validated by ensure_readable"),
         }
     }
 
@@ -2722,7 +2825,20 @@ mod array_reader {
         elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<i32, String> {
-        validate_index(arr, element, "array_ts_nanos")?;
+        ensure_readable(
+            arr,
+            elem_type,
+            element,
+            "array_ts_nanos",
+            "TIMESTAMP/TIMESTAMP_LTZ",
+            |dt| {
+                matches!(
+                    dt,
+                    fcore::metadata::DataType::Timestamp(_)
+                        | fcore::metadata::DataType::TimestampLTz(_)
+                )
+            },
+        )?;
         match elem_type {
             fcore::metadata::DataType::TimestampLTz(ts) => arr
                 .get_timestamp_ltz(element, ts.precision())
@@ -2732,9 +2848,7 @@ mod array_reader {
                 .get_timestamp_ntz(element, ts.precision())
                 .map(|v| v.get_nano_of_millisecond())
                 .map_err(|e| e.to_string()),
-            dt => Err(format!(
-                "array_ts_nanos: element type is {dt}, not timestamp"
-            )),
+            _ => unreachable!("type validated by ensure_readable"),
         }
     }
 
@@ -2743,7 +2857,9 @@ mod array_reader {
         elem_type: &fcore::metadata::DataType,
         element: usize,
     ) -> Result<String, String> {
-        validate_index(arr, element, "array_decimal")?;
+        ensure_readable(arr, elem_type, element, "array_decimal", "DECIMAL", |dt| {
+            matches!(dt, fcore::metadata::DataType::Decimal(_))
+        })?;
         match elem_type {
             fcore::metadata::DataType::Decimal(dd) => {
                 let decimal = arr
@@ -2751,7 +2867,7 @@ mod array_reader {
                     .map_err(|e| e.to_string())?;
                 Ok(decimal.to_big_decimal().to_string())
             }
-            dt => Err(format!("array_decimal: element type is {dt}, not decimal")),
+            _ => unreachable!("type validated by ensure_readable"),
         }
     }
 
@@ -2766,13 +2882,15 @@ mod array_reader {
         ),
         String,
     > {
-        validate_index(arr, element, "array_nested")?;
+        ensure_readable(arr, elem_type, element, "array_nested", "ARRAY", |dt| {
+            matches!(dt, fcore::metadata::DataType::Array(_))
+        })?;
         match elem_type {
             fcore::metadata::DataType::Array(at) => {
                 let nested = arr.get_array(element).map_err(|e| e.to_string())?;
                 Ok((nested, at.get_element_type().clone()))
             }
-            dt => Err(format!("array_nested: element type is {dt}, not array")),
+            _ => unreachable!("type validated by ensure_readable"),
         }
     }
 }
@@ -3143,7 +3261,7 @@ impl ArrayViewInner {
     }
 
     fn av_get_bool(&self, element: usize) -> Result<bool, String> {
-        array_reader::get_bool(&self.array, element)
+        array_reader::get_bool(&self.array, &self.element_type, element)
     }
 
     fn av_get_i32(&self, element: usize) -> Result<i32, String> {
@@ -3151,31 +3269,31 @@ impl ArrayViewInner {
     }
 
     fn av_get_i64(&self, element: usize) -> Result<i64, String> {
-        array_reader::get_i64(&self.array, element)
+        array_reader::get_i64(&self.array, &self.element_type, element)
     }
 
     fn av_get_f32(&self, element: usize) -> Result<f32, String> {
-        array_reader::get_f32(&self.array, element)
+        array_reader::get_f32(&self.array, &self.element_type, element)
     }
 
     fn av_get_f64(&self, element: usize) -> Result<f64, String> {
-        array_reader::get_f64(&self.array, element)
+        array_reader::get_f64(&self.array, &self.element_type, element)
     }
 
     fn av_get_str(&self, element: usize) -> Result<String, String> {
-        array_reader::get_str(&self.array, element)
+        array_reader::get_str(&self.array, &self.element_type, element)
     }
 
     fn av_get_bytes(&self, element: usize) -> Result<Vec<u8>, String> {
-        array_reader::get_bytes(&self.array, element)
+        array_reader::get_bytes(&self.array, &self.element_type, element)
     }
 
     fn av_get_date_days(&self, element: usize) -> Result<i32, String> {
-        array_reader::get_date_days(&self.array, element)
+        array_reader::get_date_days(&self.array, &self.element_type, element)
     }
 
     fn av_get_time_millis(&self, element: usize) -> Result<i32, String> {
-        array_reader::get_time_millis(&self.array, element)
+        array_reader::get_time_millis(&self.array, &self.element_type, element)
     }
 
     fn av_get_ts_millis(&self, element: usize) -> Result<i64, String> {
@@ -3475,11 +3593,10 @@ impl ArrayWriterInner {
             ));
         }
         nested.complete_if_needed()?;
-        // After `complete_if_needed()?` succeeds, `completed` is guaranteed `Some`.
-        let arr = nested
-            .completed
-            .as_ref()
-            .expect("ArrayWriterInner::completed should be populated after complete_if_needed");
+        let arr = nested.completed.as_ref().ok_or_else(|| {
+            "ArrayWriter invariant violation: nested completed array missing after finalize"
+                .to_string()
+        })?;
         self.writer_mut()?.write_array(idx, arr);
         Ok(())
     }
