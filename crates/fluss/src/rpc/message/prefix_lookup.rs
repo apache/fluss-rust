@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::proto::LookupResponse;
+use crate::proto::PrefixLookupResponse;
 use crate::rpc::frame::ReadError;
 
 use crate::rpc::api_key::ApiKey;
@@ -28,24 +28,24 @@ use prost::Message;
 
 use bytes::{Buf, BufMut};
 
-pub struct LookupRequest {
-    pub inner_request: proto::LookupRequest,
+pub struct PrefixLookupRequest {
+    pub inner_request: proto::PrefixLookupRequest,
 }
 
-impl LookupRequest {
+impl PrefixLookupRequest {
     pub fn new_batched(table_id: i64, buckets: Vec<(i32, Option<i64>, Vec<Bytes>)>) -> Self {
-        let buckets_req: Vec<proto::PbLookupReqForBucket> = buckets
+        let buckets_req: Vec<proto::PbPrefixLookupReqForBucket> = buckets
             .into_iter()
             .map(
-                |(bucket_id, partition_id, keys)| proto::PbLookupReqForBucket {
+                |(bucket_id, partition_id, keys)| proto::PbPrefixLookupReqForBucket {
                     partition_id,
                     bucket_id,
-                    key: keys,
+                    keys,
                 },
             )
             .collect();
 
-        let request = proto::LookupRequest {
+        let request = proto::PrefixLookupRequest {
             table_id,
             buckets_req,
         };
@@ -56,13 +56,13 @@ impl LookupRequest {
     }
 }
 
-impl RequestBody for LookupRequest {
-    type ResponseBody = LookupResponse;
+impl RequestBody for PrefixLookupRequest {
+    type ResponseBody = PrefixLookupResponse;
 
-    const API_KEY: ApiKey = ApiKey::Lookup;
+    const API_KEY: ApiKey = ApiKey::PrefixLookup;
 
     const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(LookupRequest);
-impl_read_version_type!(LookupResponse);
+impl_write_version_type!(PrefixLookupRequest);
+impl_read_version_type!(PrefixLookupResponse);

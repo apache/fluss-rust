@@ -15,77 +15,177 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Lookup query representation for batching lookup operations.
-
+use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TablePath};
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-/// Represents a single lookup query that will be batched and sent to the server.
-pub struct LookupQuery {
-    /// The table path for this lookup
+struct QueryShared {
     table_path: TablePath,
-    /// The table bucket for this lookup
     table_bucket: TableBucket,
-    /// The encoded primary key bytes
     key: Bytes,
-    /// Channel to send the result back to the caller
-    result_tx: Option<oneshot::Sender<Result<Option<Vec<u8>>, crate::error::Error>>>,
-    /// Number of retry attempts
     retries: i32,
 }
 
-impl LookupQuery {
-    /// Creates a new lookup query.
+pub struct PrimaryLookupQuery {
+    shared: QueryShared,
+    result_tx: Option<oneshot::Sender<Result<Option<Vec<u8>>>>>,
+}
+
+impl PrimaryLookupQuery {
     pub fn new(
         table_path: TablePath,
         table_bucket: TableBucket,
         key: Bytes,
-        result_tx: oneshot::Sender<Result<Option<Vec<u8>>, crate::error::Error>>,
+        result_tx: oneshot::Sender<Result<Option<Vec<u8>>>>,
     ) -> Self {
         Self {
-            table_path,
-            table_bucket,
-            key,
+            shared: QueryShared {
+                table_path,
+                table_bucket,
+                key,
+                retries: 0,
+            },
             result_tx: Some(result_tx),
-            retries: 0,
         }
     }
 
-    /// Returns the table path.
     pub fn table_path(&self) -> &TablePath {
-        &self.table_path
+        &self.shared.table_path
     }
 
-    /// Returns the table bucket.
     pub fn table_bucket(&self) -> &TableBucket {
-        &self.table_bucket
+        &self.shared.table_bucket
     }
 
-    /// Returns the encoded key bytes.
     pub fn key(&self) -> &Bytes {
-        &self.key
+        &self.shared.key
     }
 
-    /// Returns the current retry count.
     pub fn retries(&self) -> i32 {
-        self.retries
+        self.shared.retries
     }
 
-    /// Increments the retry counter.
     pub fn increment_retries(&mut self) {
-        self.retries += 1;
+        self.shared.retries += 1;
     }
 
-    /// Completes the lookup with a result.
-    pub fn complete(&mut self, result: Result<Option<Vec<u8>>, crate::error::Error>) {
+    pub fn is_done(&self) -> bool {
+        self.result_tx.is_none()
+    }
+
+    pub fn complete(&mut self, result: Result<Option<Vec<u8>>>) {
         if let Some(tx) = self.result_tx.take() {
             let _ = tx.send(result);
         }
     }
 
-    /// Returns true if the result has already been sent.
+    pub fn complete_with_error(&mut self, error: Error) {
+        self.complete(Err(error));
+    }
+}
+
+impl From<PrimaryLookupQuery> for LookupQuery {
+    fn from(q: PrimaryLookupQuery) -> Self {
+        LookupQuery::Primary(q)
+    }
+}
+
+pub struct PrefixLookupQuery {
+    shared: QueryShared,
+    result_tx: Option<oneshot::Sender<Result<Vec<Vec<u8>>>>>,
+}
+
+impl PrefixLookupQuery {
+    pub fn new(
+        table_path: TablePath,
+        table_bucket: TableBucket,
+        key: Bytes,
+        result_tx: oneshot::Sender<Result<Vec<Vec<u8>>>>,
+    ) -> Self {
+        Self {
+            shared: QueryShared {
+                table_path,
+                table_bucket,
+                key,
+                retries: 0,
+            },
+            result_tx: Some(result_tx),
+        }
+    }
+
+    pub fn table_path(&self) -> &TablePath {
+        &self.shared.table_path
+    }
+
+    pub fn table_bucket(&self) -> &TableBucket {
+        &self.shared.table_bucket
+    }
+
+    pub fn key(&self) -> &Bytes {
+        &self.shared.key
+    }
+
+    pub fn retries(&self) -> i32 {
+        self.shared.retries
+    }
+
+    pub fn increment_retries(&mut self) {
+        self.shared.retries += 1;
+    }
+
     pub fn is_done(&self) -> bool {
         self.result_tx.is_none()
+    }
+
+    pub fn complete(&mut self, result: Result<Vec<Vec<u8>>>) {
+        if let Some(tx) = self.result_tx.take() {
+            let _ = tx.send(result);
+        }
+    }
+
+    pub fn complete_with_error(&mut self, error: Error) {
+        self.complete(Err(error));
+    }
+}
+
+impl From<PrefixLookupQuery> for LookupQuery {
+    fn from(q: PrefixLookupQuery) -> Self {
+        LookupQuery::Prefix(q)
+    }
+}
+
+pub enum LookupQuery {
+    Primary(PrimaryLookupQuery),
+    Prefix(PrefixLookupQuery),
+}
+
+impl LookupQuery {
+    pub fn table_path(&self) -> &TablePath {
+        match self {
+            Self::Primary(q) => q.table_path(),
+            Self::Prefix(q) => q.table_path(),
+        }
+    }
+
+    pub fn table_bucket(&self) -> &TableBucket {
+        match self {
+            Self::Primary(q) => q.table_bucket(),
+            Self::Prefix(q) => q.table_bucket(),
+        }
+    }
+
+    pub fn key(&self) -> &Bytes {
+        match self {
+            Self::Primary(q) => q.key(),
+            Self::Prefix(q) => q.key(),
+        }
+    }
+
+    pub fn complete_with_error(&mut self, error: Error) {
+        match self {
+            Self::Primary(q) => q.complete_with_error(error),
+            Self::Prefix(q) => q.complete_with_error(error),
+        }
     }
 }

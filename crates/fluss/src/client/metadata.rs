@@ -26,22 +26,34 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use tokio::sync::watch;
 
-#[derive(Default)]
 pub struct Metadata {
     cluster: RwLock<Arc<Cluster>>,
     connections: Arc<RpcClient>,
     bootstrap: Arc<str>,
+    cluster_version_tx: watch::Sender<u64>,
 }
 
 impl Metadata {
     pub async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
         let cluster = Self::init_cluster(bootstrap, connections.clone()).await?;
+        let (cluster_version_tx, _) = watch::channel(0);
         Ok(Metadata {
             cluster: RwLock::new(Arc::new(cluster)),
             connections,
             bootstrap: bootstrap.into(),
+            cluster_version_tx,
         })
+    }
+
+    pub fn subscribe_cluster_changes(&self) -> watch::Receiver<u64> {
+        self.cluster_version_tx.subscribe()
+    }
+
+    fn notify_cluster_changed(&self) {
+        let v = *self.cluster_version_tx.borrow();
+        let _ = self.cluster_version_tx.send(v.wrapping_add(1));
     }
 
     fn parse_bootstrap(boot_strap: &str) -> Result<SocketAddr> {
@@ -92,33 +104,41 @@ impl Metadata {
     pub(crate) async fn reinit_cluster(&self) -> Result<()> {
         let cluster = Self::init_cluster(&self.bootstrap, self.connections.clone()).await?;
         *self.cluster.write() = cluster.into();
+        self.notify_cluster_changed();
         Ok(())
     }
 
     pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) {
-        // Take a write lock for the entire operation to avoid races between
-        // reading the current cluster state and writing back the updated one.
-        let mut cluster_guard = self.cluster.write();
-        let updated_cluster = cluster_guard.invalidate_server(server_id, table_ids);
-        *cluster_guard = Arc::new(updated_cluster);
+        {
+            let mut cluster_guard = self.cluster.write();
+            let updated_cluster = cluster_guard.invalidate_server(server_id, table_ids);
+            *cluster_guard = Arc::new(updated_cluster);
+        }
+        self.notify_cluster_changed();
     }
 
     pub fn invalidate_physical_table_meta(
         &self,
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) {
-        let mut cluster_guard = self.cluster.write();
-        let updated_cluster =
-            cluster_guard.invalidate_physical_table_meta(physical_tables_to_invalid);
-        *cluster_guard = Arc::new(updated_cluster);
+        {
+            let mut cluster_guard = self.cluster.write();
+            let updated_cluster =
+                cluster_guard.invalidate_physical_table_meta(physical_tables_to_invalid);
+            *cluster_guard = Arc::new(updated_cluster);
+        }
+        self.notify_cluster_changed();
     }
 
     pub async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
         let origin_cluster = self.cluster.read().clone();
         let new_cluster =
             Cluster::from_metadata_response(metadata_response, Some(&origin_cluster))?;
-        let mut cluster = self.cluster.write();
-        *cluster = Arc::new(new_cluster);
+        {
+            let mut cluster = self.cluster.write();
+            *cluster = Arc::new(new_cluster);
+        }
+        self.notify_cluster_changed();
         Ok(())
     }
 
@@ -257,10 +277,12 @@ impl Metadata {
 #[cfg(test)]
 impl Metadata {
     pub(crate) fn new_for_test(cluster: Arc<Cluster>) -> Self {
+        let (cluster_version_tx, _) = watch::channel(0);
         Metadata {
             cluster: RwLock::new(cluster),
             connections: Arc::new(RpcClient::new()),
             bootstrap: Arc::from(""),
+            cluster_version_tx,
         }
     }
 }

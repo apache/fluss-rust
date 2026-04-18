@@ -22,7 +22,7 @@
 //! - Batching multiple lookups to the same server/bucket
 //! - Running a background sender task to process batches
 
-use super::{LookupQuery, LookupQueue};
+use super::{LookupQuery, LookupQueue, PrefixLookupQuery, PrimaryLookupQuery};
 use crate::client::lookup::lookup_sender::LookupSender;
 use crate::client::metadata::Metadata;
 use crate::config::Config;
@@ -70,8 +70,9 @@ impl LookupClient {
         let max_retries = config.lookup_max_retries;
 
         // Create queue and channels
+        let cluster_rx = metadata.subscribe_cluster_changes();
         let (queue, lookup_tx, re_enqueue_tx) =
-            LookupQueue::new(queue_size, max_batch_size, batch_timeout_ms);
+            LookupQueue::new(queue_size, max_batch_size, batch_timeout_ms, cluster_rx);
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -121,7 +122,6 @@ impl LookupClient {
         table_bucket: TableBucket,
         key_bytes: Bytes,
     ) -> Result<Option<Vec<u8>>> {
-        // Check if the client is closed
         if self.closed.load(Ordering::Acquire) {
             return Err(Error::UnexpectedError {
                 message: "Lookup client is closed".to_string(),
@@ -130,32 +130,79 @@ impl LookupClient {
         }
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let query = LookupQuery::Primary(PrimaryLookupQuery::new(
+            table_path,
+            table_bucket,
+            key_bytes,
+            result_tx,
+        ));
 
-        let query = LookupQuery::new(table_path, table_bucket, key_bytes, result_tx);
+        self.enqueue(query).await?;
 
-        // Send to queue
-        self.lookup_tx
-            .send(query)
-            .await
-            .map_err(|e| {
-                let failed_query = e.0;
-                error!(
-                    "Failed to queue lookup: channel closed. table_path: {}, table_bucket: {:?}, key_len: {}",
-                    failed_query.table_path(),
-                    failed_query.table_bucket(),
-                    failed_query.key().len()
-                );
-                Error::UnexpectedError {
-                    message: "Failed to queue lookup: channel closed".to_string(),
-                    source: None,
-                }
-            })?;
-
-        // Wait for result
         result_rx.await.map_err(|_| Error::UnexpectedError {
             message: "Lookup result channel closed".to_string(),
             source: None,
         })?
+    }
+
+    /// Looks up all values matching a prefix key.
+    ///
+    /// The prefix key must be a prefix subset of the table's primary key
+    /// (specifically, the bucket keys). Returns every row whose primary key
+    /// starts with the supplied prefix. Queries are batched together with
+    /// other lookups going to the same server for improved throughput.
+    ///
+    /// # Arguments
+    /// * `table_path` - The table path
+    /// * `table_bucket` - The table bucket computed from the bucket key part of the prefix
+    /// * `key_bytes` - The encoded prefix key bytes
+    ///
+    /// # Returns
+    /// * `Ok(rows)` - Every row matching the prefix (possibly empty)
+    /// * `Err(Error)` - If the lookup fails
+    pub async fn prefix_lookup(
+        &self,
+        table_path: TablePath,
+        table_bucket: TableBucket,
+        key_bytes: Bytes,
+    ) -> Result<Vec<Vec<u8>>> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::UnexpectedError {
+                message: "Lookup client is closed".to_string(),
+                source: None,
+            });
+        }
+
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let query = LookupQuery::Prefix(PrefixLookupQuery::new(
+            table_path,
+            table_bucket,
+            key_bytes,
+            result_tx,
+        ));
+
+        self.enqueue(query).await?;
+
+        result_rx.await.map_err(|_| Error::UnexpectedError {
+            message: "Lookup result channel closed".to_string(),
+            source: None,
+        })?
+    }
+
+    async fn enqueue(&self, query: LookupQuery) -> Result<()> {
+        self.lookup_tx.send(query).await.map_err(|e| {
+            let failed_query = e.0;
+            error!(
+                "Failed to queue lookup: channel closed. table_path: {}, table_bucket: {:?}, key_len: {}",
+                failed_query.table_path(),
+                failed_query.table_bucket(),
+                failed_query.key().len()
+            );
+            Error::UnexpectedError {
+                message: "Failed to queue lookup: channel closed".to_string(),
+                source: None,
+            }
+        })
     }
 
     /// Closes the lookup client gracefully.

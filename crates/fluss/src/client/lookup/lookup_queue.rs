@@ -22,8 +22,7 @@
 
 use super::LookupQuery;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::timeout;
+use tokio::sync::{mpsc, watch};
 
 /// A queue that buffers pending lookup operations and provides batched draining.
 ///
@@ -41,14 +40,16 @@ pub struct LookupQueue {
     max_batch_size: usize,
     /// Timeout for batch collection
     batch_timeout: Duration,
+    /// Wakes `drain()` early when the cluster changes.
+    cluster_rx: watch::Receiver<u64>,
 }
 
 impl LookupQueue {
-    /// Creates a new lookup queue with the specified configuration.
     pub fn new(
         queue_size: usize,
         max_batch_size: usize,
         batch_timeout_ms: u64,
+        cluster_rx: watch::Receiver<u64>,
     ) -> (
         Self,
         mpsc::Sender<LookupQuery>,
@@ -62,6 +63,7 @@ impl LookupQueue {
             re_enqueue_rx,
             max_batch_size,
             batch_timeout: Duration::from_millis(batch_timeout_ms),
+            cluster_rx,
         };
 
         (queue, lookup_tx, re_enqueue_tx)
@@ -78,32 +80,41 @@ impl LookupQueue {
                 break;
             }
 
-            // First drain re-enqueued lookups (prioritized)
+            // Prioritize re-enqueued lookups.
             while lookups.len() < self.max_batch_size {
                 match self.re_enqueue_rx.try_recv() {
                     Ok(lookup) => lookups.push(lookup),
                     Err(_) => break,
                 }
             }
-
             if lookups.len() >= self.max_batch_size {
                 break;
             }
 
-            // Then try to get from main queue with timeout
-            match timeout(remaining, self.lookup_rx.recv()).await {
-                Ok(Some(lookup)) => {
-                    lookups.push(lookup);
-                    // Try to drain more without waiting
-                    while lookups.len() < self.max_batch_size {
-                        match self.lookup_rx.try_recv() {
-                            Ok(lookup) => lookups.push(lookup),
-                            Err(_) => break,
+            let sleep = tokio::time::sleep(remaining);
+            tokio::select! {
+                biased;
+
+                maybe = self.lookup_rx.recv() => {
+                    match maybe {
+                        Some(lookup) => {
+                            lookups.push(lookup);
+                            while lookups.len() < self.max_batch_size {
+                                match self.lookup_rx.try_recv() {
+                                    Ok(lookup) => lookups.push(lookup),
+                                    Err(_) => break,
+                                }
+                            }
                         }
+                        None => break,
                     }
                 }
-                Ok(None) => break, // Channel closed
-                Err(_) => break,   // Timeout
+                _ = self.cluster_rx.changed() => {
+                    if !lookups.is_empty() {
+                        break;
+                    }
+                }
+                _ = sleep => break,
             }
 
             if lookups.len() >= self.max_batch_size {
