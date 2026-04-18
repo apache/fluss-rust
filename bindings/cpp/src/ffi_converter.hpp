@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cassert>
+#include <stdexcept>
 
 #include "fluss.hpp"
 #include "lib.rs.h"
@@ -229,7 +230,48 @@ inline ffi::FfiTableDescriptor to_ffi_table_descriptor(const TableDescriptor& de
 inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
     auto type_id = static_cast<TypeId>(ffi_col.data_type);
     DataType dt(type_id, ffi_col.precision, ffi_col.scale);
-    if (type_id == TypeId::Array && ffi_col.element_data_type != 0) {
+    if (type_id == TypeId::Array) {
+        if (ffi_col.element_data_type == 0) {
+            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
+                                     "': missing element_data_type");
+        }
+        if (ffi_col.array_nesting < 0) {
+            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
+                                     "': array_nesting must be non-negative");
+        }
+        if (ffi_col.element_data_type == static_cast<int32_t>(TypeId::Array)) {
+            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
+                                     "': leaf element_data_type cannot be ARRAY");
+        }
+        auto is_supported_leaf_type = [](int32_t leaf_type) {
+            switch (static_cast<TypeId>(leaf_type)) {
+                case TypeId::Boolean:
+                case TypeId::TinyInt:
+                case TypeId::SmallInt:
+                case TypeId::Int:
+                case TypeId::BigInt:
+                case TypeId::Float:
+                case TypeId::Double:
+                case TypeId::String:
+                case TypeId::Bytes:
+                case TypeId::Date:
+                case TypeId::Time:
+                case TypeId::Timestamp:
+                case TypeId::TimestampLtz:
+                case TypeId::Decimal:
+                case TypeId::Char:
+                case TypeId::Binary:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+        if (!is_supported_leaf_type(ffi_col.element_data_type)) {
+            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
+                                     "': unsupported leaf element_data_type " +
+                                     std::to_string(ffi_col.element_data_type));
+        }
+
         int32_t nesting = ffi_col.array_nesting > 0 ? ffi_col.array_nesting : 1;
         dt = rebuild_array_type(FlattenedArrayType{
             nesting,
