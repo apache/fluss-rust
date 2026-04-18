@@ -30,12 +30,12 @@ import fluss
 async def main():
     # Create connection configuration
     config_spec = {
-    "bootstrap.servers": "127.0.0.1:9123",
-    # Add other configuration options as needed
-    "writer.request-max-size": "10485760",  # 10 MB
-    "writer.acks": "all",  # Wait for all replicas to acknowledge
-    "writer.retries": "3",  # Retry up to 3 times on failure
-    "writer.batch-size": "1000",  # Batch size for writes
+        "bootstrap.servers": "127.0.0.1:9123",
+        # Add other configuration options as needed
+        "writer.request-max-size": "10485760",  # 10 MB
+        "writer.acks": "all",  # Wait for all replicas to acknowledge
+        "writer.retries": "3",  # Retry up to 3 times on failure
+        "writer.batch-size": "1000",  # Batch size for writes
     }
     config = fluss.Config(config_spec)
 
@@ -239,8 +239,10 @@ async def main():
         append_writer.write_pandas(df)
         print("Successfully wrote Pandas DataFrame")
 
+        # Flush all pending data
+        print("\n--- Flushing data ---")
         await append_writer.flush()
-        print("\n--- Append writer flushed ---")
+        print("Successfully flushed data")
 
         # Demo: Check offsets after writes
         print("\n--- Checking offsets after writes ---")
@@ -487,7 +489,7 @@ async def main():
         print("Queued user_id=3 (Charlie)")
 
         await upsert_writer.flush()
-        print("Upsert writer flushed")
+        print("Flushed — all 3 rows acknowledged by server")
 
         # Per-record acknowledgment: await the returned handle to block until
         # the server confirms this specific write, useful when you need to
@@ -875,6 +877,7 @@ async def main():
                 "region": region, "user_id": user_id,
                 "name": name, "score": score,
             })
+        await upsert_writer.flush()
         print(f"Upserted {len(test_data)} rows across 3 partitions")
 
         # Lookup all rows across partitions
