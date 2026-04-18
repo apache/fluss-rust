@@ -39,6 +39,7 @@ const DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS: u64 = u64::MAX;
 const MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE: usize = 5;
 const DEFAULT_ACKS: &str = "all";
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
@@ -153,6 +154,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
 
+    /// Request timeout in milliseconds for individual RPC calls.
+    /// Default: 30000 (30 seconds).
+    #[arg(long, default_value_t = DEFAULT_REQUEST_TIMEOUT_MS)]
+    pub request_timeout_ms: u64,
+
     #[arg(long, default_value_t = String::from(DEFAULT_SECURITY_PROTOCOL))]
     pub security_protocol: String,
 
@@ -243,6 +249,7 @@ impl std::fmt::Debug for Config {
                 &self.writer_buffer_wait_timeout_ms,
             )
             .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("request_timeout_ms", &self.request_timeout_ms)
             .field("security_protocol", &self.security_protocol)
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
             .field("security_sasl_username", &self.security_sasl_username)
@@ -283,6 +290,7 @@ impl Default for Config {
             writer_buffer_memory_size: DEFAULT_WRITER_BUFFER_MEMORY_SIZE,
             writer_buffer_wait_timeout_ms: DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
+            request_timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
             security_sasl_username: String::new(),
