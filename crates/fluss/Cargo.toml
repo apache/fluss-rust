@@ -81,8 +81,6 @@ jiff = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
 metrics-util = "0.20"
-testcontainers = "0.25.0"
-test-env-helpers = "0.2.2"
 fluss-test-cluster = { path = "../fluss-test-cluster" }
 
 [build-dependencies]
