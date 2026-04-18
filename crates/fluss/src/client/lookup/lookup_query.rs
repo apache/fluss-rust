@@ -20,61 +20,55 @@ use crate::metadata::{TableBucket, TablePath};
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-struct QueryShared {
+pub struct LookupQuery<T> {
     table_path: TablePath,
     table_bucket: TableBucket,
     key: Bytes,
     retries: i32,
+    result_tx: Option<oneshot::Sender<Result<T>>>,
 }
 
-pub struct PrimaryLookupQuery {
-    shared: QueryShared,
-    result_tx: Option<oneshot::Sender<Result<Option<Vec<u8>>>>>,
-}
-
-impl PrimaryLookupQuery {
+impl<T> LookupQuery<T> {
     pub fn new(
         table_path: TablePath,
         table_bucket: TableBucket,
         key: Bytes,
-        result_tx: oneshot::Sender<Result<Option<Vec<u8>>>>,
+        result_tx: oneshot::Sender<Result<T>>,
     ) -> Self {
         Self {
-            shared: QueryShared {
-                table_path,
-                table_bucket,
-                key,
-                retries: 0,
-            },
+            table_path,
+            table_bucket,
+            key,
+            retries: 0,
             result_tx: Some(result_tx),
         }
     }
 
     pub fn table_path(&self) -> &TablePath {
-        &self.shared.table_path
+        &self.table_path
     }
 
     pub fn table_bucket(&self) -> &TableBucket {
-        &self.shared.table_bucket
+        &self.table_bucket
     }
 
     pub fn key(&self) -> &Bytes {
-        &self.shared.key
+        &self.key
     }
 
     pub fn retries(&self) -> i32 {
-        self.shared.retries
+        self.retries
     }
 
     pub fn increment_retries(&mut self) {
-        self.shared.retries += 1;
+        self.retries += 1;
     }
 
     pub fn is_done(&self) -> bool {
         self.result_tx.is_none()
     }
 
-    pub fn complete(&mut self, result: Result<Option<Vec<u8>>>) {
+    pub fn complete(&mut self, result: Result<T>) {
         if let Some(tx) = self.result_tx.take() {
             let _ = tx.send(result);
         }
@@ -85,82 +79,15 @@ impl PrimaryLookupQuery {
     }
 }
 
-impl From<PrimaryLookupQuery> for LookupQuery {
-    fn from(q: PrimaryLookupQuery) -> Self {
-        LookupQuery::Primary(q)
-    }
-}
+pub type PrimaryLookupQuery = LookupQuery<Option<Vec<u8>>>;
+pub type PrefixLookupQuery = LookupQuery<Vec<Vec<u8>>>;
 
-pub struct PrefixLookupQuery {
-    shared: QueryShared,
-    result_tx: Option<oneshot::Sender<Result<Vec<Vec<u8>>>>>,
-}
-
-impl PrefixLookupQuery {
-    pub fn new(
-        table_path: TablePath,
-        table_bucket: TableBucket,
-        key: Bytes,
-        result_tx: oneshot::Sender<Result<Vec<Vec<u8>>>>,
-    ) -> Self {
-        Self {
-            shared: QueryShared {
-                table_path,
-                table_bucket,
-                key,
-                retries: 0,
-            },
-            result_tx: Some(result_tx),
-        }
-    }
-
-    pub fn table_path(&self) -> &TablePath {
-        &self.shared.table_path
-    }
-
-    pub fn table_bucket(&self) -> &TableBucket {
-        &self.shared.table_bucket
-    }
-
-    pub fn key(&self) -> &Bytes {
-        &self.shared.key
-    }
-
-    pub fn retries(&self) -> i32 {
-        self.shared.retries
-    }
-
-    pub fn increment_retries(&mut self) {
-        self.shared.retries += 1;
-    }
-
-    pub fn is_done(&self) -> bool {
-        self.result_tx.is_none()
-    }
-
-    pub fn complete(&mut self, result: Result<Vec<Vec<u8>>>) {
-        if let Some(tx) = self.result_tx.take() {
-            let _ = tx.send(result);
-        }
-    }
-
-    pub fn complete_with_error(&mut self, error: Error) {
-        self.complete(Err(error));
-    }
-}
-
-impl From<PrefixLookupQuery> for LookupQuery {
-    fn from(q: PrefixLookupQuery) -> Self {
-        LookupQuery::Prefix(q)
-    }
-}
-
-pub enum LookupQuery {
+pub enum QueuedLookup {
     Primary(PrimaryLookupQuery),
     Prefix(PrefixLookupQuery),
 }
 
-impl LookupQuery {
+impl QueuedLookup {
     pub fn table_path(&self) -> &TablePath {
         match self {
             Self::Primary(q) => q.table_path(),
@@ -187,5 +114,17 @@ impl LookupQuery {
             Self::Primary(q) => q.complete_with_error(error),
             Self::Prefix(q) => q.complete_with_error(error),
         }
+    }
+}
+
+impl From<PrimaryLookupQuery> for QueuedLookup {
+    fn from(q: PrimaryLookupQuery) -> Self {
+        QueuedLookup::Primary(q)
+    }
+}
+
+impl From<PrefixLookupQuery> for QueuedLookup {
+    fn from(q: PrefixLookupQuery) -> Self {
+        QueuedLookup::Prefix(q)
     }
 }

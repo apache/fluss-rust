@@ -22,7 +22,7 @@
 //! - Batching multiple lookups to the same server/bucket
 //! - Running a background sender task to process batches
 
-use super::{LookupQuery, LookupQueue, PrefixLookupQuery, PrimaryLookupQuery};
+use super::{LookupQueue, PrefixLookupQuery, PrimaryLookupQuery, QueuedLookup};
 use crate::client::lookup::lookup_sender::LookupSender;
 use crate::client::metadata::Metadata;
 use crate::config::Config;
@@ -50,7 +50,7 @@ use tokio::task::JoinHandle;
 /// ```
 pub struct LookupClient {
     /// Channel to send lookup requests to the queue
-    lookup_tx: mpsc::Sender<LookupQuery>,
+    lookup_tx: mpsc::Sender<QueuedLookup>,
     /// Handle to the sender task
     sender_handle: Option<JoinHandle<()>>,
     /// Watch channel for internal shutdown handling
@@ -130,7 +130,7 @@ impl LookupClient {
         }
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let query = LookupQuery::Primary(PrimaryLookupQuery::new(
+        let query = QueuedLookup::Primary(PrimaryLookupQuery::new(
             table_path,
             table_bucket,
             key_bytes,
@@ -174,7 +174,7 @@ impl LookupClient {
         }
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let query = LookupQuery::Prefix(PrefixLookupQuery::new(
+        let query = QueuedLookup::Prefix(PrefixLookupQuery::new(
             table_path,
             table_bucket,
             key_bytes,
@@ -189,7 +189,7 @@ impl LookupClient {
         })?
     }
 
-    async fn enqueue(&self, query: LookupQuery) -> Result<()> {
+    async fn enqueue(&self, query: QueuedLookup) -> Result<()> {
         self.lookup_tx.send(query).await.map_err(|e| {
             let failed_query = e.0;
             error!(

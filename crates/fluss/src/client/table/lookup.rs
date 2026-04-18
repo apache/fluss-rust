@@ -151,8 +151,11 @@ impl TableLookup {
         }
     }
 
-    /// Switches the builder into prefix-scan mode. Validation of
-    /// `lookup_column_names` happens in `create_lookuper()`.
+    /// Switches the builder into prefix-scan mode. `lookup_column_names`
+    /// must list the table's partition keys (if any) plus the bucket keys,
+    /// in that order — i.e. this is a **bucket-key prefix** scan, not an
+    /// arbitrary primary-key prefix. Validation is deferred to
+    /// `create_lookuper()`.
     pub fn lookup_by(self, lookup_column_names: Vec<String>) -> TablePrefixLookup {
         TablePrefixLookup {
             lookup_client: self.lookup_client,

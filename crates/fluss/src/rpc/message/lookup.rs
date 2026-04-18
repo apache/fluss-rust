@@ -22,7 +22,9 @@ use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::{
+    BucketId, PartitionId, TableId, impl_read_version_type, impl_write_version_type, proto,
+};
 use bytes::Bytes;
 use prost::Message;
 
@@ -33,7 +35,10 @@ pub struct LookupRequest {
 }
 
 impl LookupRequest {
-    pub fn new_batched(table_id: i64, buckets: Vec<(i32, Option<i64>, Vec<Bytes>)>) -> Self {
+    pub fn new_batched(
+        table_id: TableId,
+        buckets: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
+    ) -> Self {
         let buckets_req: Vec<proto::PbLookupReqForBucket> = buckets
             .into_iter()
             .map(

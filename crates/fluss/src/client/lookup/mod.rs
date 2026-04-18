@@ -35,5 +35,5 @@ mod lookup_queue;
 mod lookup_sender;
 
 pub use lookup_client::LookupClient;
-pub(crate) use lookup_query::{LookupQuery, PrefixLookupQuery, PrimaryLookupQuery};
+pub(crate) use lookup_query::{PrefixLookupQuery, PrimaryLookupQuery, QueuedLookup};
 pub(crate) use lookup_queue::LookupQueue;

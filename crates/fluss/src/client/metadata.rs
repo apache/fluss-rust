@@ -52,8 +52,8 @@ impl Metadata {
     }
 
     fn notify_cluster_changed(&self) {
-        let v = *self.cluster_version_tx.borrow();
-        let _ = self.cluster_version_tx.send(v.wrapping_add(1));
+        self.cluster_version_tx
+            .send_modify(|v| *v = v.wrapping_add(1));
     }
 
     fn parse_bootstrap(boot_strap: &str) -> Result<SocketAddr> {

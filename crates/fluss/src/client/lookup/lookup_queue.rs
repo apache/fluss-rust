@@ -20,7 +20,7 @@
 //! This queue buffers lookup operations and provides batched draining
 //! to improve throughput by reducing network round trips.
 
-use super::LookupQuery;
+use super::QueuedLookup;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
@@ -33,9 +33,9 @@ use tokio::sync::{mpsc, watch};
 /// Re-enqueued lookups are prioritized over new lookups to ensure fair processing.
 pub struct LookupQueue {
     /// Channel for receiving lookup requests
-    lookup_rx: mpsc::Receiver<LookupQuery>,
+    lookup_rx: mpsc::Receiver<QueuedLookup>,
     /// Channel for receiving re-enqueued lookups
-    re_enqueue_rx: mpsc::UnboundedReceiver<LookupQuery>,
+    re_enqueue_rx: mpsc::UnboundedReceiver<QueuedLookup>,
     /// Maximum batch size for draining
     max_batch_size: usize,
     /// Timeout for batch collection
@@ -52,8 +52,8 @@ impl LookupQueue {
         cluster_rx: watch::Receiver<u64>,
     ) -> (
         Self,
-        mpsc::Sender<LookupQuery>,
-        mpsc::UnboundedSender<LookupQuery>,
+        mpsc::Sender<QueuedLookup>,
+        mpsc::UnboundedSender<QueuedLookup>,
     ) {
         let (lookup_tx, lookup_rx) = mpsc::channel(queue_size);
         let (re_enqueue_tx, re_enqueue_rx) = mpsc::unbounded_channel();
@@ -70,7 +70,7 @@ impl LookupQueue {
     }
 
     /// Drains a batch of lookup queries from the queue.
-    pub async fn drain(&mut self) -> Vec<LookupQuery> {
+    pub async fn drain(&mut self) -> Vec<QueuedLookup> {
         let mut lookups = Vec::with_capacity(self.max_batch_size);
         let deadline = tokio::time::Instant::now() + self.batch_timeout;
 
@@ -94,7 +94,6 @@ impl LookupQueue {
             let sleep = tokio::time::sleep(remaining);
             tokio::select! {
                 biased;
-
                 maybe = self.lookup_rx.recv() => {
                     match maybe {
                         Some(lookup) => {
@@ -126,7 +125,7 @@ impl LookupQueue {
     }
 
     /// Drains all remaining lookups from the queue.
-    pub fn drain_all(&mut self) -> Vec<LookupQuery> {
+    pub fn drain_all(&mut self) -> Vec<QueuedLookup> {
         let mut lookups = Vec::new();
 
         // Drain re-enqueued lookups
