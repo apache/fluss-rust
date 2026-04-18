@@ -41,6 +41,7 @@ async def main():
 
     # Create connection using the static create method
     conn = await fluss.FlussConnection.create(config)
+
     # Define fields for PyArrow
     fields = [
         pa.field("id", pa.int32()),
@@ -488,6 +489,7 @@ async def main():
         )
         print("Queued user_id=3 (Charlie)")
 
+        # flush() waits for all queued writes to be acknowledged by the server
         await upsert_writer.flush()
         print("Flushed — all 3 rows acknowledged by server")
 
