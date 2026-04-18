@@ -148,6 +148,8 @@ Complete API reference for the Fluss Rust client.
 
 ## `RecordBatchLogScanner`
 
+Overlapping `poll` calls on clones that share state, or `poll` concurrent with `RecordBatchLogReader::next_batch`, are not supported. Use one active polling/consumption call at a time per underlying scanner state.
+
 | Method                                                                                                    | Description                                              |
 |-----------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
 | `async fn subscribe(&self, bucket_id: i32, start_offset: i64) -> Result<()>`                              | Subscribe to a bucket                                    |
@@ -159,6 +161,23 @@ Complete API reference for the Fluss Rust client.
 | `async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>>`                                       | Poll for Arrow record batches                            |
 | `fn is_partitioned(&self) -> bool`                                                                        | Check if the table is partitioned                        |
 | `fn get_subscribed_buckets(&self) -> Vec<(TableBucket, i64)>`                                             | Get all current subscriptions as (bucket, offset) pairs  |
+| `fn schema(&self) -> SchemaRef`                                                                           | Get the Arrow schema for batches produced by this scanner|
+| `fn table_path(&self) -> &TablePath`                                                                      | Get the table path                                       |
+| `fn table_id(&self) -> TableId`                                                                           | Get the table ID                                         |
+
+## `RecordBatchLogReader`
+
+Bounded log reader that consumes data up to specified stopping offsets, then terminates.
+Unlike `RecordBatchLogScanner` which polls indefinitely, this reader stops automatically.
+
+| Method                                                                                                      | Description                                              |
+|-------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
+| `async fn new_until_latest(scanner: RecordBatchLogScanner, admin: &FlussAdmin) -> Result<Self>`              | Read until the latest offsets at time of creation         |
+| `fn new_until_offsets(scanner: RecordBatchLogScanner, stopping_offsets: HashMap<TableBucket, i64>) -> Self`  | Read until custom stopping offsets per bucket             |
+| `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>`                                                | Get the next batch with bucket/offset metadata, or `None` when all buckets caught up |
+| `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>`                                          | Drain all batches (with metadata) until stopping offsets are satisfied |
+| `fn schema(&self) -> SchemaRef`                                                                              | Arrow schema for produced batches                        |
+| `fn to_record_batch_reader(self, handle) -> SyncRecordBatchLogReader`                                        | Sync adapter implementing `arrow::RecordBatchReader`     |
 
 ## `ScanRecord`
 

@@ -254,6 +254,10 @@ pub struct LogScanner {
 ///
 /// More efficient than [`LogScanner`] for batch-level analytics where per-record
 /// metadata (offsets, timestamps) is not needed.
+///
+/// This type is intentionally **not** `Clone`. To perform a bounded read, move
+/// the scanner into a [`crate::client::RecordBatchLogReader`] — the compiler
+/// then prevents concurrent polls by construction.
 pub struct RecordBatchLogScanner {
     inner: Arc<LogScannerInner>,
 }
@@ -266,6 +270,7 @@ struct LogScannerInner {
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
     is_partitioned_table: bool,
+    arrow_schema: SchemaRef,
 }
 
 impl LogScannerInner {
@@ -277,6 +282,20 @@ impl LogScannerInner {
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
+
+        let full_row_type = table_info.get_row_type();
+        let arrow_schema = match &projected_fields {
+            Some(indices) => {
+                let projected_fields_vec: Vec<_> = indices
+                    .iter()
+                    .map(|&i| full_row_type.fields()[i].clone())
+                    .collect();
+                let projected_row_type = crate::metadata::RowType::new(projected_fields_vec);
+                to_arrow_schema(&projected_row_type)?
+            }
+            None => to_arrow_schema(full_row_type)?,
+        };
+
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
@@ -285,12 +304,13 @@ impl LogScannerInner {
             log_scanner_status: log_scanner_status.clone(),
             log_fetcher: LogFetcher::new(
                 table_info.clone(),
-                connections.clone(),
-                metadata.clone(),
+                connections,
+                metadata,
                 log_scanner_status.clone(),
                 config,
                 projected_fields,
             )?,
+            arrow_schema,
         })
     }
 
@@ -611,6 +631,34 @@ impl RecordBatchLogScanner {
         bucket: i32,
     ) -> Result<()> {
         self.inner.unsubscribe_partition(partition_id, bucket).await
+    }
+
+    /// Returns the Arrow schema for batches produced by this scanner.
+    pub fn schema(&self) -> SchemaRef {
+        self.inner.arrow_schema.clone()
+    }
+
+    pub fn table_path(&self) -> &TablePath {
+        &self.inner.table_path
+    }
+
+    pub fn table_id(&self) -> TableId {
+        self.inner.table_id
+    }
+
+    /// Creates a new handle to the same underlying scanner state.
+    ///
+    /// Binding layers (Python, C++) that hold the scanner behind shared
+    /// ownership (`Arc`) cannot move it into a [`crate::client::RecordBatchLogReader`].
+    /// This method produces a second handle so the reader can take ownership
+    /// while the binding retains its reference for subscription management.
+    ///
+    /// **Not intended for general use** — prefer moving the scanner directly.
+    #[doc(hidden)]
+    pub fn new_shared_handle(&self) -> Self {
+        RecordBatchLogScanner {
+            inner: Arc::clone(&self.inner),
+        }
     }
 }
 
@@ -1993,6 +2041,7 @@ mod tests {
         let result = validate_scan_support(&table_path, &table_info);
         assert!(result.is_ok());
     }
+
     #[tokio::test]
     async fn prepare_fetch_log_requests_uses_configured_fetch_params() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
