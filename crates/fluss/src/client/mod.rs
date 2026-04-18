@@ -18,6 +18,7 @@
 mod admin;
 mod connection;
 mod credentials;
+pub mod lookup;
 mod metadata;
 mod table;
 mod write;
@@ -25,6 +26,7 @@ mod write;
 pub use admin::*;
 pub use connection::*;
 pub use credentials::*;
+pub use lookup::LookupClient;
 pub use metadata::*;
 pub use table::*;
 pub use write::*;

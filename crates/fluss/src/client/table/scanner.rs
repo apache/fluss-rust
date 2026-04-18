@@ -94,7 +94,7 @@ impl<'a> TableScan<'a> {
     ///             .build()?,
     ///         ).build()?;
     ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
-    ///     let admin = conn.get_admin().await?;
+    ///     let admin = conn.get_admin()?;
     ///     admin.create_table(&table_path, &table_descriptor, true)
     ///         .await?;
     ///     let table_info = admin.get_table_info(&table_path).await?;
@@ -169,7 +169,7 @@ impl<'a> TableScan<'a> {
     ///             .build()?,
     ///         ).build()?;
     ///     let table_path = TablePath::new("fluss".to_owned(), "rust_test_long".to_owned());
-    ///     let admin = conn.get_admin().await?;
+    ///     let admin = conn.get_admin()?;
     ///     admin.create_table(&table_path, &table_descriptor, true)
     ///         .await?;
     ///     let table = conn.get_table(&table_path).await?;
@@ -1700,7 +1700,8 @@ mod tests {
     use crate::client::WriteRecord;
     use crate::client::metadata::Metadata;
     use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+        ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
+        DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath};
     use crate::record::MemoryLogRecordsArrowBuilder;
@@ -1717,6 +1718,8 @@ mod tests {
                 compression_type: ArrowCompressionType::None,
                 compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
             },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
         let row = GenericRow {

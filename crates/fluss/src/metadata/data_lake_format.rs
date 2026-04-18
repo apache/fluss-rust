@@ -54,7 +54,7 @@ mod tests {
 
         for (raw, expected) in cases {
             let parsed = raw.parse::<DataLakeFormat>().unwrap();
-            assert_eq!(parsed, expected, "failed to parse: {}", raw);
+            assert_eq!(parsed, expected, "failed to parse: {raw}");
         }
 
         // negative cases

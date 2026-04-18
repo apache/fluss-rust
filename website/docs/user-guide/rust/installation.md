@@ -7,7 +7,7 @@ The Fluss Rust client is published to [crates.io](https://crates.io/crates/fluss
 
 ```toml
 [dependencies]
-fluss-rs = "0.1"
+fluss-rs = "0.1.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -16,7 +16,7 @@ tokio = { version = "1", features = ["full"] }
 ```toml
 [dependencies]
 # Default: memory and filesystem storage
-fluss-rs = "0.1"
+fluss-rs = "0.1.0"
 
 # With S3 storage support
 fluss-rs = { version = "0.1", features = ["storage-s3"] }

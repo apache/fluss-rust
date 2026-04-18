@@ -336,7 +336,7 @@ pub fn resolve_row_types(
                     Some(fcore::metadata::DataType::Decimal(dt)) => {
                         let (precision, scale) = (dt.precision(), dt.scale());
                         let bd = bigdecimal::BigDecimal::from_str(cow.as_ref()).map_err(|e| {
-                            anyhow!("Column {idx}: invalid decimal string '{}': {e}", cow)
+                            anyhow!("Column {idx}: invalid decimal string '{cow}': {e}")
                         })?;
                         let decimal = fcore::row::Decimal::from_big_decimal(bd, precision, scale)
                             .map_err(|e| anyhow!("Column {idx}: {e}"))?;
@@ -351,6 +351,9 @@ pub fn resolve_row_types(
             Datum::Time(t) => Datum::Time(*t),
             Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
             Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
+            // TODO: C++ bindings need proper CXX wrapper types for FlussArray
+            // before C++ users can construct or inspect array values through FFI.
+            Datum::Array(a) => Datum::Array(a.clone()),
         };
         out.set_field(idx, resolved);
     }
@@ -408,6 +411,9 @@ pub fn compacted_row_to_owned(
             fcore::metadata::DataType::Binary(dt) => {
                 Datum::Blob(Cow::Owned(row.get_binary(i, dt.length())?.to_vec()))
             }
+            // TODO: C++ bindings need proper CXX wrapper types for FlussArray
+            // before C++ users can construct or inspect array values through FFI.
+            fcore::metadata::DataType::Array(_) => Datum::Array(row.get_array(i)?),
             other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
         };
 

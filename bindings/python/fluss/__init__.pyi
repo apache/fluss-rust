@@ -19,7 +19,17 @@
 
 from enum import IntEnum
 from types import TracebackType
-from typing import Dict, Iterator, List, Optional, Tuple, Union, overload
+from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    overload,
+)
 
 import pandas as pd
 import pyarrow as pa
@@ -233,7 +243,7 @@ class Config:
 class FlussConnection:
     @staticmethod
     async def create(config: Config) -> FlussConnection: ...
-    async def get_admin(self) -> FlussAdmin: ...
+    def get_admin(self) -> FlussAdmin: ...
     async def get_table(self, table_path: TablePath) -> FlussTable: ...
     def close(self) -> None: ...
     def __enter__(self) -> FlussConnection: ...
@@ -797,8 +807,8 @@ class LogScanner:
 
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
-        ...
     def __repr__(self) -> str: ...
+    def __aiter__(self) -> AsyncIterator[Union[ScanRecord, RecordBatch]]: ...
 
 class Schema:
     def __init__(

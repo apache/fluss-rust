@@ -21,10 +21,10 @@ build-backend = "maturin"
 
 [project]
 name = "pyfluss"
-description = "Apache Fluss (incubating) Python Binding"
+description = "Apache Fluss (incubating) Python client"
 authors = [{name = "Apache Fluss", email = "dev@fluss.apache.org"}]
 license = {text = "Apache-2.0"}
-readme = "GENERATED_README.md"
+readme = "PYPI_README.md"
 requires-python = ">=3.9"
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
@@ -42,7 +42,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://fluss.apache.org/"
+Homepage = "https://clients.fluss.apache.org/user-guide/python/installation/"
 Repository = "https://github.com/apache/fluss-rust"
 
 [project.optional-dependencies]
@@ -51,9 +51,10 @@ dev = [
     "pytest>=8.3.5",
     "pytest-asyncio>=0.25.3",
     "pytest-xdist>=3.5.0",
+    "pytest-timeout>=2.3.1",
+    "filelock>=3.0",
     "ruff>=0.9.10",
     "maturin>=1.8.2",
-    "testcontainers>=4.0.0",
 ]
 docs = [
     "pdoc>=15.0.4",
@@ -94,7 +95,8 @@ known-first-party = ["fluss"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 120
 
 [tool.mypy]
 python_version = "3.9"

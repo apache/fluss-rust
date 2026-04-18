@@ -62,6 +62,11 @@ mod ffi {
         security_sasl_mechanism: String,
         security_sasl_username: String,
         security_sasl_password: String,
+        lookup_queue_size: usize,
+        lookup_max_batch_size: usize,
+        lookup_batch_timeout_ms: u64,
+        lookup_max_inflight_requests: usize,
+        lookup_max_retries: i32,
     }
 
     struct FfiResult {
@@ -556,7 +561,7 @@ pub struct Connection {
 }
 
 pub struct Admin {
-    inner: fcore::client::FlussAdmin,
+    inner: Arc<fcore::client::FlussAdmin>,
 }
 
 pub struct Table {
@@ -689,6 +694,11 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
         security_sasl_username: config.security_sasl_username.to_string(),
         security_sasl_password: config.security_sasl_password.to_string(),
+        lookup_queue_size: config.lookup_queue_size,
+        lookup_max_batch_size: config.lookup_max_batch_size,
+        lookup_batch_timeout_ms: config.lookup_batch_timeout_ms,
+        lookup_max_inflight_requests: config.lookup_max_inflight_requests,
+        lookup_max_retries: config.lookup_max_retries,
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });
@@ -712,7 +722,7 @@ unsafe fn delete_connection(conn: *mut Connection) {
 
 impl Connection {
     fn get_admin(&self) -> ffi::FfiPtrResult {
-        let admin_result = RUNTIME.block_on(async { self.inner.get_admin().await });
+        let admin_result = self.inner.get_admin();
 
         match admin_result {
             Ok(admin) => {

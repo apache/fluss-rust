@@ -19,7 +19,10 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::row::InternalRow;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
-use arrow::array::{Array, AsArray, BinaryArray, RecordBatch, StringArray};
+use arrow::array::{
+    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, ListArray, RecordBatch,
+    StringArray,
+};
 use arrow::datatypes::{
     DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
     Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
@@ -407,16 +410,399 @@ impl InternalRow for ColumnarRow {
             })?
             .value(self.row_id))
     }
+
+    fn get_array(&self, pos: usize) -> Result<crate::row::FlussArray> {
+        use crate::record::from_arrow_type;
+        use crate::row::binary_array::FlussArrayWriter;
+
+        let column = self.column(pos)?;
+        let values = if let Some(list_arr) = column.as_any().downcast_ref::<ListArray>() {
+            list_arr.value(self.row_id)
+        } else {
+            return Err(IllegalArgument {
+                message: format!(
+                    "expected List array at position {pos}, got {:?}",
+                    column.data_type()
+                ),
+            });
+        };
+
+        let element_fluss_type = from_arrow_type(values.data_type())?;
+        let mut writer = FlussArrayWriter::new(values.len(), &element_fluss_type);
+
+        write_arrow_values_to_fluss_array(&*values, &element_fluss_type, &mut writer)?;
+        writer.complete()
+    }
+}
+
+/// Downcast to a primitive Arrow array type, then loop with null checks calling a writer method.
+macro_rules! write_primitive_elements {
+    ($values:expr, $arrow_type:ty, $element_type:expr, $writer:expr, $write_method:ident) => {{
+        let arr = $values
+            .as_primitive_opt::<$arrow_type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "Expected {} for {:?} element",
+                    stringify!($arrow_type),
+                    $element_type
+                ),
+            })?;
+        for i in 0..arr.len() {
+            if arr.is_null(i) {
+                $writer.set_null_at(i);
+            } else {
+                $writer.$write_method(i, arr.value(i));
+            }
+        }
+    }};
+}
+
+/// Downcast via `downcast_ref`, then loop with null checks calling a writer method.
+macro_rules! write_downcast_elements {
+    ($values:expr, $array_type:ty, $element_type:expr, $writer:expr, $write_method:ident) => {{
+        let arr = $values
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "Expected {} for {:?} element",
+                    stringify!($array_type),
+                    $element_type
+                ),
+            })?;
+        for i in 0..arr.len() {
+            if arr.is_null(i) {
+                $writer.set_null_at(i);
+            } else {
+                $writer.$write_method(i, arr.value(i));
+            }
+        }
+    }};
+}
+
+/// Downcast via `downcast_ref` to a List array type, then loop with null checks.
+macro_rules! write_list_elements {
+    ($values:expr, $list_array_type:ty, $len:expr, $element_type:expr, $writer:expr) => {{
+        let arr = $values
+            .as_any()
+            .downcast_ref::<$list_array_type>()
+            .ok_or_else(|| IllegalArgument {
+                message: format!(
+                    "Expected {} for {:?} element",
+                    stringify!($list_array_type),
+                    $element_type
+                ),
+            })?;
+        let nested_element_type = from_arrow_type(&arr.value_type())?;
+        for i in 0..$len {
+            if arr.is_null(i) {
+                $writer.set_null_at(i);
+            } else {
+                let nested_values = arr.value(i);
+                let mut nested_writer =
+                    FlussArrayWriter::new(nested_values.len(), &nested_element_type);
+                write_arrow_values_to_fluss_array(
+                    &*nested_values,
+                    &nested_element_type,
+                    &mut nested_writer,
+                )?;
+                let nested_array = nested_writer.complete()?;
+                $writer.write_array(i, &nested_array);
+            }
+        }
+    }};
+}
+
+/// Converts all elements of an Arrow array into a `FlussArrayWriter`, downcasting
+/// the Arrow array once per call rather than per element.
+fn write_arrow_values_to_fluss_array(
+    values: &dyn Array,
+    element_type: &crate::metadata::DataType,
+    writer: &mut crate::row::binary_array::FlussArrayWriter,
+) -> Result<()> {
+    use crate::metadata::DataType;
+    use crate::record::from_arrow_type;
+    use crate::row::binary_array::FlussArrayWriter;
+
+    let len = values.len();
+
+    match element_type {
+        DataType::Boolean(_) => {
+            write_downcast_elements!(values, BooleanArray, element_type, writer, write_boolean)
+        }
+        DataType::TinyInt(_) => {
+            write_primitive_elements!(values, Int8Type, element_type, writer, write_byte)
+        }
+        DataType::SmallInt(_) => {
+            write_primitive_elements!(values, Int16Type, element_type, writer, write_short)
+        }
+        DataType::Int(_) => {
+            write_primitive_elements!(values, Int32Type, element_type, writer, write_int)
+        }
+        DataType::BigInt(_) => {
+            write_primitive_elements!(values, Int64Type, element_type, writer, write_long)
+        }
+        DataType::Float(_) => {
+            write_primitive_elements!(values, Float32Type, element_type, writer, write_float)
+        }
+        DataType::Double(_) => {
+            write_primitive_elements!(values, Float64Type, element_type, writer, write_double)
+        }
+        DataType::Char(_) | DataType::String(_) => {
+            write_downcast_elements!(values, StringArray, element_type, writer, write_string)
+        }
+        DataType::Binary(_) => {
+            write_downcast_elements!(
+                values,
+                FixedSizeBinaryArray,
+                element_type,
+                writer,
+                write_binary_bytes
+            )
+        }
+        DataType::Bytes(_) => {
+            write_downcast_elements!(
+                values,
+                BinaryArray,
+                element_type,
+                writer,
+                write_binary_bytes
+            )
+        }
+        DataType::Decimal(dt) => {
+            let arr =
+                values
+                    .as_primitive_opt::<Decimal128Type>()
+                    .ok_or_else(|| IllegalArgument {
+                        message: format!("Expected Decimal128Array for {element_type:?} element"),
+                    })?;
+            let arrow_scale = match values.data_type() {
+                ArrowDataType::Decimal128(_p, s) => *s as i64,
+                other => {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Expected Decimal128 data type for {element_type:?} element, got {other:?}"
+                        ),
+                    });
+                }
+            };
+            let precision = dt.precision();
+            let scale = dt.scale();
+            for i in 0..len {
+                if arr.is_null(i) {
+                    writer.set_null_at(i);
+                } else {
+                    let d = crate::row::Decimal::from_arrow_decimal128(
+                        arr.value(i),
+                        arrow_scale,
+                        precision,
+                        scale,
+                    )?;
+                    writer.write_decimal(i, &d, precision);
+                }
+            }
+        }
+        DataType::Date(_) => {
+            let arr = values
+                .as_primitive_opt::<Date32Type>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!("Expected Date32Array for {element_type:?} element"),
+                })?;
+            for i in 0..len {
+                if arr.is_null(i) {
+                    writer.set_null_at(i);
+                } else {
+                    writer.write_date(i, Date::new(arr.value(i)));
+                }
+            }
+        }
+        DataType::Time(_) => {
+            write_time_elements(values, element_type, writer)?;
+        }
+        DataType::Timestamp(ts_type) => {
+            write_timestamp_elements(
+                values,
+                element_type,
+                writer,
+                ts_type.precision(),
+                TimestampNtz::new,
+                TimestampNtz::from_millis_nanos,
+                |w, i, ts, p| w.write_timestamp_ntz(i, &ts, p),
+            )?;
+        }
+        DataType::TimestampLTz(ts_type) => {
+            write_timestamp_elements(
+                values,
+                element_type,
+                writer,
+                ts_type.precision(),
+                TimestampLtz::new,
+                TimestampLtz::from_millis_nanos,
+                |w, i, ts, p| w.write_timestamp_ltz(i, &ts, p),
+            )?;
+        }
+        DataType::Array(_) => {
+            if values.as_any().is::<ListArray>() {
+                write_list_elements!(values, ListArray, len, element_type, writer);
+            } else {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Expected ListArray for {element_type:?} element, got {:?}",
+                        values.data_type()
+                    ),
+                });
+            }
+        }
+        _ => {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Unsupported element type for Arrow → FlussArray conversion: {element_type:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn write_time_elements(
+    values: &dyn Array,
+    element_type: &crate::metadata::DataType,
+    writer: &mut crate::row::binary_array::FlussArrayWriter,
+) -> Result<()> {
+    macro_rules! process_time {
+        ($arrow_type:ty, $to_millis:expr) => {{
+            let arr = values
+                .as_primitive_opt::<$arrow_type>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!(
+                        "Expected {} for {:?} element",
+                        stringify!($arrow_type),
+                        element_type
+                    ),
+                })?;
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    writer.set_null_at(i);
+                } else {
+                    let to_millis_fn = $to_millis;
+                    writer.write_time(i, Time::new(to_millis_fn(arr.value(i))));
+                }
+            }
+        }};
+    }
+
+    match values.data_type() {
+        ArrowDataType::Time32(TimeUnit::Second) => {
+            process_time!(Time32SecondType, |v: i32| v * 1000);
+        }
+        ArrowDataType::Time32(TimeUnit::Millisecond) => {
+            process_time!(Time32MillisecondType, |v: i32| v);
+        }
+        ArrowDataType::Time64(TimeUnit::Microsecond) => {
+            process_time!(Time64MicrosecondType, |v: i64| (v / 1000) as i32);
+        }
+        ArrowDataType::Time64(TimeUnit::Nanosecond) => {
+            process_time!(Time64NanosecondType, |v: i64| (v / 1_000_000) as i32);
+        }
+        other => {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Expected Time column for {element_type:?} element, got {other:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn convert_timestamp_raw(raw: i64, unit: &TimeUnit) -> (i64, i32) {
+    match unit {
+        TimeUnit::Second => (raw * 1000, 0),
+        TimeUnit::Millisecond => (raw, 0),
+        TimeUnit::Microsecond => {
+            let millis = raw.div_euclid(1000);
+            let nanos = (raw.rem_euclid(1000) * 1000) as i32;
+            (millis, nanos)
+        }
+        TimeUnit::Nanosecond => {
+            let millis = raw.div_euclid(1_000_000);
+            let nanos = raw.rem_euclid(1_000_000) as i32;
+            (millis, nanos)
+        }
+    }
+}
+
+fn write_timestamp_elements<T>(
+    values: &dyn Array,
+    element_type: &crate::metadata::DataType,
+    writer: &mut crate::row::binary_array::FlussArrayWriter,
+    precision: u32,
+    construct_compact: impl Fn(i64) -> T,
+    construct_with_nanos: impl Fn(i64, i32) -> Result<T>,
+    write_fn: impl Fn(&mut crate::row::binary_array::FlussArrayWriter, usize, T, u32),
+) -> Result<()> {
+    let unit = match values.data_type() {
+        ArrowDataType::Timestamp(unit, _) => unit,
+        other => {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Expected Timestamp column for {element_type:?} element, got {other:?}"
+                ),
+            });
+        }
+    };
+
+    macro_rules! process_ts {
+        ($arrow_type:ty) => {{
+            let arr = values
+                .as_primitive_opt::<$arrow_type>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!(
+                        "Expected {} for {:?} element",
+                        stringify!($arrow_type),
+                        element_type
+                    ),
+                })?;
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    writer.set_null_at(i);
+                    continue;
+                }
+                let (millis, nanos) = convert_timestamp_raw(arr.value(i), unit);
+                let ts = if nanos == 0 {
+                    construct_compact(millis)
+                } else {
+                    construct_with_nanos(millis, nanos)?
+                };
+                write_fn(writer, i, ts, precision);
+            }
+        }};
+    }
+
+    match unit {
+        TimeUnit::Second => process_ts!(TimestampSecondType),
+        TimeUnit::Millisecond => process_ts!(TimestampMillisecondType),
+        TimeUnit::Microsecond => process_ts!(TimestampMicrosecondType),
+        TimeUnit::Nanosecond => process_ts!(TimestampNanosecondType),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::array::{
-        BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, StringArray,
+        ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array,
+        Int8Array, Int16Array, Int32Array, Int32Builder, Int64Array, ListBuilder, StringArray,
+        UInt32Builder,
     };
     use arrow::datatypes::{DataType, Field, Schema};
+
+    fn single_column_row(array: ArrayRef) -> ColumnarRow {
+        let batch =
+            RecordBatch::try_from_iter(vec![("arr", array)]).expect("record batch with one column");
+        ColumnarRow::new(Arc::new(batch))
+    }
 
     #[test]
     fn columnar_row_reads_values() {
@@ -531,6 +917,98 @@ mod tests {
                 10
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn columnar_row_get_array_int_roundtrip() {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.values().append_value(3);
+        builder.append(true);
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let arr = row.get_array(0).unwrap();
+        assert_eq!(arr.size(), 3);
+        assert_eq!(arr.get_int(0).unwrap(), 1);
+        assert_eq!(arr.get_int(1).unwrap(), 2);
+        assert_eq!(arr.get_int(2).unwrap(), 3);
+    }
+
+    #[test]
+    fn columnar_row_get_array_with_nulls() {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.values().append_null();
+        builder.values().append_value(3);
+        builder.append(true);
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let arr = row.get_array(0).unwrap();
+        assert_eq!(arr.size(), 3);
+        assert_eq!(arr.get_int(0).unwrap(), 1);
+        assert!(arr.is_null_at(1));
+        assert_eq!(arr.get_int(2).unwrap(), 3);
+    }
+
+    #[test]
+    fn columnar_row_get_array_nested_array() {
+        let mut outer = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+
+        // first nested array: [1, 2]
+        outer.values().values().append_value(1);
+        outer.values().values().append_value(2);
+        outer.values().append(true);
+
+        // second nested array: [99]
+        outer.values().values().append_value(99);
+        outer.values().append(true);
+
+        // one row containing two nested arrays
+        outer.append(true);
+        let array = Arc::new(outer.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let arr = row.get_array(0).unwrap();
+        assert_eq!(arr.size(), 2);
+
+        let nested0 = arr.get_array(0).unwrap();
+        assert_eq!(nested0.size(), 2);
+        assert_eq!(nested0.get_int(0).unwrap(), 1);
+        assert_eq!(nested0.get_int(1).unwrap(), 2);
+
+        let nested1 = arr.get_array(1).unwrap();
+        assert_eq!(nested1.size(), 1);
+        assert_eq!(nested1.get_int(0).unwrap(), 99);
+    }
+
+    #[test]
+    fn columnar_row_get_array_non_list_column_returns_error() {
+        let array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let row = single_column_row(array);
+        let err = row.get_array(0).unwrap_err();
+        assert!(
+            err.to_string().contains("expected List array"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn columnar_row_get_array_unsupported_element_type_returns_error() {
+        let mut builder = ListBuilder::new(UInt32Builder::new());
+        builder.values().append_value(7);
+        builder.append(true);
+        let array = Arc::new(builder.finish()) as ArrayRef;
+
+        let row = single_column_row(array);
+        let err = row.get_array(0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot convert Arrow type to Fluss type"),
+            "unexpected error: {err}"
         );
     }
 }

@@ -68,9 +68,16 @@ impl<'a> CompactedRow<'a> {
         self.size_in_bytes
     }
 
-    fn decoded_row(&self) -> &GenericRow<'_> {
-        self.decoded_row
-            .get_or_init(|| self.deserializer.deserialize(&self.reader))
+    fn decoded_row(&self) -> Result<&GenericRow<'_>> {
+        if let Some(row) = self.decoded_row.get() {
+            return Ok(row);
+        }
+
+        // `OnceLock::get_or_try_init` is still unstable on our toolchain.
+        // Keep the same semantics by performing the fallible decode first,
+        // then atomically installing it via `get_or_init`.
+        let decoded = self.deserializer.deserialize(&self.reader)?;
+        Ok(self.decoded_row.get_or_init(|| decoded))
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -97,67 +104,71 @@ impl<'a> InternalRow for CompactedRow<'a> {
     }
 
     fn get_boolean(&self, pos: usize) -> Result<bool> {
-        self.decoded_row().get_boolean(pos)
+        self.decoded_row()?.get_boolean(pos)
     }
 
     fn get_byte(&self, pos: usize) -> Result<i8> {
-        self.decoded_row().get_byte(pos)
+        self.decoded_row()?.get_byte(pos)
     }
 
     fn get_short(&self, pos: usize) -> Result<i16> {
-        self.decoded_row().get_short(pos)
+        self.decoded_row()?.get_short(pos)
     }
 
     fn get_int(&self, pos: usize) -> Result<i32> {
-        self.decoded_row().get_int(pos)
+        self.decoded_row()?.get_int(pos)
     }
 
     fn get_long(&self, pos: usize) -> Result<i64> {
-        self.decoded_row().get_long(pos)
+        self.decoded_row()?.get_long(pos)
     }
 
     fn get_float(&self, pos: usize) -> Result<f32> {
-        self.decoded_row().get_float(pos)
+        self.decoded_row()?.get_float(pos)
     }
 
     fn get_double(&self, pos: usize) -> Result<f64> {
-        self.decoded_row().get_double(pos)
+        self.decoded_row()?.get_double(pos)
     }
 
     fn get_char(&self, pos: usize, length: usize) -> Result<&str> {
-        self.decoded_row().get_char(pos, length)
+        self.decoded_row()?.get_char(pos, length)
     }
 
     fn get_string(&self, pos: usize) -> Result<&str> {
-        self.decoded_row().get_string(pos)
+        self.decoded_row()?.get_string(pos)
     }
 
     fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Result<Decimal> {
-        self.decoded_row().get_decimal(pos, precision, scale)
+        self.decoded_row()?.get_decimal(pos, precision, scale)
     }
 
     fn get_date(&self, pos: usize) -> Result<Date> {
-        self.decoded_row().get_date(pos)
+        self.decoded_row()?.get_date(pos)
     }
 
     fn get_time(&self, pos: usize) -> Result<Time> {
-        self.decoded_row().get_time(pos)
+        self.decoded_row()?.get_time(pos)
     }
 
     fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz> {
-        self.decoded_row().get_timestamp_ntz(pos, precision)
+        self.decoded_row()?.get_timestamp_ntz(pos, precision)
     }
 
     fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz> {
-        self.decoded_row().get_timestamp_ltz(pos, precision)
+        self.decoded_row()?.get_timestamp_ltz(pos, precision)
     }
 
     fn get_binary(&self, pos: usize, length: usize) -> Result<&[u8]> {
-        self.decoded_row().get_binary(pos, length)
+        self.decoded_row()?.get_binary(pos, length)
     }
 
     fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
-        self.decoded_row().get_bytes(pos)
+        self.decoded_row()?.get_bytes(pos)
+    }
+
+    fn get_array(&self, pos: usize) -> Result<crate::row::FlussArray> {
+        self.decoded_row()?.get_array(pos)
     }
 
     fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
@@ -326,5 +337,158 @@ mod tests {
             read_large_decimal.to_unscaled_long().unwrap(),
             999999999999999999i64
         );
+    }
+
+    #[test]
+    fn test_compacted_row_int_array() {
+        use crate::metadata::DataTypes;
+        use crate::row::binary_array::FlussArrayWriter;
+
+        let row_type =
+            RowType::with_data_types(vec![DataTypes::int(), DataTypes::array(DataTypes::int())]);
+
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
+        writer.write_int(42);
+
+        let elem_type = DataTypes::int();
+        let mut arr_writer = FlussArrayWriter::new(3, &elem_type);
+        arr_writer.write_int(0, 1);
+        arr_writer.write_int(1, 2);
+        arr_writer.write_int(2, 3);
+        let arr = arr_writer.complete().unwrap();
+        writer.write_array(arr.as_bytes());
+
+        let bytes = writer.to_bytes();
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+
+        assert_eq!(row.get_int(0).unwrap(), 42);
+        let read_arr = row.get_array(1).unwrap();
+        assert_eq!(read_arr.size(), 3);
+        assert_eq!(read_arr.get_int(0).unwrap(), 1);
+        assert_eq!(read_arr.get_int(1).unwrap(), 2);
+        assert_eq!(read_arr.get_int(2).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_compacted_row_string_array() {
+        use crate::metadata::DataTypes;
+        use crate::row::binary_array::FlussArrayWriter;
+
+        let row_type = RowType::with_data_types(vec![DataTypes::array(DataTypes::string())]);
+
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
+
+        let elem_type = DataTypes::string();
+        let mut arr_writer = FlussArrayWriter::new(3, &elem_type);
+        arr_writer.write_string(0, "hello");
+        arr_writer.write_string(1, "fluss");
+        arr_writer.write_string(2, "rust");
+        let arr = arr_writer.complete().unwrap();
+        writer.write_array(arr.as_bytes());
+
+        let bytes = writer.to_bytes();
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+
+        let read_arr = row.get_array(0).unwrap();
+        assert_eq!(read_arr.size(), 3);
+        assert_eq!(read_arr.get_string(0).unwrap(), "hello");
+        assert_eq!(read_arr.get_string(1).unwrap(), "fluss");
+        assert_eq!(read_arr.get_string(2).unwrap(), "rust");
+    }
+
+    #[test]
+    fn test_compacted_row_array_with_nulls() {
+        use crate::metadata::DataTypes;
+        use crate::row::binary_array::FlussArrayWriter;
+
+        let row_type = RowType::with_data_types(vec![DataTypes::array(DataTypes::int())]);
+
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
+
+        let elem_type = DataTypes::int();
+        let mut arr_writer = FlussArrayWriter::new(3, &elem_type);
+        arr_writer.write_int(0, 10);
+        arr_writer.set_null_at(1);
+        arr_writer.write_int(2, 30);
+        let arr = arr_writer.complete().unwrap();
+        writer.write_array(arr.as_bytes());
+
+        let bytes = writer.to_bytes();
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+
+        let read_arr = row.get_array(0).unwrap();
+        assert_eq!(read_arr.size(), 3);
+        assert!(!read_arr.is_null_at(0));
+        assert_eq!(read_arr.get_int(0).unwrap(), 10);
+        assert!(read_arr.is_null_at(1));
+        assert!(!read_arr.is_null_at(2));
+        assert_eq!(read_arr.get_int(2).unwrap(), 30);
+    }
+
+    #[test]
+    fn test_compacted_row_empty_array() {
+        use crate::metadata::DataTypes;
+        use crate::row::binary_array::FlussArrayWriter;
+
+        let row_type = RowType::with_data_types(vec![DataTypes::array(DataTypes::int())]);
+
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
+
+        let elem_type = DataTypes::int();
+        let arr_writer = FlussArrayWriter::new(0, &elem_type);
+        let arr = arr_writer.complete().unwrap();
+        writer.write_array(arr.as_bytes());
+
+        let bytes = writer.to_bytes();
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+
+        let read_arr = row.get_array(0).unwrap();
+        assert_eq!(read_arr.size(), 0);
+    }
+
+    #[test]
+    fn test_compacted_row_nested_array() {
+        use crate::metadata::DataTypes;
+        use crate::row::binary_array::FlussArrayWriter;
+
+        let row_type =
+            RowType::with_data_types(vec![DataTypes::array(DataTypes::array(DataTypes::int()))]);
+
+        let mut writer = CompactedRowWriter::new(row_type.fields().len());
+
+        // Build inner arrays
+        let inner_type = DataTypes::int();
+        let mut inner1 = FlussArrayWriter::new(2, &inner_type);
+        inner1.write_int(0, 1);
+        inner1.write_int(1, 2);
+        let inner1_arr = inner1.complete().unwrap();
+
+        let mut inner2 = FlussArrayWriter::new(1, &inner_type);
+        inner2.write_int(0, 99);
+        let inner2_arr = inner2.complete().unwrap();
+
+        // Build outer array
+        let outer_type = DataTypes::array(DataTypes::int());
+        let mut outer_writer = FlussArrayWriter::new(2, &outer_type);
+        outer_writer.write_array(0, &inner1_arr);
+        outer_writer.write_array(1, &inner2_arr);
+        let outer_arr = outer_writer.complete().unwrap();
+
+        writer.write_array(outer_arr.as_bytes());
+
+        let bytes = writer.to_bytes();
+        let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
+
+        let read_outer = row.get_array(0).unwrap();
+        assert_eq!(read_outer.size(), 2);
+
+        let nested1 = read_outer.get_array(0).unwrap();
+        assert_eq!(nested1.size(), 2);
+        assert_eq!(nested1.get_int(0).unwrap(), 1);
+        assert_eq!(nested1.get_int(1).unwrap(), 2);
+
+        let nested2 = read_outer.get_array(1).unwrap();
+        assert_eq!(nested2.size(), 1);
+        assert_eq!(nested2.get_int(0).unwrap(), 99);
     }
 }

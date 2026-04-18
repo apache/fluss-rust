@@ -35,7 +35,7 @@ async def test_sasl_connect_with_valid_credentials(sasl_bootstrap_servers):
         "security.sasl.password": "admin-secret",
     })
     conn = await fluss.FlussConnection.create(config)
-    admin = await conn.get_admin()
+    admin = conn.get_admin()
 
     db_name = "py_sasl_test_valid_db"
     db_descriptor = fluss.DatabaseDescriptor(comment="created via SASL auth")
@@ -58,7 +58,7 @@ async def test_sasl_connect_with_second_user(sasl_bootstrap_servers):
         "security.sasl.password": "alice-secret",
     })
     conn = await fluss.FlussConnection.create(config)
-    admin = await conn.get_admin()
+    admin = conn.get_admin()
 
     # Basic operation to confirm functional connection
     assert not await admin.database_exists("some_nonexistent_db_alice")

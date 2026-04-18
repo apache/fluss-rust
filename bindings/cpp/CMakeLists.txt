@@ -25,6 +25,7 @@ project(fluss-cpp LANGUAGES CXX)
 
 include(FetchContent)
 set(FLUSS_GOOGLETEST_VERSION 1.15.2 CACHE STRING "version of GoogleTest")
+set(FLUSS_NLOHMANN_JSON_VERSION 3.12.0 CACHE STRING "version of nlohmann/json")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(FLUSS_CPP_DEP_MODE "system" CACHE STRING "Dependency provisioning mode for fluss-cpp (system|build)")
@@ -253,14 +254,25 @@ if (FLUSS_ENABLE_TESTING)
         URL https://github.com/google/googletest/archive/refs/tags/v${FLUSS_GOOGLETEST_VERSION}.tar.gz
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+
     FetchContent_MakeAvailable(googletest)
+
+    if (NOT TARGET nlohmann_json::nlohmann_json)
+        set(JSON_BuildTests OFF CACHE INTERNAL "")
+        FetchContent_Declare(
+            nlohmann_json
+            URL https://github.com/nlohmann/json/archive/refs/tags/v${FLUSS_NLOHMANN_JSON_VERSION}.tar.gz
+            URL_HASH SHA256=4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187
+        )
+        FetchContent_MakeAvailable(nlohmann_json)
+    endif()
 
     enable_testing()
     include(GoogleTest)
 
     file(GLOB TEST_SOURCE_FILES "test/*.cpp")
     add_executable(fluss_cpp_test ${TEST_SOURCE_FILES})
-    target_link_libraries(fluss_cpp_test PRIVATE fluss_cpp GTest::gtest)
+    target_link_libraries(fluss_cpp_test PRIVATE fluss_cpp GTest::gtest nlohmann_json::nlohmann_json)
     target_link_libraries(fluss_cpp_test PRIVATE Arrow::arrow_shared)
     target_compile_definitions(fluss_cpp_test PRIVATE ARROW_FOUND)
     target_include_directories(fluss_cpp_test PRIVATE
@@ -268,15 +280,12 @@ if (FLUSS_ENABLE_TESTING)
         ${PROJECT_SOURCE_DIR}/test
     )
 
-    # Individual tests for parallel execution via ctest -j.
     gtest_discover_tests(fluss_cpp_test
         PROPERTIES
             TIMEOUT 120
             FIXTURES_REQUIRED fluss_cluster
     )
 
-    # Cleanup: stop Docker containers after all tests finish.
-    # Mirrors Python's pytest_unconfigure and Rust's atexit cleanup.
     add_test(NAME fluss_cluster_cleanup COMMAND fluss_cpp_test --cleanup)
     set_tests_properties(fluss_cluster_cleanup PROPERTIES
         FIXTURES_CLEANUP fluss_cluster

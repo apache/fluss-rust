@@ -46,19 +46,13 @@ impl FlussConnection {
     }
 
     /// Get admin interface
-    fn get_admin<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.inner.clone();
+    fn get_admin(&self, py: Python<'_>) -> PyResult<Py<FlussAdmin>> {
+        let admin = self
+            .inner
+            .get_admin()
+            .map_err(|e| FlussError::from_core_error(&e))?;
 
-        future_into_py(py, async move {
-            let admin = client
-                .get_admin()
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let py_admin = FlussAdmin::from_core(admin);
-
-            Python::attach(|py| Py::new(py, py_admin))
-        })
+        Py::new(py, FlussAdmin::from_core(admin))
     }
 
     /// Get a table

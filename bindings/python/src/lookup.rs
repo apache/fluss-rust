@@ -94,15 +94,18 @@ impl Lookuper {
         metadata: Arc<fcore::client::Metadata>,
         table_info: fcore::metadata::TableInfo,
     ) -> PyResult<Self> {
-        let fluss_table = fcore::client::FlussTable::new(connection, metadata, table_info.clone());
-
-        let table_lookup = fluss_table
-            .new_lookup()
-            .map_err(|e| FlussError::from_core_error(&e))?;
-
-        let lookuper = table_lookup
-            .create_lookuper()
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        // Run inside tokio runtime context because new_lookup()
+        // spawns a background task via tokio::spawn() in LookupClient::new().
+        let lookuper = TOKIO_RUNTIME.block_on(async {
+            let fluss_table =
+                fcore::client::FlussTable::new(connection, metadata, table_info.clone());
+            let table_lookup = fluss_table
+                .new_lookup()
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            table_lookup
+                .create_lookuper()
+                .map_err(|e| FlussError::from_core_error(&e))
+        })?;
 
         Ok(Self {
             inner: Arc::new(Mutex::new(lookuper)),

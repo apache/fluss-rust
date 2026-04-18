@@ -22,11 +22,14 @@ header:
 
   paths-ignore:
     - '.gitignore'
+    - 'Cargo.lock'
     - 'LICENSE'
     - 'NOTICE'
     - 'DISCLAIMER'
     - 'bindings/python/fluss/py.typed'
+    - '**/mix.lock'
     - 'website/**'
     - '**/*.md'
     - '**/DEPENDENCIES.*.tsv'
+    - '**/*.env'
   comment: on-failure

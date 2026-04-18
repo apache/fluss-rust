@@ -33,7 +33,7 @@ mod table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_append_record_batch_and_scan");
 
@@ -143,7 +143,7 @@ mod table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_list_offsets");
 
@@ -296,7 +296,7 @@ mod table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_project");
 
@@ -451,7 +451,7 @@ mod table_test {
     async fn test_poll_batches() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_poll_batches");
         let schema = Schema::builder()
@@ -584,7 +584,7 @@ mod table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_log_all_datatypes");
 
@@ -684,8 +684,8 @@ mod table_test {
         let col_smallint = 32767i16;
         let col_int = 2147483647i32;
         let col_bigint = 9223372036854775807i64;
-        let col_float = 3.14f32;
-        let col_double = 2.718281828459045f64;
+        let col_float = std::f32::consts::PI;
+        let col_double = std::f64::consts::E;
         let col_boolean = true;
         let col_char = "hello";
         let col_string = "world of fluss rust client";
@@ -738,18 +738,18 @@ mod table_test {
         row.set_field(14, col_time_ns);
         row.set_field(15, col_timestamp_s);
         row.set_field(16, col_timestamp_ms);
-        row.set_field(17, col_timestamp_us.clone());
-        row.set_field(18, col_timestamp_ns.clone());
+        row.set_field(17, col_timestamp_us);
+        row.set_field(18, col_timestamp_ns);
         row.set_field(19, col_timestamp_ltz_s);
         row.set_field(20, col_timestamp_ltz_ms);
-        row.set_field(21, col_timestamp_ltz_us.clone());
-        row.set_field(22, col_timestamp_ltz_ns.clone());
+        row.set_field(21, col_timestamp_ltz_us);
+        row.set_field(22, col_timestamp_ltz_ns);
         row.set_field(23, col_bytes.as_slice());
         row.set_field(24, col_binary.as_slice());
-        row.set_field(25, col_timestamp_us_neg.clone());
-        row.set_field(26, col_timestamp_ns_neg.clone());
-        row.set_field(27, col_timestamp_ltz_us_neg.clone());
-        row.set_field(28, col_timestamp_ltz_ns_neg.clone());
+        row.set_field(25, col_timestamp_us_neg);
+        row.set_field(26, col_timestamp_ns_neg);
+        row.set_field(27, col_timestamp_ltz_us_neg);
+        row.set_field(28, col_timestamp_ltz_ns_neg);
 
         append_writer
             .append(&row)
@@ -1015,7 +1015,7 @@ mod table_test {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_partitioned_log_append");
 
@@ -1309,7 +1309,7 @@ mod table_test {
     async fn undersized_row_returns_error() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().await.expect("Failed to get admin");
+        let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_log_undersized_row");
 

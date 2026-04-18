@@ -53,7 +53,7 @@ static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
             );
 
             let cluster =
-                FlussTestingClusterBuilder::new_with_cluster_conf("shared-test", &cluster_conf)
+                FlussTestingClusterBuilder::new_with_cluster_conf("rust-test", &cluster_conf)
                     .with_sasl(vec![
                         ("admin".to_string(), "admin-secret".to_string()),
                         ("alice".to_string(), "alice-secret".to_string()),
@@ -109,12 +109,11 @@ pub async fn wait_for_cluster_ready_with_sasl(cluster: &FlussTestingCluster) {
         let connection = cluster
             .get_fluss_connection_with_sasl(username, password)
             .await;
-        if connection.get_admin().await.is_ok()
-            && connection
-                .get_metadata()
-                .get_cluster()
-                .get_one_available_server()
-                .is_some()
+        if connection
+            .get_metadata()
+            .get_cluster()
+            .get_one_available_server()
+            .is_some()
         {
             return;
         }

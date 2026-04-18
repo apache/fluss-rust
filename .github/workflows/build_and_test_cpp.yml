@@ -38,11 +38,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test-cpp:
+  build-and-test:
     timeout-minutes: 60
     runs-on: ubuntu-latest
+    env:
+      FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/target/debug/fluss-test-cluster
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -56,13 +58,10 @@ jobs:
           sudo apt-get install -y -V libarrow-dev
 
       - name: Rust Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cpp-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Build fluss-test-cluster binary
+        run: cargo build -p fluss-test-cluster
 
       - name: Build C++ bindings and tests
         working-directory: bindings/cpp

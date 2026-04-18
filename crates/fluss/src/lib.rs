@@ -40,7 +40,7 @@
 //!     let mut config = Config::default();
 //!     config.bootstrap_servers = "127.0.0.1:9123".to_string();
 //!     let connection = FlussConnection::new(config).await?;
-//!     let admin = connection.get_admin().await?;
+//!     let admin = connection.get_admin()?;
 //!
 //!     // ---- Primary key (KV) table: upsert and lookup ----
 //!     let kv_path = TablePath::new("fluss", "users");
