@@ -148,7 +148,7 @@ Complete API reference for the Fluss Rust client.
 
 ## `RecordBatchLogScanner`
 
-Overlapping `poll` calls on clones that share state, or `poll` concurrent with `RecordBatchLogReader::next_batch`, fail fast with `fluss::error::Error::UnsupportedOperation` (not queued).
+Overlapping `poll` calls on clones that share state, or `poll` concurrent with `RecordBatchLogReader::next_batch`, are not supported. Use one active polling/consumption call at a time per underlying scanner state.
 
 | Method                                                                                                    | Description                                              |
 |-----------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
@@ -174,8 +174,8 @@ Unlike `RecordBatchLogScanner` which polls indefinitely, this reader stops autom
 |-------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
 | `async fn new_until_latest(scanner, admin) -> Result<Self>`                                                  | Read until the latest offsets at time of creation         |
 | `fn new_until_offsets(scanner, stopping_offsets) -> Self`                                                    | Read until custom stopping offsets per bucket             |
-| `async fn next_batch(&mut self) -> Result<Option<RecordBatch>>`                                              | Get the next batch, or `None` when all buckets caught up |
-| `async fn collect_all_batches(&mut self) -> Result<Vec<RecordBatch>>`                                        | Drain all batches until stopping offsets are satisfied    |
+| `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>`                                                | Get the next batch with bucket/offset metadata, or `None` when all buckets caught up |
+| `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>`                                          | Drain all batches (with metadata) until stopping offsets are satisfied |
 | `fn schema(&self) -> SchemaRef`                                                                              | Arrow schema for produced batches                        |
 | `fn to_record_batch_reader(self, handle) -> SyncRecordBatchLogReader`                                        | Sync adapter implementing `arrow::RecordBatchReader`     |
 

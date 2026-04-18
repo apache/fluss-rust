@@ -799,8 +799,8 @@ class LogScanner:
 
         Do not call ``poll_arrow`` / ``poll_record_batch`` on this scanner while
         iterating the reader; they share the same underlying scanner state.
-        Overlapping calls fail immediately with ``FlussError`` (client-side), not
-        by blocking behind the active session.
+        Overlapping calls are not supported. Use one active
+        polling/consumption path at a time.
 
         Requires a batch-based scanner (created with ``new_scan().create_record_batch_log_scanner()``).
         You must call ``subscribe()``, ``subscribe_buckets()``, ``subscribe_partition()``,
@@ -824,8 +824,7 @@ class LogScanner:
 
         Batches are collected in Rust then combined into one table (no per-batch
         Python iteration). Do not interleave with ``poll_arrow`` / ``poll_record_batch``
-        for the same subscription session; overlapping use fails immediately with
-        ``FlussError``.
+        for the same subscription session; overlapping use is not supported.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
         Reads from currently subscribed buckets until reaching their latest offsets.
