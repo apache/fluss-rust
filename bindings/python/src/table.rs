@@ -18,6 +18,7 @@
 use crate::TOKIO_RUNTIME;
 use crate::*;
 use arrow::array::RecordBatch as ArrowRecordBatch;
+use arrow::record_batch::RecordBatchReader as _;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_schema::SchemaRef;
 use fluss::record::to_arrow_schema;
@@ -1932,15 +1933,12 @@ fn get_type_name(value: &Bound<PyAny>) -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-/// Python iterator that lazily yields PyArrow RecordBatches from a
-/// [`fcore::client::RecordBatchLogReader`]. Used as the backing iterator
-/// for ``pa.RecordBatchReader.from_batches()``.
-///
-/// **Concurrency:** Do not call ``poll_arrow`` / ``poll_record_batch`` on the
-/// same logical scanner while this iterator is active.
+/// Thin Python iterator over [`fcore::client::SyncRecordBatchLogReader`].
+/// Used internally as the backing iterator for
+/// ``pa.RecordBatchReader.from_batches()``; not registered on the module.
 #[pyclass]
-pub struct PyRecordBatchLogReader {
-    reader: fcore::client::RecordBatchLogReader,
+struct PyRecordBatchLogReader {
+    sync_reader: fcore::client::SyncRecordBatchLogReader,
 }
 
 #[pymethods]
@@ -1950,18 +1948,19 @@ impl PyRecordBatchLogReader {
     }
 
     fn __next__(&mut self, py: Python) -> PyResult<Option<Py<PyAny>>> {
-        let batch = py
-            .detach(|| TOKIO_RUNTIME.block_on(self.reader.next_batch()))
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let result = py.detach(|| self.sync_reader.next().transpose());
 
-        match batch {
-            Some(b) => {
-                let py_batch = b
+        match result {
+            Ok(Some(batch)) => {
+                let py_batch = batch
                     .to_pyarrow(py)
                     .map_err(|e| FlussError::new_err(format!("Failed to convert batch: {e}")))?;
                 Ok(Some(py_batch.unbind()))
             }
-            None => Ok(None),
+            Ok(None) => Ok(None),
+            Err(arrow_err) => Err(FlussError::new_err(format!(
+                "Error reading batch: {arrow_err}"
+            ))),
         }
     }
 }
@@ -2280,24 +2279,27 @@ impl LogScanner {
     fn to_arrow_batch_reader(&self, py: Python) -> PyResult<Py<PyAny>> {
         let scanner = self.kind.as_batch()?;
 
-        let reader = py
+        let sync_reader = py
             .detach(|| {
                 TOKIO_RUNTIME.block_on(async {
-                    fcore::client::RecordBatchLogReader::new_until_latest(
-                        scanner.clone(),
+                    let reader = fcore::client::RecordBatchLogReader::new_until_latest(
+                        scanner.new_shared_handle(),
                         &self.admin,
                     )
-                    .await
+                    .await?;
+                    Ok::<_, fcore::error::Error>(
+                        reader.to_record_batch_reader(TOKIO_RUNTIME.handle().clone()),
+                    )
                 })
             })
             .map_err(|e| FlussError::from_core_error(&e))?;
 
-        let py_schema = reader
+        let py_schema = sync_reader
             .schema()
             .to_pyarrow(py)
             .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
 
-        let py_iter = Py::new(py, PyRecordBatchLogReader { reader })?;
+        let py_iter = Py::new(py, PyRecordBatchLogReader { sync_reader })?;
 
         let pyarrow = py.import("pyarrow")?;
         let batch_reader = pyarrow
@@ -2326,13 +2328,16 @@ impl LogScanner {
             .detach(|| {
                 TOKIO_RUNTIME.block_on(async {
                     let mut reader = fcore::client::RecordBatchLogReader::new_until_latest(
-                        scanner.clone(),
+                        scanner.new_shared_handle(),
                         &self.admin,
                     )
                     .await?;
-                    let batches = reader.collect_all_batches().await?;
+                    let scan_batches = reader.collect_all_batches().await?;
                     Ok::<_, fcore::error::Error>(
-                        batches.into_iter().map(std::sync::Arc::new).collect(),
+                        scan_batches
+                            .into_iter()
+                            .map(|sb| std::sync::Arc::new(sb.into_batch()))
+                            .collect(),
                     )
                 })
             })
