@@ -27,6 +27,64 @@
 namespace fluss {
 namespace utils {
 
+/// Compact FFI representation of a (possibly nested) array type.
+///
+/// `nesting` counts the number of ARRAY wrappers stripped to reach the leaf
+/// element type. `leaf_type`/`leaf_precision`/`leaf_scale` describe that leaf
+/// scalar. A non-array input produces a zero-initialised value (nesting == 0).
+///
+/// Using a flat representation — rather than serialising a recursive
+/// `DataType` — keeps the cxx bridge contract small (four `i32`s inside
+/// `FfiColumn`) while preserving full schema fidelity across the FFI boundary
+/// when paired with rebuild_array_type().
+struct FlattenedArrayType {
+    int32_t nesting{0};
+    int32_t leaf_type{0};
+    int32_t leaf_precision{0};
+    int32_t leaf_scale{0};
+};
+
+/// Flattens an `ARRAY<ARRAY<...<leaf>>>` DataType into a FlattenedArrayType.
+///
+/// Contract:
+///   - If `data_type` is not an ARRAY, returns a zero-valued FlattenedArrayType
+///     and callers must use the column's own `id/precision/scale` instead.
+///   - If `data_type` is an ARRAY but has a null element_type() chain (which
+///     should only happen on malformed input), returns a zero-valued result to
+///     signal the caller to reject the schema.
+///   - Otherwise, `nesting >= 1` and leaf_* describe the innermost scalar.
+inline FlattenedArrayType flatten_array_type(const DataType& data_type) {
+    FlattenedArrayType out;
+    if (data_type.id() != TypeId::Array) {
+        return out;
+    }
+
+    const DataType* current = &data_type;
+    while (current && current->id() == TypeId::Array) {
+        out.nesting += 1;
+        current = current->element_type();
+    }
+    if (!current) {
+        return FlattenedArrayType{};
+    }
+
+    out.leaf_type = static_cast<int32_t>(current->id());
+    out.leaf_precision = current->precision();
+    out.leaf_scale = current->scale();
+    return out;
+}
+
+/// Inverse of flatten_array_type: rebuilds an `ARRAY<ARRAY<...<leaf>>>` type
+/// from the compact flat form. Requires `flat.nesting >= 1`; callers handle
+/// the `nesting == 0` case by using a plain scalar DataType directly.
+inline DataType rebuild_array_type(const FlattenedArrayType& flat) {
+    DataType dt(static_cast<TypeId>(flat.leaf_type), flat.leaf_precision, flat.leaf_scale);
+    for (int32_t i = 0; i < flat.nesting; ++i) {
+        dt = DataType::Array(std::move(dt));
+    }
+    return dt;
+}
+
 inline Result make_error(int32_t code, std::string msg) { return Result{code, std::move(msg)}; }
 
 inline Result make_client_error(std::string msg) {
@@ -94,6 +152,17 @@ inline ffi::FfiColumn to_ffi_column(const Column& col) {
     ffi_col.comment = rust::String(col.comment);
     ffi_col.precision = col.data_type.precision();
     ffi_col.scale = col.data_type.scale();
+    auto flat = flatten_array_type(col.data_type);
+    ffi_col.array_nesting = flat.nesting;
+    if (flat.nesting > 0 && flat.leaf_type != 0) {
+        ffi_col.element_data_type = flat.leaf_type;
+        ffi_col.element_precision = flat.leaf_precision;
+        ffi_col.element_scale = flat.leaf_scale;
+    } else {
+        ffi_col.element_data_type = 0;
+        ffi_col.element_precision = 0;
+        ffi_col.element_scale = 0;
+    }
     return ffi_col;
 }
 
@@ -158,10 +227,18 @@ inline ffi::FfiTableDescriptor to_ffi_table_descriptor(const TableDescriptor& de
 }
 
 inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
-    return Column{
-        std::string(ffi_col.name),
-        DataType(static_cast<TypeId>(ffi_col.data_type), ffi_col.precision, ffi_col.scale),
-        std::string(ffi_col.comment)};
+    auto type_id = static_cast<TypeId>(ffi_col.data_type);
+    DataType dt(type_id, ffi_col.precision, ffi_col.scale);
+    if (type_id == TypeId::Array && ffi_col.element_data_type != 0) {
+        int32_t nesting = ffi_col.array_nesting > 0 ? ffi_col.array_nesting : 1;
+        dt = rebuild_array_type(FlattenedArrayType{
+            nesting,
+            ffi_col.element_data_type,
+            ffi_col.element_precision,
+            ffi_col.element_scale,
+        });
+    }
+    return Column{std::string(ffi_col.name), std::move(dt), std::string(ffi_col.comment)};
 }
 
 inline Schema from_ffi_schema(const ffi::FfiSchema& ffi_schema) {

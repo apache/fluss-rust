@@ -829,3 +829,393 @@ TEST_F(LogTableTest, PartitionedTableAppendScan) {
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
+
+// ============================================================================
+// Array data type tests
+// ============================================================================
+
+TEST_F(LogTableTest, AppendAndScanWithArray) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_append_scan_with_array_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("tags", fluss::DataType::Array(fluss::DataType::String()))
+                      .AddColumn("scores", fluss::DataType::Array(fluss::DataType::Int()))
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    auto info = table.GetTableInfo();
+    ASSERT_GE(info.schema.columns.size(), 2u);
+    const auto& matrix_type = info.schema.columns[1].data_type;
+    ASSERT_EQ(matrix_type.id(), fluss::TypeId::Array);
+    ASSERT_NE(matrix_type.element_type(), nullptr);
+    ASSERT_EQ(matrix_type.element_type()->id(), fluss::TypeId::Array);
+    ASSERT_NE(matrix_type.element_type()->element_type(), nullptr);
+    ASSERT_EQ(matrix_type.element_type()->element_type()->id(), fluss::TypeId::Int);
+
+    auto append_writer = table.NewAppend().CreateWriter();
+
+    {
+        auto row = table.NewRow();
+        row.Set("id", 1);
+
+        fluss::ArrayWriter tags(2, fluss::DataType::String());
+        tags.SetString(0, "hello");
+        tags.SetString(1, "world");
+        row.SetArray(1, std::move(tags));
+
+        fluss::ArrayWriter scores(3, fluss::DataType::Int());
+        scores.SetInt32(0, 10);
+        scores.SetInt32(1, 20);
+        scores.SetInt32(2, 30);
+        row.SetArray(2, std::move(scores));
+
+        ASSERT_OK(append_writer.AppendRow(row));
+    }
+    {
+        auto row = table.NewRow();
+        row.Set("id", 2);
+
+        fluss::ArrayWriter tags(1, fluss::DataType::String());
+        tags.SetNull(0);
+        row.SetArray(1, std::move(tags));
+
+        fluss::ArrayWriter scores(0, fluss::DataType::Int());
+        row.SetArray(2, std::move(scores));
+
+        ASSERT_OK(append_writer.AppendRow(row));
+    }
+
+    ASSERT_OK(append_writer.Flush());
+
+    auto scan = table.NewScan();
+    fluss::LogScanner scanner;
+    ASSERT_OK(scan.CreateLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+
+    struct Record {
+        int32_t id;
+        size_t tag_count;
+        std::vector<std::string> tags;
+        size_t score_count;
+        std::vector<int32_t> scores;
+    };
+
+    std::vector<Record> collected;
+    auto extract = [](const fluss::RowView& rv) {
+        Record rec;
+        rec.id = rv.GetInt32(0);
+
+        rec.tag_count = rv.GetArraySize(1);
+        for (size_t i = 0; i < rec.tag_count; ++i) {
+            if (rv.IsArrayElementNull(1, i)) {
+                rec.tags.push_back("<null>");
+            } else {
+                rec.tags.push_back(rv.GetArrayString(1, i));
+            }
+        }
+
+        rec.score_count = rv.GetArraySize(2);
+        for (size_t i = 0; i < rec.score_count; ++i) {
+            rec.scores.push_back(rv.GetArrayInt32(2, i));
+        }
+
+        return rec;
+    };
+
+    fluss_test::PollRecords(scanner, 2, extract, collected);
+
+    ASSERT_EQ(collected.size(), 2u);
+
+    std::sort(collected.begin(), collected.end(),
+              [](const Record& a, const Record& b) { return a.id < b.id; });
+
+    EXPECT_EQ(collected[0].id, 1);
+    ASSERT_EQ(collected[0].tag_count, 2u);
+    EXPECT_EQ(collected[0].tags[0], "hello");
+    EXPECT_EQ(collected[0].tags[1], "world");
+    ASSERT_EQ(collected[0].score_count, 3u);
+    EXPECT_EQ(collected[0].scores[0], 10);
+    EXPECT_EQ(collected[0].scores[1], 20);
+    EXPECT_EQ(collected[0].scores[2], 30);
+
+    EXPECT_EQ(collected[1].id, 2);
+    ASSERT_EQ(collected[1].tag_count, 1u);
+    EXPECT_EQ(collected[1].tags[0], "<null>");
+    ASSERT_EQ(collected[1].score_count, 0u);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, AppendAndScanWithNestedArray) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_append_scan_nested_array_cpp");
+
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", fluss::DataType::Int())
+            .AddColumn("matrix",
+                        fluss::DataType::Array(fluss::DataType::Array(fluss::DataType::Int())))
+            .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    auto append_writer = table.NewAppend().CreateWriter();
+
+    {
+        auto row = table.NewRow();
+        row.Set("id", 1);
+
+        fluss::ArrayWriter inner1(2, fluss::DataType::Int());
+        inner1.SetInt32(0, 1);
+        inner1.SetInt32(1, 2);
+
+        fluss::ArrayWriter inner2(2, fluss::DataType::Int());
+        inner2.SetInt32(0, 3);
+        inner2.SetInt32(1, 4);
+
+        fluss::ArrayWriter outer(2, fluss::DataType::Array(fluss::DataType::Int()));
+        outer.SetArray(0, std::move(inner1));
+        outer.SetArray(1, std::move(inner2));
+
+        row.SetArray(1, std::move(outer));
+        ASSERT_OK(append_writer.AppendRow(row));
+    }
+
+    ASSERT_OK(append_writer.Flush());
+
+    auto scan = table.NewScan();
+    fluss::LogScanner scanner;
+    ASSERT_OK(scan.CreateLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+
+    struct Record {
+        int32_t id;
+        size_t outer_count;
+        fluss::TypeId element_type;
+        std::vector<std::vector<int32_t>> values;
+    };
+
+    std::vector<Record> collected;
+    auto extract = [](const fluss::RowView& rv) {
+        Record rec;
+        rec.id = rv.GetInt32(0);
+        rec.outer_count = rv.GetArraySize(1);
+        rec.element_type = rv.GetArrayElementType(1);
+        auto outer = rv.GetArrayView(1);
+        rec.values.reserve(outer.Size());
+        for (size_t i = 0; i < outer.Size(); ++i) {
+            auto inner = outer.GetArray(i);
+            std::vector<int32_t> row;
+            row.reserve(inner.Size());
+            for (size_t j = 0; j < inner.Size(); ++j) {
+                row.push_back(inner.GetInt32(j));
+            }
+            rec.values.push_back(std::move(row));
+        }
+        return rec;
+    };
+
+    fluss_test::PollRecords(scanner, 1, extract, collected);
+    ASSERT_EQ(collected.size(), 1u);
+    EXPECT_EQ(collected[0].id, 1);
+    EXPECT_EQ(collected[0].outer_count, 2u);
+    EXPECT_EQ(collected[0].element_type, fluss::TypeId::Array);
+    ASSERT_EQ(collected[0].values.size(), 2u);
+    EXPECT_EQ(collected[0].values[0], (std::vector<int32_t>{1, 2}));
+    EXPECT_EQ(collected[0].values[1], (std::vector<int32_t>{3, 4}));
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_append_scan_array_rich_types_cpp");
+
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", fluss::DataType::Int())
+            .AddColumn("arr_bytes", fluss::DataType::Array(fluss::DataType::Bytes()))
+            .AddColumn("arr_date", fluss::DataType::Array(fluss::DataType::Date()))
+            .AddColumn("arr_time", fluss::DataType::Array(fluss::DataType::Time()))
+            .AddColumn("arr_ts", fluss::DataType::Array(fluss::DataType::Timestamp(6)))
+            .AddColumn("arr_decimal", fluss::DataType::Array(fluss::DataType::Decimal(10, 2)))
+            .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto append_writer = table.NewAppend().CreateWriter();
+
+    {
+        auto row = table.NewRow();
+        row.Set("id", 1);
+
+        fluss::ArrayWriter arr_bytes(2, fluss::DataType::Bytes());
+        arr_bytes.SetBytes(0, std::vector<uint8_t>{0x10, 0x20, 0x30});
+        arr_bytes.SetNull(1);
+        row.SetArray(1, std::move(arr_bytes));
+
+        fluss::ArrayWriter arr_date(2, fluss::DataType::Date());
+        auto d0 = fluss::Date::FromDays(20000);
+        arr_date.SetDate(0, d0);
+        arr_date.SetNull(1);
+        row.SetArray(2, std::move(arr_date));
+
+        fluss::ArrayWriter arr_time(1, fluss::DataType::Time());
+        auto t0 = fluss::Time::FromMillis(3600123);
+        arr_time.SetTime(0, t0);
+        row.SetArray(3, std::move(arr_time));
+
+        fluss::ArrayWriter arr_ts(1, fluss::DataType::Timestamp(6));
+        auto ts0 = fluss::Timestamp::FromMillisNanos(1769163227123, 456000);
+        arr_ts.SetTimestampNtz(0, ts0);
+        row.SetArray(4, std::move(arr_ts));
+
+        fluss::ArrayWriter arr_decimal(2, fluss::DataType::Decimal(10, 2));
+        arr_decimal.SetDecimal(0, "123.45");
+        arr_decimal.SetNull(1);
+        row.SetArray(5, std::move(arr_decimal));
+
+        ASSERT_OK(append_writer.AppendRow(row));
+    }
+
+    ASSERT_OK(append_writer.Flush());
+
+    auto scan = table.NewScan();
+    fluss::LogScanner scanner;
+    ASSERT_OK(scan.CreateLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+
+    fluss::ScanRecords records;
+    ASSERT_OK(scanner.Poll(10000, records));
+    ASSERT_EQ(records.Count(), 1u);
+
+    auto it = records.begin();
+    ASSERT_TRUE(it != records.end());
+    auto rec = *it;
+    const auto& rv = rec.row;
+
+    EXPECT_EQ(rv.GetArraySize(1), 2u);
+    auto bytes0 = rv.GetArrayBytes(1, 0);
+    ASSERT_EQ(bytes0.size(), 3u);
+    EXPECT_EQ(bytes0[0], 0x10);
+    EXPECT_EQ(bytes0[1], 0x20);
+    EXPECT_EQ(bytes0[2], 0x30);
+    EXPECT_TRUE(rv.IsArrayElementNull(1, 1));
+
+    EXPECT_EQ(rv.GetArraySize(2), 2u);
+    EXPECT_EQ(rv.GetArrayDate(2, 0).days_since_epoch, fluss::Date::FromDays(20000).days_since_epoch);
+    EXPECT_TRUE(rv.IsArrayElementNull(2, 1));
+
+    EXPECT_EQ(rv.GetArraySize(3), 1u);
+    EXPECT_EQ(rv.GetArrayTime(3, 0).millis_since_midnight, fluss::Time::FromMillis(3600123).millis_since_midnight);
+
+    EXPECT_EQ(rv.GetArraySize(4), 1u);
+    auto ts = rv.GetArrayTimestamp(4, 0);
+    EXPECT_EQ(ts.epoch_millis, 1769163227123);
+    EXPECT_EQ(ts.nano_of_millisecond, 456000);
+
+    EXPECT_EQ(rv.GetArraySize(5), 2u);
+    EXPECT_EQ(rv.GetArrayDecimalString(5, 0), "123.45");
+    EXPECT_TRUE(rv.IsArrayElementNull(5, 1));
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, ArrayApiValidationErrors) {
+    // Type mismatch setter should fail through FFI Result propagation.
+    {
+        fluss::ArrayWriter bool_array(1, fluss::DataType::Boolean());
+        bool threw = false;
+        try {
+            bool_array.SetInt32(0, 42);
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    auto& adm = admin();
+    auto& conn = connection();
+    fluss::TablePath table_path("fluss", "test_array_api_validation_errors_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("vals", fluss::DataType::Array(fluss::DataType::Int()))
+                      .Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto append_writer = table.NewAppend().CreateWriter();
+    auto row = table.NewRow();
+    row.Set("id", 1);
+    fluss::ArrayWriter vals(1, fluss::DataType::Int());
+    vals.SetInt32(0, 7);
+    row.SetArray(1, std::move(vals));
+    ASSERT_OK(append_writer.AppendRow(row));
+    ASSERT_OK(append_writer.Flush());
+
+    auto scan = table.NewScan();
+    fluss::LogScanner scanner;
+    ASSERT_OK(scan.CreateLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+    fluss::ScanRecords records;
+    ASSERT_OK(scanner.Poll(10000, records));
+    ASSERT_EQ(records.Count(), 1u);
+    auto it = records.begin();
+    ASSERT_TRUE(it != records.end());
+    auto rec = *it;
+
+    bool oob_threw = false;
+    try {
+        (void)rec.row.GetArrayInt32(1, 5);
+    } catch (const std::exception&) {
+        oob_threw = true;
+    }
+    EXPECT_TRUE(oob_threw);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
