@@ -327,7 +327,8 @@ impl LookupSender {
         let group = self.group_by_leader(lookups);
 
         if !group.unknown_leader_tables.is_empty() {
-            let table_paths_refs: HashSet<&TablePath> = group.unknown_leader_tables.iter().collect();
+            let table_paths_refs: HashSet<&TablePath> =
+                group.unknown_leader_tables.iter().collect();
             let partition_ids: Vec<PartitionId> =
                 group.unknown_leader_partition_ids.iter().copied().collect();
             if let Err(e) = self
@@ -432,7 +433,10 @@ impl LookupSender {
         batches_by_bucket: HashMap<TableBucket, PrimaryLookupBatch>,
     ) {
         let mut batches_by_table = group_by_table(batches_by_bucket);
-        let connection = match self.connect_or_fail(destination, &mut batches_by_table).await {
+        let connection = match self
+            .connect_or_fail(destination, &mut batches_by_table)
+            .await
+        {
             Some(conn) => conn,
             None => return,
         };
@@ -458,7 +462,10 @@ impl LookupSender {
         batches_by_bucket: HashMap<TableBucket, PrefixLookupBatch>,
     ) {
         let mut batches_by_table = group_by_table(batches_by_bucket);
-        let connection = match self.connect_or_fail(destination, &mut batches_by_table).await {
+        let connection = match self
+            .connect_or_fail(destination, &mut batches_by_table)
+            .await
+        {
             Some(conn) => conn,
             None => return,
         };

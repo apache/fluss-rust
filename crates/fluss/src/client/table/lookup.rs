@@ -382,16 +382,18 @@ fn validate_prefix_lookup(table_info: &TableInfo, lookup_columns: &[String]) -> 
     }
 
     for (i, bucket_key) in bucket_keys.iter().enumerate() {
-        let pk = physical_primary_keys.get(i).ok_or_else(|| Error::IllegalArgument {
-            message: format!(
-                "Can not perform prefix lookup on table '{}', because the bucket keys {:?} \
+        let pk = physical_primary_keys
+            .get(i)
+            .ok_or_else(|| Error::IllegalArgument {
+                message: format!(
+                    "Can not perform prefix lookup on table '{}', because the bucket keys {:?} \
                  is not a prefix subset of the physical primary keys {:?} \
                  (excluded partition fields if present).",
-                table_info.get_table_path(),
-                bucket_keys,
-                physical_primary_keys,
-            ),
-        })?;
+                    table_info.get_table_path(),
+                    bucket_keys,
+                    physical_primary_keys,
+                ),
+            })?;
         if bucket_key != pk {
             return Err(Error::IllegalArgument {
                 message: format!(
@@ -502,11 +504,7 @@ impl PrefixKeyLookuper {
 
         let rows = self
             .lookup_client
-            .prefix_lookup(
-                self.table_path.as_ref().clone(),
-                table_bucket,
-                prefix_bytes,
-            )
+            .prefix_lookup(self.table_path.as_ref().clone(), table_bucket, prefix_bytes)
             .await?;
 
         Ok(LookupResult::new(rows, Arc::clone(&self.row_type)))
