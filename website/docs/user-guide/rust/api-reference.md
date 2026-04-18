@@ -172,8 +172,8 @@ Unlike `RecordBatchLogScanner` which polls indefinitely, this reader stops autom
 
 | Method                                                                                                      | Description                                              |
 |-------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
-| `async fn new_until_latest(scanner, admin) -> Result<Self>`                                                  | Read until the latest offsets at time of creation         |
-| `fn new_until_offsets(scanner, stopping_offsets) -> Self`                                                    | Read until custom stopping offsets per bucket             |
+| `async fn new_until_latest(scanner: RecordBatchLogScanner, admin: &FlussAdmin) -> Result<Self>`              | Read until the latest offsets at time of creation         |
+| `fn new_until_offsets(scanner: RecordBatchLogScanner, stopping_offsets: HashMap<TableBucket, i64>) -> Self`  | Read until custom stopping offsets per bucket             |
 | `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>`                                                | Get the next batch with bucket/offset metadata, or `None` when all buckets caught up |
 | `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>`                                          | Drain all batches (with metadata) until stopping offsets are satisfied |
 | `fn schema(&self) -> SchemaRef`                                                                              | Arrow schema for produced batches                        |

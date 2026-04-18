@@ -38,6 +38,7 @@ use crate::record::ScanBatch;
 use crate::rpc::message::OffsetSpec;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::SchemaRef;
+use log::warn;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
@@ -234,7 +235,10 @@ impl arrow::record_batch::RecordBatchReader for SyncRecordBatchLogReader {
 /// and non-partitioned tables.
 ///
 /// Buckets whose subscribed offset already meets or exceeds the latest offset
-/// are excluded from the result (there is nothing to read).
+/// are excluded from the result (there is nothing to read). A `latest_offset`
+/// of `0` means the bucket is empty and is silently skipped; a negative value
+/// is unexpected from the server and is logged as a warning before being
+/// skipped.
 async fn query_latest_offsets(
     admin: &FlussAdmin,
     scanner: &RecordBatchLogScanner,
@@ -258,7 +262,13 @@ async fn query_latest_offsets(
         Ok(offsets
             .into_iter()
             .filter(|(bucket_id, latest_offset)| {
-                if *latest_offset <= 0 {
+                if *latest_offset < 0 {
+                    warn!(
+                        "Server returned negative latest offset {latest_offset} for bucket {bucket_id} of table {table_id}; skipping bucket."
+                    );
+                    return false;
+                }
+                if *latest_offset == 0 {
                     return false;
                 }
                 let subscribed_offset = subscribed_offset_by_bucket
@@ -320,7 +330,13 @@ async fn query_partitioned_offsets(
             .await?;
 
         for (bucket_id, latest_offset) in offsets {
-            if latest_offset <= 0 {
+            if latest_offset < 0 {
+                warn!(
+                    "Server returned negative latest offset {latest_offset} for bucket {bucket_id} of partition {partition_id} (table {table_id}); skipping bucket."
+                );
+                continue;
+            }
+            if latest_offset == 0 {
                 continue;
             }
             let tb = TableBucket::new_with_partition(table_id, Some(partition_id), bucket_id);
@@ -342,8 +358,11 @@ async fn query_partitioned_offsets(
 /// - If `last_offset >= stop_at`, slice to keep only records before stop_at.
 /// - Otherwise, keep the full batch.
 ///
-/// Accepted batches are pushed to `buffer`. Returns the list of buckets
-/// that completed (were removed from `stopping_offsets`).
+/// Accepted batches with at least one row are pushed to `buffer`; empty
+/// batches (e.g. a server-emitted batch containing no rows, or a slice that
+/// reduces to zero rows) are dropped so consumers never observe an empty
+/// `ScanBatch`. Returns the list of buckets that completed (were removed
+/// from `stopping_offsets`).
 fn filter_batches(
     scan_batches: Vec<ScanBatch>,
     stopping_offsets: &mut HashMap<TableBucket, i64>,
@@ -375,7 +394,9 @@ fn filter_batches(
             scan_batch
         };
 
-        buffer.push_back(kept_batch);
+        if kept_batch.batch().num_rows() > 0 {
+            buffer.push_back(kept_batch);
+        }
 
         if last_offset >= stop_at - 1 {
             stopping_offsets.remove(&bucket);
@@ -520,6 +541,23 @@ mod tests {
         assert!(buffer.is_empty());
         assert!(!offsets.contains_key(&bucket(0)));
         assert_eq!(completed, vec![bucket(0)]);
+    }
+
+    #[test]
+    fn filter_drops_empty_batch_before_stop() {
+        // Empty batch well below the stop offset: base=5, 0 rows -> last=4, stop=100.
+        // base_offset (5) < stop_at (100) and last_offset (4) < stop_at (100),
+        // so it falls into the "keep full batch" branch but must not surface to
+        // the consumer because it has zero rows.
+        let mut offsets = HashMap::from([(bucket(0), 100)]);
+        let mut buffer = VecDeque::new();
+
+        let batches = vec![make_scan_batch(bucket(0), 5, &[])];
+        let completed = filter_batches(batches, &mut offsets, &mut buffer);
+
+        assert!(buffer.is_empty());
+        assert!(offsets.contains_key(&bucket(0)));
+        assert!(completed.is_empty());
     }
 
     #[test]
