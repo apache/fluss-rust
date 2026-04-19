@@ -34,7 +34,7 @@ defmodule Fluss.Admin do
 
   @type t :: reference()
 
-  @spec new(Fluss.Connection.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec new(Fluss.Connection.t()) :: {:ok, t()} | {:error, Fluss.Error.t()}
   def new(conn) do
     case Native.admin_new(conn) do
       {:error, _} = err -> err
@@ -46,25 +46,25 @@ defmodule Fluss.Admin do
   def new!(conn) do
     case new(conn) do
       {:ok, admin} -> admin
-      {:error, reason} -> raise "failed to create admin: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
     end
   end
 
-  @spec create_database(t(), String.t(), boolean()) :: :ok | {:error, String.t()}
+  @spec create_database(t(), String.t(), boolean()) :: :ok | {:error, Fluss.Error.t()}
   def create_database(admin, name, ignore_if_exists \\ true) do
     admin
     |> Native.admin_create_database(name, ignore_if_exists)
     |> Native.await_nif()
   end
 
-  @spec drop_database(t(), String.t(), boolean()) :: :ok | {:error, String.t()}
+  @spec drop_database(t(), String.t(), boolean()) :: :ok | {:error, Fluss.Error.t()}
   def drop_database(admin, name, ignore_if_not_exists \\ true) do
     admin
     |> Native.admin_drop_database(name, ignore_if_not_exists)
     |> Native.await_nif()
   end
 
-  @spec list_databases(t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  @spec list_databases(t()) :: {:ok, [String.t()]} | {:error, Fluss.Error.t()}
   def list_databases(admin) do
     admin
     |> Native.admin_list_databases()
@@ -75,26 +75,26 @@ defmodule Fluss.Admin do
   def list_databases!(admin) do
     case list_databases(admin) do
       {:ok, dbs} -> dbs
-      {:error, reason} -> raise "failed to list databases: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
     end
   end
 
   @spec create_table(t(), String.t(), String.t(), Fluss.TableDescriptor.t(), boolean()) ::
-          :ok | {:error, String.t()}
+          :ok | {:error, Fluss.Error.t()}
   def create_table(admin, database, table, descriptor, ignore_if_exists \\ true) do
     admin
     |> Native.admin_create_table(database, table, descriptor, ignore_if_exists)
     |> Native.await_nif()
   end
 
-  @spec drop_table(t(), String.t(), String.t(), boolean()) :: :ok | {:error, String.t()}
+  @spec drop_table(t(), String.t(), String.t(), boolean()) :: :ok | {:error, Fluss.Error.t()}
   def drop_table(admin, database, table, ignore_if_not_exists \\ true) do
     admin
     |> Native.admin_drop_table(database, table, ignore_if_not_exists)
     |> Native.await_nif()
   end
 
-  @spec list_tables(t(), String.t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  @spec list_tables(t(), String.t()) :: {:ok, [String.t()]} | {:error, Fluss.Error.t()}
   def list_tables(admin, database) do
     admin
     |> Native.admin_list_tables(database)
@@ -105,7 +105,7 @@ defmodule Fluss.Admin do
   def list_tables!(admin, database) do
     case list_tables(admin, database) do
       {:ok, tables} -> tables
-      {:error, reason} -> raise "failed to list tables: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
     end
   end
 end
