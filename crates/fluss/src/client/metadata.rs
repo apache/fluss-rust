@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::PartitionId;
 use crate::cluster::{Cluster, ServerNode, ServerType};
-use crate::error::{Error, Result};
+use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::MetadataResponse;
 use crate::rpc::message::UpdateMetadataRequest;
@@ -215,6 +216,27 @@ impl Metadata {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Resolves the partition id, refreshing metadata once if not cached.
+    /// Returns `None` when the partition does not exist — `PartitionNotExists`
+    /// server errors are swallowed so callers can short-circuit to an empty result.
+    pub async fn check_and_update_partition_metadata(
+        &self,
+        physical_table_path: &PhysicalTablePath,
+    ) -> Result<Option<PartitionId>> {
+        if let Some(id) = self.get_cluster().get_partition_id(physical_table_path) {
+            return Ok(Some(id));
+        }
+        let path = Arc::new(physical_table_path.clone());
+        match self.update_physical_table_metadata(&[path]).await {
+            Ok(()) => {}
+            Err(e) if matches!(e.api_error(), Some(FlussError::PartitionNotExists)) => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        }
+        Ok(self.get_cluster().get_partition_id(physical_table_path))
     }
 
     pub async fn get_connection(&self, server_node: &ServerNode) -> Result<ServerConnection> {

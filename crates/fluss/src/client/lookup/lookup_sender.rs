@@ -134,6 +134,22 @@ impl GroupByLeaderResult {
     fn is_empty(&self) -> bool {
         self.primary.is_empty() && self.prefix.is_empty()
     }
+
+    /// Assumes no `(server, bucket)` overlap — safe because the second pass only
+    /// re-groups items unknown in the first.
+    fn merge_batches(&mut self, other: GroupByLeaderResult) {
+        for (server, inner) in other.primary {
+            self.primary.entry(server).or_default().extend(inner);
+        }
+        for (server, inner) in other.prefix {
+            self.prefix.entry(server).or_default().extend(inner);
+        }
+    }
+}
+
+struct GroupingResult {
+    groups: GroupByLeaderResult,
+    unknowns: Vec<QueuedLookup>,
 }
 
 pub struct LookupSender {
@@ -283,13 +299,19 @@ impl LookupSender {
             return Ok(());
         }
 
-        let group = self.group_by_leader(lookups);
+        let GroupingResult {
+            mut groups,
+            unknowns,
+        } = self.group_by_leader(lookups);
 
-        if !group.unknown_leader_tables.is_empty() {
+        if !unknowns.is_empty() {
             let table_paths_refs: HashSet<&TablePath> =
-                group.unknown_leader_tables.iter().collect();
-            let partition_ids: Vec<PartitionId> =
-                group.unknown_leader_partition_ids.iter().copied().collect();
+                groups.unknown_leader_tables.iter().collect();
+            let partition_ids: Vec<PartitionId> = groups
+                .unknown_leader_partition_ids
+                .iter()
+                .copied()
+                .collect();
             if let Err(e) = self
                 .metadata
                 .update_tables_metadata(&table_paths_refs, &HashSet::new(), partition_ids)
@@ -299,30 +321,38 @@ impl LookupSender {
             } else {
                 debug!(
                     "Updated metadata due to unknown leader tables during lookup: {:?}",
-                    group.unknown_leader_tables
+                    groups.unknown_leader_tables
                 );
             }
-        }
 
-        if group.is_empty() && !self.queue.has_undrained() {
-            let mut cluster_rx = self.metadata.subscribe_cluster_changes();
-            tokio::select! {
-                _ = cluster_rx.changed() => {}
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            // Re-group with fresh cluster state; dispatch what resolved, re-enqueue the rest.
+            let retry = self.group_by_leader(unknowns);
+            groups.merge_batches(retry.groups);
+            for item in retry.unknowns {
+                self.re_enqueue_lookup(item);
             }
-            return Ok(());
+
+            // Nothing to dispatch even after refresh — back off to avoid a tight RPC loop.
+            if groups.is_empty() {
+                let mut cluster_rx = self.metadata.subscribe_cluster_changes();
+                tokio::select! {
+                    _ = cluster_rx.changed() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+                return Ok(());
+            }
         }
 
         let primary_fut = async {
             let mut pending = FuturesUnordered::new();
-            for (server, batches) in group.primary {
+            for (server, batches) in groups.primary {
                 pending.push(self.send_request::<Primary>(server, batches));
             }
             while pending.next().await.is_some() {}
         };
         let prefix_fut = async {
             let mut pending = FuturesUnordered::new();
-            for (server, batches) in group.prefix {
+            for (server, batches) in groups.prefix {
                 pending.push(self.send_request::<Prefix>(server, batches));
             }
             while pending.next().await.is_some() {}
@@ -332,12 +362,13 @@ impl LookupSender {
         Ok(())
     }
 
-    fn group_by_leader(&self, lookups: Vec<QueuedLookup>) -> GroupByLeaderResult {
+    fn group_by_leader(&self, lookups: Vec<QueuedLookup>) -> GroupingResult {
         let cluster = self.metadata.get_cluster();
         let mut primary: PrimaryBatches = HashMap::new();
         let mut prefix: PrefixBatches = HashMap::new();
         let mut unknown_leader_tables: HashSet<TablePath> = HashSet::new();
         let mut unknown_leader_partition_ids: HashSet<PartitionId> = HashSet::new();
+        let mut unknowns: Vec<QueuedLookup> = Vec::new();
 
         for query in lookups {
             let table_bucket = query.table_bucket().clone();
@@ -353,7 +384,7 @@ impl LookupSender {
                     if let Some(partition_id) = table_bucket.partition_id() {
                         unknown_leader_partition_ids.insert(partition_id);
                     }
-                    self.re_enqueue_lookup(query);
+                    unknowns.push(query);
                     continue;
                 }
             };
@@ -378,11 +409,14 @@ impl LookupSender {
             }
         }
 
-        GroupByLeaderResult {
-            primary,
-            prefix,
-            unknown_leader_tables,
-            unknown_leader_partition_ids,
+        GroupingResult {
+            groups: GroupByLeaderResult {
+                primary,
+                prefix,
+                unknown_leader_tables,
+                unknown_leader_partition_ids,
+            },
+            unknowns,
         }
     }
 

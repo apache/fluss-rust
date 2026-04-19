@@ -31,9 +31,9 @@ use std::sync::Arc;
 
 /// The result of a lookup operation.
 ///
-/// Contains the rows returned from a lookup. For primary key lookups,
-/// this will contain at most one row. For prefix key lookups (future),
-/// this may contain multiple rows.
+/// Contains the rows returned from a lookup. For primary-key lookups,
+/// this will contain at most one row. For prefix-key lookups, it may
+/// contain multiple rows.
 pub struct LookupResult {
     rows: Vec<Vec<u8>>,
     row_type: Arc<RowType>,
@@ -275,13 +275,13 @@ impl Lookuper {
                 Arc::clone(&self.table_path),
                 Some(partition_name),
             );
-            let cluster = self.metadata.get_cluster();
-            match cluster.get_partition_id(&physical_table_path) {
+            match self
+                .metadata
+                .check_and_update_partition_metadata(&physical_table_path)
+                .await?
+            {
                 Some(id) => Some(id),
-                None => {
-                    // Partition doesn't exist, return empty result (like Java)
-                    return Ok(LookupResult::empty(Arc::clone(&self.row_type)));
-                }
+                None => return Ok(LookupResult::empty(Arc::clone(&self.row_type))),
             }
         } else {
             None
@@ -473,12 +473,13 @@ impl PrefixKeyLookuper {
                 Arc::clone(&self.table_path),
                 Some(partition_name),
             );
-            let cluster = self.metadata.get_cluster();
-            match cluster.get_partition_id(&physical_table_path) {
+            match self
+                .metadata
+                .check_and_update_partition_metadata(&physical_table_path)
+                .await?
+            {
                 Some(id) => Some(id),
-                None => {
-                    return Ok(LookupResult::empty(Arc::clone(&self.row_type)));
-                }
+                None => return Ok(LookupResult::empty(Arc::clone(&self.row_type))),
             }
         } else {
             None
