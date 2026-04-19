@@ -260,7 +260,8 @@ std::string ArrayView::GetString(size_t element) const {
 
 std::vector<uint8_t> ArrayView::GetBytes(size_t element) const {
     CHECK_AV();
-    return inner_->av_get_bytes(element);
+    auto rv = inner_->av_get_bytes(element);
+    return {rv.data(), rv.data() + rv.size()};
 }
 
 fluss::Date ArrayView::GetDate(size_t element) const {
@@ -546,7 +547,8 @@ std::string RowView::GetArrayString(size_t idx, size_t element) const {
 
 std::vector<uint8_t> RowView::GetArrayBytes(size_t idx, size_t element) const {
     CHECK_DATA("RowView");
-    return data_->raw->sv_get_array_bytes(bucket_idx_, rec_idx_, idx, element);
+    auto rv = data_->raw->sv_get_array_bytes(bucket_idx_, rec_idx_, idx, element);
+    return {rv.data(), rv.data() + rv.size()};
 }
 
 fluss::Date RowView::GetArrayDate(size_t idx, size_t element) const {
@@ -830,7 +832,8 @@ std::string LookupResult::GetArrayString(size_t idx, size_t element) const {
 
 std::vector<uint8_t> LookupResult::GetArrayBytes(size_t idx, size_t element) const {
     CHECK_INNER("LookupResult");
-    return inner_->lv_get_array_bytes(idx, element);
+    auto rv = inner_->lv_get_array_bytes(idx, element);
+    return {rv.data(), rv.data() + rv.size()};
 }
 
 fluss::Date LookupResult::GetArrayDate(size_t idx, size_t element) const {
