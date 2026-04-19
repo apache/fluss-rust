@@ -21,6 +21,7 @@ sidebar_position: 3
 | `DataType::Timestamp()`    | Timestamp without timezone (default precision 6, microseconds) |
 | `DataType::TimestampLtz()` | Timestamp with timezone (default precision 6, microseconds)    |
 | `DataType::Decimal(p, s)`  | Decimal with precision and scale                               |
+| `DataType::Array(element)` | Array of the given element type (supports nesting)             |
 
 ## GenericRow Setters
 
@@ -36,6 +37,30 @@ row.SetFloat32(4, 3.14f);
 row.SetFloat64(5, 2.71828);
 row.SetString(6, "hello");
 row.SetBytes(7, {0x01, 0x02, 0x03});
+```
+
+### Array Columns
+
+Array values are built element-by-element using `ArrayWriter`, then attached to the row via `SetArray`:
+
+```cpp
+fluss::ArrayWriter aw(3, fluss::DataType::Int());
+aw.SetInt32(0, 10);
+aw.SetInt32(1, 20);
+aw.SetNull(2);
+row.SetArray(8, std::move(aw));
+```
+
+For nested arrays (e.g., `ARRAY<ARRAY<INT>>`), build inner arrays first:
+
+```cpp
+fluss::ArrayWriter inner(2, fluss::DataType::Int());
+inner.SetInt32(0, 1);
+inner.SetInt32(1, 2);
+
+fluss::ArrayWriter outer(1, fluss::DataType::Array(fluss::DataType::Int()));
+outer.SetArray(0, std::move(inner));
+row.SetArray(9, std::move(outer));
 ```
 
 ## Name-Based Setters
@@ -109,6 +134,37 @@ if (result.Found()) {
 }
 ```
 
+### Reading Array Columns
+
+Array columns can be read element-by-element using index-based getters, or via an `ArrayView` for recursive access:
+
+```cpp
+// Element-by-element access (flat arrays)
+size_t len = rec.row.GetArraySize(8);
+for (size_t i = 0; i < len; i++) {
+    if (!rec.row.IsArrayElementNull(8, i)) {
+        int32_t val = rec.row.GetArrayInt32(8, i);
+    }
+}
+
+// ArrayView for nested arrays or when you need a standalone handle
+fluss::ArrayView av = rec.row.GetArrayView(8);
+for (size_t i = 0; i < av.Size(); i++) {
+    if (!av.IsNull(i)) {
+        int32_t val = av.GetInt32(i);
+    }
+}
+
+// Nested arrays: ArrayView::GetArray() returns a child ArrayView
+fluss::ArrayView outer = rec.row.GetArrayView(9);
+for (size_t i = 0; i < outer.Size(); i++) {
+    fluss::ArrayView inner = outer.GetArray(i);
+    for (size_t j = 0; j < inner.Size(); j++) {
+        int32_t val = inner.GetInt32(j);
+    }
+}
+```
+
 ## TypeId Enum
 
 `TinyInt` and `SmallInt` values are widened to `int32_t` on read.
@@ -129,6 +185,7 @@ if (result.Found()) {
 | `Timestamp`     | `Timestamp`                                 | `GetTimestamp(idx)`       |
 | `TimestampLtz`  | `Timestamp`                                 | `GetTimestamp(idx)`       |
 | `Decimal`       | `std::string`                               | `GetDecimalString(idx)`   |
+| `Array`         | `ArrayView`                                 | `GetArrayView(idx)`       |
 
 ## Type Checking
 

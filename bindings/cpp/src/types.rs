@@ -39,10 +39,76 @@ pub const DATA_TYPE_TIMESTAMP_LTZ: i32 = 13;
 pub const DATA_TYPE_DECIMAL: i32 = 14;
 pub const DATA_TYPE_CHAR: i32 = 15;
 pub const DATA_TYPE_BINARY: i32 = 16;
+pub const DATA_TYPE_ARRAY: i32 = 17;
 
-// DATUM_TYPE_* constants removed — no longer needed with opaque types.
+fn ffi_column_to_core_data_type(col: &ffi::FfiColumn) -> Result<fcore::metadata::DataType> {
+    ffi_data_type_to_core(
+        col.data_type,
+        col.precision as u32,
+        col.scale as u32,
+        col.element_data_type,
+        col.element_precision as u32,
+        col.element_scale as u32,
+        col.array_nesting.max(0) as u32,
+    )
+}
 
-fn ffi_data_type_to_core(dt: i32, precision: u32, scale: u32) -> Result<fcore::metadata::DataType> {
+fn type_precision_scale(dt: &fcore::metadata::DataType) -> (i32, i32) {
+    match dt {
+        fcore::metadata::DataType::Decimal(d) => (d.precision() as i32, d.scale() as i32),
+        fcore::metadata::DataType::Timestamp(ts) => (ts.precision() as i32, 0),
+        fcore::metadata::DataType::TimestampLTz(ts) => (ts.precision() as i32, 0),
+        fcore::metadata::DataType::Char(ch) => (ch.length() as i32, 0),
+        fcore::metadata::DataType::Binary(bin) => (bin.length() as i32, 0),
+        _ => (0, 0),
+    }
+}
+
+fn flatten_array_leaf_type(dt: &fcore::metadata::DataType) -> Result<(i32, i32, i32, i32)> {
+    let mut nesting = 0_i32;
+    let mut leaf = dt;
+    while let fcore::metadata::DataType::Array(at) = leaf {
+        nesting += 1;
+        leaf = at.get_element_type();
+    }
+    if nesting == 0 {
+        return Err(anyhow!("Expected ARRAY data type, got {dt}"));
+    }
+    let leaf_type = core_data_type_to_ffi(leaf);
+    if leaf_type == 0 {
+        return Err(anyhow!(
+            "Unsupported ARRAY leaf type for C++ bindings: {leaf}"
+        ));
+    }
+    let (leaf_precision, leaf_scale) = type_precision_scale(leaf);
+    Ok((nesting, leaf_type, leaf_precision, leaf_scale))
+}
+
+fn build_array_type_from_leaf(
+    leaf_dt: i32,
+    leaf_precision: u32,
+    leaf_scale: u32,
+    nesting: u32,
+) -> Result<fcore::metadata::DataType> {
+    if nesting == 0 {
+        return Err(anyhow!("ARRAY nesting must be >= 1"));
+    }
+    let mut dt = ffi_data_type_to_core(leaf_dt, leaf_precision, leaf_scale, 0, 0, 0, 0)?;
+    for _ in 0..nesting {
+        dt = fcore::metadata::DataTypes::array(dt);
+    }
+    Ok(dt)
+}
+
+fn ffi_data_type_to_core(
+    dt: i32,
+    precision: u32,
+    scale: u32,
+    element_dt: i32,
+    element_precision: u32,
+    element_scale: u32,
+    array_nesting: u32,
+) -> Result<fcore::metadata::DataType> {
     match dt {
         DATA_TYPE_BOOLEAN => Ok(fcore::metadata::DataTypes::boolean()),
         DATA_TYPE_TINYINT => Ok(fcore::metadata::DataTypes::tinyint()),
@@ -67,6 +133,31 @@ fn ffi_data_type_to_core(dt: i32, precision: u32, scale: u32) -> Result<fcore::m
         }
         DATA_TYPE_CHAR => Ok(fcore::metadata::DataTypes::char(precision)),
         DATA_TYPE_BINARY => Ok(fcore::metadata::DataTypes::binary(precision as usize)),
+        DATA_TYPE_ARRAY => {
+            if array_nesting > 0 {
+                build_array_type_from_leaf(
+                    element_dt,
+                    element_precision,
+                    element_scale,
+                    array_nesting,
+                )
+            } else {
+                // Backward compatibility for older one-level metadata.
+                if element_dt == 0 {
+                    return Err(anyhow!("ARRAY requires element type metadata"));
+                }
+                let element_type = ffi_data_type_to_core(
+                    element_dt,
+                    element_precision,
+                    element_scale,
+                    0,
+                    0,
+                    0,
+                    0,
+                )?;
+                Ok(fcore::metadata::DataTypes::array(element_type))
+            }
+        }
         _ => Err(anyhow!("Unknown data type: {dt}")),
     }
 }
@@ -89,7 +180,32 @@ pub fn core_data_type_to_ffi(dt: &fcore::metadata::DataType) -> i32 {
         fcore::metadata::DataType::Decimal(_) => DATA_TYPE_DECIMAL,
         fcore::metadata::DataType::Char(_) => DATA_TYPE_CHAR,
         fcore::metadata::DataType::Binary(_) => DATA_TYPE_BINARY,
+        fcore::metadata::DataType::Array(_) => DATA_TYPE_ARRAY,
         _ => 0,
+    }
+}
+
+fn core_column_to_ffi(col: &fcore::metadata::Column) -> ffi::FfiColumn {
+    let (precision, scale) = type_precision_scale(col.data_type());
+
+    let (array_nesting, element_data_type, element_precision, element_scale) = match col.data_type()
+    {
+        fcore::metadata::DataType::Array(_) => {
+            flatten_array_leaf_type(col.data_type()).unwrap_or((0, 0, 0, 0))
+        }
+        _ => (0, 0, 0, 0),
+    };
+
+    ffi::FfiColumn {
+        name: col.name().to_string(),
+        data_type: core_data_type_to_ffi(col.data_type()),
+        comment: col.comment().unwrap_or("").to_string(),
+        precision,
+        scale,
+        array_nesting,
+        element_data_type,
+        element_precision,
+        element_scale,
     }
 }
 
@@ -99,13 +215,13 @@ pub fn ffi_descriptor_to_core(
     let mut schema_builder = fcore::metadata::Schema::builder();
 
     for col in &descriptor.schema.columns {
-        if col.precision < 0 || col.scale < 0 {
+        if col.precision < 0 || col.scale < 0 || col.array_nesting < 0 {
             return Err(anyhow!(
-                "Column '{}': precision and scale must be non-negative",
+                "Column '{}': precision, scale, and array_nesting must be non-negative",
                 col.name
             ));
         }
-        let dt = ffi_data_type_to_core(col.data_type, col.precision as u32, col.scale as u32)?;
+        let dt = ffi_column_to_core_data_type(col)?;
         schema_builder = schema_builder.column(&col.name, dt);
         if !col.comment.is_empty() {
             schema_builder = schema_builder.with_comment(&col.comment);
@@ -153,29 +269,7 @@ pub fn ffi_descriptor_to_core(
 
 pub fn core_table_info_to_ffi(info: &fcore::metadata::TableInfo) -> ffi::FfiTableInfo {
     let schema = info.get_schema();
-    let columns: Vec<ffi::FfiColumn> = schema
-        .columns()
-        .iter()
-        .map(|col| {
-            let (precision, scale) = match col.data_type() {
-                fcore::metadata::DataType::Decimal(dt) => {
-                    (dt.precision() as i32, dt.scale() as i32)
-                }
-                fcore::metadata::DataType::Timestamp(dt) => (dt.precision() as i32, 0),
-                fcore::metadata::DataType::TimestampLTz(dt) => (dt.precision() as i32, 0),
-                fcore::metadata::DataType::Char(dt) => (dt.length() as i32, 0),
-                fcore::metadata::DataType::Binary(dt) => (dt.length() as i32, 0),
-                _ => (0, 0),
-            };
-            ffi::FfiColumn {
-                name: col.name().to_string(),
-                data_type: core_data_type_to_ffi(col.data_type()),
-                comment: col.comment().unwrap_or("").to_string(),
-                precision,
-                scale,
-            }
-        })
-        .collect();
+    let columns: Vec<ffi::FfiColumn> = schema.columns().iter().map(core_column_to_ffi).collect();
 
     let primary_keys: Vec<String> = schema
         .primary_key()
@@ -248,6 +342,21 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
             columns: vec![],
             primary_keys: vec![],
         },
+    }
+}
+
+/// Convert element type tag + precision/scale to core DataType.
+/// Used by ArrayWriterInner construction from C++.
+pub fn element_type_from_ffi(
+    leaf_dt: i32,
+    precision: u32,
+    scale: u32,
+    array_nesting: u32,
+) -> Result<fcore::metadata::DataType> {
+    if array_nesting == 0 {
+        ffi_data_type_to_core(leaf_dt, precision, scale, 0, 0, 0, 0)
+    } else {
+        build_array_type_from_leaf(leaf_dt, precision, scale, array_nesting)
     }
 }
 
@@ -351,8 +460,6 @@ pub fn resolve_row_types(
             Datum::Time(t) => Datum::Time(*t),
             Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
             Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
-            // TODO: C++ bindings need proper CXX wrapper types for FlussArray
-            // before C++ users can construct or inspect array values through FFI.
             Datum::Array(a) => Datum::Array(a.clone()),
         };
         out.set_field(idx, resolved);
@@ -411,8 +518,6 @@ pub fn compacted_row_to_owned(
             fcore::metadata::DataType::Binary(dt) => {
                 Datum::Blob(Cow::Owned(row.get_binary(i, dt.length())?.to_vec()))
             }
-            // TODO: C++ bindings need proper CXX wrapper types for FlussArray
-            // before C++ users can construct or inspect array values through FFI.
             fcore::metadata::DataType::Array(_) => Datum::Array(row.get_array(i)?),
             other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
         };

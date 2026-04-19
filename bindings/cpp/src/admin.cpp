@@ -21,6 +21,7 @@
 #include "fluss.hpp"
 #include "lib.rs.h"
 #include "rust/cxx.h"
+#include <exception>
 
 namespace fluss {
 
@@ -83,7 +84,11 @@ Result Admin::GetTableInfo(const TablePath& table_path, TableInfo& out) {
 
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
-        out = utils::from_ffi_table_info(ffi_result.table_info);
+        try {
+            out = utils::from_ffi_table_info(ffi_result.table_info);
+        } catch (const std::exception& e) {
+            return utils::make_client_error(std::string("Failed to parse table metadata: ") + e.what());
+        }
     }
 
     return result;

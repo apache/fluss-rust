@@ -50,6 +50,8 @@ struct Lookuper;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
+struct ArrayWriterInner;
+struct ArrayViewInner;
 }  // namespace ffi
 
 /// Named constants for Fluss API error codes.
@@ -276,6 +278,7 @@ enum class TypeId {
     Decimal = 14,
     Char = 15,
     Binary = 16,
+    Array = 17,
 };
 
 class DataType {
@@ -305,15 +308,29 @@ class DataType {
     }
     static DataType Char(int32_t length) { return DataType(TypeId::Char, length, 0); }
     static DataType Binary(int32_t length) { return DataType(TypeId::Binary, length, 0); }
+    /// Constructs an `ARRAY<element>` type. The element DataType (possibly
+    /// itself an array) is deep-copied into a shared owning handle so that
+    /// copies of the outer DataType remain cheap while the element lives
+    /// as long as any reference exists.
+    static DataType Array(DataType element) {
+        DataType dt(TypeId::Array, 0, 0);
+        dt.element_type_ = std::make_shared<DataType>(std::move(element));
+        return dt;
+    }
 
     TypeId id() const { return id_; }
     int32_t precision() const { return precision_; }
     int32_t scale() const { return scale_; }
+    /// Returns the element type of an ARRAY. Returns `nullptr` for non-array
+    /// types. The returned pointer is valid as long as this DataType (or a
+    /// copy holding the same shared element) is alive.
+    const DataType* element_type() const { return element_type_.get(); }
 
    private:
     TypeId id_;
     int32_t precision_{0};
     int32_t scale_{0};
+    std::shared_ptr<DataType> element_type_;
 };
 
 constexpr int64_t EARLIEST_OFFSET = -2;
@@ -493,6 +510,12 @@ inline size_t ResolveColumn(const ColumnMap& map, const std::string& name) {
     return it->second.index;
 }
 
+// Forward declaration so NamedGetters can declare GetArrayView(...) even
+// though the concrete class is defined further down.
+}  // namespace detail
+class ArrayView;
+namespace detail {
+
 /// CRTP mixin that adds name-based getters to any class with index-based getters.
 /// Derived must provide: `size_t Resolve(const std::string&) const`
 /// and all the index-based getters (IsNull(idx), GetBool(idx), etc.).
@@ -518,6 +541,51 @@ struct NamedGetters {
     std::string GetDecimalString(const std::string& n) const {
         return Self().GetDecimalString(Self().Resolve(n));
     }
+    size_t GetArraySize(const std::string& n) const {
+        return Self().GetArraySize(Self().Resolve(n));
+    }
+    TypeId GetArrayElementType(const std::string& n) const {
+        return Self().GetArrayElementType(Self().Resolve(n));
+    }
+    bool IsArrayElementNull(const std::string& n, size_t element) const {
+        return Self().IsArrayElementNull(Self().Resolve(n), element);
+    }
+    bool GetArrayBool(const std::string& n, size_t element) const {
+        return Self().GetArrayBool(Self().Resolve(n), element);
+    }
+    int32_t GetArrayInt32(const std::string& n, size_t element) const {
+        return Self().GetArrayInt32(Self().Resolve(n), element);
+    }
+    int64_t GetArrayInt64(const std::string& n, size_t element) const {
+        return Self().GetArrayInt64(Self().Resolve(n), element);
+    }
+    float GetArrayFloat32(const std::string& n, size_t element) const {
+        return Self().GetArrayFloat32(Self().Resolve(n), element);
+    }
+    double GetArrayFloat64(const std::string& n, size_t element) const {
+        return Self().GetArrayFloat64(Self().Resolve(n), element);
+    }
+    std::string GetArrayString(const std::string& n, size_t element) const {
+        return Self().GetArrayString(Self().Resolve(n), element);
+    }
+    std::vector<uint8_t> GetArrayBytes(const std::string& n, size_t element) const {
+        return Self().GetArrayBytes(Self().Resolve(n), element);
+    }
+    fluss::Date GetArrayDate(const std::string& n, size_t element) const {
+        return Self().GetArrayDate(Self().Resolve(n), element);
+    }
+    fluss::Time GetArrayTime(const std::string& n, size_t element) const {
+        return Self().GetArrayTime(Self().Resolve(n), element);
+    }
+    fluss::Timestamp GetArrayTimestamp(const std::string& n, size_t element) const {
+        return Self().GetArrayTimestamp(Self().Resolve(n), element);
+    }
+    std::string GetArrayDecimalString(const std::string& n, size_t element) const {
+        return Self().GetArrayDecimalString(Self().Resolve(n), element);
+    }
+    // Definition appears below the ArrayView class; return-by-value requires
+    // the complete type so we cannot inline the body here.
+    ArrayView GetArrayView(const std::string& n) const;
 
    private:
     const Derived& Self() const { return static_cast<const Derived&>(*this); }
@@ -534,6 +602,90 @@ struct ScanData {
     ScanData& operator=(const ScanData&) = delete;
 };
 }  // namespace detail
+
+/**
+ * @brief Read-only view over a FlussArray column value.
+ *
+ * Obtained from RowView::GetArrayView() / LookupResult::GetArrayView(), and
+ * recursively from ArrayView::GetArray() for nested `ARRAY<ARRAY<...>>`
+ * columns. Owns an opaque Rust handle (FlussArray + element DataType) that
+ * is released on destruction. Move-only.
+ */
+class ArrayView {
+   public:
+    ~ArrayView() noexcept;
+
+    ArrayView(const ArrayView&) = delete;
+    ArrayView& operator=(const ArrayView&) = delete;
+    ArrayView(ArrayView&& other) noexcept;
+    ArrayView& operator=(ArrayView&& other) noexcept;
+
+    size_t Size() const;
+    TypeId ElementType() const;
+    bool IsNull(size_t element) const;
+
+    bool GetBool(size_t element) const;
+    int32_t GetInt32(size_t element) const;
+    int64_t GetInt64(size_t element) const;
+    float GetFloat32(size_t element) const;
+    double GetFloat64(size_t element) const;
+    std::string GetString(size_t element) const;
+    std::vector<uint8_t> GetBytes(size_t element) const;
+    fluss::Date GetDate(size_t element) const;
+    fluss::Time GetTime(size_t element) const;
+    fluss::Timestamp GetTimestampNtz(size_t element) const;
+    fluss::Timestamp GetTimestampLtz(size_t element) const;
+    std::string GetDecimalString(size_t element) const;
+    ArrayView GetArray(size_t element) const;
+
+   private:
+    friend class RowView;
+    friend class LookupResult;
+    explicit ArrayView(ffi::ArrayViewInner* inner) : inner_(inner) {}
+    void Destroy() noexcept;
+    ffi::ArrayViewInner* inner_{nullptr};
+};
+
+namespace detail {
+template <typename Derived>
+inline ArrayView NamedGetters<Derived>::GetArrayView(const std::string& n) const {
+    return Self().GetArrayView(Self().Resolve(n));
+}
+}  // namespace detail
+
+class ArrayWriter {
+   public:
+    ArrayWriter(size_t size, DataType element_type);
+    ~ArrayWriter() noexcept;
+
+    ArrayWriter(const ArrayWriter&) = delete;
+    ArrayWriter& operator=(const ArrayWriter&) = delete;
+    ArrayWriter(ArrayWriter&& other) noexcept;
+    ArrayWriter& operator=(ArrayWriter&& other) noexcept;
+
+    bool Available() const;
+
+    void SetNull(size_t idx);
+    void SetBool(size_t idx, bool v);
+    void SetInt32(size_t idx, int32_t v);
+    void SetInt64(size_t idx, int64_t v);
+    void SetFloat32(size_t idx, float v);
+    void SetFloat64(size_t idx, double v);
+    void SetString(size_t idx, const std::string& v);
+    void SetBytes(size_t idx, const std::vector<uint8_t>& v);
+    void SetDate(size_t idx, fluss::Date d);
+    void SetTime(size_t idx, fluss::Time t);
+    void SetTimestampNtz(size_t idx, fluss::Timestamp ts);
+    void SetTimestampLtz(size_t idx, fluss::Timestamp ts);
+    void SetDecimal(size_t idx, const std::string& value);
+    void SetArray(size_t idx, ArrayWriter&& nested);
+
+   private:
+    friend class GenericRow;
+    void Destroy() noexcept;
+    ffi::ArrayWriterInner* inner_{nullptr};
+    DataType element_type_;
+};
 
 class GenericRow {
    public:
@@ -563,6 +715,7 @@ class GenericRow {
     void SetTimestampNtz(size_t idx, fluss::Timestamp ts);
     void SetTimestampLtz(size_t idx, fluss::Timestamp ts);
     void SetDecimal(size_t idx, const std::string& value);
+    void SetArray(size_t idx, ArrayWriter&& writer);
 
     // ── Name-based setters (require schema — see Table::NewRow()) ───
     void Set(const std::string& name, std::nullptr_t) { SetNull(Resolve(name)); }
@@ -610,6 +763,7 @@ class GenericRow {
                                      "' is not a timestamp column");
         }
     }
+    void Set(const std::string& name, ArrayWriter&& writer) { SetArray(Resolve(name), std::move(writer)); }
 
    private:
     friend class Table;
@@ -669,6 +823,26 @@ class RowView : public detail::NamedGetters<RowView> {
     bool IsDecimal(size_t idx) const;
     std::string GetDecimalString(size_t idx) const;
 
+    // ── Array getters ────────────────────────────────────────────────
+    size_t GetArraySize(size_t idx) const;
+    TypeId GetArrayElementType(size_t idx) const;
+    bool IsArrayElementNull(size_t idx, size_t element) const;
+    bool GetArrayBool(size_t idx, size_t element) const;
+    int32_t GetArrayInt32(size_t idx, size_t element) const;
+    int64_t GetArrayInt64(size_t idx, size_t element) const;
+    float GetArrayFloat32(size_t idx, size_t element) const;
+    double GetArrayFloat64(size_t idx, size_t element) const;
+    std::string GetArrayString(size_t idx, size_t element) const;
+    std::vector<uint8_t> GetArrayBytes(size_t idx, size_t element) const;
+    fluss::Date GetArrayDate(size_t idx, size_t element) const;
+    fluss::Time GetArrayTime(size_t idx, size_t element) const;
+    fluss::Timestamp GetArrayTimestamp(size_t idx, size_t element) const;
+    std::string GetArrayDecimalString(size_t idx, size_t element) const;
+    /// Returns an owning ArrayView over the array column at `idx`. ArrayView
+    /// supports nested arrays via ArrayView::GetArray(). Parity with Python's
+    /// recursive list return from `row.get_array(i)`.
+    ArrayView GetArrayView(size_t idx) const;
+
     // Name-based getters inherited from detail::NamedGetters<RowView>
     using detail::NamedGetters<RowView>::IsNull;
     using detail::NamedGetters<RowView>::GetBool;
@@ -682,6 +856,21 @@ class RowView : public detail::NamedGetters<RowView> {
     using detail::NamedGetters<RowView>::GetTime;
     using detail::NamedGetters<RowView>::GetTimestamp;
     using detail::NamedGetters<RowView>::GetDecimalString;
+    using detail::NamedGetters<RowView>::GetArraySize;
+    using detail::NamedGetters<RowView>::GetArrayElementType;
+    using detail::NamedGetters<RowView>::IsArrayElementNull;
+    using detail::NamedGetters<RowView>::GetArrayBool;
+    using detail::NamedGetters<RowView>::GetArrayInt32;
+    using detail::NamedGetters<RowView>::GetArrayInt64;
+    using detail::NamedGetters<RowView>::GetArrayFloat32;
+    using detail::NamedGetters<RowView>::GetArrayFloat64;
+    using detail::NamedGetters<RowView>::GetArrayString;
+    using detail::NamedGetters<RowView>::GetArrayBytes;
+    using detail::NamedGetters<RowView>::GetArrayDate;
+    using detail::NamedGetters<RowView>::GetArrayTime;
+    using detail::NamedGetters<RowView>::GetArrayTimestamp;
+    using detail::NamedGetters<RowView>::GetArrayDecimalString;
+    using detail::NamedGetters<RowView>::GetArrayView;
 
    private:
     size_t Resolve(const std::string& name) const {
@@ -951,6 +1140,24 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
     bool IsDecimal(size_t idx) const;
     std::string GetDecimalString(size_t idx) const;
 
+    // ── Array getters ────────────────────────────────────────────────
+    size_t GetArraySize(size_t idx) const;
+    TypeId GetArrayElementType(size_t idx) const;
+    bool IsArrayElementNull(size_t idx, size_t element) const;
+    bool GetArrayBool(size_t idx, size_t element) const;
+    int32_t GetArrayInt32(size_t idx, size_t element) const;
+    int64_t GetArrayInt64(size_t idx, size_t element) const;
+    float GetArrayFloat32(size_t idx, size_t element) const;
+    double GetArrayFloat64(size_t idx, size_t element) const;
+    std::string GetArrayString(size_t idx, size_t element) const;
+    std::vector<uint8_t> GetArrayBytes(size_t idx, size_t element) const;
+    fluss::Date GetArrayDate(size_t idx, size_t element) const;
+    fluss::Time GetArrayTime(size_t idx, size_t element) const;
+    fluss::Timestamp GetArrayTimestamp(size_t idx, size_t element) const;
+    std::string GetArrayDecimalString(size_t idx, size_t element) const;
+    /// See RowView::GetArrayView for semantics. Supports nested arrays.
+    ArrayView GetArrayView(size_t idx) const;
+
     // Name-based getters inherited from detail::NamedGetters<LookupResult>
     using detail::NamedGetters<LookupResult>::IsNull;
     using detail::NamedGetters<LookupResult>::GetBool;
@@ -964,6 +1171,21 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
     using detail::NamedGetters<LookupResult>::GetTime;
     using detail::NamedGetters<LookupResult>::GetTimestamp;
     using detail::NamedGetters<LookupResult>::GetDecimalString;
+    using detail::NamedGetters<LookupResult>::GetArraySize;
+    using detail::NamedGetters<LookupResult>::GetArrayElementType;
+    using detail::NamedGetters<LookupResult>::IsArrayElementNull;
+    using detail::NamedGetters<LookupResult>::GetArrayBool;
+    using detail::NamedGetters<LookupResult>::GetArrayInt32;
+    using detail::NamedGetters<LookupResult>::GetArrayInt64;
+    using detail::NamedGetters<LookupResult>::GetArrayFloat32;
+    using detail::NamedGetters<LookupResult>::GetArrayFloat64;
+    using detail::NamedGetters<LookupResult>::GetArrayString;
+    using detail::NamedGetters<LookupResult>::GetArrayBytes;
+    using detail::NamedGetters<LookupResult>::GetArrayDate;
+    using detail::NamedGetters<LookupResult>::GetArrayTime;
+    using detail::NamedGetters<LookupResult>::GetArrayTimestamp;
+    using detail::NamedGetters<LookupResult>::GetArrayDecimalString;
+    using detail::NamedGetters<LookupResult>::GetArrayView;
 
    private:
     friend class Lookuper;
