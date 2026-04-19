@@ -181,6 +181,7 @@ void ArrayWriter::SetArray(size_t idx, ArrayWriter&& nested) {
         throw std::logic_error("ArrayWriter::SetArray: nested writer not available");
     }
     inner_->aw_set_array(idx, *nested.inner_);
+    nested.Destroy();
 }
 
 // ============================================================================
@@ -411,6 +412,7 @@ void GenericRow::SetArray(size_t idx, ArrayWriter&& writer) {
         throw std::logic_error("GenericRow::SetArray: ArrayWriter not available");
     }
     inner_->gr_set_array(idx, *writer.inner_);
+    writer.Destroy();
 }
 
 // ============================================================================
