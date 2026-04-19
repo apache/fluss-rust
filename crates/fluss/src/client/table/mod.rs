@@ -33,7 +33,7 @@ mod scanner;
 mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
-pub use lookup::{LookupResult, Lookuper, TableLookup};
+pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
 pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
