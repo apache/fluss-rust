@@ -65,8 +65,8 @@ scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
 # Reads everything up to current latest offset, then returns
-arrow_table = scanner.to_arrow()
-df = scanner.to_pandas()
+arrow_table = await scanner.to_arrow()
+df = await scanner.to_pandas()
 ```
 
 ### Continuous Polling
@@ -79,7 +79,7 @@ scanner = await table.new_scan().create_record_batch_log_scanner()
 scanner.subscribe(bucket_id=0, start_offset=fluss.EARLIEST_OFFSET)
 
 while True:
-    result = scanner.poll_arrow(timeout_ms=5000)
+    result = await scanner.poll_arrow(timeout_ms=5000)
     if result.num_rows > 0:
         print(result.to_pandas())
 
@@ -88,7 +88,7 @@ scanner = await table.new_scan().create_log_scanner()
 scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
 while True:
-    scan_records = scanner.poll(timeout_ms=5000)
+    scan_records = await scanner.poll(timeout_ms=5000)
 
     for record in scan_records:
         print(f"offset={record.offset}, change={record.change_type.short_string()}, row={record.row}")
