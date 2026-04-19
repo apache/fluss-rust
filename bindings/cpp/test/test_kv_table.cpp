@@ -197,7 +197,7 @@ TEST_F(KvTableTest, LookupWithNestedArrayArrayView) {
         fluss::ArrayWriter outer(2, fluss::DataType::Array(fluss::DataType::Int()));
         outer.SetArray(0, std::move(inner1));
         outer.SetArray(1, std::move(inner2));
-        row.SetArray("matrix", std::move(outer));
+        row.Set("matrix", std::move(outer));
 
         ASSERT_OK(writer.Upsert(row));
         ASSERT_OK(writer.Flush());
@@ -262,7 +262,7 @@ TEST_F(KvTableTest, LookupArrayValidationErrors) {
     fluss::ArrayWriter vals(2, fluss::DataType::Int());
     vals.SetInt32(0, 99);
     vals.SetNull(1);
-    row.SetArray("vals", std::move(vals));
+    row.Set("vals", std::move(vals));
     ASSERT_OK(writer.Upsert(row));
     ASSERT_OK(writer.Flush());
 

@@ -867,7 +867,8 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
     ASSERT_NE(matrix_type.element_type()->element_type(), nullptr);
     ASSERT_EQ(matrix_type.element_type()->element_type()->id(), fluss::TypeId::Int);
 
-    auto append_writer = table.NewAppend().CreateWriter();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
 
     {
         auto row = table.NewRow();
@@ -884,7 +885,7 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
         scores.SetInt32(2, 30);
         row.SetArray(2, std::move(scores));
 
-        ASSERT_OK(append_writer.AppendRow(row));
+        ASSERT_OK(append_writer.Append(row));
     }
     {
         auto row = table.NewRow();
@@ -897,7 +898,7 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
         fluss::ArrayWriter scores(0, fluss::DataType::Int());
         row.SetArray(2, std::move(scores));
 
-        ASSERT_OK(append_writer.AppendRow(row));
+        ASSERT_OK(append_writer.Append(row));
     }
 
     ASSERT_OK(append_writer.Flush());
@@ -916,7 +917,8 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
     };
 
     std::vector<Record> collected;
-    auto extract = [](const fluss::RowView& rv) {
+    auto extract = [](const fluss::ScanRecord& scan_rec) {
+        const auto& rv = scan_rec.row;
         Record rec;
         rec.id = rv.GetInt32(0);
 
@@ -986,7 +988,8 @@ TEST_F(LogTableTest, AppendAndScanWithNestedArray) {
     fluss::Table table;
     ASSERT_OK(conn.GetTable(table_path, table));
 
-    auto append_writer = table.NewAppend().CreateWriter();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
 
     {
         auto row = table.NewRow();
@@ -1005,7 +1008,7 @@ TEST_F(LogTableTest, AppendAndScanWithNestedArray) {
         outer.SetArray(1, std::move(inner2));
 
         row.SetArray(1, std::move(outer));
-        ASSERT_OK(append_writer.AppendRow(row));
+        ASSERT_OK(append_writer.Append(row));
     }
 
     ASSERT_OK(append_writer.Flush());
@@ -1023,7 +1026,8 @@ TEST_F(LogTableTest, AppendAndScanWithNestedArray) {
     };
 
     std::vector<Record> collected;
-    auto extract = [](const fluss::RowView& rv) {
+    auto extract = [](const fluss::ScanRecord& scan_rec) {
+        const auto& rv = scan_rec.row;
         Record rec;
         rec.id = rv.GetInt32(0);
         rec.outer_count = rv.GetArraySize(1);
@@ -1080,7 +1084,8 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
 
     fluss::Table table;
     ASSERT_OK(conn.GetTable(table_path, table));
-    auto append_writer = table.NewAppend().CreateWriter();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
 
     {
         auto row = table.NewRow();
@@ -1112,7 +1117,7 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
         arr_decimal.SetNull(1);
         row.SetArray(5, std::move(arr_decimal));
 
-        ASSERT_OK(append_writer.AppendRow(row));
+        ASSERT_OK(append_writer.Append(row));
     }
 
     ASSERT_OK(append_writer.Flush());
@@ -1189,14 +1194,15 @@ TEST_F(LogTableTest, ArrayApiValidationErrors) {
 
     fluss::Table table;
     ASSERT_OK(conn.GetTable(table_path, table));
-    auto append_writer = table.NewAppend().CreateWriter();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
     auto row = table.NewRow();
     row.Set("id", 1);
     fluss::ArrayWriter vals(2, fluss::DataType::Int());
     vals.SetInt32(0, 7);
     vals.SetNull(1);
     row.SetArray(1, std::move(vals));
-    ASSERT_OK(append_writer.AppendRow(row));
+    ASSERT_OK(append_writer.Append(row));
     ASSERT_OK(append_writer.Flush());
 
     auto scan = table.NewScan();
