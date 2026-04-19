@@ -385,8 +385,11 @@ impl Display for FlussError {
 
 impl From<ErrorResponse> for ApiError {
     fn from(error_response: ErrorResponse) -> Self {
-        let fluss_error = FlussError::for_code(error_response.error_code);
-        fluss_error.to_api_error(error_response.error_message)
+        let code = error_response.error_code;
+        let message = error_response
+            .error_message
+            .unwrap_or_else(|| FlussError::for_code(code).message().to_string());
+        ApiError { code, message }
     }
 }
 
@@ -428,6 +431,30 @@ mod tests {
         assert_eq!(api_error.message, "missing");
         let fluss_error = FlussError::from(api_error);
         assert_eq!(fluss_error, FlussError::TableNotExist);
+    }
+
+    #[test]
+    fn error_response_preserves_unknown_wire_code() {
+        let response = ErrorResponse {
+            error_code: 9999,
+            error_message: Some("NewException: forward compat".to_string()),
+        };
+        let api_error = ApiError::from(response);
+        assert_eq!(api_error.code, 9999);
+        assert_eq!(api_error.message, "NewException: forward compat");
+        assert_eq!(FlussError::from(api_error), FlussError::UnknownServerError);
+    }
+
+    #[test]
+    fn error_response_falls_back_to_default_message_for_unknown_code() {
+        let response = ErrorResponse {
+            error_code: 9999,
+            error_message: None,
+        };
+        let api_error = ApiError::from(response);
+        assert_eq!(api_error.code, 9999);
+        assert_eq!(api_error.message, FlussError::UnknownServerError.message());
+        assert!(!api_error.is_retriable());
     }
 
     #[test]
