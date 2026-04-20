@@ -62,32 +62,28 @@ async def test_append_writer_success_flush(connection, admin):
     assert sorted([r.row["a"] for r in records]) == [1, 2]
 
 @pytest.mark.asyncio
-async def test_append_writer_exception_no_flush(connection, admin):
-    table_path = fluss.TablePath("fluss", "test_append_ctx_fail")
+async def test_connection_drain_on_close(plaintext_bootstrap_servers, admin):
+    table_path = fluss.TablePath("fluss", "test_conn_drain")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
-    
     schema = fluss.Schema(pa.schema([pa.field("a", pa.int32())]))
     await admin.create_table(table_path, fluss.TableDescriptor(schema))
-    table = await connection.get_table(table_path)
-    
-    class TestException(Exception): pass
-    
-    start_time = time.perf_counter()
-    try:
-        async with table.new_append().create_writer() as writer:
-            writer.append({"a": 100})
-            raise TestException("abort")
-    except TestException:
-        pass
-    duration = time.perf_counter() - start_time
-    
-    # Verification:
-    # 1. The exception was propagated immediately.
-    # 2. The block exited nearly instantly because it bypassed the network flush.
-    assert duration < 0.1, f"Context exit took too long ({duration:.3f}s), likely performed a flush"
 
-    # NOTE: Records may still eventually arrive because of the background sender threads.
-    # We don't assert 0 records here because Fluss does not support true transactional rollback.
+    config = fluss.Config({"bootstrap.servers": plaintext_bootstrap_servers})
+    async with await fluss.FlussConnection.create(config) as conn:
+        table = await conn.get_table(table_path)
+        writer = table.new_append().create_writer()
+        writer.append({"a": 123})
+        # No explicit flush, no writer context exit. 
+        # Rely on connection.__aexit__ -> close() to drain.
+    
+    # Re-connect with a new connection to verify data arrived
+    async with await fluss.FlussConnection.create(config) as conn2:
+        table2 = await conn2.get_table(table_path)
+        scanner = await table2.new_scan().create_log_scanner()
+        scanner.subscribe(0, fluss.EARLIEST_OFFSET)
+        records = _poll_records(scanner, expected_count=1)
+        assert len(records) == 1
+        assert records[0].row["a"] == 123
 
 @pytest.mark.asyncio
 async def test_upsert_writer_context_manager(connection, admin):
@@ -108,18 +104,6 @@ async def test_upsert_writer_context_manager(connection, admin):
     assert res is not None
     assert res["v"] == "a"
     
-    # Failure path: verify it bypasses flush
-    class TestException(Exception): pass
-    start_time = time.perf_counter()
-    try:
-        async with table.new_upsert().create_writer() as writer:
-            writer.upsert({"id": 2, "v": "b"})
-            raise TestException("abort")
-    except TestException:
-        pass
-    duration = time.perf_counter() - start_time
-    assert duration < 0.1, f"Context exit took too long ({duration:.3f}s), likely performed a flush"
-
 @pytest.mark.asyncio
 async def test_connection_context_manager_exception(plaintext_bootstrap_servers):
     config = fluss.Config({"bootstrap.servers": plaintext_bootstrap_servers})

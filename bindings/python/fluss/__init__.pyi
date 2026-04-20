@@ -635,18 +635,8 @@ class AppendWriter:
         """
         Exit the async context manager.
 
-        On successful exit, the writer is automatically flushed to ensure
+        On exit, the writer is automatically flushed to ensure
         all pending records are sent and acknowledged.
-
-        Note on Exceptions:
-            If an exception occurs inside the `async with` block, `flush()` is
-            bypassed to return control to the event loop immediately. However,
-            any records already passed to `append()` prior to the exception
-            reside in a shared background buffer and will still be transmitted
-            to the server.
-
-            To achieve true atomicity, buffer your records in a Python list and
-            write them in a single batch at the end of your logic.
         """
         ...
     def __repr__(self) -> str: ...
@@ -699,18 +689,8 @@ class UpsertWriter:
         """
         Exit the async context manager.
 
-        On successful exit, the writer is automatically flushed to ensure
+        On exit, the writer is automatically flushed to ensure
         all pending records are sent and acknowledged.
-
-        Note on Exceptions:
-            If an exception occurs inside the `async with` block, `flush()` is
-            bypassed to return control to the event loop immediately. However,
-            any records already passed to `upsert()` or `delete()` prior to the
-            exception reside in a shared background buffer and will still be
-            transmitted to the server.
-
-            To achieve true atomicity, buffer your records in a Python list and
-            write them in a single batch at the end of your logic.
         """
         ...
     def __repr__(self) -> str: ...

@@ -115,26 +115,21 @@ impl UpsertWriter {
     }
 
     // Exit the async runtime context (for 'async with' statement)
-    /// On successful exit, the writer is automatically flushed.
-    /// If an exception occurs, the flush is skipped to allow immediate error
-    /// propagation, though pending records may still be sent in the background.
-    #[pyo3(signature = (exc_type=None, _exc_value=None, _traceback=None))]
+    /// On exit, the writer is automatically flushed.
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
     fn __aexit__<'py>(
         &self,
         py: Python<'py>,
-        exc_type: Option<Bound<'py, PyAny>>,
+        _exc_type: Option<Bound<'py, PyAny>>,
         _exc_value: Option<Bound<'py, PyAny>>,
         _traceback: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let has_error = exc_type.is_some();
         let writer = self.writer.clone();
         future_into_py(py, async move {
-            if !has_error {
-                writer
-                    .flush()
-                    .await
-                    .map_err(|e| FlussError::from_core_error(&e))?;
-            }
+            writer
+                .flush()
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
             Ok(false)
         })
     }
