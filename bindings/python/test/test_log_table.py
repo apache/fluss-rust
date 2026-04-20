@@ -144,7 +144,6 @@ async def test_list_offsets(connection, admin):
     assert latest[0] == 0
 
     before_append_ms = int(time.time() * 1000)
-    await asyncio.sleep(0.1)
 
     # Append some records
     table = await connection.get_table(table_path)

@@ -20,8 +20,6 @@ use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
 use std::time::Duration;
 
-const DEFAULT_CLOSE_TIMEOUT_SECS: u64 = 30;
-
 /// Connection to a Fluss cluster
 #[pyclass]
 pub struct FlussConnection {
@@ -89,20 +87,12 @@ impl FlussConnection {
     ///
     /// Gracefully shuts down the connection by draining any pending write batches.
     /// This method is awaitable.
-    ///
-    /// Args:
-    ///     timeout_ms: The timeout in milliseconds to wait for the graceful drain.
-    ///                 If not provided, defaults to 30 seconds.
-    #[pyo3(signature = (timeout_ms=None))]
-    fn close<'py>(&self, py: Python<'py>, timeout_ms: Option<u64>) -> PyResult<Bound<'py, PyAny>> {
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let timeout = timeout_ms
-            .map(Duration::from_millis)
-            .unwrap_or_else(|| Duration::from_secs(DEFAULT_CLOSE_TIMEOUT_SECS));
 
         future_into_py(py, async move {
             inner
-                .close(timeout)
+                .close(Duration::MAX)
                 .await
                 .map_err(|e| FlussError::from_core_error(&e))
         })
@@ -144,7 +134,7 @@ impl FlussConnection {
         let inner = self.inner.clone();
         future_into_py(py, async move {
             inner
-                .close(Duration::from_secs(DEFAULT_CLOSE_TIMEOUT_SECS))
+                .close(Duration::MAX)
                 .await
                 .map_err(|e| FlussError::from_core_error(&e))?;
             Ok(false)

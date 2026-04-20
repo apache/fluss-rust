@@ -37,7 +37,7 @@ async def test_connection_context_manager(plaintext_bootstrap_servers):
         admin = conn.get_admin()
         nodes = await admin.get_server_nodes()
         assert len(nodes) > 0
-    # conn should be closed (though currently close is a no-op in python side, but verifies syntax)
+
 
 @pytest.mark.asyncio
 async def test_append_writer_success_flush(connection, admin):
