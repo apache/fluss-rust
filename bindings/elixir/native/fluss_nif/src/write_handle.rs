@@ -42,6 +42,6 @@ fn write_handle_wait<'a>(env: Env<'a>, handle: ResourceArc<WriteHandleResource>)
     let future = handle.inner.lock().unwrap().take();
     match future {
         Some(f) => async_nif::spawn_task(env, f),
-        None => async_nif::send_error(env, "WriteHandle already consumed"),
+        None => async_nif::send_client_error(env, "WriteHandle already consumed"),
     }
 }

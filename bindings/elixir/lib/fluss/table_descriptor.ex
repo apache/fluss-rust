@@ -38,7 +38,7 @@ defmodule Fluss.TableDescriptor do
     properties = Keyword.get(opts, :properties, [])
 
     case Native.table_descriptor_new(schema, bucket_count, properties) do
-      {:error, reason} -> raise "failed to create table descriptor: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
       ref -> ref
     end
   end
