@@ -32,6 +32,7 @@ on:
       - '**/*.md'
       - 'bindings/python/**'
       - 'bindings/cpp/**'
+      - 'bindings/elixir/**'
   workflow_dispatch:
 
 concurrency:

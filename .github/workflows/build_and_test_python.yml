@@ -31,6 +31,7 @@ on:
       - 'website/**'
       - '**/*.md'
       - 'bindings/cpp/**'
+      - 'bindings/elixir/**'
   workflow_dispatch:
 
 concurrency:
