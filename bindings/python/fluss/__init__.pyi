@@ -245,9 +245,16 @@ class FlussConnection:
     async def create(config: Config) -> FlussConnection: ...
     def get_admin(self) -> FlussAdmin: ...
     async def get_table(self, table_path: TablePath) -> FlussTable: ...
-    def close(self) -> None: ...
+    async def close(self) -> None: ...
     def __enter__(self) -> FlussConnection: ...
     def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool: ...
+    async def __aenter__(self) -> FlussConnection: ...
+    async def __aexit__(
         self,
         exc_type: Optional[type],
         exc_value: Optional[BaseException],
@@ -611,6 +618,27 @@ class AppendWriter:
     def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle: ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...
     async def flush(self) -> None: ...
+    async def __aenter__(self) -> AppendWriter:
+        """
+        Enter the async context manager.
+
+        Returns:
+            The AppendWriter instance.
+        """
+        ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """
+        Exit the async context manager.
+
+        On exit, the writer is automatically flushed to ensure
+        all pending records are sent and acknowledged.
+        """
+        ...
     def __repr__(self) -> str: ...
 
 class UpsertWriter:
@@ -643,6 +671,27 @@ class UpsertWriter:
         ...
     async def flush(self) -> None:
         """Flush all pending upsert/delete operations to the server."""
+        ...
+    async def __aenter__(self) -> UpsertWriter:
+        """
+        Enter the async context manager.
+
+        Returns:
+            The UpsertWriter instance.
+        """
+        ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """
+        Exit the async context manager.
+
+        On exit, the writer is automatically flushed to ensure
+        all pending records are sent and acknowledged.
+        """
         ...
     def __repr__(self) -> str: ...
 
@@ -807,6 +856,15 @@ class LogScanner:
 
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
+        ...
+
+    async def __aenter__(self) -> LogScanner: ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool: ...
     def __repr__(self) -> str: ...
     def __aiter__(self) -> AsyncIterator[Union[ScanRecord, RecordBatch]]: ...
 

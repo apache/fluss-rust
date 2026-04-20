@@ -96,7 +96,7 @@ async def _connect(bootstrap_servers):
             nodes = await admin.get_server_nodes()
             if any(n.server_type == "TabletServer" for n in nodes):
                 return conn
-            conn.close()
+            await conn.close()
             last_err = RuntimeError("No TabletServer available yet")
         except Exception as e:
             last_err = e

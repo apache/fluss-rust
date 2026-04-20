@@ -933,8 +933,15 @@ async def main():
         print(f"Error with partitioned KV table: {e}")
         traceback.print_exc()
 
+
+    print("\n--- New: async context manager demo ---")
+    async with await fluss.FlussConnection.create(config) as demo_conn:
+        demo_table = await demo_conn.get_table(table_path)
+        async with demo_table.new_append().create_writer() as writer:
+            writer.append({"id": 1, "name": "demo", "score": 1.0})
+            # auto-flushes on exit
     # Close connection
-    conn.close()
+    await conn.close()
     print("\nConnection closed")
 
 

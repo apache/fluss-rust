@@ -108,6 +108,32 @@ impl UpsertWriter {
         })
     }
 
+    // Enter the async runtime context (for 'async with' statement)
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_slf = slf.into_pyobject(py)?.unbind();
+        future_into_py(py, async move { Ok(py_slf) })
+    }
+
+    // Exit the async runtime context (for 'async with' statement)
+    /// On exit, the writer is automatically flushed.
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        _exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let writer = self.writer.clone();
+        future_into_py(py, async move {
+            writer
+                .flush()
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            Ok(false)
+        })
+    }
+
     fn __repr__(&self) -> String {
         "UpsertWriter()".to_string()
     }
