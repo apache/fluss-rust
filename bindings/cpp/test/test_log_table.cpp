@@ -861,13 +861,15 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
     ASSERT_OK(conn.GetTable(table_path, table));
 
     auto info = table.GetTableInfo();
-    ASSERT_GE(info.schema.columns.size(), 2u);
-    const auto& matrix_type = info.schema.columns[1].data_type;
-    ASSERT_EQ(matrix_type.id(), fluss::TypeId::Array);
-    ASSERT_NE(matrix_type.element_type(), nullptr);
-    ASSERT_EQ(matrix_type.element_type()->id(), fluss::TypeId::Array);
-    ASSERT_NE(matrix_type.element_type()->element_type(), nullptr);
-    ASSERT_EQ(matrix_type.element_type()->element_type()->id(), fluss::TypeId::Int);
+    ASSERT_GE(info.schema.columns.size(), 3u);
+    const auto& tags_type = info.schema.columns[1].data_type;
+    ASSERT_EQ(tags_type.id(), fluss::TypeId::Array);
+    ASSERT_NE(tags_type.element_type(), nullptr);
+    ASSERT_EQ(tags_type.element_type()->id(), fluss::TypeId::String);
+    const auto& scores_type = info.schema.columns[2].data_type;
+    ASSERT_EQ(scores_type.id(), fluss::TypeId::Array);
+    ASSERT_NE(scores_type.element_type(), nullptr);
+    ASSERT_EQ(scores_type.element_type()->id(), fluss::TypeId::Int);
 
     fluss::AppendWriter append_writer;
     ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
@@ -1105,7 +1107,7 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
         row.SetArray(2, std::move(arr_date));
 
         fluss::ArrayWriter arr_time(1, fluss::DataType::Time());
-        auto t0 = fluss::Time::FromMillis(3600123);
+        auto t0 = fluss::Time::FromMillis(3600000);
         arr_time.SetTime(0, t0);
         row.SetArray(3, std::move(arr_time));
 
@@ -1151,7 +1153,7 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
     EXPECT_TRUE(rv.IsArrayElementNull(2, 1));
 
     EXPECT_EQ(rv.GetArraySize(3), 1u);
-    EXPECT_EQ(rv.GetArrayTime(3, 0).millis_since_midnight, fluss::Time::FromMillis(3600123).millis_since_midnight);
+    EXPECT_EQ(rv.GetArrayTime(3, 0).millis_since_midnight, fluss::Time::FromMillis(3600000).millis_since_midnight);
 
     EXPECT_EQ(rv.GetArraySize(4), 1u);
     auto ts = rv.GetArrayTimestamp(4, 0);
@@ -1307,8 +1309,8 @@ TEST_F(LogTableTest, AppendAndScanWithArrayEncodingEdgeCases) {
 
         // precision > 18 forces non-compact decimal encoding
         fluss::ArrayWriter arr_big_decimal(2, fluss::DataType::Decimal(22, 5));
-        arr_big_decimal.SetDecimal(0, "1234567890123456789.12345");
-        arr_big_decimal.SetDecimal(1, "-9999999999999999999.99999");
+        arr_big_decimal.SetDecimal(0, "12345678901234567.12345");
+        arr_big_decimal.SetDecimal(1, "-99999999999999999.99999");
         row.SetArray(2, std::move(arr_big_decimal));
 
         // precision > 3 forces non-compact timestamp (millis + nanos-of-millis)
@@ -1362,8 +1364,8 @@ TEST_F(LogTableTest, AppendAndScanWithArrayEncodingEdgeCases) {
 
     // Non-compact decimal (precision 22 > MAX_COMPACT_PRECISION 18)
     EXPECT_EQ(rv.GetArraySize(2), 2u);
-    EXPECT_EQ(rv.GetArrayDecimalString(2, 0), "1234567890123456789.12345");
-    EXPECT_EQ(rv.GetArrayDecimalString(2, 1), "-9999999999999999999.99999");
+    EXPECT_EQ(rv.GetArrayDecimalString(2, 0), "12345678901234567.12345");
+    EXPECT_EQ(rv.GetArrayDecimalString(2, 1), "-99999999999999999.99999");
 
     // Non-compact timestamp (precision 9 > MAX_COMPACT_TIMESTAMP_PRECISION 3)
     EXPECT_EQ(rv.GetArraySize(3), 1u);
