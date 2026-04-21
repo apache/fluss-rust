@@ -404,6 +404,7 @@ mod ffi {
             scale: u32,
             array_nesting: u32,
         ) -> Result<Box<ArrayWriterInner>>;
+        fn aw_size(self: &ArrayWriterInner) -> usize;
         fn aw_set_null(self: &mut ArrayWriterInner, idx: usize) -> Result<()>;
         fn aw_set_bool(self: &mut ArrayWriterInner, idx: usize, val: bool) -> Result<()>;
         fn aw_set_i32(self: &mut ArrayWriterInner, idx: usize, val: i32) -> Result<()>;
@@ -3385,6 +3386,10 @@ impl ArrayWriterInner {
             return Err("ArrayWriter is already finalized".to_string());
         }
         self.validate_index(idx)
+    }
+
+    fn aw_size(&self) -> usize {
+        self.num_elements
     }
 
     fn aw_set_null(&mut self, idx: usize) -> Result<(), String> {

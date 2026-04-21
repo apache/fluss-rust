@@ -620,8 +620,8 @@ class ArrayView {
     ArrayView(ArrayView&& other) noexcept;
     ArrayView& operator=(ArrayView&& other) noexcept;
 
-    size_t Size() const;
-    TypeId ElementType() const;
+    size_t Size() const noexcept;
+    TypeId ElementType() const noexcept;
     bool IsNull(size_t element) const;
 
     bool GetBool(size_t element) const;
@@ -664,6 +664,7 @@ class ArrayWriter {
     ArrayWriter& operator=(ArrayWriter&& other) noexcept;
 
     bool Available() const;
+    size_t Size() const noexcept;
 
     void SetNull(size_t idx);
     void SetBool(size_t idx, bool v);

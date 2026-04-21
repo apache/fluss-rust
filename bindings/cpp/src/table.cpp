@@ -19,6 +19,7 @@
 
 #include <arrow/c/bridge.h>
 
+#include <cassert>
 #include <ctime>
 
 #include "ffi_converter.hpp"
@@ -127,6 +128,11 @@ ArrayWriter& ArrayWriter::operator=(ArrayWriter&& other) noexcept {
 
 bool ArrayWriter::Available() const { return inner_ != nullptr; }
 
+size_t ArrayWriter::Size() const noexcept {
+    assert(inner_ && "ArrayWriter::Size called on moved-from instance");
+    return inner_->aw_size();
+}
+
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define CHECK_AW(name)                                                                    \
     do {                                                                                  \
@@ -214,13 +220,13 @@ ArrayView& ArrayView::operator=(ArrayView&& other) noexcept {
         if (!inner_) throw std::logic_error("ArrayView: not available (moved-from)");  \
     } while (0)
 
-size_t ArrayView::Size() const {
-    CHECK_AV();
+size_t ArrayView::Size() const noexcept {
+    assert(inner_ && "ArrayView::Size called on moved-from instance");
     return inner_->av_size();
 }
 
-TypeId ArrayView::ElementType() const {
-    CHECK_AV();
+TypeId ArrayView::ElementType() const noexcept {
+    assert(inner_ && "ArrayView::ElementType called on moved-from instance");
     return static_cast<TypeId>(inner_->av_element_type_id());
 }
 

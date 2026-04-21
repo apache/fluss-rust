@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <thread>
 #include <tuple>
 
@@ -1261,4 +1263,196 @@ TEST_F(LogTableTest, ArrayApiValidationErrors) {
     EXPECT_TRUE(view_null_typed_getter_threw);
 
     ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, AppendAndScanWithArrayEncodingEdgeCases) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_array_encoding_edge_cases_cpp");
+
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", fluss::DataType::Int())
+            .AddColumn("arr_long_str", fluss::DataType::Array(fluss::DataType::String()))
+            .AddColumn("arr_big_decimal", fluss::DataType::Array(fluss::DataType::Decimal(22, 5)))
+            .AddColumn("arr_ts_nano", fluss::DataType::Array(fluss::DataType::Timestamp(9)))
+            .AddColumn("arr_float", fluss::DataType::Array(fluss::DataType::Float()))
+            .AddColumn("arr_double", fluss::DataType::Array(fluss::DataType::Double()))
+            .AddColumn("arr_binary", fluss::DataType::Array(fluss::DataType::Binary(4)))
+            .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"id"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
+
+    {
+        auto row = table.NewRow();
+        row.Set("id", 1);
+
+        // >= 8 bytes forces the heap-pointer variable-length path (threshold: 7)
+        fluss::ArrayWriter arr_long_str(2, fluss::DataType::String());
+        arr_long_str.SetString(0, "abcdefgh");
+        arr_long_str.SetString(1, "this is a much longer string that definitely exceeds inline");
+        row.SetArray(1, std::move(arr_long_str));
+
+        // precision > 18 forces non-compact decimal encoding
+        fluss::ArrayWriter arr_big_decimal(2, fluss::DataType::Decimal(22, 5));
+        arr_big_decimal.SetDecimal(0, "1234567890123456789.12345");
+        arr_big_decimal.SetDecimal(1, "-9999999999999999999.99999");
+        row.SetArray(2, std::move(arr_big_decimal));
+
+        // precision > 3 forces non-compact timestamp (millis + nanos-of-millis)
+        fluss::ArrayWriter arr_ts_nano(1, fluss::DataType::Timestamp(9));
+        auto ts_nano = fluss::Timestamp::FromMillisNanos(1769163227123, 456789);
+        arr_ts_nano.SetTimestampNtz(0, ts_nano);
+        row.SetArray(3, std::move(arr_ts_nano));
+
+        // IEEE 754 special values: NaN, +Infinity, -Infinity
+        fluss::ArrayWriter arr_float(3, fluss::DataType::Float());
+        arr_float.SetFloat32(0, std::numeric_limits<float>::quiet_NaN());
+        arr_float.SetFloat32(1, std::numeric_limits<float>::infinity());
+        arr_float.SetFloat32(2, -std::numeric_limits<float>::infinity());
+        row.SetArray(4, std::move(arr_float));
+
+        fluss::ArrayWriter arr_double(3, fluss::DataType::Double());
+        arr_double.SetFloat64(0, std::numeric_limits<double>::quiet_NaN());
+        arr_double.SetFloat64(1, std::numeric_limits<double>::infinity());
+        arr_double.SetFloat64(2, -std::numeric_limits<double>::infinity());
+        row.SetArray(5, std::move(arr_double));
+
+        // Fixed-length binary
+        fluss::ArrayWriter arr_binary(2, fluss::DataType::Binary(4));
+        arr_binary.SetBytes(0, std::vector<uint8_t>{0xDE, 0xAD, 0xBE, 0xEF});
+        arr_binary.SetNull(1);
+        row.SetArray(6, std::move(arr_binary));
+
+        ASSERT_OK(append_writer.Append(row));
+    }
+
+    ASSERT_OK(append_writer.Flush());
+
+    auto scan = table.NewScan();
+    fluss::LogScanner scanner;
+    ASSERT_OK(scan.CreateLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+
+    fluss::ScanRecords records;
+    ASSERT_OK(scanner.Poll(10000, records));
+    ASSERT_EQ(records.Count(), 1u);
+
+    auto it = records.begin();
+    ASSERT_TRUE(it != records.end());
+    auto rec = *it;
+    const auto& rv = rec.row;
+
+    // Long strings: heap-encoded variable-length round-trip
+    EXPECT_EQ(rv.GetArraySize(1), 2u);
+    EXPECT_EQ(rv.GetArrayString(1, 0), "abcdefgh");
+    EXPECT_EQ(rv.GetArrayString(1, 1), "this is a much longer string that definitely exceeds inline");
+
+    // Non-compact decimal (precision 22 > MAX_COMPACT_PRECISION 18)
+    EXPECT_EQ(rv.GetArraySize(2), 2u);
+    EXPECT_EQ(rv.GetArrayDecimalString(2, 0), "1234567890123456789.12345");
+    EXPECT_EQ(rv.GetArrayDecimalString(2, 1), "-9999999999999999999.99999");
+
+    // Non-compact timestamp (precision 9 > MAX_COMPACT_TIMESTAMP_PRECISION 3)
+    EXPECT_EQ(rv.GetArraySize(3), 1u);
+    auto ts = rv.GetArrayTimestamp(3, 0);
+    EXPECT_EQ(ts.epoch_millis, 1769163227123);
+    EXPECT_EQ(ts.nano_of_millisecond, 456789);
+
+    // Float NaN / Infinity round-trip
+    EXPECT_EQ(rv.GetArraySize(4), 3u);
+    EXPECT_TRUE(std::isnan(rv.GetArrayFloat32(4, 0)));
+    EXPECT_TRUE(std::isinf(rv.GetArrayFloat32(4, 1)));
+    EXPECT_GT(rv.GetArrayFloat32(4, 1), 0.0f);
+    EXPECT_TRUE(std::isinf(rv.GetArrayFloat32(4, 2)));
+    EXPECT_LT(rv.GetArrayFloat32(4, 2), 0.0f);
+
+    // Double NaN / Infinity round-trip
+    EXPECT_EQ(rv.GetArraySize(5), 3u);
+    EXPECT_TRUE(std::isnan(rv.GetArrayFloat64(5, 0)));
+    EXPECT_TRUE(std::isinf(rv.GetArrayFloat64(5, 1)));
+    EXPECT_GT(rv.GetArrayFloat64(5, 1), 0.0);
+    EXPECT_TRUE(std::isinf(rv.GetArrayFloat64(5, 2)));
+    EXPECT_LT(rv.GetArrayFloat64(5, 2), 0.0);
+
+    // Fixed-length binary round-trip
+    EXPECT_EQ(rv.GetArraySize(6), 2u);
+    auto bin = rv.GetArrayBytes(6, 0);
+    ASSERT_EQ(bin.size(), 4u);
+    EXPECT_EQ(bin[0], 0xDE);
+    EXPECT_EQ(bin[1], 0xAD);
+    EXPECT_EQ(bin[2], 0xBE);
+    EXPECT_EQ(bin[3], 0xEF);
+    EXPECT_TRUE(rv.IsArrayElementNull(6, 1));
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
+    // SetInt32 on TINYINT array must throw when value overflows i8 range (-128..127)
+    {
+        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        EXPECT_EQ(tinyint_arr.Size(), 1u);
+        bool threw = false;
+        try {
+            tinyint_arr.SetInt32(0, 1000);
+        } catch (const std::exception& e) {
+            threw = true;
+            std::string msg(e.what());
+            EXPECT_NE(msg.find("TINYINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // SetInt32 on SMALLINT array must throw when value overflows i16 range (-32768..32767)
+    {
+        fluss::ArrayWriter smallint_arr(1, fluss::DataType::SmallInt());
+        bool threw = false;
+        try {
+            smallint_arr.SetInt32(0, 40000);
+        } catch (const std::exception& e) {
+            threw = true;
+            std::string msg(e.what());
+            EXPECT_NE(msg.find("SMALLINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // Negative overflow: -200 doesn't fit TINYINT
+    {
+        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        bool threw = false;
+        try {
+            tinyint_arr.SetInt32(0, -200);
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // Values within range must succeed
+    {
+        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        EXPECT_NO_THROW(tinyint_arr.SetInt32(0, 127));
+    }
+    {
+        fluss::ArrayWriter tinyint_arr(1, fluss::DataType::TinyInt());
+        EXPECT_NO_THROW(tinyint_arr.SetInt32(0, -128));
+    }
+    {
+        fluss::ArrayWriter smallint_arr(1, fluss::DataType::SmallInt());
+        EXPECT_NO_THROW(smallint_arr.SetInt32(0, 32767));
+    }
 }
