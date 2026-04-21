@@ -31,9 +31,9 @@ use std::sync::Arc;
 
 /// The result of a lookup operation.
 ///
-/// Contains the rows returned from a lookup. For primary key lookups,
-/// this will contain at most one row. For prefix key lookups (future),
-/// this may contain multiple rows.
+/// Contains the rows returned from a lookup. For primary-key lookups,
+/// this will contain at most one row. For prefix-key lookups, it may
+/// contain multiple rows.
 pub struct LookupResult {
     rows: Vec<Vec<u8>>,
     row_type: Arc<RowType>,
@@ -128,22 +128,9 @@ impl LookupResult {
     }
 }
 
-/// Configuration and factory struct for creating lookup operations.
-///
-/// `TableLookup` follows the same pattern as `TableScan` and `TableAppend`,
-/// providing a builder-style API for configuring lookup operations before
-/// creating the actual `Lookuper`.
-///
-/// # Example
-/// ```ignore
-/// let table = conn.get_table(&table_path).await?;
-/// let lookuper = table.new_lookup()?.create_lookuper()?;
-/// let result = lookuper.lookup(&row).await?;
-/// if let Some(value) = result.get_single_row() {
-///     println!("Found: {:?}", value);
-/// }
-/// ```
-// TODO: Add lookup_by(column_names) for prefix key lookups (PrefixKeyLookuper)
+/// Builder for lookup operations. `create_lookuper()` builds a primary-key
+/// `Lookuper`; `lookup_by(columns).create_lookuper()` builds a
+/// `PrefixKeyLookuper` for prefix scans.
 // TODO: Add create_typed_lookuper<T>() for typed lookups with POJO mapping
 pub struct TableLookup {
     lookup_client: Arc<LookupClient>,
@@ -161,6 +148,20 @@ impl TableLookup {
             lookup_client,
             table_info,
             metadata,
+        }
+    }
+
+    /// Switches the builder into prefix-scan mode. `lookup_column_names`
+    /// must list the table's partition keys (if any) plus the bucket keys,
+    /// in that order — i.e. this is a **bucket-key prefix** scan, not an
+    /// arbitrary primary-key prefix. Validation is deferred to
+    /// `create_lookuper()`.
+    pub fn lookup_by(self, lookup_column_names: Vec<String>) -> TablePrefixLookup {
+        TablePrefixLookup {
+            lookup_client: self.lookup_client,
+            table_info: self.table_info,
+            metadata: self.metadata,
+            lookup_column_names,
         }
     }
 
@@ -274,13 +275,13 @@ impl Lookuper {
                 Arc::clone(&self.table_path),
                 Some(partition_name),
             );
-            let cluster = self.metadata.get_cluster();
-            match cluster.get_partition_id(&physical_table_path) {
+            match self
+                .metadata
+                .check_and_update_partition_metadata(&physical_table_path)
+                .await?
+            {
                 Some(id) => Some(id),
-                None => {
-                    // Partition doesn't exist, return empty result (like Java)
-                    return Ok(LookupResult::empty(Arc::clone(&self.row_type)));
-                }
+                None => return Ok(LookupResult::empty(Arc::clone(&self.row_type))),
             }
         } else {
             None
@@ -309,6 +310,196 @@ impl Lookuper {
     }
 
     /// Returns a reference to the table info.
+    pub fn table_info(&self) -> &TableInfo {
+        &self.table_info
+    }
+}
+
+pub struct TablePrefixLookup {
+    lookup_client: Arc<LookupClient>,
+    table_info: TableInfo,
+    metadata: Arc<Metadata>,
+    lookup_column_names: Vec<String>,
+}
+
+impl TablePrefixLookup {
+    pub fn create_lookuper(self) -> Result<PrefixKeyLookuper> {
+        validate_prefix_lookup(&self.table_info, &self.lookup_column_names)?;
+
+        let num_buckets = self.table_info.get_num_buckets();
+        let data_lake_format = self.table_info.get_table_config().get_datalake_format()?;
+        let bucketing_function = <dyn BucketingFunction>::of(data_lake_format.as_ref());
+
+        let row_type = self.table_info.row_type();
+        let lookup_row_type = row_type.project_with_field_names(&self.lookup_column_names)?;
+
+        let bucket_keys = self.table_info.get_bucket_keys().to_vec();
+        let prefix_key_encoder =
+            KeyEncoderFactory::of(&lookup_row_type, &bucket_keys, &data_lake_format)?;
+
+        let partition_getter = if self.table_info.is_partitioned() {
+            Some(PartitionGetter::new(
+                &lookup_row_type,
+                Arc::clone(self.table_info.get_partition_keys()),
+            )?)
+        } else {
+            None
+        };
+
+        let full_row_type = Arc::new(self.table_info.row_type().clone());
+
+        Ok(PrefixKeyLookuper {
+            table_path: Arc::new(self.table_info.table_path.clone()),
+            row_type: full_row_type,
+            table_info: self.table_info,
+            metadata: self.metadata,
+            lookup_client: self.lookup_client,
+            bucketing_function,
+            prefix_key_encoder,
+            partition_getter,
+            num_buckets,
+        })
+    }
+}
+
+fn validate_prefix_lookup(table_info: &TableInfo, lookup_columns: &[String]) -> Result<()> {
+    if !table_info.has_primary_key() {
+        return Err(Error::IllegalArgument {
+            message: format!(
+                "Log table {} doesn't support prefix lookup",
+                table_info.get_table_path()
+            ),
+        });
+    }
+
+    let physical_primary_keys = table_info.get_physical_primary_keys();
+    let bucket_keys = table_info.get_bucket_keys();
+
+    if bucket_keys.is_empty() {
+        return Err(Error::IllegalArgument {
+            message: format!(
+                "Can not perform prefix lookup on table '{}', because it has no bucket keys.",
+                table_info.get_table_path()
+            ),
+        });
+    }
+
+    if !physical_primary_keys.starts_with(bucket_keys) {
+        return Err(Error::IllegalArgument {
+            message: format!(
+                "Can not perform prefix lookup on table '{}', because the bucket keys {:?} \
+                 is not a prefix subset of the physical primary keys {:?} \
+                 (excluded partition fields if present).",
+                table_info.get_table_path(),
+                bucket_keys,
+                physical_primary_keys,
+            ),
+        });
+    }
+
+    let partition_keys: &[String] = table_info.get_partition_keys();
+    if table_info.is_partitioned() {
+        for pk in partition_keys {
+            if !lookup_columns.iter().any(|c| c == pk) {
+                return Err(Error::IllegalArgument {
+                    message: format!(
+                        "Can not perform prefix lookup on table '{}', because the lookup columns \
+                         {:?} must contain all partition fields {:?}.",
+                        table_info.get_table_path(),
+                        lookup_columns,
+                        partition_keys,
+                    ),
+                });
+            }
+        }
+    }
+
+    let physical_lookup_columns: Vec<&String> = lookup_columns
+        .iter()
+        .filter(|c| !partition_keys.iter().any(|p| p == *c))
+        .collect();
+    if physical_lookup_columns.len() != bucket_keys.len()
+        || !physical_lookup_columns
+            .iter()
+            .zip(bucket_keys.iter())
+            .all(|(a, b)| *a == b)
+    {
+        return Err(Error::IllegalArgument {
+            message: format!(
+                "Can not perform prefix lookup on table '{}', because the lookup columns {:?} \
+                 must contain all bucket keys {:?} in order.",
+                table_info.get_table_path(),
+                lookup_columns,
+                bucket_keys,
+            ),
+        });
+    }
+
+    if bucket_keys == physical_primary_keys {
+        return Err(Error::IllegalArgument {
+            message: format!(
+                "Can not perform prefix lookup on table '{}', because the lookup columns {:?} \
+                 equals the physical primary keys {:?}. \
+                 Please use primary key lookup (Lookuper without lookup_by) instead.",
+                table_info.get_table_path(),
+                lookup_columns,
+                physical_primary_keys,
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+pub struct PrefixKeyLookuper {
+    table_path: Arc<TablePath>,
+    table_info: TableInfo,
+    row_type: Arc<RowType>,
+    metadata: Arc<Metadata>,
+    lookup_client: Arc<LookupClient>,
+    bucketing_function: Box<dyn BucketingFunction>,
+    prefix_key_encoder: Box<dyn KeyEncoder>,
+    partition_getter: Option<PartitionGetter>,
+    num_buckets: i32,
+}
+
+impl PrefixKeyLookuper {
+    pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
+        let prefix_bytes = self.prefix_key_encoder.encode_key(row)?;
+
+        let partition_id = if let Some(ref partition_getter) = self.partition_getter {
+            let partition_name = partition_getter.get_partition(row)?;
+            let physical_table_path = PhysicalTablePath::of_partitioned(
+                Arc::clone(&self.table_path),
+                Some(partition_name),
+            );
+            match self
+                .metadata
+                .check_and_update_partition_metadata(&physical_table_path)
+                .await?
+            {
+                Some(id) => Some(id),
+                None => return Ok(LookupResult::empty(Arc::clone(&self.row_type))),
+            }
+        } else {
+            None
+        };
+
+        let bucket_id = self
+            .bucketing_function
+            .bucketing(&prefix_bytes, self.num_buckets)?;
+
+        let table_id = self.table_info.get_table_id();
+        let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);
+
+        let rows = self
+            .lookup_client
+            .prefix_lookup(self.table_path.as_ref().clone(), table_bucket, prefix_bytes)
+            .await?;
+
+        Ok(LookupResult::new(rows, Arc::clone(&self.row_type)))
+    }
+
     pub fn table_info(&self) -> &TableInfo {
         &self.table_info
     }

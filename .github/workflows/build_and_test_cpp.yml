@@ -47,7 +47,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Apache Arrow C++
         run: |
@@ -60,14 +62,24 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
 
       - name: Build C++ bindings and tests
         working-directory: bindings/cpp
+        env:
+          SCCACHE_GHA_ENABLED: "true"
         run: |
-          cmake -B build -DFLUSS_ENABLE_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake -B build \
+            -DFLUSS_ENABLE_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build build --parallel
+          sccache --show-stats
 
       - name: Run C++ integration tests (parallel)
         working-directory: bindings/cpp

@@ -20,10 +20,9 @@
 //! This queue buffers lookup operations and provides batched draining
 //! to improve throughput by reducing network round trips.
 
-use super::LookupQuery;
+use super::QueuedLookup;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::timeout;
+use tokio::sync::{mpsc, watch};
 
 /// A queue that buffers pending lookup operations and provides batched draining.
 ///
@@ -34,25 +33,27 @@ use tokio::time::timeout;
 /// Re-enqueued lookups are prioritized over new lookups to ensure fair processing.
 pub struct LookupQueue {
     /// Channel for receiving lookup requests
-    lookup_rx: mpsc::Receiver<LookupQuery>,
+    lookup_rx: mpsc::Receiver<QueuedLookup>,
     /// Channel for receiving re-enqueued lookups
-    re_enqueue_rx: mpsc::UnboundedReceiver<LookupQuery>,
+    re_enqueue_rx: mpsc::UnboundedReceiver<QueuedLookup>,
     /// Maximum batch size for draining
     max_batch_size: usize,
     /// Timeout for batch collection
     batch_timeout: Duration,
+    /// Wakes `drain()` early when the cluster changes.
+    cluster_rx: watch::Receiver<u64>,
 }
 
 impl LookupQueue {
-    /// Creates a new lookup queue with the specified configuration.
     pub fn new(
         queue_size: usize,
         max_batch_size: usize,
         batch_timeout_ms: u64,
+        cluster_rx: watch::Receiver<u64>,
     ) -> (
         Self,
-        mpsc::Sender<LookupQuery>,
-        mpsc::UnboundedSender<LookupQuery>,
+        mpsc::Sender<QueuedLookup>,
+        mpsc::UnboundedSender<QueuedLookup>,
     ) {
         let (lookup_tx, lookup_rx) = mpsc::channel(queue_size);
         let (re_enqueue_tx, re_enqueue_rx) = mpsc::unbounded_channel();
@@ -62,13 +63,14 @@ impl LookupQueue {
             re_enqueue_rx,
             max_batch_size,
             batch_timeout: Duration::from_millis(batch_timeout_ms),
+            cluster_rx,
         };
 
         (queue, lookup_tx, re_enqueue_tx)
     }
 
     /// Drains a batch of lookup queries from the queue.
-    pub async fn drain(&mut self) -> Vec<LookupQuery> {
+    pub async fn drain(&mut self) -> Vec<QueuedLookup> {
         let mut lookups = Vec::with_capacity(self.max_batch_size);
         let deadline = tokio::time::Instant::now() + self.batch_timeout;
 
@@ -78,32 +80,40 @@ impl LookupQueue {
                 break;
             }
 
-            // First drain re-enqueued lookups (prioritized)
+            // Prioritize re-enqueued lookups.
             while lookups.len() < self.max_batch_size {
                 match self.re_enqueue_rx.try_recv() {
                     Ok(lookup) => lookups.push(lookup),
                     Err(_) => break,
                 }
             }
-
             if lookups.len() >= self.max_batch_size {
                 break;
             }
 
-            // Then try to get from main queue with timeout
-            match timeout(remaining, self.lookup_rx.recv()).await {
-                Ok(Some(lookup)) => {
-                    lookups.push(lookup);
-                    // Try to drain more without waiting
-                    while lookups.len() < self.max_batch_size {
-                        match self.lookup_rx.try_recv() {
-                            Ok(lookup) => lookups.push(lookup),
-                            Err(_) => break,
+            let sleep = tokio::time::sleep(remaining);
+            tokio::select! {
+                biased;
+                maybe = self.lookup_rx.recv() => {
+                    match maybe {
+                        Some(lookup) => {
+                            lookups.push(lookup);
+                            while lookups.len() < self.max_batch_size {
+                                match self.lookup_rx.try_recv() {
+                                    Ok(lookup) => lookups.push(lookup),
+                                    Err(_) => break,
+                                }
+                            }
                         }
+                        None => break,
                     }
                 }
-                Ok(None) => break, // Channel closed
-                Err(_) => break,   // Timeout
+                _ = self.cluster_rx.changed() => {
+                    if !lookups.is_empty() {
+                        break;
+                    }
+                }
+                _ = sleep => break,
             }
 
             if lookups.len() >= self.max_batch_size {
@@ -115,7 +125,7 @@ impl LookupQueue {
     }
 
     /// Drains all remaining lookups from the queue.
-    pub fn drain_all(&mut self) -> Vec<LookupQuery> {
+    pub fn drain_all(&mut self) -> Vec<QueuedLookup> {
         let mut lookups = Vec::new();
 
         // Drain re-enqueued lookups

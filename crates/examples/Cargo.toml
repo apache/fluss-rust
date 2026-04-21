@@ -42,3 +42,11 @@ path = "src/example_kv_table.rs"
 [[example]]
 name = "example-partitioned-upsert-lookup"
 path = "src/example_partitioned_kv_table.rs"
+
+[[example]]
+name = "example-prefix-lookup"
+path = "src/example_prefix_lookup.rs"
+
+[[example]]
+name = "example-partitioned-prefix-lookup"
+path = "src/example_partitioned_prefix_lookup.rs"

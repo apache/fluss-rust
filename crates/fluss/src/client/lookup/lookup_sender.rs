@@ -15,72 +15,161 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Lookup sender that processes batched lookup requests.
-//!
-//! The sender runs as a background task, draining lookups from the queue,
-//! grouping them by destination server, and sending batched requests.
-
-use super::{LookupQuery, LookupQueue};
+use super::{LookupQueue, QueuedLookup};
+use crate::client::lookup::lookup_query::LookupQuery;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::{TableBucket, TablePath};
-use crate::proto::LookupResponse;
+use crate::proto::{LookupResponse, PrefixLookupResponse};
 use crate::rpc::ServerConnection;
-use crate::rpc::message::LookupRequest;
+use crate::rpc::message::{
+    LookupRequest, PrefixLookupRequest, ReadVersionedType, RequestBody, WriteVersionedType,
+};
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
 use log::{debug, error, warn};
 use std::collections::{HashMap, HashSet};
+use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
-/// Server ID type alias for clarity.
 type ServerId = i32;
 
-/// Batches grouped by table bucket, keyed by server.
-type BatchesByLeader = HashMap<ServerId, HashMap<TableBucket, LookupBatch>>;
+type BatchesByLeader<T> = HashMap<ServerId, HashMap<TableBucket, LookupBatch<T>>>;
+type PrimaryBatches = BatchesByLeader<Option<Vec<u8>>>;
+type PrefixBatches = BatchesByLeader<Vec<Vec<u8>>>;
 
-/// Result of grouping lookups by leader.
+struct BucketResponse<V> {
+    partition_id: Option<PartitionId>,
+    bucket_id: BucketId,
+    error_code: Option<i32>,
+    error_message: Option<String>,
+    values: Vec<V>,
+}
+
+trait LookupProtocol {
+    type Request: RequestBody<ResponseBody = Self::Response> + Send + WriteVersionedType<Vec<u8>>;
+    type Response: ReadVersionedType<Cursor<Vec<u8>>> + Send;
+    type Value: Send;
+
+    const OP_NAME: &'static str;
+
+    fn build_request(
+        table_id: TableId,
+        keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
+    ) -> Self::Request;
+
+    fn decode_buckets(
+        response: Self::Response,
+    ) -> impl Iterator<Item = BucketResponse<Self::Value>>;
+}
+
+struct Primary;
+impl LookupProtocol for Primary {
+    type Request = LookupRequest;
+    type Response = LookupResponse;
+    type Value = Option<Vec<u8>>;
+
+    const OP_NAME: &'static str = "Lookup";
+
+    fn build_request(
+        table_id: TableId,
+        keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
+    ) -> Self::Request {
+        LookupRequest::new_batched(table_id, keys_by_bucket)
+    }
+
+    fn decode_buckets(
+        response: Self::Response,
+    ) -> impl Iterator<Item = BucketResponse<Self::Value>> {
+        response.buckets_resp.into_iter().map(|r| BucketResponse {
+            partition_id: r.partition_id,
+            bucket_id: r.bucket_id,
+            error_code: r.error_code,
+            error_message: r.error_message,
+            values: r.values.into_iter().map(|pb| pb.values).collect(),
+        })
+    }
+}
+
+struct Prefix;
+impl LookupProtocol for Prefix {
+    type Request = PrefixLookupRequest;
+    type Response = PrefixLookupResponse;
+    type Value = Vec<Vec<u8>>;
+
+    const OP_NAME: &'static str = "Prefix lookup";
+
+    fn build_request(
+        table_id: TableId,
+        keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)>,
+    ) -> Self::Request {
+        PrefixLookupRequest::new_batched(table_id, keys_by_bucket)
+    }
+
+    fn decode_buckets(
+        response: Self::Response,
+    ) -> impl Iterator<Item = BucketResponse<Self::Value>> {
+        response.buckets_resp.into_iter().map(|r| BucketResponse {
+            partition_id: r.partition_id,
+            bucket_id: r.bucket_id,
+            error_code: r.error_code,
+            error_message: r.error_message,
+            values: r.value_lists.into_iter().map(|pb| pb.values).collect(),
+        })
+    }
+}
+
 struct GroupByLeaderResult {
-    /// Lookup batches grouped by leader server.
-    batches_by_leader: BatchesByLeader,
-    /// Tables with unknown leaders that need metadata refresh.
+    primary: PrimaryBatches,
+    prefix: PrefixBatches,
     unknown_leader_tables: HashSet<TablePath>,
-    /// Partition IDs with unknown leaders.
     unknown_leader_partition_ids: HashSet<PartitionId>,
 }
 
-/// Lookup sender that batches and sends lookup requests.
+impl GroupByLeaderResult {
+    fn is_empty(&self) -> bool {
+        self.primary.is_empty() && self.prefix.is_empty()
+    }
+
+    /// Assumes no `(server, bucket)` overlap — safe because the second pass only
+    /// re-groups items unknown in the first.
+    fn merge_batches(&mut self, other: GroupByLeaderResult) {
+        for (server, inner) in other.primary {
+            self.primary.entry(server).or_default().extend(inner);
+        }
+        for (server, inner) in other.prefix {
+            self.prefix.entry(server).or_default().extend(inner);
+        }
+    }
+}
+
+struct GroupingResult {
+    groups: GroupByLeaderResult,
+    unknowns: Vec<QueuedLookup>,
+}
+
 pub struct LookupSender {
-    /// Metadata for leader lookup
     metadata: Arc<Metadata>,
-    /// The lookup queue to drain from
     queue: LookupQueue,
-    /// Channel to re-enqueue failed lookups
-    re_enqueue_tx: mpsc::UnboundedSender<LookupQuery>,
-    /// Semaphore to limit in-flight requests
+    re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
     inflight_semaphore: Arc<Semaphore>,
-    /// Maximum number of retries
     max_retries: i32,
-    /// Whether the sender is running
     running: AtomicBool,
-    /// Whether to force close (abandon pending lookups)
     force_close: AtomicBool,
-    /// Shutdown signal receiver
     shutdown_rx: watch::Receiver<bool>,
 }
 
-/// A batch of lookups going to the same table bucket.
-struct LookupBatch {
+struct LookupBatch<T> {
     table_bucket: TableBucket,
-    lookups: Vec<LookupQuery>,
+    lookups: Vec<LookupQuery<T>>,
     keys: Vec<Bytes>,
 }
 
-impl LookupBatch {
+impl<T> LookupBatch<T> {
     fn new(table_bucket: TableBucket) -> Self {
         Self {
             table_bucket,
@@ -89,12 +178,12 @@ impl LookupBatch {
         }
     }
 
-    fn add_lookup(&mut self, lookup: LookupQuery) {
+    fn add_lookup(&mut self, lookup: LookupQuery<T>) {
         self.keys.push(lookup.key().clone());
         self.lookups.push(lookup);
     }
 
-    fn complete(&mut self, values: Vec<Option<Vec<u8>>>) {
+    fn complete(&mut self, values: Vec<T>) {
         if values.len() != self.lookups.len() {
             let err_msg = format!(
                 "The number of return values ({}) does not match the number of lookups ({})",
@@ -102,10 +191,10 @@ impl LookupBatch {
                 self.lookups.len()
             );
             for lookup in &mut self.lookups {
-                lookup.complete(Err(Error::UnexpectedError {
+                lookup.complete_with_error(Error::UnexpectedError {
                     message: err_msg.clone(),
                     source: None,
-                }));
+                });
             }
             return;
         }
@@ -115,22 +204,29 @@ impl LookupBatch {
         }
     }
 
-    fn complete_exceptionally(&mut self, error_msg: &str) {
+    fn complete_all_with_error(&mut self, error_msg: &str) {
         for lookup in &mut self.lookups {
-            lookup.complete(Err(Error::UnexpectedError {
+            lookup.complete_with_error(Error::UnexpectedError {
                 message: error_msg.to_string(),
                 source: None,
-            }));
+            });
         }
+    }
+
+    fn keys_tuple(&mut self) -> (BucketId, Option<PartitionId>, Vec<Bytes>) {
+        (
+            self.table_bucket.bucket_id(),
+            self.table_bucket.partition_id(),
+            std::mem::take(&mut self.keys),
+        )
     }
 }
 
 impl LookupSender {
-    /// Creates a new lookup sender.
     pub fn new(
         metadata: Arc<Metadata>,
         queue: LookupQueue,
-        re_enqueue_tx: mpsc::UnboundedSender<LookupQuery>,
+        re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
         max_inflight_requests: usize,
         max_retries: i32,
         shutdown_rx: watch::Receiver<bool>,
@@ -147,14 +243,12 @@ impl LookupSender {
         }
     }
 
-    /// Runs the sender loop.
     pub async fn run(&mut self) {
         debug!("Starting Fluss lookup sender");
 
         let mut shutdown_rx = self.shutdown_rx.clone();
 
         while self.running.load(Ordering::Acquire) {
-            // Check for shutdown signal before entering select
             if *shutdown_rx.borrow() {
                 debug!("Lookup sender received shutdown signal");
                 self.initiate_close();
@@ -163,16 +257,12 @@ impl LookupSender {
 
             tokio::select! {
                 biased;
-
-                // Check shutdown signal
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         debug!("Lookup sender received shutdown signal during select");
                         self.initiate_close();
                     }
                 }
-
-                // Process lookups
                 result = self.run_once(false) => {
                     if let Err(e) = result {
                         error!("Error in lookup sender: {}", e);
@@ -183,8 +273,7 @@ impl LookupSender {
 
         debug!("Beginning shutdown of lookup sender, sending remaining lookups");
 
-        // Process remaining lookups during shutdown
-        // TODO: Check the in flight request count in the accumulator.
+        // TODO: Check the in-flight request count in the accumulator.
         if !self.force_close.load(Ordering::Acquire) && self.queue.has_undrained() {
             if let Err(e) = self.run_once(true).await {
                 error!("Error during lookup sender shutdown: {}", e);
@@ -195,7 +284,6 @@ impl LookupSender {
         debug!("Lookup sender shutdown complete");
     }
 
-    /// Runs a single iteration of the sender loop.
     async fn run_once(&mut self, drain_all: bool) -> Result<()> {
         let lookups = if drain_all {
             self.queue.drain_all()
@@ -206,24 +294,24 @@ impl LookupSender {
         self.send_lookups(lookups).await
     }
 
-    /// Groups and sends lookups to appropriate servers.
-    async fn send_lookups(&self, lookups: Vec<LookupQuery>) -> Result<()> {
+    async fn send_lookups(&self, lookups: Vec<QueuedLookup>) -> Result<()> {
         if lookups.is_empty() {
             return Ok(());
         }
 
-        // Group by leader
-        let GroupByLeaderResult {
-            batches_by_leader: lookup_batches,
-            unknown_leader_tables,
-            unknown_leader_partition_ids,
+        let GroupingResult {
+            mut groups,
+            unknowns,
         } = self.group_by_leader(lookups);
 
-        // Update metadata for tables with unknown leaders
-        if !unknown_leader_tables.is_empty() {
-            let table_paths_refs: HashSet<&TablePath> = unknown_leader_tables.iter().collect();
-            let partition_ids: Vec<PartitionId> =
-                unknown_leader_partition_ids.into_iter().collect();
+        if !unknowns.is_empty() {
+            let table_paths_refs: HashSet<&TablePath> =
+                groups.unknown_leader_tables.iter().collect();
+            let partition_ids: Vec<PartitionId> = groups
+                .unknown_leader_partition_ids
+                .iter()
+                .copied()
+                .collect();
             if let Err(e) = self
                 .metadata
                 .update_tables_metadata(&table_paths_refs, &HashSet::new(), partition_ids)
@@ -233,38 +321,57 @@ impl LookupSender {
             } else {
                 debug!(
                     "Updated metadata due to unknown leader tables during lookup: {:?}",
-                    unknown_leader_tables
+                    groups.unknown_leader_tables
                 );
+            }
+
+            // Re-group with fresh cluster state; dispatch what resolved, re-enqueue the rest.
+            let retry = self.group_by_leader(unknowns);
+            groups.merge_batches(retry.groups);
+            for item in retry.unknowns {
+                self.re_enqueue_lookup(item);
+            }
+
+            // Nothing to dispatch even after refresh — back off to avoid a tight RPC loop.
+            if groups.is_empty() {
+                let mut cluster_rx = self.metadata.subscribe_cluster_changes();
+                tokio::select! {
+                    _ = cluster_rx.changed() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+                return Ok(());
             }
         }
 
-        // If no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
-        // no leader for all the lookup request in queue.
-        if lookup_batches.is_empty() && !self.queue.has_undrained() {
-            // TODO: May use wait/notify mechanism to avoid active sleep, and use a dynamic sleep time based on the request waited time.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            return Ok(());
-        }
-
-        // Send batches to each destination
-        let mut pending = FuturesUnordered::new();
-        for (destination, batches) in lookup_batches {
-            pending.push(self.send_lookup_request(destination, batches));
-        }
-        while let Some(()) = pending.next().await {}
+        let primary_fut = async {
+            let mut pending = FuturesUnordered::new();
+            for (server, batches) in groups.primary {
+                pending.push(self.send_request::<Primary>(server, batches));
+            }
+            while pending.next().await.is_some() {}
+        };
+        let prefix_fut = async {
+            let mut pending = FuturesUnordered::new();
+            for (server, batches) in groups.prefix {
+                pending.push(self.send_request::<Prefix>(server, batches));
+            }
+            while pending.next().await.is_some() {}
+        };
+        tokio::join!(primary_fut, prefix_fut);
 
         Ok(())
     }
 
-    /// Groups lookups by leader server.
-    fn group_by_leader(&self, lookups: Vec<LookupQuery>) -> GroupByLeaderResult {
+    fn group_by_leader(&self, lookups: Vec<QueuedLookup>) -> GroupingResult {
         let cluster = self.metadata.get_cluster();
-        let mut batches_by_leader: BatchesByLeader = HashMap::new();
+        let mut primary: PrimaryBatches = HashMap::new();
+        let mut prefix: PrefixBatches = HashMap::new();
         let mut unknown_leader_tables: HashSet<TablePath> = HashSet::new();
         let mut unknown_leader_partition_ids: HashSet<PartitionId> = HashSet::new();
+        let mut unknowns: Vec<QueuedLookup> = Vec::new();
 
-        for lookup in lookups {
-            let table_bucket = lookup.table_bucket().clone();
+        for query in lookups {
+            let table_bucket = query.table_bucket().clone();
 
             let leader = match cluster.leader_for(&table_bucket) {
                 Some(leader) => leader.id(),
@@ -273,276 +380,334 @@ impl LookupSender {
                         "No leader found for table bucket {} during lookup",
                         table_bucket
                     );
-                    // Collect tables with unknown leaders for metadata update
-                    unknown_leader_tables.insert(lookup.table_path().clone());
+                    unknown_leader_tables.insert(query.table_path().clone());
                     if let Some(partition_id) = table_bucket.partition_id() {
                         unknown_leader_partition_ids.insert(partition_id);
                     }
-                    self.re_enqueue_lookup(lookup);
+                    unknowns.push(query);
                     continue;
                 }
             };
 
-            batches_by_leader
-                .entry(leader)
-                .or_default()
-                .entry(table_bucket.clone())
-                .or_insert_with(|| LookupBatch::new(table_bucket))
-                .add_lookup(lookup);
+            match query {
+                QueuedLookup::Primary(q) => {
+                    primary
+                        .entry(leader)
+                        .or_default()
+                        .entry(table_bucket.clone())
+                        .or_insert_with(|| LookupBatch::new(table_bucket))
+                        .add_lookup(q);
+                }
+                QueuedLookup::Prefix(q) => {
+                    prefix
+                        .entry(leader)
+                        .or_default()
+                        .entry(table_bucket.clone())
+                        .or_insert_with(|| LookupBatch::new(table_bucket))
+                        .add_lookup(q);
+                }
+            }
         }
 
-        GroupByLeaderResult {
-            batches_by_leader,
-            unknown_leader_tables,
-            unknown_leader_partition_ids,
+        GroupingResult {
+            groups: GroupByLeaderResult {
+                primary,
+                prefix,
+                unknown_leader_tables,
+                unknown_leader_partition_ids,
+            },
+            unknowns,
         }
     }
 
-    /// Sends lookup requests to a specific destination server.
-    async fn send_lookup_request(
+    async fn send_request<P: LookupProtocol>(
         &self,
-        destination: i32,
-        batches_by_bucket: HashMap<TableBucket, LookupBatch>,
-    ) {
-        // Group by table_id for request batching
-        let mut batches_by_table: HashMap<TableId, Vec<LookupBatch>> = HashMap::new();
-        for (table_bucket, batch) in batches_by_bucket {
-            batches_by_table
-                .entry(table_bucket.table_id())
-                .or_default()
-                .push(batch);
-        }
+        destination: ServerId,
+        batches_by_bucket: HashMap<TableBucket, LookupBatch<P::Value>>,
+    ) where
+        LookupQuery<P::Value>: Into<QueuedLookup>,
+    {
+        let mut batches_by_table = group_by_table(batches_by_bucket);
+        let connection = match self
+            .connect_or_fail(destination, &mut batches_by_table)
+            .await
+        {
+            Some(conn) => conn,
+            None => return,
+        };
 
+        let mut pending = FuturesUnordered::new();
+        for (table_id, mut batches) in batches_by_table {
+            let keys_by_bucket: Vec<_> = batches.iter_mut().map(|b| b.keys_tuple()).collect();
+            let request = P::build_request(table_id, keys_by_bucket);
+            pending.push(self.send_single_table_lookup::<P>(
+                table_id,
+                destination,
+                connection.clone(),
+                request,
+                batches,
+            ));
+        }
+        while pending.next().await.is_some() {}
+    }
+
+    async fn connect_or_fail<T>(
+        &self,
+        destination: ServerId,
+        batches_by_table: &mut HashMap<TableId, Vec<LookupBatch<T>>>,
+    ) -> Option<ServerConnection>
+    where
+        LookupQuery<T>: Into<QueuedLookup>,
+    {
         let cluster = self.metadata.get_cluster();
         let tablet_server = match cluster.get_tablet_server(destination) {
             Some(server) => server.clone(),
             None => {
                 let err_msg = format!("Server {} is not found in metadata cache", destination);
-                for batches in batches_by_table.into_values() {
-                    for mut batch in batches {
-                        self.handle_lookup_error(&err_msg, true, &mut batch);
-                    }
-                }
-                return;
+                self.fail_all_batches(&err_msg, true, batches_by_table);
+                return None;
             }
         };
 
-        let connection = match self.metadata.get_connection(&tablet_server).await {
-            Ok(conn) => conn,
+        match self.metadata.get_connection(&tablet_server).await {
+            Ok(conn) => Some(conn),
             Err(e) => {
                 let err_msg = format!("Failed to get connection to server {}: {}", destination, e);
-                for batches in batches_by_table.into_values() {
-                    for mut batch in batches {
-                        self.handle_lookup_error(&err_msg, true, &mut batch);
-                    }
-                }
-                return;
+                self.fail_all_batches(&err_msg, true, batches_by_table);
+                None
             }
-        };
-
-        let mut pending = FuturesUnordered::new();
-        for (table_id, mut batches) in batches_by_table {
-            let mut all_keys_by_bucket: Vec<(BucketId, Option<PartitionId>, Vec<Bytes>)> =
-                Vec::new();
-            for batch in &mut batches {
-                all_keys_by_bucket.push((
-                    batch.table_bucket.bucket_id(),
-                    batch.table_bucket.partition_id(),
-                    std::mem::take(&mut batch.keys),
-                ));
-            }
-
-            let request = LookupRequest::new_batched(table_id, all_keys_by_bucket);
-            let conn = connection.clone();
-            pending.push(self.send_single_table_lookup(
-                table_id,
-                destination,
-                conn,
-                request,
-                batches,
-            ));
         }
-
-        while let Some(()) = pending.next().await {}
     }
 
-    /// Sends a single lookup request for one table and handles the response.
-    async fn send_single_table_lookup(
+    fn fail_all_batches<T>(
+        &self,
+        err_msg: &str,
+        is_retriable: bool,
+        batches_by_table: &mut HashMap<TableId, Vec<LookupBatch<T>>>,
+    ) where
+        LookupQuery<T>: Into<QueuedLookup>,
+    {
+        for batches in batches_by_table.values_mut() {
+            for batch in batches.iter_mut() {
+                self.handle_batch_error(err_msg, is_retriable, batch);
+            }
+        }
+    }
+
+    async fn send_single_table_lookup<P: LookupProtocol>(
         &self,
         table_id: TableId,
-        destination: i32,
+        destination: ServerId,
         connection: ServerConnection,
-        request: LookupRequest,
-        mut batches: Vec<LookupBatch>,
-    ) {
-        let _permit = match self.inflight_semaphore.clone().acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => {
-                error!("Semaphore closed during lookup");
-                for batch in &mut batches {
-                    batch.complete_exceptionally("Lookup sender shutdown");
-                }
-                return;
-            }
+        request: P::Request,
+        mut batches: Vec<LookupBatch<P::Value>>,
+    ) where
+        LookupQuery<P::Value>: Into<QueuedLookup>,
+    {
+        let _permit = match self.acquire_inflight_permit(&mut batches).await {
+            Some(p) => p,
+            None => return,
         };
 
         match connection.request(request).await {
             Ok(response) => {
-                self.handle_lookup_response(table_id, destination, response, &mut batches);
+                self.handle_response::<P>(table_id, destination, response, &mut batches);
             }
             Err(e) => {
-                let err_msg = format!("Lookup request failed: {}", e);
+                let err_msg = format!("{} request failed: {}", P::OP_NAME, e);
                 let is_retriable = e.is_retriable();
                 for batch in &mut batches {
-                    self.handle_lookup_error(&err_msg, is_retriable, batch);
+                    self.handle_batch_error(&err_msg, is_retriable, batch);
                 }
             }
         }
     }
 
-    /// Handles the lookup response.
-    fn handle_lookup_response(
+    async fn acquire_inflight_permit<T>(
+        &self,
+        batches: &mut [LookupBatch<T>],
+    ) -> Option<OwnedSemaphorePermit> {
+        match self.inflight_semaphore.clone().acquire_owned().await {
+            Ok(p) => Some(p),
+            Err(_) => {
+                error!("Semaphore closed during lookup");
+                for batch in batches.iter_mut() {
+                    batch.complete_all_with_error("Lookup sender shutdown");
+                }
+                None
+            }
+        }
+    }
+
+    fn handle_response<P: LookupProtocol>(
         &self,
         table_id: TableId,
-        destination: i32,
-        response: LookupResponse,
-        batches: &mut [LookupBatch],
-    ) {
-        let bucket_to_index: HashMap<TableBucket, usize> = batches
-            .iter()
-            .enumerate()
-            .map(|(idx, batch)| (batch.table_bucket.clone(), idx))
-            .collect();
+        destination: ServerId,
+        response: P::Response,
+        batches: &mut [LookupBatch<P::Value>],
+    ) where
+        LookupQuery<P::Value>: Into<QueuedLookup>,
+    {
+        let bucket_to_index = build_bucket_index(batches);
+        let mut processed = vec![false; batches.len()];
 
-        // Track which batches have been processed
-        let mut processed_batches = vec![false; batches.len()];
-
-        for bucket_resp in response.buckets_resp {
+        for bucket_resp in P::decode_buckets(response) {
             let table_bucket = TableBucket::new_with_partition(
                 table_id,
                 bucket_resp.partition_id,
                 bucket_resp.bucket_id,
             );
-            if let Some(&batch_idx) = bucket_to_index.get(&table_bucket) {
-                processed_batches[batch_idx] = true;
-                let batch = &mut batches[batch_idx];
-
-                // Check for errors
-                if let Some(error_code) = bucket_resp.error_code {
-                    let fluss_error = FlussError::for_code(error_code);
-                    if fluss_error != FlussError::None {
-                        let err_msg = format!(
-                            "Lookup error for bucket {}: code={}, message={}",
-                            table_bucket,
-                            error_code,
-                            bucket_resp.error_message.unwrap_or_default()
-                        );
-                        let is_retriable = fluss_error.is_retriable();
-                        self.handle_lookup_error(&err_msg, is_retriable, batch);
-                        continue;
-                    }
-                }
-
-                // Extract values
-                let values: Vec<Option<Vec<u8>>> = bucket_resp
-                    .values
-                    .into_iter()
-                    .map(|pb_value| pb_value.values)
-                    .collect();
-
-                batch.complete(values);
-            } else {
+            let Some(&idx) = bucket_to_index.get(&table_bucket) else {
                 error!(
-                    "Received response for unknown bucket {} from server {}",
-                    table_bucket, destination
+                    "Received {} response for unknown bucket {} from server {}",
+                    P::OP_NAME,
+                    table_bucket,
+                    destination
                 );
+                continue;
+            };
+            processed[idx] = true;
+            let batch = &mut batches[idx];
+
+            if let Some(err) = extract_bucket_error(
+                bucket_resp.error_code,
+                bucket_resp.error_message,
+                &table_bucket,
+                P::OP_NAME,
+            ) {
+                self.handle_batch_error(&err.message, err.is_retriable, batch);
+                continue;
             }
+
+            batch.complete(bucket_resp.values);
         }
 
-        // Handle any batches that were not included in the response
-        for (idx, processed) in processed_batches.iter().enumerate() {
-            if !processed {
+        self.fail_unprocessed_batches(&processed, batches, destination, P::OP_NAME);
+    }
+
+    fn fail_unprocessed_batches<T>(
+        &self,
+        processed: &[bool],
+        batches: &mut [LookupBatch<T>],
+        destination: ServerId,
+        op_name: &'static str,
+    ) where
+        LookupQuery<T>: Into<QueuedLookup>,
+    {
+        for (idx, was_processed) in processed.iter().enumerate() {
+            if !was_processed {
                 let batch = &mut batches[idx];
-                // If the batch has lookups that haven't been processed, retry them
-                if !batch.lookups.is_empty() {
-                    let err_msg = format!(
-                        "Bucket {} response missing from server {}",
-                        batch.table_bucket.bucket_id(),
-                        destination
-                    );
-                    // Treat missing bucket response as retriable
-                    self.handle_lookup_error(&err_msg, true, batch);
-                }
+                let err_msg = format!(
+                    "Bucket {} {} response missing from server {}",
+                    batch.table_bucket.bucket_id(),
+                    op_name,
+                    destination
+                );
+                self.handle_batch_error(&err_msg, true, batch);
             }
         }
     }
 
-    /// Handles lookup errors with retry logic.
-    fn handle_lookup_error(&self, error_msg: &str, is_retriable: bool, batch: &mut LookupBatch) {
-        let mut lookups_to_retry = Vec::new();
-        let mut lookups_to_complete = Vec::new();
+    fn handle_batch_error<T>(&self, error_msg: &str, is_retriable: bool, batch: &mut LookupBatch<T>)
+    where
+        LookupQuery<T>: Into<QueuedLookup>,
+    {
+        let mut retried = 0usize;
+        let mut failed = 0usize;
+        let table_bucket = batch.table_bucket.clone();
 
-        for lookup in batch.lookups.drain(..) {
+        for mut lookup in batch.lookups.drain(..) {
             if is_retriable && lookup.retries() < self.max_retries && !lookup.is_done() {
-                lookups_to_retry.push(lookup);
-            } else {
-                lookups_to_complete.push(lookup);
-            }
-        }
-
-        // Re-enqueue retriable lookups
-        if !lookups_to_retry.is_empty() {
-            warn!(
-                "Lookup error for bucket {}, retrying {} lookups: {}",
-                batch.table_bucket,
-                lookups_to_retry.len(),
-                error_msg
-            );
-            for mut lookup in lookups_to_retry {
                 lookup.increment_retries();
-                self.re_enqueue_lookup(lookup);
-            }
-        }
-
-        // Complete non-retriable lookups with error
-        if !lookups_to_complete.is_empty() {
-            warn!(
-                "Lookup failed for bucket {} ({} lookups): {}",
-                batch.table_bucket,
-                lookups_to_complete.len(),
-                error_msg
-            );
-            for mut lookup in lookups_to_complete {
-                lookup.complete(Err(Error::UnexpectedError {
+                self.re_enqueue_lookup(lookup.into());
+                retried += 1;
+            } else {
+                lookup.complete_with_error(Error::UnexpectedError {
                     message: error_msg.to_string(),
                     source: None,
-                }));
+                });
+                failed += 1;
             }
         }
-    }
 
-    /// Re-enqueues a lookup for retry.
-    fn re_enqueue_lookup(&self, lookup: LookupQuery) {
-        if let Err(e) = self.re_enqueue_tx.send(lookup) {
-            // Ensure the caller does not hang by completing the lookup with an error.
-            error!("Failed to re-enqueue lookup: {}", e);
-            let mut failed_lookup = e.0;
-            failed_lookup.complete(Err(Error::UnexpectedError {
-                message: "Failed to re-enqueue lookup: channel closed".to_string(),
-                source: None,
-            }));
+        if retried > 0 {
+            warn!(
+                "Lookup error for bucket {}, retrying {} lookups: {}",
+                table_bucket, retried, error_msg
+            );
+        }
+        if failed > 0 {
+            warn!(
+                "Lookup failed for bucket {} ({} lookups): {}",
+                table_bucket, failed, error_msg
+            );
         }
     }
 
-    /// Initiates graceful shutdown of the sender.
+    fn re_enqueue_lookup(&self, lookup: QueuedLookup) {
+        if let Err(e) = self.re_enqueue_tx.send(lookup) {
+            error!("Failed to re-enqueue lookup: {}", e);
+            let mut failed_lookup = e.0;
+            failed_lookup.complete_with_error(Error::UnexpectedError {
+                message: "Failed to re-enqueue lookup: channel closed".to_string(),
+                source: None,
+            });
+        }
+    }
+
     pub fn initiate_close(&mut self) {
         self.running.store(false, Ordering::Release);
     }
 
-    /// Forces immediate shutdown, abandoning pending lookups.
     #[allow(dead_code)]
     pub fn force_close(&mut self) {
         self.force_close.store(true, Ordering::Release);
         self.initiate_close();
     }
+}
+
+fn group_by_table<T>(
+    batches_by_bucket: HashMap<TableBucket, LookupBatch<T>>,
+) -> HashMap<TableId, Vec<LookupBatch<T>>> {
+    let mut out: HashMap<TableId, Vec<LookupBatch<T>>> = HashMap::new();
+    for (table_bucket, batch) in batches_by_bucket {
+        out.entry(table_bucket.table_id()).or_default().push(batch);
+    }
+    out
+}
+
+fn build_bucket_index<T>(batches: &[LookupBatch<T>]) -> HashMap<TableBucket, usize> {
+    batches
+        .iter()
+        .enumerate()
+        .map(|(idx, batch)| (batch.table_bucket.clone(), idx))
+        .collect()
+}
+
+struct BucketError {
+    message: String,
+    is_retriable: bool,
+}
+
+fn extract_bucket_error(
+    error_code: Option<i32>,
+    error_message: Option<String>,
+    table_bucket: &TableBucket,
+    op: &str,
+) -> Option<BucketError> {
+    let code = error_code?;
+    let fluss_error = FlussError::for_code(code);
+    if fluss_error == FlussError::None {
+        return None;
+    }
+    Some(BucketError {
+        message: format!(
+            "{} error for bucket {}: code={}, message={}",
+            op,
+            table_bucket,
+            code,
+            error_message.unwrap_or_default()
+        ),
+        is_retriable: fluss_error.is_retriable(),
+    })
 }

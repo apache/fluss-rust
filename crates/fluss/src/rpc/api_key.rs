@@ -39,6 +39,7 @@ pub enum ApiKey {
     InitWriter,                 // 1026
     GetLatestLakeSnapshot,      // 1032
     LimitScan,                  // 1033
+    PrefixLookup,               // 1034
     GetDatabaseInfo,            // 1035
     CreatePartition,            // 1036
     DropPartition,              // 1037
@@ -69,6 +70,7 @@ impl From<i16> for ApiKey {
             1026 => ApiKey::InitWriter,
             1032 => ApiKey::GetLatestLakeSnapshot,
             1033 => ApiKey::LimitScan,
+            1034 => ApiKey::PrefixLookup,
             1035 => ApiKey::GetDatabaseInfo,
             1036 => ApiKey::CreatePartition,
             1037 => ApiKey::DropPartition,
@@ -102,6 +104,7 @@ impl From<ApiKey> for i16 {
             ApiKey::InitWriter => 1026,
             ApiKey::GetLatestLakeSnapshot => 1032,
             ApiKey::LimitScan => 1033,
+            ApiKey::PrefixLookup => 1034,
             ApiKey::GetDatabaseInfo => 1035,
             ApiKey::CreatePartition => 1036,
             ApiKey::DropPartition => 1037,
@@ -138,6 +141,7 @@ mod tests {
             (1026, ApiKey::InitWriter),
             (1032, ApiKey::GetLatestLakeSnapshot),
             (1033, ApiKey::LimitScan),
+            (1034, ApiKey::PrefixLookup),
             (1035, ApiKey::GetDatabaseInfo),
             (1036, ApiKey::CreatePartition),
             (1037, ApiKey::DropPartition),

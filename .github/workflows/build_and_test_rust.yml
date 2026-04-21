@@ -51,21 +51,18 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install protoc
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            brew install protobuf
-          fi
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build
-        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp
+        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif
 
       - name: Unit Test
-        run: cargo test --all-targets --workspace --exclude fluss_python --exclude fluss-cpp
+        run: cargo test --all-targets --workspace --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
@@ -78,21 +75,15 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rust Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            rust-${{ runner.os }}-
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Integration Test
-        run: cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp
+        run: cargo test --features integration_tests --all-targets --workspace --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

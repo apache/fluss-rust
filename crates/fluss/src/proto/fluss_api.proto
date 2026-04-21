@@ -376,6 +376,34 @@ message PbValue {
   optional bytes values = 1;
 }
 
+// prefix lookup request and response
+message PrefixLookupRequest {
+  required int64 table_id = 1;
+  repeated PbPrefixLookupReqForBucket buckets_req = 2;
+}
+
+message PrefixLookupResponse {
+  repeated PbPrefixLookupRespForBucket buckets_resp = 1;
+}
+
+message PbPrefixLookupReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  repeated bytes keys = 3;
+}
+
+message PbPrefixLookupRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  repeated PbValueList value_lists = 5;
+}
+
+message PbValueList {
+  repeated bytes values = 1;
+}
+
 message PbPartitionSpec {
   repeated PbKeyValue partition_key_values = 1;
 }
