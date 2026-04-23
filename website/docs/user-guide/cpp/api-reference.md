@@ -212,6 +212,7 @@ Complete API reference for the Fluss C++ client.
 | `SetTimestampNtz(size_t idx, const Timestamp& value)`     | Set timestamp without timezone |
 | `SetTimestampLtz(size_t idx, const Timestamp& value)`     | Set timestamp with timezone    |
 | `SetDecimal(size_t idx, const std::string& value)`        | Set decimal from string        |
+| `SetArray(size_t idx, ArrayWriter&& writer)`              | Set array value (consumes the writer) |
 
 ### Name-Based Setters
 
@@ -257,6 +258,28 @@ Read-only row view for scan results. Provides zero-copy access to string and byt
 | `GetTimestamp(size_t idx) -> Timestamp`                    | Get timestamp at index         |
 | `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
 | `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
+
+### Array Getters (Index-Based)
+
+| Method                                                             |  Description                              |
+|--------------------------------------------------------------------|-------------------------------------------|
+| `GetArraySize(size_t idx) -> size_t`                               | Get element count of array at index       |
+| `GetArrayElementType(size_t idx) -> TypeId`                        | Get element type of array at index        |
+| `IsArrayElementNull(size_t idx, size_t element) -> bool`           | Check if array element is null            |
+| `GetArrayBool(size_t idx, size_t element) -> bool`                 | Get boolean array element                 |
+| `GetArrayInt32(size_t idx, size_t element) -> int32_t`             | Get 32-bit integer array element          |
+| `GetArrayInt64(size_t idx, size_t element) -> int64_t`             | Get 64-bit integer array element          |
+| `GetArrayFloat32(size_t idx, size_t element) -> float`             | Get 32-bit float array element            |
+| `GetArrayFloat64(size_t idx, size_t element) -> double`            | Get 64-bit float array element            |
+| `GetArrayString(size_t idx, size_t element) -> std::string`        | Get string array element                  |
+| `GetArrayBytes(size_t idx, size_t element) -> std::vector<uint8_t>`| Get binary array element                  |
+| `GetArrayDate(size_t idx, size_t element) -> Date`                 | Get date array element                    |
+| `GetArrayTime(size_t idx, size_t element) -> Time`                 | Get time array element                    |
+| `GetArrayTimestamp(size_t idx, size_t element) -> Timestamp`       | Get timestamp array element               |
+| `GetArrayDecimalString(size_t idx, size_t element) -> std::string` | Get decimal array element as string       |
+| `GetArrayView(size_t idx) -> ArrayView`                            | Get owning ArrayView for nested access    |
+
+All array getters are also available by column name (e.g., `GetArraySize("col")`, `GetArrayView("col")`).
 
 ### Name-Based Getters
 
@@ -364,6 +387,10 @@ Read-only result for lookup operations. Provides zero-copy access to field value
 | `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
 | `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
 
+### Array Getters (Index-Based)
+
+Same array getters as [`RowView`](#array-getters-index-based) — `GetArraySize`, `GetArrayInt32`, `GetArrayView`, etc. Also available by column name.
+
 ### Name-Based Getters
 
 | Method                                                  |  Description                       |
@@ -456,14 +483,61 @@ Read-only result for lookup operations. Provides zero-copy access to field value
 | `DataType::Timestamp(int precision)`          | Timestamp without timezone         |
 | `DataType::TimestampLtz(int precision)`       | Timestamp with timezone            |
 | `DataType::Decimal(int precision, int scale)` | Decimal with precision and scale   |
+| `DataType::Array(DataType element)`           | Array of the given element type    |
 
 ### Accessors
 
-| Method               |  Description                                |
-|----------------------|---------------------------------------------|
-| `id() -> TypeId`     | Get the type ID                             |
-| `precision() -> int` | Get precision (for Decimal/Timestamp types) |
-| `scale() -> int`     | Get scale (for Decimal type)                |
+| Method                              |  Description                                |
+|-------------------------------------|---------------------------------------------|
+| `id() -> TypeId`                    | Get the type ID                             |
+| `precision() -> int`               | Get precision (for Decimal/Timestamp types) |
+| `scale() -> int`                   | Get scale (for Decimal type)                |
+| `element_type() -> const DataType*` | Get element type (for Array type, nullptr otherwise) |
+
+## `ArrayWriter`
+
+Write-only builder for array column values. Constructed with a fixed size and element type, then populated element-by-element. Move-only — consumed by `GenericRow::SetArray()` or `ArrayWriter::SetArray()` for nested arrays.
+
+| Method                                                    |  Description                              |
+|-----------------------------------------------------------|-------------------------------------------|
+| `ArrayWriter(size_t size, DataType element_type)`         | Create an array writer                    |
+| `SetNull(size_t idx)`                                     | Set element to null                       |
+| `SetBool(size_t idx, bool value)`                         | Set boolean element                       |
+| `SetInt32(size_t idx, int32_t value)`                     | Set 32-bit integer element                |
+| `SetInt64(size_t idx, int64_t value)`                     | Set 64-bit integer element                |
+| `SetFloat32(size_t idx, float value)`                     | Set 32-bit float element                  |
+| `SetFloat64(size_t idx, double value)`                    | Set 64-bit float element                  |
+| `SetString(size_t idx, const std::string& value)`         | Set string element                        |
+| `SetBytes(size_t idx, const std::vector<uint8_t>& value)` | Set binary element                        |
+| `SetDate(size_t idx, const Date& value)`                  | Set date element                          |
+| `SetTime(size_t idx, const Time& value)`                  | Set time element                          |
+| `SetTimestampNtz(size_t idx, const Timestamp& value)`     | Set timestamp without timezone element    |
+| `SetTimestampLtz(size_t idx, const Timestamp& value)`     | Set timestamp with timezone element       |
+| `SetDecimal(size_t idx, const std::string& value)`        | Set decimal element from string           |
+| `SetArray(size_t idx, ArrayWriter&& nested)`              | Set nested array element (consumes nested)|
+
+## `ArrayView`
+
+Read-only view over an array column value. Obtained from `RowView::GetArrayView()` or `LookupResult::GetArrayView()`, and recursively from `ArrayView::GetArray()` for nested `ARRAY<ARRAY<...>>` columns. Move-only.
+
+| Method                                                  |  Description                              |
+|---------------------------------------------------------|-------------------------------------------|
+| `Size() -> size_t`                                      | Get element count                         |
+| `ElementType() -> TypeId`                               | Get element type                          |
+| `IsNull(size_t element) -> bool`                        | Check if element is null                  |
+| `GetBool(size_t element) -> bool`                       | Get boolean element                       |
+| `GetInt32(size_t element) -> int32_t`                   | Get 32-bit integer element                |
+| `GetInt64(size_t element) -> int64_t`                   | Get 64-bit integer element                |
+| `GetFloat32(size_t element) -> float`                   | Get 32-bit float element                  |
+| `GetFloat64(size_t element) -> double`                  | Get 64-bit float element                  |
+| `GetString(size_t element) -> std::string`              | Get string element                        |
+| `GetBytes(size_t element) -> std::vector<uint8_t>`      | Get binary element                        |
+| `GetDate(size_t element) -> Date`                       | Get date element                          |
+| `GetTime(size_t element) -> Time`                       | Get time element                          |
+| `GetTimestamp(size_t element) -> Timestamp`              | Get timestamp element                     |
+| `GetTimestampLtz(size_t element) -> Timestamp`          | Get timestamp with timezone element       |
+| `GetDecimalString(size_t element) -> std::string`       | Get decimal element as string             |
+| `GetArray(size_t element) -> ArrayView`                 | Get nested array as child ArrayView       |
 
 ## `TablePath`
 
@@ -632,6 +706,7 @@ inline const char* ChangeTypeShortString(ChangeType ct) {
 | `Timestamp`    | Timestamp without timezone |
 | `TimestampLtz` | Timestamp with timezone    |
 | `Decimal`      | Decimal                    |
+| `Array`        | Array of elements          |
 
 ### `ChangeType`
 
