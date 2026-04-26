@@ -50,56 +50,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Workaround: erlef/setup-beam is not on the ASF action allowlist
-      # yet. Once it is, this block collapses to a single setup-beam step.
-      # In the meantime we build OTP from source and cache it — the previous
-      # apt-based approach died when Erlang Solutions shut down their repo
-      # in Jan 2025 (https://binaries2.erlang-solutions.com/packages.html).
-      #
-      # The job runs on the native runner (no `container:`) so that the
-      # testcontainers-rs calls inside fluss-test-cluster can reach the
-      # runner's own Docker daemon during integration tests.
-      - name: Install OTP build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential autoconf m4 libncurses-dev \
-            libssl-dev libpng-dev libssh-dev unixodbc-dev xsltproc fop
-
-      - name: Cache OTP
-        id: otp-cache
-        uses: actions/cache@v4
+      - name: Set up BEAM
+        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24.0
         with:
-          path: /opt/otp
-          key: ${{ runner.os }}-otp-${{ env.OTP_VERSION }}-v1
-
-      - name: Build OTP from source
-        if: steps.otp-cache.outputs.cache-hit != 'true'
-        run: |
-          curl -fsSL -o /tmp/otp.tar.gz \
-            "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
-          tar xf /tmp/otp.tar.gz -C /tmp
-          cd /tmp/otp_src_${OTP_VERSION}
-          ./configure --prefix=/opt/otp --without-wx --without-debugger \
-            --without-observer --without-javac
-          make -j$(nproc)
-          sudo make install
-
-      - name: Put OTP on PATH
-        run: |
-          echo "/opt/otp/bin" >> "$GITHUB_PATH"
-          /opt/otp/bin/erl -eval 'io:format("OTP ~s~n", [erlang:system_info(otp_release)]), halt().' -noshell
-
-      - name: Install Elixir
-        run: |
-          curl -fsSL -o /tmp/elixir.zip \
-            "https://github.com/elixir-lang/elixir/releases/download/v${ELIXIR_VERSION}/elixir-otp-28.zip"
-          sudo mkdir -p /usr/local/elixir
-          sudo unzip -qo /tmp/elixir.zip -d /usr/local/elixir
-          echo "/usr/local/elixir/bin" >> "$GITHUB_PATH"
-          /usr/local/elixir/bin/elixir --version
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
 
       - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
