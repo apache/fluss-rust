@@ -1193,6 +1193,11 @@ impl DataField {
     pub fn data_type(&self) -> &DataType {
         &self.data_type
     }
+
+    /// Returns the description of the field, if any.
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
 }
 
 impl Display for DataField {
@@ -1694,4 +1699,26 @@ fn test_row_type_project_duplicate_indices() {
     assert_eq!(projected.fields()[0].name, "id");
     assert_eq!(projected.fields()[1].name, "id");
     assert_eq!(projected.fields()[2].name, "name");
+}
+
+#[test]
+fn test_datafield_description() {
+    // Test field with description
+    let field_with_desc = DataTypes::field_with_description(
+        "user_id",
+        DataTypes::bigint(),
+        "Unique identifier for the user".to_string(),
+    );
+    assert_eq!(
+        field_with_desc.description(),
+        Some("Unique identifier for the user")
+    );
+
+    // Test field without description
+    let field_no_desc = DataTypes::field("name", DataTypes::string());
+    assert_eq!(field_no_desc.description(), None);
+
+    // Test that description() returns a reference to the description
+    let desc = field_with_desc.description();
+    assert_eq!(desc.unwrap(), "Unique identifier for the user");
 }
