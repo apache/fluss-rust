@@ -28,6 +28,7 @@ mod error;
 mod lookup;
 mod metadata;
 mod table;
+mod test_cluster;
 mod upsert;
 mod utils;
 mod write_handle;
@@ -39,6 +40,7 @@ pub use error::*;
 pub use lookup::*;
 pub use metadata::*;
 pub use table::*;
+pub use test_cluster::*;
 pub use upsert::*;
 pub use utils::*;
 pub use write_handle::*;
@@ -130,6 +132,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<WriteResultHandle>()?;
     m.add_class::<DatabaseDescriptor>()?;
     m.add_class::<DatabaseInfo>()?;
+    m.add_class::<FlussTestCluster>()?;
 
     // Register constants
     m.add("EARLIEST_OFFSET", fcore::client::EARLIEST_OFFSET)?;

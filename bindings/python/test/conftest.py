@@ -16,73 +16,15 @@
 # under the License.
 
 import asyncio
-import json
 import os
-import subprocess
-import tempfile
 import time
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from filelock import FileLock
 
 import fluss
 
 CLUSTER_NAME = "shared-test"
-
-
-def _find_cli_binary():
-    env_bin = os.environ.get("FLUSS_TEST_CLUSTER_BIN")
-    if env_bin:
-        if os.path.isfile(env_bin):
-            return env_bin
-        raise FileNotFoundError(f"FLUSS_TEST_CLUSTER_BIN={env_bin!r} does not exist")
-    result = subprocess.run(
-        ["cargo", "locate-project", "--workspace", "--message-format", "plain"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        root = Path(result.stdout.strip()).parent
-        for profile in ("debug", "release"):
-            bin_path = root / "target" / profile / "fluss-test-cluster"
-            if bin_path.is_file():
-                return str(bin_path)
-    raise FileNotFoundError(
-        "fluss-test-cluster not found. Run: cargo build -p fluss-test-cluster"
-    )
-
-
-def _start_cluster():
-    lock = Path(tempfile.gettempdir()) / f"fluss-{CLUSTER_NAME}.lock"
-    with FileLock(lock):
-        cli = _find_cli_binary()
-        result = subprocess.run(
-            [cli, "start", "--sasl", "--name", CLUSTER_NAME],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"fluss-test-cluster start failed:\n{result.stderr}\n{result.stdout}"
-            )
-        prefix = "CLUSTER_JSON: "
-        for line in result.stdout.strip().split("\n"):
-            if line.startswith(prefix):
-                info = json.loads(line[len(prefix) :])
-                return info["bootstrap_servers"], info.get("sasl_bootstrap_servers")
-        raise RuntimeError(
-            f"No CLUSTER_JSON token in output:\n{result.stdout}\n{result.stderr}"
-        )
-
-
-def _stop_cluster():
-    try:
-        cli = _find_cli_binary()
-    except FileNotFoundError:
-        return
-    subprocess.run([cli, "stop", "--name", CLUSTER_NAME], capture_output=True)
 
 
 async def _connect(bootstrap_servers):
@@ -109,7 +51,7 @@ def pytest_unconfigure(config):
         return
     if hasattr(config, "workerinput"):
         return
-    _stop_cluster()
+    fluss.FlussTestCluster.stop_by_name(CLUSTER_NAME)
 
 
 @pytest.fixture(scope="session")
@@ -120,8 +62,16 @@ def fluss_cluster():
         yield (env, sasl_env)
         return
 
-    plaintext_addr, sasl_addr = _start_cluster()
-    yield (plaintext_addr, sasl_addr or plaintext_addr)
+    loop = asyncio.new_event_loop()
+    try:
+        cluster = loop.run_until_complete(
+            fluss.FlussTestCluster.start(CLUSTER_NAME, sasl=True)
+        )
+    finally:
+        loop.close()
+    plaintext_addr = cluster.bootstrap_servers
+    sasl_addr = cluster.sasl_bootstrap_servers or plaintext_addr
+    yield (plaintext_addr, sasl_addr)
 
 
 _cached_connection = None

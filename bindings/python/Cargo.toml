@@ -29,6 +29,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.26.0", features = ["extension-module", "generate-import-lib"] }
 fluss = { workspace = true, features = ["storage-all"] }
+fluss-test-cluster = { path = "../../crates/fluss-test-cluster" }
 tokio = { workspace = true }
 arrow = { workspace = true }
 arrow-pyarrow = "57.0.0"

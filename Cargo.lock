@@ -1156,6 +1156,7 @@ dependencies = [
  "arrow-schema",
  "bigdecimal",
  "fluss-rs",
+ "fluss-test-cluster",
  "indexmap 2.13.1",
  "jiff",
  "pyo3",
