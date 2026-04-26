@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::connection::FlussConnection;
+use crate::client::table::batch_scanner::BatchScanner;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
 use crate::client::table::log_fetch_buffer::{
