@@ -132,7 +132,7 @@ impl FlussConnection {
         _traceback: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let is_exc_none = exc_type.as_ref().map_or(true, |e| e.is_none());
+        let is_exc_none = exc_type.as_ref().is_none_or(|e| e.is_none());
         future_into_py(py, async move {
             let res = inner.close(Duration::MAX).await;
             if let Err(e) = res {
