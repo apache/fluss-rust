@@ -15,20 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Async NIF helpers — spawn on tokio, send `{ref, result}` back
-//! as a BEAM message instead of blocking dirty schedulers.
+//! Async NIF helpers — spawn on tokio, send `{ref, result}` back as a BEAM
+//! message instead of blocking dirty schedulers.
 
 use crate::RUNTIME;
-use crate::atoms;
+use crate::atoms::{self, NifFlussError};
+use fluss::error::Error as CoreError;
 use rustler::env::OwnedEnv;
 use rustler::{Encoder, Env, Term};
 use std::future::Future;
 
-/// Sends `{ref, :ok}` or `{ref, {:error, reason}}` on completion.
-pub fn spawn_task<'a, F, E>(env: Env<'a>, future: F) -> Term<'a>
+fn encode_err<'a>(env: Env<'a>, err: CoreError) -> Term<'a> {
+    (atoms::error(), NifFlussError::from_core(&err)).encode(env)
+}
+
+pub fn spawn_task<'a, F>(env: Env<'a>, future: F) -> Term<'a>
 where
-    F: Future<Output = Result<(), E>> + Send + 'static,
-    E: std::fmt::Display + Send + 'static,
+    F: Future<Output = Result<(), CoreError>> + Send + 'static,
 {
     let pid = env.pid();
     let ref_term: Term<'a> = *env.make_ref();
@@ -41,7 +44,7 @@ where
             let r = saved_ref.load(env);
             match result {
                 Ok(()) => (r, atoms::ok()).encode(env),
-                Err(e) => (r, (atoms::error(), e.to_string())).encode(env),
+                Err(e) => (r, encode_err(env, e)).encode(env),
             }
         });
     });
@@ -49,12 +52,10 @@ where
     ref_term
 }
 
-/// Sends `{ref, {:ok, value}}` or `{ref, {:error, reason}}` on completion.
-pub fn spawn_task_with_result<'a, F, T, E>(env: Env<'a>, future: F) -> Term<'a>
+pub fn spawn_task_with_result<'a, F, T>(env: Env<'a>, future: F) -> Term<'a>
 where
-    F: Future<Output = Result<T, E>> + Send + 'static,
+    F: Future<Output = Result<T, CoreError>> + Send + 'static,
     T: Encoder + Send + 'static,
-    E: std::fmt::Display + Send + 'static,
 {
     let pid = env.pid();
     let ref_term: Term<'a> = *env.make_ref();
@@ -67,7 +68,7 @@ where
             let r = saved_ref.load(env);
             match result {
                 Ok(val) => (r, (atoms::ok(), val)).encode(env),
-                Err(e) => (r, (atoms::error(), e.to_string())).encode(env),
+                Err(e) => (r, encode_err(env, e)).encode(env),
             }
         });
     });
@@ -75,17 +76,17 @@ where
     ref_term
 }
 
-/// Sends `{ref, {:error, reason}}` immediately (no async work).
-pub fn send_error<'a>(env: Env<'a>, msg: &str) -> Term<'a> {
+pub fn send_client_error<'a>(env: Env<'a>, msg: &str) -> Term<'a> {
     let pid = env.pid();
     let ref_term: Term<'a> = *env.make_ref();
     let mut task_env = OwnedEnv::new();
     let saved_ref = task_env.save(ref_term);
-    let msg = msg.to_string();
+    let message = msg.to_string();
 
     let _ = task_env.send_and_clear(&pid, |env| {
         let r = saved_ref.load(env);
-        (r, (atoms::error(), msg)).encode(env)
+        let err = NifFlussError::client(message);
+        (r, (atoms::error(), err)).encode(env)
     });
 
     ref_term

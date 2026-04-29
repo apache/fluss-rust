@@ -17,7 +17,7 @@
 
 use crate::RUNTIME;
 use crate::async_nif;
-use crate::atoms::{self, to_nif_err};
+use crate::atoms::{self, NifFlussError, to_nif_err};
 use crate::row_convert;
 use crate::table::TableResource;
 use fluss::client::{EARLIEST_OFFSET, LogScanner};
@@ -108,13 +108,15 @@ fn send_poll_result(pid: &LocalPid, result: Result<ScanRecords, Error>, columns:
             let _ = msg_env.send_and_clear(pid, |env| {
                 match encode_scan_records(env, scan_records, columns) {
                     Ok(records) => (atoms::fluss_records(), records).encode(env),
-                    Err(e) => (atoms::fluss_poll_error(), e).encode(env),
+                    Err(message) => {
+                        (atoms::fluss_poll_error(), NifFlussError::client(message)).encode(env)
+                    }
                 }
             });
         }
         Err(e) => {
             let _ = msg_env.send_and_clear(pid, |env| {
-                (atoms::fluss_poll_error(), e.to_string()).encode(env)
+                (atoms::fluss_poll_error(), NifFlussError::from_core(&e)).encode(env)
             });
         }
     }
