@@ -667,6 +667,26 @@ async def main():
     except Exception as e:
         print(f"Error during projection: {e}")
 
+
+    print("\n--- New: async context manager demo ---")
+    async with await fluss.FlussConnection.create(config) as demo_conn:
+        demo_table = await demo_conn.get_table(table_path)
+        async with demo_table.new_append().create_writer() as writer:
+            writer.append(
+                {
+                    "id": 1,
+                    "name": "demo",
+                    "score": 1.0,
+                    "age": 25,
+                    "birth_date": date(2000, 1, 1),
+                    "check_in_time": dt_time(12, 0, 0),
+                    "created_at": datetime(2024, 1, 1, 12, 0, 0),
+                    "updated_at": datetime(2024, 1, 1, 12, 0, 0),
+                    "salary": Decimal("100.00"),
+                }
+            )
+            # auto-flushes on exit
+
     # Demo: Drop tables
     print("\n--- Testing drop_table() ---")
     try:
@@ -934,24 +954,7 @@ async def main():
         traceback.print_exc()
 
 
-    print("\n--- New: async context manager demo ---")
-    async with await fluss.FlussConnection.create(config) as demo_conn:
-        demo_table = await demo_conn.get_table(table_path)
-        async with demo_table.new_append().create_writer() as writer:
-            writer.append(
-                {
-                    "id": 1,
-                    "name": "demo",
-                    "score": 1.0,
-                    "age": 25,
-                    "birth_date": date(2000, 1, 1),
-                    "check_in_time": dt_time(12, 0, 0),
-                    "created_at": datetime(2024, 1, 1, 12, 0, 0),
-                    "updated_at": datetime(2024, 1, 1, 12, 0, 0),
-                    "salary": Decimal("100.00"),
-                }
-            )
-            # auto-flushes on exit
+
     # Close connection
     await conn.close()
     print("\nConnection closed")
