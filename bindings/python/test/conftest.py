@@ -172,7 +172,7 @@ async def wait_for_table_ready(admin):
             except (fluss.FlussError, Exception) as e:
                 # Catch "No leader found" or other errors that indicate the table/partition is still initializing
                 err_msg = str(e)
-                if any(msg in err_msg for msg in ["No leader found", "Table not ready", "Metadata not ready"]):
+                if any(msg in err_msg for msg in ["No leader found", "Table not ready", "Metadata not ready", "not leader or follower"]):
                     await asyncio.sleep(1)
                     continue
                 raise
