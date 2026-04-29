@@ -123,20 +123,23 @@ impl FlussConnection {
     }
 
     // Exit the async runtime context (for 'async with' statement)
-    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    #[pyo3(signature = (exc_type=None, _exc_value=None, _traceback=None))]
     fn __aexit__<'py>(
         &self,
         py: Python<'py>,
-        _exc_type: Option<Bound<'py, PyAny>>,
+        exc_type: Option<Bound<'py, PyAny>>,
         _exc_value: Option<Bound<'py, PyAny>>,
         _traceback: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
+        let is_exc_none = exc_type.as_ref().map_or(true, |e| e.is_none());
         future_into_py(py, async move {
-            inner
-                .close(Duration::MAX)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
+            let res = inner.close(Duration::MAX).await;
+            if let Err(e) = res {
+                if is_exc_none {
+                    return Err(FlussError::from_core_error(&e));
+                }
+            }
             Ok(false)
         })
     }
