@@ -40,7 +40,7 @@ async def main():
 
     # Cleanup
     await admin.drop_table(table_path, ignore_if_not_exists=True)
-    conn.close()
+    await conn.close()
 
 asyncio.run(main())
 ```
