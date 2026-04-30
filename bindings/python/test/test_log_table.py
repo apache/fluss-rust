@@ -118,7 +118,7 @@ async def test_append_dict_rows(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
-async def test_list_offsets(connection, admin):
+async def test_list_offsets(connection, admin, wait_for_table_ready):
     """Test listing earliest, latest, and timestamp-based offsets."""
     table_path = fluss.TablePath("fluss", "py_test_list_offsets")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
@@ -129,7 +129,7 @@ async def test_list_offsets(connection, admin):
     table_descriptor = fluss.TableDescriptor(schema)
     await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
 
-    await asyncio.sleep(2)  # Wait for table initialization
+    await wait_for_table_ready(table_path)
 
     # Earliest offset should be 0 for empty table
     earliest = await admin.list_offsets(
@@ -266,7 +266,7 @@ async def test_project(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
-async def test_poll_batches(connection, admin):
+async def test_poll_batches(connection, admin, wait_for_table_ready):
     """Test batch-based scanning with poll_arrow and poll_record_batch."""
     table_path = fluss.TablePath("fluss", "py_test_poll_batches")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
@@ -277,7 +277,7 @@ async def test_poll_batches(connection, admin):
     table_descriptor = fluss.TableDescriptor(schema)
     await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
 
-    await asyncio.sleep(1)
+    await wait_for_table_ready(table_path)
 
     table = await connection.get_table(table_path)
     scanner = await table.new_scan().create_record_batch_log_scanner()
@@ -388,7 +388,7 @@ async def test_to_arrow_and_to_pandas(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
-async def test_partitioned_table_append_scan(connection, admin):
+async def test_partitioned_table_append_scan(connection, admin, wait_for_table_ready):
     """Test append and scan on a partitioned log table."""
     table_path = fluss.TablePath("fluss", "py_test_partitioned_log_append")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
@@ -413,9 +413,7 @@ async def test_partitioned_table_append_scan(connection, admin):
         await admin.create_partition(
             table_path, {"region": region}, ignore_if_exists=True
         )
-
-    await asyncio.sleep(2)  # Wait for partitions to be available
-
+        await wait_for_table_ready(table_path, partition_name=region)
     table = await connection.get_table(table_path)
     append_writer = table.new_append().create_writer()
 
@@ -625,7 +623,7 @@ async def test_write_pandas(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
-async def test_partitioned_table_to_arrow(connection, admin):
+async def test_partitioned_table_to_arrow(connection, admin, wait_for_table_ready):
     """Test to_arrow() on partitioned tables."""
     table_path = fluss.TablePath("fluss", "py_test_partitioned_to_arrow")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
@@ -646,8 +644,7 @@ async def test_partitioned_table_to_arrow(connection, admin):
         await admin.create_partition(
             table_path, {"region": region}, ignore_if_exists=True
         )
-
-    await asyncio.sleep(2)
+        await wait_for_table_ready(table_path, partition_name=region)
 
     table = await connection.get_table(table_path)
     writer = table.new_append().create_writer()

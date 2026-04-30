@@ -96,7 +96,7 @@ async def _connect(bootstrap_servers):
             nodes = await admin.get_server_nodes()
             if any(n.server_type == "TabletServer" for n in nodes):
                 return conn
-            conn.close()
+            await conn.close()
             last_err = RuntimeError("No TabletServer available yet")
         except Exception as e:
             last_err = e
@@ -151,3 +151,34 @@ def plaintext_bootstrap_servers(fluss_cluster):
 @pytest_asyncio.fixture
 async def admin(connection):
     return connection.get_admin()
+
+
+@pytest_asyncio.fixture
+async def wait_for_table_ready(admin):
+    """
+    Fixture that returns a helper function to wait for a table or partition to be ready.
+    """
+    async def _wait(table_path, timeout=15, partition_name=None):
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < timeout:
+            try:
+                if partition_name:
+                    await admin.list_partition_offsets(
+                        table_path, partition_name, [0], fluss.OffsetSpec.earliest()
+                    )
+                else:
+                    await admin.list_offsets(table_path, [0], fluss.OffsetSpec.earliest())
+                return
+            except (fluss.FlussError, Exception) as e:
+                # Catch "No leader found" or other errors that indicate the table/partition is still initializing
+                err_msg = str(e)
+                if any(msg in err_msg for msg in ["No leader found", "Table not ready", "Metadata not ready", "not leader or follower"]):
+                    await asyncio.sleep(1)
+                    continue
+                raise
+        raise TimeoutError(
+            f"Table/Partition {table_path} ({partition_name or 'standard'}) "
+            f"did not become ready within {timeout}s"
+        )
+
+    return _wait

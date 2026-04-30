@@ -28,10 +28,6 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-// TODO: implement `close(&self, timeout: Duration)` to gracefully shut down the
-// writer client (drain pending batches, then force-close on timeout).
-// Java's FlussConnection.close() calls writerClient.close(Long.MAX_VALUE).
-// WriterClient::close() already exists but is never called from the public API.
 pub struct FlussConnection {
     metadata: Arc<Metadata>,
     network_connects: Arc<RpcClient>,
@@ -71,6 +67,19 @@ impl FlussConnection {
             admin_client: RwLock::new(None),
             lookup_client: Default::default(),
         })
+    }
+
+    /// Gracefully shut down the connection, draining any pending write batches.
+    ///
+    /// If a writer client has been created, this method will signal it to drain
+    /// its buffers and wait for the background sender task to complete, bounded
+    /// by the provided timeout.
+    pub async fn close(&self, timeout: Duration) -> Result<()> {
+        let writer_client = self.writer_client.write().take();
+        if let Some(client) = writer_client {
+            client.close(timeout).await?;
+        }
+        Ok(())
     }
 
     pub fn get_metadata(&self) -> Arc<Metadata> {

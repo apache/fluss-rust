@@ -38,9 +38,9 @@ Complete API reference for the Fluss Python client.
 | `await FlussConnection.create(config) -> FlussConnection` | Connect to a Fluss cluster            |
 | `conn.get_admin() -> FlussAdmin`                        | Get admin interface                   |
 | `await conn.get_table(table_path) -> FlussTable`          | Get a table for read/write operations |
-| `conn.close()`                                            | Close the connection                  |
+| `await conn.close()`                                      | Close the connection                  |
 
-Supports `with` statement (context manager).
+Supports `async with` statement (async context manager).
 
 ## `FlussAdmin`
 
