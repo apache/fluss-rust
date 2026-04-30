@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::connection::FlussConnection;
+use crate::client::table::batch_scanner::BatchScanner;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
 use crate::client::table::log_fetch_buffer::{
@@ -50,6 +51,8 @@ pub struct TableScan<'a> {
     metadata: Arc<Metadata>,
     /// Column indices to project. None means all columns, Some(vec) means only the specified columns (non-empty).
     projected_fields: Option<Vec<usize>>,
+    /// Optional row limit. When set, callers may construct a [`BatchScanner`] for a one-shot bounded scan.
+    limit: Option<i32>,
 }
 
 impl<'a> TableScan<'a> {
@@ -59,7 +62,55 @@ impl<'a> TableScan<'a> {
             table_info,
             metadata,
             projected_fields: None,
+            limit: None,
         }
+    }
+
+    /// Sets a row limit for the scan, enabling [`Self::create_batch_scanner`].
+    ///
+    /// The limit must be positive. Callers configure a limit prior to
+    /// constructing a `BatchScanner` for a one-shot bounded read.
+    pub fn limit(mut self, n: i32) -> Result<Self> {
+        if n <= 0 {
+            return Err(Error::IllegalArgument {
+                message: format!("Scan limit must be positive, got {n}"),
+            });
+        }
+        self.limit = Some(n);
+        Ok(self)
+    }
+
+    /// Creates a `BatchScanner` that performs a single bounded scan of `table_bucket`.
+    ///
+    /// Requires a previously-configured limit via [`Self::limit`]. The scanner sends
+    /// a `LimitScanRequest` eagerly and exposes the resulting batch through
+    /// [`BatchScanner::poll_batch`].
+    pub async fn create_batch_scanner(
+        self,
+        table_bucket: TableBucket,
+    ) -> Result<BatchScanner> {
+        let limit = self.limit.ok_or_else(|| Error::IllegalArgument {
+            message: "create_batch_scanner requires a limit configured via .limit(n)"
+                .to_string(),
+        })?;
+        if table_bucket.table_id() != self.table_info.table_id {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Bucket table_id {} does not match scan table_id {}",
+                    table_bucket.table_id(),
+                    self.table_info.table_id
+                ),
+            });
+        }
+        BatchScanner::new(
+            self.conn.get_connections(),
+            self.metadata.clone(),
+            self.table_info,
+            self.projected_fields,
+            table_bucket,
+            limit,
+        )
+        .await
     }
 
     /// Projects the scan to only include specified columns by their indices.
