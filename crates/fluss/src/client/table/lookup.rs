@@ -16,73 +16,124 @@
 // under the License.
 
 use crate::bucketing::BucketingFunction;
+use crate::client::ClientSchemaGetter;
 use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
 use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
-use crate::metadata::{PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
+use crate::metadata::{
+    KvFormat, PhysicalTablePath, RowType, Schema, TableBucket, TableInfo, TablePath,
+};
 use crate::record::RowAppendRecordBatchBuilder;
 use crate::record::kv::SCHEMA_ID_LENGTH;
-use crate::row::InternalRow;
-use crate::row::compacted::CompactedRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
+use crate::row::{FixedSchemaDecoder, InternalRow, LookupRow};
 use arrow::array::RecordBatch;
+use byteorder::{ByteOrder, LittleEndian};
+use futures::future::try_join_all;
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-/// The result of a lookup operation.
-///
-/// Contains the rows returned from a lookup. For primary-key lookups,
-/// this will contain at most one row. For prefix-key lookups, it may
-/// contain multiple rows.
-pub struct LookupResult {
-    rows: Vec<Vec<u8>>,
-    row_type: Arc<RowType>,
+/// Per-Lookuper decoder cache. The target-schema decoder is held
+/// directly so the dominant decode path is a single field access; older
+/// schemas are populated lazily on first observation.
+struct DecoderCache {
+    target_id: i16,
+    target_decoder: Arc<FixedSchemaDecoder>,
+    others: RwLock<HashMap<i16, Arc<FixedSchemaDecoder>>>,
 }
 
-impl LookupResult {
-    /// Creates a new LookupResult from a list of row bytes.
-    fn new(rows: Vec<Vec<u8>>, row_type: Arc<RowType>) -> Self {
-        Self { rows, row_type }
-    }
-
-    /// Creates an empty LookupResult.
-    fn empty(row_type: Arc<RowType>) -> Self {
+impl DecoderCache {
+    fn new(target_id: i16, target_decoder: Arc<FixedSchemaDecoder>) -> Self {
         Self {
-            rows: Vec::new(),
-            row_type,
+            target_id,
+            target_decoder,
+            others: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Extracts the row payload by stripping the schema id prefix.
-    fn extract_payload(bytes: &[u8]) -> Result<&[u8]> {
-        bytes
-            .get(SCHEMA_ID_LENGTH..)
-            .ok_or_else(|| Error::RowConvertError {
+    fn decode<'a>(&self, schema_id: i16, bytes: &'a [u8]) -> Result<LookupRow<'a>> {
+        if schema_id == self.target_id {
+            return self.target_decoder.decode(bytes);
+        }
+        let decoder =
+            self.others
+                .read()
+                .get(&schema_id)
+                .cloned()
+                .ok_or_else(|| Error::RowConvertError {
+                    message: format!("No decoder available for schema id {schema_id}"),
+                })?;
+        decoder.decode(bytes)
+    }
+
+    fn contains(&self, schema_id: i16) -> bool {
+        schema_id == self.target_id || self.others.read().contains_key(&schema_id)
+    }
+
+    fn insert(&self, schema_id: i16, decoder: Arc<FixedSchemaDecoder>) {
+        self.others.write().insert(schema_id, decoder);
+    }
+
+    #[cfg(test)]
+    fn get(&self, schema_id: i16) -> Option<Arc<FixedSchemaDecoder>> {
+        if schema_id == self.target_id {
+            return Some(Arc::clone(&self.target_decoder));
+        }
+        self.others.read().get(&schema_id).cloned()
+    }
+}
+
+/// Rows returned from a lookup. Primary-key lookups produce at most one
+/// row; prefix-key lookups may produce many. Rows written under older
+/// schemas are decoded with their original schema and projected to the
+/// table's current schema before the caller sees them.
+pub struct LookupResult {
+    rows: Vec<Vec<u8>>,
+    target_row_type: Arc<RowType>,
+    decoders: Arc<DecoderCache>,
+}
+
+impl LookupResult {
+    fn new(rows: Vec<Vec<u8>>, target_row_type: Arc<RowType>, decoders: Arc<DecoderCache>) -> Self {
+        Self {
+            rows,
+            target_row_type,
+            decoders,
+        }
+    }
+
+    fn read_schema_id(bytes: &[u8]) -> Result<i16> {
+        if bytes.len() < SCHEMA_ID_LENGTH {
+            return Err(Error::RowConvertError {
                 message: format!(
                     "Row payload too short: {} bytes, need at least {} for schema id",
                     bytes.len(),
                     SCHEMA_ID_LENGTH
                 ),
-            })
+            });
+        }
+        let schema_id = LittleEndian::read_i16(&bytes[..SCHEMA_ID_LENGTH]);
+        if schema_id < 0 {
+            return Err(Error::RowConvertError {
+                message: format!("Invalid negative schema id {schema_id}; row prefix is corrupt"),
+            });
+        }
+        Ok(schema_id)
     }
 
-    /// Returns the only row in the result set as a [`CompactedRow`].
-    ///
-    /// This method provides a zero-copy view of the row data, which means the returned
-    /// `CompactedRow` borrows from this result set and cannot outlive it.
-    ///
-    /// # Returns
-    /// - `Ok(Some(row))`: If exactly one row exists.
-    /// - `Ok(None)`: If the result set is empty.
-    /// - `Err(Error::UnexpectedError)`: If the result set contains more than one row.
-    /// - `Err(Error)`: If the row payload is too short to contain a schema id.
-    pub fn get_single_row(&self) -> Result<Option<CompactedRow<'_>>> {
+    fn decode<'a>(&self, bytes: &'a [u8]) -> Result<LookupRow<'a>> {
+        let schema_id = Self::read_schema_id(bytes)?;
+        self.decoders.decode(schema_id, bytes)
+    }
+
+    /// Returns the single row when exactly one is present, `None` for
+    /// empty, or an error if the result holds more than one row.
+    pub fn get_single_row(&self) -> Result<Option<LookupRow<'_>>> {
         match self.rows.len() {
             0 => Ok(None),
-            1 => {
-                let payload = Self::extract_payload(&self.rows[0])?;
-                Ok(Some(CompactedRow::from_bytes(&self.row_type, payload)))
-            }
+            1 => Ok(Some(self.decode(&self.rows[0])?)),
             _ => Err(Error::UnexpectedError {
                 message: "LookupResult contains multiple rows, use get_rows() instead".to_string(),
                 source: None,
@@ -90,41 +141,102 @@ impl LookupResult {
         }
     }
 
-    /// Returns all rows in the result set as [`CompactedRow`]s.
-    ///
-    /// # Returns
-    /// - `Ok(rows)` - All rows in the result set.
-    /// - `Err(Error)` - If any row payload is too short to contain a schema id.
-    pub fn get_rows(&self) -> Result<Vec<CompactedRow<'_>>> {
-        self.rows
-            .iter()
-            // TODO Add schema id check and fetch when implementing prefix lookup
-            .map(|bytes| {
-                let payload = Self::extract_payload(bytes)?;
-                Ok(CompactedRow::from_bytes(&self.row_type, payload))
-            })
-            .collect()
+    pub fn get_rows(&self) -> Result<Vec<LookupRow<'_>>> {
+        self.rows.iter().map(|bytes| self.decode(bytes)).collect()
     }
 
-    /// Converts all rows in this result into an Arrow [`RecordBatch`].
-    ///
-    /// This is useful for integration with DataFusion or other Arrow-based tools.
-    ///
-    /// # Returns
-    /// - `Ok(RecordBatch)` - All rows in columnar Arrow format. Returns an empty
-    ///   batch (with the correct schema) if the result set is empty.
-    /// - `Err(Error)` - If the conversion fails.
     pub fn to_record_batch(&self) -> Result<RecordBatch> {
-        let mut builder = RowAppendRecordBatchBuilder::new(&self.row_type)?;
-
+        let mut builder = RowAppendRecordBatchBuilder::new(&self.target_row_type)?;
         for bytes in &self.rows {
-            let payload = Self::extract_payload(bytes)?;
-
-            let row = CompactedRow::from_bytes(&self.row_type, payload);
+            let row = self.decode(bytes)?;
             builder.append(&row)?;
         }
-
         builder.build_arrow_record_batch().map(Arc::unwrap_or_clone)
+    }
+}
+
+struct LookupSchemaCtx {
+    target_schema: Arc<Schema>,
+    target_row_type: Arc<RowType>,
+    kv_format: KvFormat,
+    schema_getter: Arc<ClientSchemaGetter>,
+    decoders: Arc<DecoderCache>,
+}
+
+impl LookupSchemaCtx {
+    fn new(table_info: &TableInfo, schema_getter: Arc<ClientSchemaGetter>) -> Result<Self> {
+        let target_schema_i32 = table_info.get_schema_id();
+        if !(0..=i16::MAX as i32).contains(&target_schema_i32) {
+            return Err(Error::UnexpectedError {
+                message: format!(
+                    "Schema id {target_schema_i32} does not fit in 16 bits — wire format violated"
+                ),
+                source: None,
+            });
+        }
+        let target_schema = Arc::new(table_info.get_schema().clone());
+        let target_row_type = Arc::new(table_info.row_type().clone());
+        let kv_format = table_info.get_table_config().get_kv_format()?;
+        let target_decoder = Arc::new(FixedSchemaDecoder::new_no_projection(
+            kv_format,
+            target_schema.as_ref(),
+        )?);
+        let decoders = Arc::new(DecoderCache::new(target_schema_i32 as i16, target_decoder));
+        Ok(Self {
+            target_schema,
+            target_row_type,
+            kv_format,
+            schema_getter,
+            decoders,
+        })
+    }
+
+    async fn ensure_decoders(&self, rows: &[Vec<u8>]) -> Result<()> {
+        let mut missing: Vec<i16> = Vec::new();
+        for bytes in rows {
+            let schema_id = LookupResult::read_schema_id(bytes)?;
+            if !self.decoders.contains(schema_id) && !missing.contains(&schema_id) {
+                missing.push(schema_id);
+            }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        let fetches = missing.into_iter().map(|schema_id| {
+            let cache = Arc::clone(&self.decoders);
+            let schema_getter = Arc::clone(&self.schema_getter);
+            let target_schema = Arc::clone(&self.target_schema);
+            let kv_format = self.kv_format;
+            async move {
+                let source = schema_getter.get_schema(schema_id as i32).await?;
+                let decoder =
+                    FixedSchemaDecoder::new(kv_format, source.as_ref(), target_schema.as_ref())?;
+                cache.insert(schema_id, Arc::new(decoder));
+                Ok::<_, Error>(())
+            }
+        });
+        try_join_all(fetches).await?;
+        Ok(())
+    }
+
+    async fn build_result(&self, rows: Vec<Vec<u8>>) -> Result<LookupResult> {
+        if !rows.is_empty() {
+            self.ensure_decoders(&rows).await?;
+        }
+        Ok(LookupResult::new(
+            rows,
+            Arc::clone(&self.target_row_type),
+            Arc::clone(&self.decoders),
+        ))
+    }
+
+    fn empty_result(&self) -> LookupResult {
+        LookupResult::new(
+            Vec::new(),
+            Arc::clone(&self.target_row_type),
+            Arc::clone(&self.decoders),
+        )
     }
 }
 
@@ -136,6 +248,7 @@ pub struct TableLookup {
     lookup_client: Arc<LookupClient>,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
+    schema_getter: Arc<ClientSchemaGetter>,
 }
 
 impl TableLookup {
@@ -143,11 +256,13 @@ impl TableLookup {
         lookup_client: Arc<LookupClient>,
         table_info: TableInfo,
         metadata: Arc<Metadata>,
+        schema_getter: Arc<ClientSchemaGetter>,
     ) -> Self {
         Self {
             lookup_client,
             table_info,
             metadata,
+            schema_getter,
         }
     }
 
@@ -161,6 +276,7 @@ impl TableLookup {
             lookup_client: self.lookup_client,
             table_info: self.table_info,
             metadata: self.metadata,
+            schema_getter: self.schema_getter,
             lookup_column_names,
         }
     }
@@ -208,11 +324,10 @@ impl TableLookup {
             None
         };
 
-        let row_type = Arc::new(self.table_info.row_type().clone());
+        let schema_ctx = LookupSchemaCtx::new(&self.table_info, self.schema_getter)?;
 
         Ok(Lookuper {
             table_path: Arc::new(self.table_info.table_path.clone()),
-            row_type,
             table_info: self.table_info,
             metadata: self.metadata,
             lookup_client: self.lookup_client,
@@ -221,6 +336,7 @@ impl TableLookup {
             bucket_key_encoder,
             partition_getter,
             num_buckets,
+            schema_ctx,
         })
     }
 }
@@ -239,7 +355,6 @@ impl TableLookup {
 pub struct Lookuper {
     table_path: Arc<TablePath>,
     table_info: TableInfo,
-    row_type: Arc<RowType>,
     metadata: Arc<Metadata>,
     lookup_client: Arc<LookupClient>,
     bucketing_function: Box<dyn BucketingFunction>,
@@ -247,6 +362,7 @@ pub struct Lookuper {
     bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
     partition_getter: Option<PartitionGetter>,
     num_buckets: i32,
+    schema_ctx: LookupSchemaCtx,
 }
 
 impl Lookuper {
@@ -281,7 +397,7 @@ impl Lookuper {
                 .await?
             {
                 Some(id) => Some(id),
-                None => return Ok(LookupResult::empty(Arc::clone(&self.row_type))),
+                None => return Ok(self.schema_ctx.empty_result()),
             }
         } else {
             None
@@ -300,13 +416,11 @@ impl Lookuper {
             .lookup(self.table_path.as_ref().clone(), table_bucket, pk_bytes)
             .await?;
 
-        match result {
-            Some(value_bytes) => Ok(LookupResult::new(
-                vec![value_bytes],
-                Arc::clone(&self.row_type),
-            )),
-            None => Ok(LookupResult::empty(Arc::clone(&self.row_type))),
-        }
+        let rows = match result {
+            Some(value_bytes) => vec![value_bytes],
+            None => Vec::new(),
+        };
+        self.schema_ctx.build_result(rows).await
     }
 
     /// Returns a reference to the table info.
@@ -319,6 +433,7 @@ pub struct TablePrefixLookup {
     lookup_client: Arc<LookupClient>,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
+    schema_getter: Arc<ClientSchemaGetter>,
     lookup_column_names: Vec<String>,
 }
 
@@ -346,11 +461,10 @@ impl TablePrefixLookup {
             None
         };
 
-        let full_row_type = Arc::new(self.table_info.row_type().clone());
+        let schema_ctx = LookupSchemaCtx::new(&self.table_info, self.schema_getter)?;
 
         Ok(PrefixKeyLookuper {
             table_path: Arc::new(self.table_info.table_path.clone()),
-            row_type: full_row_type,
             table_info: self.table_info,
             metadata: self.metadata,
             lookup_client: self.lookup_client,
@@ -358,6 +472,7 @@ impl TablePrefixLookup {
             prefix_key_encoder,
             partition_getter,
             num_buckets,
+            schema_ctx,
         })
     }
 }
@@ -454,13 +569,13 @@ fn validate_prefix_lookup(table_info: &TableInfo, lookup_columns: &[String]) -> 
 pub struct PrefixKeyLookuper {
     table_path: Arc<TablePath>,
     table_info: TableInfo,
-    row_type: Arc<RowType>,
     metadata: Arc<Metadata>,
     lookup_client: Arc<LookupClient>,
     bucketing_function: Box<dyn BucketingFunction>,
     prefix_key_encoder: Box<dyn KeyEncoder>,
     partition_getter: Option<PartitionGetter>,
     num_buckets: i32,
+    schema_ctx: LookupSchemaCtx,
 }
 
 impl PrefixKeyLookuper {
@@ -479,7 +594,7 @@ impl PrefixKeyLookuper {
                 .await?
             {
                 Some(id) => Some(id),
-                None => return Ok(LookupResult::empty(Arc::clone(&self.row_type))),
+                None => return Ok(self.schema_ctx.empty_result()),
             }
         } else {
             None
@@ -497,7 +612,7 @@ impl PrefixKeyLookuper {
             .prefix_lookup(self.table_path.as_ref().clone(), table_bucket, prefix_bytes)
             .await?;
 
-        Ok(LookupResult::new(rows, Arc::clone(&self.row_type)))
+        self.schema_ctx.build_result(rows).await
     }
 
     pub fn table_info(&self) -> &TableInfo {
@@ -508,7 +623,7 @@ impl PrefixKeyLookuper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataField, DataTypes};
+    use crate::metadata::{Column, DataTypes, Schema};
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
     use arrow::array::Int32Array;
@@ -520,34 +635,56 @@ mod tests {
         bytes
     }
 
+    fn schema_with_ids(columns: &[(i32, &str, crate::metadata::DataType)]) -> Schema {
+        let cols: Vec<Column> = columns
+            .iter()
+            .map(|(id, name, dt)| Column::new(*name, dt.clone()).with_id(*id))
+            .collect();
+        Schema::builder().with_columns(cols).build().unwrap()
+    }
+
+    fn cache_with(
+        target_id: i16,
+        target_decoder: FixedSchemaDecoder,
+        others: Vec<(i16, FixedSchemaDecoder)>,
+    ) -> Arc<DecoderCache> {
+        let cache = DecoderCache::new(target_id, Arc::new(target_decoder));
+        for (id, decoder) in others {
+            cache.insert(id, Arc::new(decoder));
+        }
+        Arc::new(cache)
+    }
+
+    fn lookup_result_from(
+        rows: Vec<Vec<u8>>,
+        target_schema: &Schema,
+        decoders: Arc<DecoderCache>,
+    ) -> LookupResult {
+        LookupResult::new(rows, Arc::new(target_schema.row_type().clone()), decoders)
+    }
+
     #[test]
     fn test_to_record_batch_empty() {
-        let row_type = Arc::new(RowType::new(vec![DataField::new(
-            "id",
-            DataTypes::int(),
-            None,
-        )]));
-        let result = LookupResult::empty(row_type);
+        let target = schema_with_ids(&[(0, "id", DataTypes::int())]);
+        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
+        let result = lookup_result_from(Vec::new(), &target, cache_with(0, decoder, vec![]));
         let batch = result.to_record_batch().unwrap();
         assert_eq!(batch.num_rows(), 0);
         assert_eq!(batch.num_columns(), 1);
     }
 
     #[test]
-    fn test_to_record_batch_with_row() {
-        let row_type = Arc::new(RowType::new(vec![DataField::new(
-            "id",
-            DataTypes::int(),
-            None,
-        )]));
+    fn test_to_record_batch_with_row_at_target_schema() {
+        let target = schema_with_ids(&[(0, "id", DataTypes::int())]);
 
         let mut writer = CompactedRowWriter::new(1);
         writer.write_int(42);
         let row_bytes = make_row_bytes(0, writer.buffer());
 
-        let result = LookupResult::new(vec![row_bytes], Arc::clone(&row_type));
-        let batch = result.to_record_batch().unwrap();
+        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
+        let result = lookup_result_from(vec![row_bytes], &target, cache_with(0, decoder, vec![]));
 
+        let batch = result.to_record_batch().unwrap();
         assert_eq!(batch.num_rows(), 1);
         let col = batch
             .column(0)
@@ -558,14 +695,78 @@ mod tests {
     }
 
     #[test]
+    fn test_get_rows_decodes_per_row_schema_id_with_projection() {
+        let source = schema_with_ids(&[(0, "a", DataTypes::int())]);
+        let target = schema_with_ids(&[(0, "a", DataTypes::int()), (1, "b", DataTypes::string())]);
+
+        let mut w = CompactedRowWriter::new(1);
+        w.write_int(7);
+        let old_row = make_row_bytes(3, w.buffer());
+
+        let mut w = CompactedRowWriter::new(2);
+        w.write_int(8);
+        w.write_string("eight");
+        let new_row = make_row_bytes(7, w.buffer());
+
+        let target_decoder =
+            FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
+        let projection_decoder =
+            FixedSchemaDecoder::new(KvFormat::COMPACTED, &source, &target).unwrap();
+        let cache = cache_with(7, target_decoder, vec![(3, projection_decoder)]);
+        let result = lookup_result_from(vec![old_row, new_row], &target, cache);
+
+        let rows = result.get_rows().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get_int(0).unwrap(), 7);
+        assert!(rows[0].is_null_at(1).unwrap());
+        assert_eq!(rows[1].get_int(0).unwrap(), 8);
+        assert_eq!(rows[1].get_string(1).unwrap(), "eight");
+    }
+
+    #[test]
     fn test_to_record_batch_payload_too_short() {
-        let row_type = Arc::new(RowType::new(vec![DataField::new(
-            "id",
-            DataTypes::int(),
-            None,
-        )]));
-        // Only 1 byte — shorter than SCHEMA_ID_LENGTH (2)
-        let result = LookupResult::new(vec![vec![0u8]], Arc::clone(&row_type));
+        let target = schema_with_ids(&[(0, "id", DataTypes::int())]);
+        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
+        let result = lookup_result_from(vec![vec![0u8]], &target, cache_with(0, decoder, vec![]));
         assert!(result.to_record_batch().is_err());
+    }
+
+    #[test]
+    fn test_get_rows_errors_when_no_decoder_for_schema_id() {
+        let target = schema_with_ids(&[(0, "id", DataTypes::int())]);
+        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
+        let mut w = CompactedRowWriter::new(1);
+        w.write_int(1);
+        let row = make_row_bytes(99, w.buffer());
+        let result = lookup_result_from(vec![row], &target, cache_with(0, decoder, vec![]));
+
+        let err = result
+            .get_rows()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+            .unwrap_err();
+        assert!(err.contains("schema id 99"), "{err}");
+    }
+
+    #[test]
+    fn test_read_schema_id_rejects_negative() {
+        let bytes = [0xFFu8, 0xFFu8, 0u8];
+        let err = LookupResult::read_schema_id(&bytes).unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid negative schema id"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_decoder_cache_target_lookup_skips_lock() {
+        let target = schema_with_ids(&[(0, "a", DataTypes::int())]);
+        let target_decoder =
+            Arc::new(FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap());
+        let cache = DecoderCache::new(7, Arc::clone(&target_decoder));
+
+        let returned = cache.get(7).expect("target id must hit the cache");
+        assert!(Arc::ptr_eq(&returned, &target_decoder));
+        assert!(cache.get(99).is_none());
     }
 }

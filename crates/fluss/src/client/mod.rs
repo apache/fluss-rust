@@ -20,6 +20,7 @@ mod connection;
 mod credentials;
 pub mod lookup;
 mod metadata;
+mod schema_getter;
 mod table;
 mod write;
 
@@ -28,5 +29,6 @@ pub use connection::*;
 pub use credentials::*;
 pub use lookup::LookupClient;
 pub use metadata::*;
+pub use schema_getter::ClientSchemaGetter;
 pub use table::*;
 pub use write::*;

@@ -29,6 +29,7 @@ pub enum ApiKey {
     ListTables,                 // 1008
     ListPartitionInfos,         // 1009
     TableExists,                // 1010
+    GetTableSchema,             // 1011
     MetaData,                   // 1012
     ProduceLog,                 // 1014
     FetchLog,                   // 1015
@@ -60,6 +61,7 @@ impl From<i16> for ApiKey {
             1008 => ApiKey::ListTables,
             1009 => ApiKey::ListPartitionInfos,
             1010 => ApiKey::TableExists,
+            1011 => ApiKey::GetTableSchema,
             1012 => ApiKey::MetaData,
             1014 => ApiKey::ProduceLog,
             1015 => ApiKey::FetchLog,
@@ -94,6 +96,7 @@ impl From<ApiKey> for i16 {
             ApiKey::ListTables => 1008,
             ApiKey::ListPartitionInfos => 1009,
             ApiKey::TableExists => 1010,
+            ApiKey::GetTableSchema => 1011,
             ApiKey::MetaData => 1012,
             ApiKey::ProduceLog => 1014,
             ApiKey::FetchLog => 1015,
@@ -131,6 +134,7 @@ mod tests {
             (1008, ApiKey::ListTables),
             (1009, ApiKey::ListPartitionInfos),
             (1010, ApiKey::TableExists),
+            (1011, ApiKey::GetTableSchema),
             (1012, ApiKey::MetaData),
             (1014, ApiKey::ProduceLog),
             (1015, ApiKey::FetchLog),

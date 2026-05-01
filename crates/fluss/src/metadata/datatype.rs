@@ -93,6 +93,60 @@ impl DataType {
             DataType::Bytes(v) => DataType::Bytes(v.as_non_nullable()),
         }
     }
+
+    /// Structural equality ignoring the outermost nullability flag at
+    /// every level. Equivalent to comparing `as_non_nullable()` on both
+    /// sides but without the recursive clone.
+    pub fn eq_ignore_nullable(&self, other: &DataType) -> bool {
+        match self {
+            DataType::Boolean(_) => matches!(other, DataType::Boolean(_)),
+            DataType::TinyInt(_) => matches!(other, DataType::TinyInt(_)),
+            DataType::SmallInt(_) => matches!(other, DataType::SmallInt(_)),
+            DataType::Int(_) => matches!(other, DataType::Int(_)),
+            DataType::BigInt(_) => matches!(other, DataType::BigInt(_)),
+            DataType::Float(_) => matches!(other, DataType::Float(_)),
+            DataType::Double(_) => matches!(other, DataType::Double(_)),
+            DataType::Date(_) => matches!(other, DataType::Date(_)),
+            DataType::String(_) => matches!(other, DataType::String(_)),
+            DataType::Bytes(_) => matches!(other, DataType::Bytes(_)),
+            DataType::Char(a) => {
+                matches!(other, DataType::Char(b) if a.length() == b.length())
+            }
+            DataType::Binary(a) => {
+                matches!(other, DataType::Binary(b) if a.length() == b.length())
+            }
+            DataType::Decimal(a) => matches!(
+                other,
+                DataType::Decimal(b) if a.precision() == b.precision() && a.scale() == b.scale()
+            ),
+            DataType::Time(a) => {
+                matches!(other, DataType::Time(b) if a.precision() == b.precision())
+            }
+            DataType::Timestamp(a) => {
+                matches!(other, DataType::Timestamp(b) if a.precision() == b.precision())
+            }
+            DataType::TimestampLTz(a) => {
+                matches!(other, DataType::TimestampLTz(b) if a.precision() == b.precision())
+            }
+            DataType::Array(a) => matches!(
+                other,
+                DataType::Array(b) if a.get_element_type().eq_ignore_nullable(b.get_element_type())
+            ),
+            DataType::Map(a) => matches!(
+                other,
+                DataType::Map(b)
+                    if a.key_type().eq_ignore_nullable(b.key_type())
+                        && a.value_type().eq_ignore_nullable(b.value_type())
+            ),
+            DataType::Row(a) => matches!(
+                other,
+                DataType::Row(b) if a.fields().len() == b.fields().len()
+                    && a.fields().iter().zip(b.fields().iter()).all(|(x, y)| {
+                        x.name() == y.name() && x.data_type().eq_ignore_nullable(y.data_type())
+                    })
+            ),
+        }
+    }
 }
 
 impl Display for DataType {
@@ -1694,4 +1748,107 @@ fn test_row_type_project_duplicate_indices() {
     assert_eq!(projected.fields()[0].name, "id");
     assert_eq!(projected.fields()[1].name, "id");
     assert_eq!(projected.fields()[2].name, "name");
+}
+
+#[cfg(test)]
+mod eq_ignore_nullable_tests {
+    use super::*;
+
+    #[test]
+    fn ignores_nullability_at_top_level() {
+        let nullable = DataType::Int(IntType::new());
+        let non_nullable = DataType::Int(IntType::with_nullable(false));
+        assert_ne!(nullable, non_nullable, "PartialEq still distinguishes");
+        assert!(nullable.eq_ignore_nullable(&non_nullable));
+        assert!(non_nullable.eq_ignore_nullable(&nullable));
+    }
+
+    #[test]
+    fn rejects_different_kinds() {
+        assert!(
+            !DataType::Int(IntType::new()).eq_ignore_nullable(&DataType::BigInt(BigIntType::new()))
+        );
+    }
+
+    #[test]
+    fn compares_parameterized_types() {
+        // Char length must match.
+        assert!(
+            DataType::Char(CharType::with_nullable(10, true))
+                .eq_ignore_nullable(&DataType::Char(CharType::with_nullable(10, false)))
+        );
+        assert!(
+            !DataType::Char(CharType::with_nullable(10, true))
+                .eq_ignore_nullable(&DataType::Char(CharType::with_nullable(11, true)))
+        );
+
+        // Decimal precision + scale must match.
+        let a = DataType::Decimal(DecimalType::with_nullable(true, 10, 2).unwrap());
+        let b = DataType::Decimal(DecimalType::with_nullable(false, 10, 2).unwrap());
+        let c = DataType::Decimal(DecimalType::with_nullable(true, 10, 3).unwrap());
+        assert!(a.eq_ignore_nullable(&b));
+        assert!(!a.eq_ignore_nullable(&c));
+    }
+
+    #[test]
+    fn recurses_into_array_and_map() {
+        // Array<Int NULL> ~ Array<Int NOT NULL>
+        let a = DataType::Array(ArrayType::with_nullable(
+            true,
+            DataType::Int(IntType::new()),
+        ));
+        let b = DataType::Array(ArrayType::with_nullable(
+            false,
+            DataType::Int(IntType::with_nullable(false)),
+        ));
+        assert!(a.eq_ignore_nullable(&b));
+
+        // Map<String, Int> on both sides, mixed nullability.
+        let m1 = DataType::Map(MapType::with_nullable(
+            true,
+            DataType::String(StringType::new()),
+            DataType::Int(IntType::new()),
+        ));
+        let m2 = DataType::Map(MapType::with_nullable(
+            false,
+            DataType::String(StringType::with_nullable(false)),
+            DataType::Int(IntType::with_nullable(false)),
+        ));
+        assert!(m1.eq_ignore_nullable(&m2));
+
+        // Map element-type mismatch is still caught.
+        let m3 = DataType::Map(MapType::with_nullable(
+            true,
+            DataType::String(StringType::new()),
+            DataType::BigInt(BigIntType::new()),
+        ));
+        assert!(!m1.eq_ignore_nullable(&m3));
+    }
+
+    #[test]
+    fn recurses_into_row_fields() {
+        let r1 = DataType::Row(RowType::new(vec![
+            DataField::new("a", DataType::Int(IntType::new()), None),
+            DataField::new("b", DataType::String(StringType::new()), None),
+        ]));
+        let r2 = DataType::Row(RowType::with_nullable(
+            false,
+            vec![
+                DataField::new("a", DataType::Int(IntType::with_nullable(false)), None),
+                DataField::new(
+                    "b",
+                    DataType::String(StringType::with_nullable(false)),
+                    None,
+                ),
+            ],
+        ));
+        assert!(r1.eq_ignore_nullable(&r2));
+
+        // Field name mismatch must fail.
+        let r3 = DataType::Row(RowType::new(vec![
+            DataField::new("renamed_a", DataType::Int(IntType::new()), None),
+            DataField::new("b", DataType::String(StringType::new()), None),
+        ]));
+        assert!(!r1.eq_ignore_nullable(&r3));
+    }
 }
