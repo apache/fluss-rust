@@ -165,7 +165,7 @@ impl Schema {
         let mut builder = fcore::metadata::Schema::builder();
 
         for field in arrow_schema.fields() {
-            let fluss_data_type = crate::utils::Utils::arrow_type_to_fluss_type(field.data_type())?;
+            let fluss_data_type = crate::utils::Utils::arrow_field_to_fluss_type(field)?;
             builder = builder.column(field.name(), fluss_data_type);
 
             if let Some(comment) = field.metadata().get("comment") {
