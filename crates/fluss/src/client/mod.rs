@@ -29,6 +29,6 @@ pub use connection::*;
 pub use credentials::*;
 pub use lookup::LookupClient;
 pub use metadata::*;
-pub use schema_getter::ClientSchemaGetter;
+pub(crate) use schema_getter::ClientSchemaGetter;
 pub use table::*;
 pub use write::*;

@@ -21,12 +21,12 @@ use std::collections::{HashMap, HashSet};
 
 /// Sentinel for an expected column that does not exist in the origin
 /// schema. Used by [`index_mapping`] and [`crate::row::ProjectedRow`].
-pub const UNEXIST_MAPPING: i32 = -1;
+pub(crate) const UNEXIST_MAPPING: i32 = -1;
 
 /// For each column in `expected_schema`, return the index of the column
 /// with the same id in `origin_schema`, or [`UNEXIST_MAPPING`] if absent.
 /// Matching by id keeps mappings stable across `ALTER TABLE … RENAME`.
-pub fn index_mapping(origin_schema: &Schema, expected_schema: &Schema) -> Result<Vec<i32>> {
+pub(crate) fn index_mapping(origin_schema: &Schema, expected_schema: &Schema) -> Result<Vec<i32>> {
     let origin_columns = origin_schema.columns();
     let mut origin_id_to_index: HashMap<i32, usize> = HashMap::with_capacity(origin_columns.len());
     for (i, col) in origin_columns.iter().enumerate() {

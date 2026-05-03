@@ -28,5 +28,5 @@ pub use database::*;
 pub use datatype::*;
 pub use json_serde::*;
 pub use partition::*;
-pub use schema_util::{UNEXIST_MAPPING, index_mapping};
+pub(crate) use schema_util::{UNEXIST_MAPPING, index_mapping};
 pub use table::*;

@@ -97,7 +97,7 @@ impl DataType {
     /// Structural equality ignoring the outermost nullability flag at
     /// every level. Equivalent to comparing `as_non_nullable()` on both
     /// sides but without the recursive clone.
-    pub fn eq_ignore_nullable(&self, other: &DataType) -> bool {
+    pub(crate) fn eq_ignore_nullable(&self, other: &DataType) -> bool {
         match self {
             DataType::Boolean(_) => matches!(other, DataType::Boolean(_)),
             DataType::TinyInt(_) => matches!(other, DataType::TinyInt(_)),

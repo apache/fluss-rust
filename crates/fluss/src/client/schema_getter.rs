@@ -26,7 +26,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub struct ClientSchemaGetter {
+pub(crate) struct ClientSchemaGetter {
     table_path: TablePath,
     admin: Arc<FlussAdmin>,
     /// Pre-seeded with the table's current schema so the dominant case
