@@ -161,11 +161,11 @@ Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
 | `.subscribe_partition_buckets(partition_bucket_offsets)`      | Subscribe to multiple partition+bucket combos (`{(part_id, bucket_id): offset}`) |
 | `.unsubscribe(bucket_id)`                                     | Unsubscribe from a bucket (non-partitioned tables)                               |
 | `.unsubscribe_partition(partition_id, bucket_id)`             | Unsubscribe from a partition bucket                                              |
-| `.poll(timeout_ms) -> ScanRecords`                            | Poll individual records (record scanner only)                                    |
-| `.poll_arrow(timeout_ms) -> pa.Table`                         | Poll as Arrow Table (batch scanner only)                                         |
-| `.poll_record_batch(timeout_ms) -> list[RecordBatch]`         | Poll batches with metadata (batch scanner only)                                  |
-| `.to_arrow() -> pa.Table`                                     | Read all subscribed data as Arrow Table (batch scanner only)                     |
-| `.to_pandas() -> pd.DataFrame`                                | Read all subscribed data as DataFrame (batch scanner only)                       |
+| `await .poll(timeout_ms) -> ScanRecords`                      | Poll individual records (record scanner only)                                    |
+| `await .poll_arrow(timeout_ms) -> pa.Table`                   | Poll as Arrow Table (batch scanner only)                                         |
+| `await .poll_record_batch(timeout_ms) -> list[RecordBatch]`   | Poll batches with metadata (batch scanner only)                                  |
+| `await .to_arrow() -> pa.Table`                               | Read all subscribed data as Arrow Table (batch scanner only)                     |
+| `await .to_pandas() -> pd.DataFrame`                          | Read all subscribed data as DataFrame (batch scanner only)                       |
 
 ## `ScanRecords`
 
@@ -174,7 +174,7 @@ Returned by `LogScanner.poll()`. Records are grouped by bucket.
 > **Note:** Flat iteration and integer indexing traverse buckets in an arbitrary order that is consistent within a single `ScanRecords` instance but may differ between `poll()` calls. Use per-bucket access (`.items()`, `.records(bucket)`) when bucket ordering matters.
 
 ```python
-scan_records = scanner.poll(timeout_ms=5000)
+scan_records = await scanner.poll(timeout_ms=5000)
 
 # Sequence access
 scan_records[0]                              # first record
@@ -242,10 +242,10 @@ for record in scan_records:
 
 | Method                                         |  Description               |
 |------------------------------------------------|----------------------------|
-| `Schema(schema: pa.Schema, primary_keys=None)` | Create from PyArrow schema |
+| `Schema(schema: pa.Schema, primary_keys=None)` | Create from PyArrow schema. Field nullability (`pa.field(..., nullable=False)`) is preserved. |
 | `.get_column_names() -> list[str]`             | Get column names           |
-| `.get_column_types() -> list[str]`             | Get column type names      |
-| `.get_columns() -> list[tuple[str, str]]`      | Get `(name, type)` pairs   |
+| `.get_column_types() -> list[str]`             | Get column type names. Non-nullable types include a `" NOT NULL"` suffix (e.g., `"int NOT NULL"`). |
+| `.get_columns() -> list[tuple[str, str]]`      | Get `(name, type)` pairs. Type strings follow the same nullability formatting as `.get_column_types()`. |
 | `.get_primary_keys() -> list[str]`             | Get primary key columns    |
 
 ## `TableDescriptor`

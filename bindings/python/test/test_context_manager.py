@@ -20,12 +20,12 @@ import pyarrow as pa
 import time
 import fluss
 
-def _poll_records(scanner, expected_count, timeout_s=10):
+async def _poll_records(scanner, expected_count, timeout_s=10):
     """Poll a record-based scanner until expected_count records are collected."""
     collected = []
     deadline = time.monotonic() + timeout_s
     while len(collected) < expected_count and time.monotonic() < deadline:
-        records = scanner.poll(5000)
+        records = await scanner.poll(5000)
         collected.extend(records)
     return collected
 
@@ -56,7 +56,7 @@ async def test_append_writer_success_flush(connection, admin):
     # After context exit, data should be flushed
     scanner = await table.new_scan().create_log_scanner()
     scanner.subscribe(0, fluss.EARLIEST_OFFSET)
-    records = _poll_records(scanner, expected_count=2)
+    records = await _poll_records(scanner, expected_count=2)
     assert len(records) == 2
     assert sorted([r.row["a"] for r in records]) == [1, 2]
 
@@ -80,7 +80,7 @@ async def test_connection_drain_on_close(plaintext_bootstrap_servers, admin):
         table2 = await conn2.get_table(table_path)
         scanner = await table2.new_scan().create_log_scanner()
         scanner.subscribe(0, fluss.EARLIEST_OFFSET)
-        records = _poll_records(scanner, expected_count=1)
+        records = await _poll_records(scanner, expected_count=1)
         assert len(records) == 1
         assert records[0].row["a"] == 123
 

@@ -21,6 +21,31 @@ The Python client uses PyArrow types for schema definitions:
 
 All Python native types (`date`, `time`, `datetime`, `Decimal`) work when appending rows via dicts.
 
+## Nullability
+
+PyArrow field nullability is preserved when constructing Fluss schemas. By default, fields are nullable. Use `nullable=False` on `pa.field()` to create a `NOT NULL` column:
+
+```python
+schema = pa.schema([
+    pa.field("id", pa.int32(), nullable=False),
+    pa.field("name", pa.string()),          # nullable by default
+])
+fluss_schema = fluss.Schema(schema)
+fluss_schema.get_column_types()  # ["int NOT NULL", "string"]
+```
+
+Primary key columns are automatically forced `NOT NULL` regardless of the PyArrow field setting.
+
+For nested types, element nullability is also preserved:
+
+```python
+schema = pa.schema([
+    pa.field("tags", pa.list_(pa.field("item", pa.string(), nullable=False))),
+])
+fluss_schema = fluss.Schema(schema)
+fluss_schema.get_column_types()  # ["array<string NOT NULL>"]
+```
+
 ## Writing Data
 
 Rows can be dicts, lists, or tuples:
@@ -55,7 +80,7 @@ handle = writer.append(row)
 ## Reading Data
 
 ```python
-records = scanner.poll(timeout_ms=1000)
+records = await scanner.poll(timeout_ms=1000)
 for record in records:
     row = record.row  # dict[str, Any]
     print(row["user_id"])     # int

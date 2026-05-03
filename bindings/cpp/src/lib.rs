@@ -23,6 +23,8 @@ use std::time::Duration;
 
 use fluss as fcore;
 use fluss::PartitionId;
+use fluss::error::Error;
+use fluss::rpc::FlussError as CoreFlussError;
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -858,13 +860,14 @@ fn client_err(msg: String) -> ffi::FfiResult {
     err_result(CLIENT_ERROR_CODE, msg)
 }
 
-/// Convert a core Error to FfiResult.
-/// `FlussAPIError` variants carry the server protocol error code directly.
-/// All other error kinds are client-side and use CLIENT_ERROR_CODE.
-fn err_from_core_error(e: &fcore::error::Error) -> ffi::FfiResult {
-    use fcore::error::Error;
+fn err_from_core_error(e: &Error) -> ffi::FfiResult {
+    // Transport failures map to `NetworkException` (Java parity,
+    // retriable).
     match e {
         Error::FlussAPIError { api_error } => err_result(api_error.code, api_error.message.clone()),
+        Error::RpcError { .. } => {
+            err_result(CoreFlussError::NetworkException.code(), e.to_string())
+        }
         _ => client_err(e.to_string()),
     }
 }

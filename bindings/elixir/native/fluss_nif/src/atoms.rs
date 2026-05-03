@@ -120,9 +120,14 @@ pub struct NifFlussError {
 
 impl NifFlussError {
     pub fn from_core(error: &CoreError) -> Self {
+        // Transport failures map to `:network_exception` (Java parity,
+        // retriable).
         let (code, error_code) = match error {
             CoreError::FlussAPIError { api_error } => {
                 (api_error_atom(api_error.code), api_error.code)
+            }
+            CoreError::RpcError { .. } => {
+                (network_exception(), FlussError::NetworkException.code())
             }
             _ => (client_error(), CLIENT_ERROR_CODE),
         };

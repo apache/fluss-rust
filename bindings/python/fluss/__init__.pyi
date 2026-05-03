@@ -790,7 +790,7 @@ class LogScanner:
             bucket_id: The bucket ID within the partition
         """
         ...
-    def poll(self, timeout_ms: int) -> ScanRecords:
+    async def poll(self, timeout_ms: int) -> ScanRecords:
         """Poll for individual records with metadata.
 
         Requires a record-based scanner (created with new_scan().create_log_scanner()).
@@ -807,7 +807,7 @@ class LogScanner:
             Returns an empty ScanRecords if no records are available or timeout expires.
         """
         ...
-    def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]:
+    async def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]:
         """Poll for batches with metadata.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
@@ -823,7 +823,7 @@ class LogScanner:
             Returns an empty list if no batches are available or timeout expires.
         """
         ...
-    def poll_arrow(self, timeout_ms: int) -> pa.Table:
+    async def poll_arrow(self, timeout_ms: int) -> pa.Table:
         """Poll for records as an Arrow Table.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
@@ -839,7 +839,7 @@ class LogScanner:
             or timeout expires.
         """
         ...
-    def to_pandas(self) -> pd.DataFrame:
+    async def to_pandas(self) -> pd.DataFrame:
         """Convert all data to Pandas DataFrame.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
@@ -848,7 +848,7 @@ class LogScanner:
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
         ...
-    def to_arrow(self) -> pa.Table:
+    async def to_arrow(self) -> pa.Table:
         """Convert all data to Arrow Table.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
