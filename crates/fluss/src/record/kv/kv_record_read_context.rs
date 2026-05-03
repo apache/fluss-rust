@@ -88,7 +88,7 @@ impl ReadContext for KvRecordReadContext {
         let row_type = schema.row_type().clone();
 
         // Create decoder outside lock
-        let decoder = RowDecoderFactory::create(self.kv_format.clone(), row_type)?;
+        let decoder = RowDecoderFactory::create(self.kv_format, row_type)?;
 
         // Second check: insert only if another thread didn't beat us to it
         {

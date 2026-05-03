@@ -377,6 +377,7 @@ impl Column {
     const NAME: &'static str = "name";
     const DATA_TYPE: &'static str = "data_type";
     const COMMENT: &'static str = "comment";
+    const ID: &'static str = "id";
 }
 
 impl JsonSerde for Column {
@@ -393,6 +394,9 @@ impl JsonSerde for Column {
         if let Some(comment) = &self.comment() {
             obj.insert(Self::COMMENT.to_string(), json!(comment));
         }
+
+        // The Java client requires `id` on input.
+        obj.insert(Self::ID.to_string(), json!(self.id()));
 
         Ok(Value::Object(obj))
     }
@@ -417,6 +421,15 @@ impl JsonSerde for Column {
 
         if let Some(comment) = node.get(Self::COMMENT).and_then(|v| v.as_str()) {
             column = column.with_comment(comment);
+        }
+
+        // Pre-id JSON is treated as unassigned; SchemaBuilder will
+        // auto-assign on build.
+        if let Some(id) = node.get(Self::ID).and_then(|v| v.as_i64()) {
+            let id = i32::try_from(id).map_err(|_| Error::JsonSerdeError {
+                message: format!("Column id {id} does not fit in i32"),
+            })?;
+            column = column.with_id(id);
         }
 
         Ok(column)
@@ -670,6 +683,95 @@ impl JsonSerde for TableDescriptor {
 mod tests {
     use super::*;
     use crate::metadata::DataTypes;
+
+    #[test]
+    fn column_id_round_trip_through_json() {
+        use crate::metadata::Column;
+
+        let col = Column::new("a", DataTypes::int())
+            .with_id(7)
+            .with_comment("desc");
+        let json = col.serialize_json().unwrap();
+        assert_eq!(json.get("id").and_then(|v| v.as_i64()), Some(7));
+        let round_tripped = Column::deserialize_json(&json).unwrap();
+        assert_eq!(round_tripped, col);
+    }
+
+    #[test]
+    fn schema_assigns_ids_when_absent_and_preserves_when_present() {
+        use crate::metadata::{Column, Schema};
+
+        let auto = Schema::builder()
+            .column("a", DataTypes::int())
+            .column("b", DataTypes::string())
+            .build()
+            .unwrap();
+        let ids: Vec<i32> = auto.columns().iter().map(|c| c.id()).collect();
+        assert_eq!(ids, vec![0, 1]);
+
+        let preserved = Schema::builder()
+            .with_columns(vec![
+                Column::new("a", DataTypes::int()).with_id(3),
+                Column::new("b", DataTypes::string()).with_id(7),
+            ])
+            .build()
+            .unwrap();
+        let ids: Vec<i32> = preserved.columns().iter().map(|c| c.id()).collect();
+        assert_eq!(ids, vec![3, 7]);
+    }
+
+    #[test]
+    fn schema_rejects_duplicate_ids() {
+        use crate::metadata::Column;
+        let err = Schema::builder()
+            .with_columns(vec![
+                Column::new("a", DataTypes::int()).with_id(7),
+                Column::new("b", DataTypes::string()).with_id(7),
+            ])
+            .build()
+            .unwrap_err();
+        assert!(err.to_string().contains("Duplicate column id 7"), "{err}");
+    }
+
+    #[test]
+    fn schema_rejects_negative_non_sentinel_ids() {
+        use crate::metadata::Column;
+        let err = Schema::builder()
+            .with_columns(vec![Column::new("a", DataTypes::int()).with_id(-7)])
+            .build()
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid id -7"), "{err}");
+    }
+
+    #[test]
+    fn column_json_id_overflow_errors() {
+        use crate::metadata::Column;
+        let json = serde_json::json!({
+            "name": "a",
+            "data_type": Column::new("a", DataTypes::int()).serialize_json().unwrap()
+                .get("data_type").unwrap(),
+            "id": (i32::MAX as i64) + 1,
+        });
+        let err = Column::deserialize_json(&json).unwrap_err();
+        assert!(err.to_string().contains("does not fit in i32"), "{err}");
+    }
+
+    #[test]
+    fn schema_rejects_partially_assigned_ids() {
+        use crate::metadata::Column;
+
+        let err = Schema::builder()
+            .with_columns(vec![
+                Column::new("a", DataTypes::int()).with_id(0),
+                Column::new("b", DataTypes::string()),
+            ])
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("All columns must have an id"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn test_datatype_json_serde() {
