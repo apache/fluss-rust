@@ -18,41 +18,21 @@
 
 #[cfg(test)]
 mod kv_table_test {
-    use crate::integration::utils::{create_partitions, create_table, get_shared_cluster};
+    use crate::integration::utils::{
+        create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
+    };
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::{FlussArray, GenericRow, InternalRow};
 
     fn make_key(id: i32) -> GenericRow<'static> {
-        make_key_with_len(id, 3)
+        make_key_with_field_count(id, 3)
     }
 
-    fn make_key_with_len(id: i32, field_count: usize) -> GenericRow<'static> {
+    fn make_key_with_field_count(id: i32, field_count: usize) -> GenericRow<'static> {
         let mut row = GenericRow::new(field_count);
         row.set_field(0, id);
         row
-    }
-
-    fn make_string_array(values: &[Option<&str>]) -> FlussArray {
-        let mut writer = FlussArrayWriter::new(values.len(), &DataTypes::string());
-        for (idx, value) in values.iter().enumerate() {
-            match value {
-                Some(v) => writer.write_string(idx, v),
-                None => writer.set_null_at(idx),
-            }
-        }
-        writer.complete().expect("Failed to build string array")
-    }
-
-    fn make_int_array(values: &[Option<i32>]) -> FlussArray {
-        let mut writer = FlussArrayWriter::new(values.len(), &DataTypes::int());
-        for (idx, value) in values.iter().enumerate() {
-            match value {
-                Some(v) => writer.write_int(idx, *v),
-                None => writer.set_null_at(idx),
-            }
-        }
-        writer.complete().expect("Failed to build int array")
     }
 
     #[tokio::test]
@@ -1115,7 +1095,7 @@ mod kv_table_test {
             .expect("Failed to create lookuper");
 
         let result = lookuper
-            .lookup(&make_key_with_len(1, 2))
+            .lookup(&make_key_with_field_count(1, 2))
             .await
             .expect("lookup");
         let r = result

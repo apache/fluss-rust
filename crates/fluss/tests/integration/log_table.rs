@@ -18,7 +18,9 @@
 
 #[cfg(test)]
 mod table_test {
-    use crate::integration::utils::{create_partitions, create_table, get_shared_cluster};
+    use crate::integration::utils::{
+        create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
+    };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
@@ -579,7 +581,6 @@ mod table_test {
     /// in log tables.
     #[tokio::test]
     async fn all_supported_datatypes() {
-        use fluss::row::binary_array::FlussArrayWriter;
         use fluss::row::{Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz};
 
         let cluster = get_shared_cluster();
@@ -721,12 +722,7 @@ mod table_test {
         let col_timestamp_ltz_ns_neg =
             TimestampLtz::from_millis_nanos(-301234154877, 999_999).unwrap();
 
-        let col_array = {
-            let mut w = FlussArrayWriter::new(2, &DataTypes::string());
-            w.write_string(0, "fluss");
-            w.write_string(1, "rust");
-            w.complete().expect("col_array")
-        };
+        let col_array = make_string_array(&[Some("fluss"), Some("rust")]);
 
         // Append a row with all datatypes
         let mut row = GenericRow::new(field_count);
@@ -1391,7 +1387,6 @@ mod table_test {
 
     #[tokio::test]
     async fn append_and_scan_with_array() {
-        use fluss::row::binary_array::FlussArrayWriter;
         use fluss::row::{Datum, GenericRow};
 
         let cluster = get_shared_cluster();
@@ -1428,19 +1423,8 @@ mod table_test {
         let mut row1 = GenericRow::new(3);
         row1.set_field(0, 1_i32);
 
-        let tags1 = {
-            let mut w = FlussArrayWriter::new(2, &DataTypes::string());
-            w.write_string(0, "hello");
-            w.write_string(1, "world");
-            w.complete().expect("tags1")
-        };
-        let scores1 = {
-            let mut w = FlussArrayWriter::new(3, &DataTypes::int());
-            w.write_int(0, 10);
-            w.write_int(1, 20);
-            w.write_int(2, 30);
-            w.complete().expect("scores1")
-        };
+        let tags1 = make_string_array(&[Some("hello"), Some("world")]);
+        let scores1 = make_int_array(&[Some(10), Some(20), Some(30)]);
         row1.set_field(1, tags1);
         row1.set_field(2, scores1);
 
@@ -1448,15 +1432,8 @@ mod table_test {
         let mut row2 = GenericRow::new(3);
         row2.set_field(0, 2_i32);
 
-        let tags2 = {
-            let mut w = FlussArrayWriter::new(1, &DataTypes::string());
-            w.set_null_at(0);
-            w.complete().expect("tags2")
-        };
-        let scores2 = {
-            let w = FlussArrayWriter::new(0, &DataTypes::int());
-            w.complete().expect("scores2")
-        };
+        let tags2 = make_string_array(&[None]);
+        let scores2 = make_int_array(&[]);
         row2.set_field(1, tags2);
         row2.set_field(2, scores2);
 
@@ -1464,11 +1441,7 @@ mod table_test {
         let mut row3 = GenericRow::new(3);
         row3.set_field(0, 3_i32);
         row3.set_field(1, Datum::Null);
-        let scores3 = {
-            let mut w = FlussArrayWriter::new(1, &DataTypes::int());
-            w.write_int(0, 42);
-            w.complete().expect("scores3")
-        };
+        let scores3 = make_int_array(&[Some(42)]);
         row3.set_field(2, scores3);
 
         append_writer.append(&row1).expect("append row1");
@@ -1763,7 +1736,7 @@ mod table_test {
             if expected.is_nan() {
                 assert!(actual.is_nan(), "expected NaN");
             } else if expected.is_infinite() {
-                assert_eq!(actual.is_infinite(), true);
+                assert!(actual.is_infinite());
                 assert_eq!(actual.signum(), expected.signum());
             } else {
                 assert!((actual - expected).abs() < f32::EPSILON);
@@ -1774,7 +1747,7 @@ mod table_test {
             if expected.is_nan() {
                 assert!(actual.is_nan(), "expected NaN");
             } else if expected.is_infinite() {
-                assert_eq!(actual.is_infinite(), true);
+                assert!(actual.is_infinite());
                 assert_eq!(actual.signum(), expected.signum());
             } else {
                 assert!((actual - expected).abs() < f64::EPSILON);
