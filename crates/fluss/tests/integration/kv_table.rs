@@ -18,12 +18,19 @@
 
 #[cfg(test)]
 mod kv_table_test {
-    use crate::integration::utils::{create_partitions, create_table, get_shared_cluster};
+    use crate::integration::utils::{
+        create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
+    };
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-    use fluss::row::{GenericRow, InternalRow};
+    use fluss::row::binary_array::FlussArrayWriter;
+    use fluss::row::{FlussArray, GenericRow, InternalRow};
 
     fn make_key(id: i32) -> GenericRow<'static> {
-        let mut row = GenericRow::new(3);
+        make_key_with_field_count(id, 3)
+    }
+
+    fn make_key_with_field_count(id: i32, field_count: usize) -> GenericRow<'static> {
+        let mut row = GenericRow::new(field_count);
         row.set_field(0, id);
         row
     }
@@ -606,6 +613,7 @@ mod kv_table_test {
                     // Binary types
                     .column("col_bytes", DataTypes::bytes())
                     .column("col_binary", DataTypes::binary(20))
+                    .column("col_array", DataTypes::array(DataTypes::string()))
                     .primary_key(vec!["pk_int"])
                     .build()
                     .expect("Failed to build schema"),
@@ -644,8 +652,10 @@ mod kv_table_test {
         let col_bytes: &[u8] = b"binary data";
         let col_binary: &[u8] = b"fixed binary data!!!";
 
+        let col_array = make_string_array(&[Some("fluss"), Some("rust")]);
+
         // Upsert a row with all datatypes
-        let mut row = GenericRow::new(17);
+        let mut row = GenericRow::new(18);
         row.set_field(0, pk_int);
         row.set_field(1, col_boolean);
         row.set_field(2, col_tinyint);
@@ -663,6 +673,7 @@ mod kv_table_test {
         row.set_field(14, col_timestamp_ltz);
         row.set_field(15, col_bytes);
         row.set_field(16, col_binary);
+        row.set_field(17, col_array);
 
         upsert_writer
             .upsert(&row)
@@ -677,7 +688,7 @@ mod kv_table_test {
             .create_lookuper()
             .expect("Failed to create lookuper");
 
-        let mut key = GenericRow::new(17);
+        let mut key = GenericRow::new(18);
         key.set_field(0, pk_int);
 
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -772,10 +783,14 @@ mod kv_table_test {
             col_binary,
             "col_binary mismatch"
         );
+        let arr = found_row.get_array(17).unwrap();
+        assert_eq!(arr.size(), 2, "col_array size mismatch");
+        assert_eq!(arr.get_string(0).unwrap(), "fluss", "col_array[0] mismatch");
+        assert_eq!(arr.get_string(1).unwrap(), "rust", "col_array[1] mismatch");
 
         // Test with null values for nullable columns
         let pk_int_2 = 2i32;
-        let mut row_with_nulls = GenericRow::new(17);
+        let mut row_with_nulls = GenericRow::new(18);
         row_with_nulls.set_field(0, pk_int_2);
         row_with_nulls.set_field(1, Datum::Null); // col_boolean
         row_with_nulls.set_field(2, Datum::Null); // col_tinyint
@@ -793,6 +808,7 @@ mod kv_table_test {
         row_with_nulls.set_field(14, Datum::Null); // col_timestamp_ltz
         row_with_nulls.set_field(15, Datum::Null); // col_bytes
         row_with_nulls.set_field(16, Datum::Null); // col_binary
+        row_with_nulls.set_field(17, Datum::Null); // col_array
 
         upsert_writer
             .upsert(&row_with_nulls)
@@ -801,7 +817,7 @@ mod kv_table_test {
             .expect("Failed to wait for upsert acknowledgment");
 
         // Lookup row with nulls
-        let mut key2 = GenericRow::new(17);
+        let mut key2 = GenericRow::new(18);
         key2.set_field(0, pk_int_2);
 
         let result = lookuper.lookup(&key2).await.expect("Failed to lookup");
@@ -880,6 +896,226 @@ mod kv_table_test {
             found_row_nulls.is_null_at(16).unwrap(),
             "col_binary should be null"
         );
+        assert!(
+            found_row_nulls.is_null_at(17).unwrap(),
+            "col_array should be null"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn upsert_and_lookup_with_array() {
+        use fluss::row::Datum;
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_arrays_basic");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("tags", DataTypes::array(DataTypes::string()))
+                    .column("scores", DataTypes::array(DataTypes::int()))
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let upsert = table.new_upsert().expect("Failed to create upsert");
+        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
+
+        // Row 1: id=1, tags=["hello", "world"], scores=[10, 20, 30]
+        let mut row1 = GenericRow::new(3);
+        row1.set_field(0, 1_i32);
+        let tags1 = make_string_array(&[Some("hello"), Some("world")]);
+        let scores1 = make_int_array(&[Some(10), Some(20), Some(30)]);
+        row1.set_field(1, tags1);
+        row1.set_field(2, scores1);
+
+        upsert_writer
+            .upsert(&row1)
+            .expect("upsert row1")
+            .await
+            .expect("ack row1");
+
+        // Row 2: id=2, tags=[null element], scores=[] (empty)
+        let mut row2 = GenericRow::new(3);
+        row2.set_field(0, 2_i32);
+        let tags2 = make_string_array(&[None]);
+        let scores2 = make_int_array(&[]);
+        row2.set_field(1, tags2);
+        row2.set_field(2, scores2);
+
+        upsert_writer
+            .upsert(&row2)
+            .expect("upsert row2")
+            .await
+            .expect("ack row2");
+
+        // Row 3: id=3, tags=null, scores=[42]
+        let mut row3 = GenericRow::new(3);
+        row3.set_field(0, 3_i32);
+        row3.set_field(1, Datum::Null);
+        let scores3 = make_int_array(&[Some(42)]);
+        row3.set_field(2, scores3);
+
+        upsert_writer
+            .upsert(&row3)
+            .expect("upsert row3")
+            .await
+            .expect("ack row3");
+
+        // Lookup and verify
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        // Verify row 1
+        let result1 = lookuper.lookup(&make_key(1)).await.expect("lookup row1");
+        let r1 = result1
+            .get_single_row()
+            .expect("get row1")
+            .expect("row1 should exist");
+        assert_eq!(r1.get_int(0).unwrap(), 1);
+        let tags_r1 = r1.get_array(1).unwrap();
+        assert_eq!(tags_r1.size(), 2);
+        assert_eq!(tags_r1.get_string(0).unwrap(), "hello");
+        assert_eq!(tags_r1.get_string(1).unwrap(), "world");
+        let scores_r1 = r1.get_array(2).unwrap();
+        assert_eq!(scores_r1.size(), 3);
+        assert_eq!(scores_r1.get_int(0).unwrap(), 10);
+        assert_eq!(scores_r1.get_int(1).unwrap(), 20);
+        assert_eq!(scores_r1.get_int(2).unwrap(), 30);
+
+        // Verify row 2
+        let result2 = lookuper.lookup(&make_key(2)).await.expect("lookup row2");
+        let r2 = result2
+            .get_single_row()
+            .expect("get row2")
+            .expect("row2 should exist");
+        assert_eq!(r2.get_int(0).unwrap(), 2);
+        let tags_r2 = r2.get_array(1).unwrap();
+        assert_eq!(tags_r2.size(), 1);
+        assert!(tags_r2.is_null_at(0));
+        let scores_r2 = r2.get_array(2).unwrap();
+        assert_eq!(scores_r2.size(), 0);
+
+        // Verify row 3
+        let result3 = lookuper.lookup(&make_key(3)).await.expect("lookup row3");
+        let r3 = result3
+            .get_single_row()
+            .expect("get row3")
+            .expect("row3 should exist");
+        assert_eq!(r3.get_int(0).unwrap(), 3);
+        assert!(r3.is_null_at(1).unwrap());
+        let scores_r3 = r3.get_array(2).unwrap();
+        assert_eq!(scores_r3.size(), 1);
+        assert_eq!(scores_r3.get_int(0).unwrap(), 42);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn upsert_and_lookup_with_nested_array() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_arrays_nested");
+        let inner_array_type = DataTypes::array(DataTypes::int());
+        let matrix_type = DataTypes::array(inner_array_type.clone());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("matrix", matrix_type)
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let upsert = table.new_upsert().expect("Failed to create upsert");
+        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
+
+        // Row: id=1, matrix=[[1, 2], [3, 4]]
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        let inner1 = make_int_array(&[Some(1), Some(2)]);
+        let inner2 = make_int_array(&[Some(3), Some(4)]);
+        let outer = {
+            let mut w = FlussArrayWriter::new(2, &inner_array_type);
+            w.write_array(0, &inner1);
+            w.write_array(1, &inner2);
+            w.complete().expect("outer")
+        };
+        row.set_field(1, outer);
+
+        upsert_writer
+            .upsert(&row)
+            .expect("upsert")
+            .await
+            .expect("ack");
+
+        // Lookup and verify nested structure
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        let result = lookuper
+            .lookup(&make_key_with_field_count(1, 2))
+            .await
+            .expect("lookup");
+        let r = result
+            .get_single_row()
+            .expect("get row")
+            .expect("row should exist");
+
+        assert_eq!(r.get_int(0).unwrap(), 1);
+        let matrix: FlussArray = r.get_array(1).unwrap();
+        assert_eq!(matrix.size(), 2);
+
+        let row0 = matrix.get_array(0).unwrap();
+        assert_eq!(row0.size(), 2);
+        assert_eq!(row0.get_int(0).unwrap(), 1);
+        assert_eq!(row0.get_int(1).unwrap(), 2);
+
+        let row1 = matrix.get_array(1).unwrap();
+        assert_eq!(row1.size(), 2);
+        assert_eq!(row1.get_int(0).unwrap(), 3);
+        assert_eq!(row1.get_int(1).unwrap(), 4);
 
         admin
             .drop_table(&table_path, false)
