@@ -535,7 +535,7 @@ impl TableScan {
                 admin,
                 table_info,
                 projected_schema,
-                projected_row_type,
+                Arc::new(projected_row_type),
             );
 
             Python::attach(|py| Py::new(py, py_scanner))
@@ -2013,9 +2013,9 @@ pub struct LogScanner {
     /// The projected Arrow schema to use for empty table creation
     projected_schema: SchemaRef,
     /// The projected row type to use for record-based scanning
-    projected_row_type: fcore::metadata::RowType,
+    projected_row_type: Arc<fcore::metadata::RowType>,
     /// Cache for partition_id -> partition_name mapping (avoids repeated list_partition_infos calls)
-    partition_name_cache: std::sync::RwLock<Option<HashMap<i64, String>>>,
+    partition_name_cache: Arc<std::sync::RwLock<Option<HashMap<i64, String>>>>,
 }
 
 #[pymethods]
@@ -2132,9 +2132,7 @@ impl LogScanner {
     ///     - Requires a record-based scanner (created with new_scan().create_log_scanner())
     ///     - Returns an empty ScanRecords if no records are available
     ///     - When timeout expires, returns an empty ScanRecords (NOT an error)
-    fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<ScanRecords> {
-        let scanner = self.kind.as_record()?;
-
+    fn poll<'py>(&self, py: Python<'py>, timeout_ms: i64) -> PyResult<Bound<'py, PyAny>> {
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
                 "timeout_ms must be non-negative, got: {timeout_ms}"
@@ -2142,29 +2140,36 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scan_records = py
-            .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scanner = Arc::clone(&self.kind);
+        let projected_row_type = self.projected_row_type.clone();
 
-        // Convert core ScanRecords to Python ScanRecords grouped by bucket
-        let row_type = &self.projected_row_type;
-        let mut records_by_bucket = IndexMap::new();
-        let mut total_count = 0usize;
+        future_into_py(py, async move {
+            let scan_records = scanner
+                .as_record()?
+                .poll(timeout)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
-        for (bucket, records) in scan_records.into_records_by_buckets() {
-            let py_bucket = TableBucket::from_core(bucket);
-            let mut py_records = Vec::with_capacity(records.len());
-            for record in &records {
-                let scan_record = ScanRecord::from_core(py, record, row_type)?;
-                py_records.push(Py::new(py, scan_record)?);
-                total_count += 1;
-            }
-            records_by_bucket.insert(py_bucket, py_records);
-        }
+            Python::attach(|py| {
+                let mut records_by_bucket = IndexMap::new();
+                let mut total_count = 0usize;
 
-        Ok(ScanRecords {
-            records_by_bucket,
-            total_count,
+                for (bucket, records) in scan_records.into_records_by_buckets() {
+                    let py_bucket = TableBucket::from_core(bucket);
+                    let mut py_records = Vec::with_capacity(records.len());
+                    for record in &records {
+                        let scan_record = ScanRecord::from_core(py, record, &projected_row_type)?;
+                        py_records.push(Py::new(py, scan_record)?);
+                        total_count += 1;
+                    }
+                    records_by_bucket.insert(py_bucket, py_records);
+                }
+
+                Ok(ScanRecords {
+                    records_by_bucket,
+                    total_count,
+                })
+            })
         })
     }
 
@@ -2181,9 +2186,11 @@ impl LogScanner {
     ///     - Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner())
     ///     - Returns an empty list if no batches are available
     ///     - When timeout expires, returns an empty list (NOT an error)
-    fn poll_record_batch(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<RecordBatch>> {
-        let scanner = self.kind.as_batch()?;
-
+    fn poll_record_batch<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_ms: i64,
+    ) -> PyResult<Bound<'py, PyAny>> {
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
                 "timeout_ms must be non-negative, got: {timeout_ms}"
@@ -2191,17 +2198,22 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scan_batches = py
-            .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scanner = Arc::clone(&self.kind);
 
-        // Convert ScanBatch to RecordBatch with metadata
-        let result = scan_batches
-            .into_iter()
-            .map(RecordBatch::from_scan_batch)
-            .collect();
+        future_into_py(py, async move {
+            let scan_batches = scanner
+                .as_batch()?
+                .poll(timeout)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
-        Ok(result)
+            Python::attach(|py| {
+                scan_batches
+                    .into_iter()
+                    .map(|sb| Py::new(py, RecordBatch::from_scan_batch(sb)))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })
     }
 
     /// Poll for new records as an Arrow Table.
@@ -2216,9 +2228,7 @@ impl LogScanner {
     ///     - Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner())
     ///     - Returns an empty table (with correct schema) if no records are available
     ///     - When timeout expires, returns an empty table (NOT an error)
-    fn poll_arrow(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
-        let scanner = self.kind.as_batch()?;
-
+    fn poll_arrow<'py>(&self, py: Python<'py>, timeout_ms: i64) -> PyResult<Bound<'py, PyAny>> {
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
                 "timeout_ms must be non-negative, got: {timeout_ms}"
@@ -2226,38 +2236,23 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scan_batches = py
-            .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scanner = Arc::clone(&self.kind);
+        let projected_schema = self.projected_schema.clone();
 
-        // Convert ScanBatch to Arrow batches
-        if scan_batches.is_empty() {
-            return self.create_empty_table(py);
-        }
+        future_into_py(py, async move {
+            let scan_batches = scanner
+                .as_batch()?
+                .poll(timeout)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
-        let arrow_batches: Vec<_> = scan_batches
-            .into_iter()
-            .map(|scan_batch| Arc::new(scan_batch.into_batch()))
-            .collect();
+            let arrow_batches = scan_batches
+                .into_iter()
+                .map(|sb| Arc::new(sb.into_batch()))
+                .collect();
 
-        Utils::combine_batches_to_table(py, arrow_batches)
-    }
-
-    /// Create an empty PyArrow table with the correct (projected) schema
-    fn create_empty_table(&self, py: Python) -> PyResult<Py<PyAny>> {
-        // Use the projected schema stored in the scanner
-        let py_schema = self
-            .projected_schema
-            .as_ref()
-            .to_pyarrow(py)
-            .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
-
-        let pyarrow = py.import("pyarrow")?;
-        let empty_table = pyarrow
-            .getattr("Table")?
-            .call_method1("from_batches", (vec![] as Vec<Py<PyAny>>, py_schema))?;
-
-        Ok(empty_table.into())
+            Python::attach(|py| Self::batches_to_arrow_table(py, arrow_batches, &projected_schema))
+        })
     }
 
     /// Convert all data to Arrow Table.
@@ -2269,21 +2264,33 @@ impl LogScanner {
     ///
     /// Returns:
     ///     PyArrow Table containing all data from subscribed buckets
-    fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let scanner = self.kind.as_batch()?;
-        let subscribed = scanner.get_subscribed_buckets();
+    fn to_arrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let kind = Arc::clone(&self.kind);
+        let admin = Arc::clone(&self.admin);
+        let table_info = self.table_info.clone();
+        let projected_schema = self.projected_schema.clone();
+        let partition_name_cache = Arc::clone(&self.partition_name_cache);
 
-        if subscribed.is_empty() {
-            return Err(FlussError::new_err(
-                "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
-            ));
-        }
+        future_into_py(py, async move {
+            let scanner = kind.as_batch()?;
+            let subscribed = scanner.get_subscribed_buckets();
+            if subscribed.is_empty() {
+                return Err(FlussError::new_err(
+                    "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
+                ));
+            }
 
-        // 2. Query latest offsets for all subscribed buckets
-        let stopping_offsets = self.query_latest_offsets(py, &subscribed)?;
+            let all_batches = Self::collect_all_batches(
+                scanner,
+                &admin,
+                &table_info,
+                &subscribed,
+                &partition_name_cache,
+            )
+            .await?;
 
-        // 3. Poll until all buckets reach their stopping offsets
-        self.poll_until_offsets(py, stopping_offsets)
+            Python::attach(|py| Self::batches_to_arrow_table(py, all_batches, &projected_schema))
+        })
     }
 
     /// Convert all data to Pandas DataFrame.
@@ -2295,12 +2302,36 @@ impl LogScanner {
     ///
     /// Returns:
     ///     Pandas DataFrame containing all data from subscribed buckets
-    fn to_pandas(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let arrow_table = self.to_arrow(py)?;
+    fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let kind = Arc::clone(&self.kind);
+        let admin = Arc::clone(&self.admin);
+        let table_info = self.table_info.clone();
+        let projected_schema = self.projected_schema.clone();
+        let partition_name_cache = Arc::clone(&self.partition_name_cache);
 
-        // Convert Arrow Table to Pandas DataFrame using pyarrow
-        let df = arrow_table.call_method0(py, "to_pandas")?;
-        Ok(df)
+        future_into_py(py, async move {
+            let scanner = kind.as_batch()?;
+            let subscribed = scanner.get_subscribed_buckets();
+            if subscribed.is_empty() {
+                return Err(FlussError::new_err(
+                    "No buckets subscribed. Call subscribe(), subscribe_buckets(), subscribe_partition(), or subscribe_partition_buckets() first.",
+                ));
+            }
+
+            let all_batches = Self::collect_all_batches(
+                scanner,
+                &admin,
+                &table_info,
+                &subscribed,
+                &partition_name_cache,
+            )
+            .await?;
+
+            Python::attach(|py| {
+                let arrow_table = Self::batches_to_arrow_table(py, all_batches, &projected_schema)?;
+                arrow_table.call_method0(py, "to_pandas")
+            })
+        })
     }
 
     fn __aiter__<'py>(slf: PyRef<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
@@ -2312,14 +2343,11 @@ impl LogScanner {
         let gen_fn = ASYNC_GEN_FN.get_or_init(py, || {
             let code = pyo3::ffi::c_str!(
                 r#"
-async def _async_scan_generic(scanner, method_name):
-    # Dynamically resolve the polling method (e.g., _async_poll or _async_poll_batches)
+async def _async_scan_generic(scanner, method_name, timeout_ms):
     poll_method = getattr(scanner, method_name)
     while True:
-        items = await poll_method()
-        if items:
-            for item in items:
-                yield item
+        for item in await poll_method(timeout_ms):
+            yield item
 "#
             );
             let globals = pyo3::types::PyDict::new(py);
@@ -2331,106 +2359,16 @@ async def _async_scan_generic(scanner, method_name):
                 .unbind()
         });
 
-        // Determine which internal method to call based on the scanner kind
         let method_name = match slf.kind.as_ref() {
-            ScannerKind::Record(_) => "_async_poll",
-            ScannerKind::Batch(_) => "_async_poll_batches",
+            ScannerKind::Record(_) => "poll",
+            ScannerKind::Batch(_) => "poll_record_batch",
         };
 
-        // Instantiate the generator with the scanner instance and the target method name
-        gen_fn
-            .bind(py)
-            .call1((slf.into_bound_py_any(py)?, method_name))
-    }
-
-    /// Perform a single bounded poll and return a list of ScanRecord objects.
-    ///
-    /// This is the async building block used by `__aiter__` (record mode) to
-    /// implement `async for`. Each call does exactly one network poll (bounded
-    /// by `DEFAULT_POLL_INTERVAL_MS`), converts any results to Python ScanRecord objects,
-    /// and returns them as a list. An empty list signals a timeout (no data yet), not
-    /// end-of-stream.
-    ///
-    /// Returns:
-    ///     Awaitable that resolves to a list of ScanRecord objects
-    fn _async_poll<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let timeout = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64);
-
-        let scanner = Arc::clone(&self.kind);
-        let projected_row_type = self.projected_row_type.clone();
-
-        future_into_py(py, async move {
-            let core_scanner = match scanner.as_ref() {
-                ScannerKind::Record(s) => s,
-                ScannerKind::Batch(_) => {
-                    return Err(PyTypeError::new_err(
-                        "This internal method only supports record-based scanners. \
-                         For batch-based scanners, use 'async for' or 'poll_record_batch' instead.",
-                    ));
-                }
-            };
-
-            let scan_records = core_scanner
-                .poll(timeout)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            // Convert to Python list
-            Python::attach(|py| {
-                let mut result: Vec<Py<ScanRecord>> = Vec::new();
-                for (_, records) in scan_records.into_records_by_buckets() {
-                    for core_record in records {
-                        let scan_record =
-                            ScanRecord::from_core(py, &core_record, &projected_row_type)?;
-                        result.push(Py::new(py, scan_record)?);
-                    }
-                }
-                Ok(result)
-            })
-        })
-    }
-
-    /// Perform a single bounded poll and return a list of RecordBatch objects.
-    ///
-    /// This is the async building block used by `__aiter__` (batch mode) to
-    /// implement `async for`. Each call does exactly one network poll (bounded
-    /// by `DEFAULT_POLL_INTERVAL_MS`), converts any results to Python RecordBatch objects,
-    /// and returns them as a list. An empty list signals a timeout (no data
-    /// yet), not end-of-stream.
-    ///
-    /// Returns:
-    ///     Awaitable that resolves to a list of RecordBatch objects
-    fn _async_poll_batches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let timeout = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64);
-
-        let scanner = Arc::clone(&self.kind);
-
-        future_into_py(py, async move {
-            let core_scanner = match scanner.as_ref() {
-                ScannerKind::Batch(s) => s,
-                ScannerKind::Record(_) => {
-                    return Err(PyTypeError::new_err(
-                        "This internal method only supports batch-based scanners. \
-                         For record-based scanners, use 'async for' or 'poll' instead.",
-                    ));
-                }
-            };
-
-            let scan_batches = core_scanner
-                .poll(timeout)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            // Convert to Python list of RecordBatch objects
-            Python::attach(|py| {
-                let mut result: Vec<Py<RecordBatch>> = Vec::new();
-                for scan_batch in scan_batches {
-                    let rb = RecordBatch::from_scan_batch(scan_batch);
-                    result.push(Py::new(py, rb)?);
-                }
-                Ok(result)
-            })
-        })
+        gen_fn.bind(py).call1((
+            slf.into_bound_py_any(py)?,
+            method_name,
+            DEFAULT_POLL_INTERVAL_MS,
+        ))
     }
 
     fn __repr__(&self) -> String {
@@ -2444,7 +2382,7 @@ impl LogScanner {
         admin: Arc<fcore::client::FlussAdmin>,
         table_info: fcore::metadata::TableInfo,
         projected_schema: SchemaRef,
-        projected_row_type: fcore::metadata::RowType,
+        projected_row_type: Arc<fcore::metadata::RowType>,
     ) -> Self {
         Self {
             kind: Arc::new(scanner),
@@ -2452,73 +2390,52 @@ impl LogScanner {
             table_info,
             projected_schema,
             projected_row_type,
-            partition_name_cache: std::sync::RwLock::new(None),
+            partition_name_cache: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
-    /// Get partition_id -> partition_name mapping, using cache if available
-    fn get_partition_name_map(
-        &self,
-        py: Python,
-        table_path: &fcore::metadata::TablePath,
-    ) -> PyResult<HashMap<i64, String>> {
-        // Check cache first (read lock)
-        {
-            let cache = self.partition_name_cache.read().unwrap();
-            if let Some(map) = cache.as_ref() {
-                return Ok(map.clone());
-            }
+    /// Convert Arrow record batches to a PyArrow Table (or empty table if no batches).
+    fn batches_to_arrow_table(
+        py: Python<'_>,
+        batches: Vec<Arc<ArrowRecordBatch>>,
+        projected_schema: &SchemaRef,
+    ) -> PyResult<Py<PyAny>> {
+        if batches.is_empty() {
+            let py_schema = projected_schema
+                .as_ref()
+                .to_pyarrow(py)
+                .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
+            let pyarrow = py.import("pyarrow")?;
+            let empty_table = pyarrow
+                .getattr("Table")?
+                .call_method1("from_batches", (vec![] as Vec<Py<PyAny>>, py_schema))?;
+            Ok(empty_table.into())
+        } else {
+            Utils::combine_batches_to_table(py, batches)
         }
-
-        // Fetch partition infos (releases GIL during async call)
-        let partition_infos: Vec<fcore::metadata::PartitionInfo> = py
-            .detach(|| {
-                TOKIO_RUNTIME.block_on(async { self.admin.list_partition_infos(table_path).await })
-            })
-            .map_err(|e| FlussError::from_core_error(&e))?;
-
-        // Build and cache the mapping
-        let map: HashMap<i64, String> = partition_infos
-            .into_iter()
-            .map(|info| (info.get_partition_id(), info.get_partition_name()))
-            .collect();
-
-        // Store in cache (write lock)
-        {
-            let mut cache = self.partition_name_cache.write().unwrap();
-            *cache = Some(map.clone());
-        }
-
-        Ok(map)
     }
 
-    /// Query latest offsets for subscribed buckets (handles both partitioned and non-partitioned)
-    fn query_latest_offsets(
-        &self,
-        py: Python,
+    /// Query stopping offsets and poll until all subscribed buckets are fully read.
+    /// Returns collected Arrow record batches.
+    async fn collect_all_batches(
+        scanner: &fcore::client::RecordBatchLogScanner,
+        admin: &fcore::client::FlussAdmin,
+        table_info: &fcore::metadata::TableInfo,
         subscribed: &[(fcore::metadata::TableBucket, i64)],
-    ) -> PyResult<HashMap<fcore::metadata::TableBucket, i64>> {
-        let scanner = self.kind.as_batch()?;
+        partition_name_cache: &std::sync::RwLock<Option<HashMap<i64, String>>>,
+    ) -> PyResult<Vec<Arc<ArrowRecordBatch>>> {
         let is_partitioned = scanner.is_partitioned();
-        let table_path = &self.table_info.table_path;
+        let table_path = &table_info.table_path;
+        let table_id = table_info.table_id;
 
-        if !is_partitioned {
-            // Non-partitioned: simple case - just query all bucket IDs
+        // 1. Query latest offsets
+        let mut stopping_offsets: HashMap<fcore::metadata::TableBucket, i64> = if !is_partitioned {
             let bucket_ids: Vec<i32> = subscribed.iter().map(|(tb, _)| tb.bucket_id()).collect();
-
-            let offsets: HashMap<i32, i64> = py
-                .detach(|| {
-                    TOKIO_RUNTIME.block_on(async {
-                        self.admin
-                            .list_offsets(table_path, &bucket_ids, OffsetSpec::Latest)
-                            .await
-                    })
-                })
+            let offsets = admin
+                .list_offsets(table_path, &bucket_ids, OffsetSpec::Latest)
+                .await
                 .map_err(|e| FlussError::from_core_error(&e))?;
-
-            // Convert to TableBucket-keyed map
-            let table_id = self.table_info.table_id;
-            Ok(offsets
+            offsets
                 .into_iter()
                 .filter(|(_, offset)| *offset > 0)
                 .map(|(bucket_id, offset)| {
@@ -2527,88 +2444,69 @@ impl LogScanner {
                         offset,
                     )
                 })
-                .collect())
+                .collect()
         } else {
-            // Partitioned: need to query per partition
-            self.query_partitioned_offsets(py, subscribed)
-        }
-    }
+            let cached = partition_name_cache.read().unwrap().clone();
+            let partition_id_to_name = match cached {
+                Some(map) => map,
+                None => {
+                    let infos = admin
+                        .list_partition_infos(table_path)
+                        .await
+                        .map_err(|e| FlussError::from_core_error(&e))?;
+                    let map: HashMap<i64, String> = infos
+                        .into_iter()
+                        .map(|info| (info.get_partition_id(), info.get_partition_name()))
+                        .collect();
+                    *partition_name_cache.write().unwrap() = Some(map.clone());
+                    map
+                }
+            };
 
-    /// Query offsets for partitioned table subscriptions
-    fn query_partitioned_offsets(
-        &self,
-        py: Python,
-        subscribed: &[(fcore::metadata::TableBucket, i64)],
-    ) -> PyResult<HashMap<fcore::metadata::TableBucket, i64>> {
-        let table_path = &self.table_info.table_path;
-
-        // Get partition_id -> partition_name mapping (cached)
-        let partition_id_to_name = self.get_partition_name_map(py, table_path)?;
-
-        // Group subscribed buckets by partition_id
-        let mut by_partition: HashMap<i64, Vec<i32>> = HashMap::new();
-        for (tb, _) in subscribed {
-            if let Some(partition_id) = tb.partition_id() {
-                by_partition
-                    .entry(partition_id)
-                    .or_default()
-                    .push(tb.bucket_id());
-            }
-        }
-
-        // Query offsets for each partition
-        let mut result: HashMap<fcore::metadata::TableBucket, i64> = HashMap::new();
-        let table_id = self.table_info.table_id;
-
-        for (partition_id, bucket_ids) in by_partition {
-            let partition_name = partition_id_to_name.get(&partition_id).ok_or_else(|| {
-                FlussError::new_err(format!("Unknown partition_id: {partition_id}"))
-            })?;
-
-            let offsets: HashMap<i32, i64> = py
-                .detach(|| {
-                    TOKIO_RUNTIME.block_on(async {
-                        self.admin
-                            .list_partition_offsets(
-                                table_path,
-                                partition_name,
-                                &bucket_ids,
-                                OffsetSpec::Latest,
-                            )
-                            .await
-                    })
-                })
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            for (bucket_id, offset) in offsets {
-                if offset > 0 {
-                    let tb = fcore::metadata::TableBucket::new_with_partition(
-                        table_id,
-                        Some(partition_id),
-                        bucket_id,
-                    );
-                    result.insert(tb, offset);
+            let mut by_partition: HashMap<i64, Vec<i32>> = HashMap::new();
+            for (tb, _) in subscribed {
+                if let Some(partition_id) = tb.partition_id() {
+                    by_partition
+                        .entry(partition_id)
+                        .or_default()
+                        .push(tb.bucket_id());
                 }
             }
-        }
 
-        Ok(result)
-    }
+            let mut result = HashMap::new();
+            for (partition_id, bucket_ids) in by_partition {
+                let partition_name = partition_id_to_name.get(&partition_id).ok_or_else(|| {
+                    FlussError::new_err(format!("Unknown partition_id: {partition_id}"))
+                })?;
+                let offsets = admin
+                    .list_partition_offsets(
+                        table_path,
+                        partition_name,
+                        &bucket_ids,
+                        OffsetSpec::Latest,
+                    )
+                    .await
+                    .map_err(|e| FlussError::from_core_error(&e))?;
+                for (bucket_id, offset) in offsets {
+                    if offset > 0 {
+                        let tb = fcore::metadata::TableBucket::new_with_partition(
+                            table_id,
+                            Some(partition_id),
+                            bucket_id,
+                        );
+                        result.insert(tb, offset);
+                    }
+                }
+            }
+            result
+        };
 
-    /// Poll until all buckets reach their stopping offsets
-    fn poll_until_offsets(
-        &self,
-        py: Python,
-        mut stopping_offsets: HashMap<fcore::metadata::TableBucket, i64>,
-    ) -> PyResult<Py<PyAny>> {
-        let scanner = self.kind.as_batch()?;
+        // 2. Poll until all buckets reach their stopping offsets
         let mut all_batches = Vec::new();
-
         while !stopping_offsets.is_empty() {
-            let scan_batches = py
-                .detach(|| {
-                    TOKIO_RUNTIME.block_on(async { scanner.poll(Duration::from_millis(500)).await })
-                })
+            let scan_batches = scanner
+                .poll(Duration::from_millis(500))
+                .await
                 .map_err(|e| FlussError::from_core_error(&e))?;
 
             if scan_batches.is_empty() {
@@ -2617,8 +2515,6 @@ impl LogScanner {
 
             for scan_batch in scan_batches {
                 let table_bucket = scan_batch.bucket().clone();
-
-                // Check if this bucket is still being tracked
                 let Some(&stop_at) = stopping_offsets.get(&table_bucket) else {
                     continue;
                 };
@@ -2626,14 +2522,12 @@ impl LogScanner {
                 let base_offset = scan_batch.base_offset();
                 let last_offset = scan_batch.last_offset();
 
-                // If the batch starts at or after the stop_at offset, the bucket is exhausted
                 if base_offset >= stop_at {
                     stopping_offsets.remove(&table_bucket);
                     continue;
                 }
 
                 let batch = if last_offset >= stop_at {
-                    // Slice batch to keep only records where offset < stop_at
                     let num_to_keep = (stop_at - base_offset) as usize;
                     let b = scan_batch.into_batch();
                     let limit = num_to_keep.min(b.num_rows());
@@ -2644,14 +2538,13 @@ impl LogScanner {
 
                 all_batches.push(Arc::new(batch));
 
-                // Check if we're done with this bucket
                 if last_offset >= stop_at - 1 {
                     stopping_offsets.remove(&table_bucket);
                 }
             }
         }
 
-        Utils::combine_batches_to_table(py, all_batches)
+        Ok(all_batches)
     }
 }
 

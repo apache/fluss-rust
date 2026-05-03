@@ -59,7 +59,7 @@ scanner.subscribe_partition_buckets({
     (p.partition_id, 0): fluss.EARLIEST_OFFSET for p in partition_infos
 })
 
-print(scanner.to_pandas())
+print(await scanner.to_pandas())
 ```
 
 ### Unsubscribing

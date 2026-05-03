@@ -36,7 +36,7 @@ async def main():
     num_buckets = (await admin.get_table_info(table_path)).num_buckets
     scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
-    print(scanner.to_pandas())
+    print(await scanner.to_pandas())
 
     # Cleanup
     await admin.drop_table(table_path, ignore_if_not_exists=True)
