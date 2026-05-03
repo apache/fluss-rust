@@ -88,7 +88,9 @@ impl DecoderCache {
 /// Rows returned from a lookup. Primary-key lookups produce at most one
 /// row; prefix-key lookups may produce many. Rows written under older
 /// schemas are decoded with their original schema and projected to the
-/// table's current schema before the caller sees them.
+/// schema captured when the `Lookuper` was created — schema evolutions
+/// that land after that point are not picked up by an existing
+/// `Lookuper`; create a new one to see them.
 pub struct LookupResult {
     rows: Vec<Vec<u8>>,
     target_row_type: Arc<RowType>,
