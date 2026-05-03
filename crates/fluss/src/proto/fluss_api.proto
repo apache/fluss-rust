@@ -184,6 +184,18 @@ message GetTableInfoResponse {
   required int64 modified_time = 5;
 }
 
+// get table schema request and response. Mirrors the Java RPC at api key 1011.
+// Omitting `schema_id` requests the latest schema.
+message GetTableSchemaRequest {
+  required PbTablePath table_path = 1;
+  optional int32 schema_id = 2;
+}
+
+message GetTableSchemaResponse {
+  required int32 schema_id = 1;
+  required bytes schema_json = 2;
+}
+
 message ListTablesRequest {
   required string database_name = 1;
 }
