@@ -77,7 +77,7 @@ jobs:
 
       - name: Run tests (parallel)
         working-directory: bindings/python
-        run: uv run --no-sync pytest test/ -v -n auto
+        run: uv run --no-sync pytest test/ -v -n 2 --dist=loadfile
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
