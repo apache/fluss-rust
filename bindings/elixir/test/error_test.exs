@@ -69,17 +69,17 @@ defmodule Fluss.ErrorTest do
   end
 
   describe "NIF error surface" do
-    test "unreachable server returns %Fluss.Error{code: :client_error, error_code: -2}" do
+    test "unreachable server returns %Fluss.Error{code: :network_exception, error_code: 1}" do
       config = Fluss.Config.new("127.0.0.1:1")
 
-      assert {:error, %Fluss.Error{code: :client_error, error_code: -2}} =
+      assert {:error, %Fluss.Error{code: :network_exception, error_code: 1}} =
                Fluss.Connection.new(config)
     end
 
     test "bang variant raises %Fluss.Error{}" do
       config = Fluss.Config.new("127.0.0.1:1")
 
-      assert_raise Fluss.Error, ~r/\[client_error\]/, fn ->
+      assert_raise Fluss.Error, ~r/\[network_exception\]/, fn ->
         Fluss.Connection.new!(config)
       end
     end
