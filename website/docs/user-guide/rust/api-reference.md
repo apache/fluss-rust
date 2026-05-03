@@ -53,13 +53,14 @@ Complete API reference for the Fluss Rust client.
 
 ### Table Operations
 
-| Method                                                                                                                     | Description               |
-|----------------------------------------------------------------------------------------------------------------------------|---------------------------|
-| `async fn create_table(&self, table_path: &TablePath, descriptor: &TableDescriptor, ignore_if_exists: bool) -> Result<()>` | Create a table            |
-| `async fn drop_table(&self, table_path: &TablePath, ignore_if_not_exists: bool) -> Result<()>`                             | Drop a table              |
-| `async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo>`                                              | Get table metadata        |
-| `async fn list_tables(&self, database_name: &str) -> Result<Vec<String>>`                                                  | List tables in a database |
-| `async fn table_exists(&self, table_path: &TablePath) -> Result<bool>`                                                     | Check if a table exists   |
+| Method                                                                                                                     | Description                                                                 |
+|----------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| `async fn create_table(&self, table_path: &TablePath, descriptor: &TableDescriptor, ignore_if_exists: bool) -> Result<()>` | Create a table                                                              |
+| `async fn drop_table(&self, table_path: &TablePath, ignore_if_not_exists: bool) -> Result<()>`                             | Drop a table                                                                |
+| `async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo>`                                              | Get table metadata                                                          |
+| `async fn get_table_schema(&self, table_path: &TablePath, schema_id: Option<i32>) -> Result<SchemaInfo>`                   | Get a table's schema by id, or the latest schema when `schema_id` is `None` |
+| `async fn list_tables(&self, database_name: &str) -> Result<Vec<String>>`                                                  | List tables in a database                                                   |
+| `async fn table_exists(&self, table_path: &TablePath) -> Result<bool>`                                                     | Check if a table exists                                                     |
 
 ### Partition Operations
 
@@ -266,6 +267,17 @@ writer.append(&row)?.await?;
 | `fn column(name: &str, data_type: DataType) -> Self` | Add a column            |
 | `fn primary_key(keys: Vec<&str>) -> Self`            | Set primary key columns |
 | `fn build() -> Result<Schema>`                       | Build the schema        |
+
+## `SchemaInfo`
+
+A schema together with its server-assigned version id. Returned by [`FlussAdmin::get_table_schema`](#flussadmin).
+
+| Method                                           | Description                              |
+|--------------------------------------------------|------------------------------------------|
+| `fn new(schema: Schema, schema_id: i32) -> Self` | Construct from a schema and id           |
+| `fn schema(&self) -> &Schema`                    | Borrow the schema                        |
+| `fn schema_id(&self) -> i32`                     | Get the server-assigned schema id        |
+| `fn into_parts(self) -> (Schema, i32)`           | Consume and return `(schema, schema_id)` |
 
 ## `TableDescriptor`
 
