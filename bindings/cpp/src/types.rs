@@ -123,6 +123,9 @@ fn build_array_type_from_leaf(spec: &FfiDataTypeSpec) -> Result<fcore::metadata:
     if spec.array_nesting == 0 {
         return Err(anyhow!("ARRAY nesting must be >= 1"));
     }
+    // Construct the leaf scalar type. `nullable` is set to `spec.element_nullable`
+    // to control the leaf's own nullability. `element_nullable` is unused here
+    // because the leaf is a scalar (not an array), so it defaults to `true`.
     let mut dt = ffi_data_type_to_core(FfiDataTypeSpec {
         data_type: spec.element_data_type,
         precision: spec.element_precision,
@@ -185,6 +188,8 @@ fn ffi_data_type_to_core(spec: FfiDataTypeSpec) -> Result<fcore::metadata::DataT
                 if spec.element_data_type == 0 {
                     return Err(anyhow!("ARRAY requires element type metadata"));
                 }
+                // Same as build_array_type_from_leaf: construct the element as a
+                // scalar, so `element_nullable` is unused and defaults to `true`.
                 let element_type = ffi_data_type_to_core(FfiDataTypeSpec {
                     data_type: spec.element_data_type,
                     precision: spec.element_precision,
@@ -399,6 +404,11 @@ pub fn empty_table_info() -> ffi::FfiTableInfo {
 
 /// Convert element type tag + precision/scale to core DataType.
 /// Used by ArrayWriterInner construction from C++.
+///
+/// Nullability is hardcoded to `true` (the default) because `ArrayWriter`
+/// only needs the type for encoding — the binary array format does not
+/// vary based on nullability. Nullability is a schema-level constraint
+/// enforced elsewhere (column definition, primary key normalization).
 pub fn element_type_from_ffi(
     leaf_dt: i32,
     precision: u32,
