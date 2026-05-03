@@ -1458,3 +1458,66 @@ TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
         EXPECT_NO_THROW(smallint_arr.SetInt32(0, 32767));
     }
 }
+
+TEST_F(LogTableTest, NullabilityPreservedInTableInfo) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_nullability_table_info_cpp");
+
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", fluss::DataType::Int())
+            .AddColumn("name", fluss::DataType::String())
+            .AddColumn("tags", fluss::DataType::Array(fluss::DataType::String().NotNull()))
+            .AddColumn("ids", fluss::DataType::Array(fluss::DataType::Int()).NotNull())
+            .AddColumn("nested",
+                       fluss::DataType::Array(
+                           fluss::DataType::Array(fluss::DataType::Int()).NotNull()))
+            .SetPrimaryKeys({"id"})
+            .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto info = table.GetTableInfo();
+
+    ASSERT_EQ(info.schema.columns.size(), 5u);
+    EXPECT_EQ(info.primary_keys, std::vector<std::string>{"id"});
+
+    // Primary key columns are forced NOT NULL by schema normalization.
+    EXPECT_EQ(info.schema.columns[0].data_type.id(), fluss::TypeId::Int);
+    EXPECT_FALSE(info.schema.columns[0].data_type.nullable());
+
+    // "name" STRING (nullable)
+    EXPECT_EQ(info.schema.columns[1].data_type.id(), fluss::TypeId::String);
+    EXPECT_TRUE(info.schema.columns[1].data_type.nullable());
+
+    // "tags" ARRAY<STRING NOT NULL> (outer nullable)
+    EXPECT_EQ(info.schema.columns[2].data_type.id(), fluss::TypeId::Array);
+    EXPECT_TRUE(info.schema.columns[2].data_type.nullable());
+    ASSERT_NE(info.schema.columns[2].data_type.element_type(), nullptr);
+    EXPECT_FALSE(info.schema.columns[2].data_type.element_type()->nullable());
+
+    // "ids" ARRAY<INT> NOT NULL (outer not null, element nullable)
+    EXPECT_EQ(info.schema.columns[3].data_type.id(), fluss::TypeId::Array);
+    EXPECT_FALSE(info.schema.columns[3].data_type.nullable());
+    ASSERT_NE(info.schema.columns[3].data_type.element_type(), nullptr);
+    EXPECT_TRUE(info.schema.columns[3].data_type.element_type()->nullable());
+
+    // "nested" ARRAY<ARRAY<INT> NOT NULL> (outer nullable, inner array not null)
+    EXPECT_EQ(info.schema.columns[4].data_type.id(), fluss::TypeId::Array);
+    EXPECT_TRUE(info.schema.columns[4].data_type.nullable());
+    ASSERT_NE(info.schema.columns[4].data_type.element_type(), nullptr);
+    EXPECT_FALSE(info.schema.columns[4].data_type.element_type()->nullable());
+    ASSERT_NE(info.schema.columns[4].data_type.element_type()->element_type(), nullptr);
+    EXPECT_TRUE(info.schema.columns[4].data_type.element_type()->element_type()->nullable());
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}

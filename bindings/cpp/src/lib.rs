@@ -85,13 +85,16 @@ mod ffi {
     struct FfiColumn {
         name: String,
         data_type: i32,
+        nullable: bool,
         comment: String,
         precision: i32,
         scale: i32,
         array_nesting: i32,
+        array_nullability: Vec<u8>,
         element_data_type: i32,
         element_precision: i32,
         element_scale: i32,
+        element_nullable: bool,
     }
 
     struct FfiSchema {

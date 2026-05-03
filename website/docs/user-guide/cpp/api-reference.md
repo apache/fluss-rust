@@ -492,7 +492,9 @@ Same array getters as [`RowView`](#array-getters-index-based) — `GetArraySize`
 | `id() -> TypeId`                    | Get the type ID                             |
 | `precision() -> int`               | Get precision (for Decimal/Timestamp types) |
 | `scale() -> int`                   | Get scale (for Decimal type)                |
+| `nullable() -> bool`               | Returns `true` if this type is nullable (default), `false` if `NOT NULL` |
 | `element_type() -> const DataType*` | Get element type (for Array type, nullptr otherwise) |
+| `NotNull() -> DataType`            | Returns a copy of this type with nullable set to `false` |
 
 ## `ArrayWriter`
 
