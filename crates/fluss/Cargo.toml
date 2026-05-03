@@ -52,7 +52,7 @@ clap = { workspace = true }
 crc32c = "0.6.8"
 linked-hash-map = "0.5.6"
 prost = "0.14"
-rand = "0.9.1"
+rand = "0.9.3"
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = "1.0"
