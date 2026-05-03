@@ -58,7 +58,7 @@ jobs:
           args: -o dist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-sdist
           path: bindings/python/dist
@@ -138,7 +138,7 @@ jobs:
           before-script-linux: *protoc-install
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target || 'native' }}
           path: bindings/python/dist
