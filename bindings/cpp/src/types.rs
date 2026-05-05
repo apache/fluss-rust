@@ -41,33 +41,43 @@ pub const DATA_TYPE_CHAR: i32 = 15;
 pub const DATA_TYPE_BINARY: i32 = 16;
 pub const DATA_TYPE_ARRAY: i32 = 17;
 
-struct FfiDataTypeSpec {
-    data_type: i32,
-    precision: u32,
-    scale: u32,
-    element_data_type: i32,
-    element_precision: u32,
-    element_scale: u32,
-    array_nesting: u32,
-    array_nullability: Vec<u8>,
-    nullable: bool,
-    element_nullable: bool,
+/// Separates scalar and array type specs so each variant only carries
+/// the fields it actually needs — no zeroed-out placeholders.
+enum FfiDataTypeSpec {
+    Scalar {
+        data_type: i32,
+        precision: u32,
+        scale: u32,
+        nullable: bool,
+    },
+    Array {
+        element_data_type: i32,
+        element_precision: u32,
+        element_scale: u32,
+        array_nesting: u32,
+        /// `nesting` entries for each ARRAY wrapper (outermost first) plus
+        /// one trailing entry for the leaf scalar. Length = `nesting + 1`.
+        array_nullability: Vec<u8>,
+    },
 }
 
 fn ffi_column_to_core_data_type(col: &ffi::FfiColumn) -> Result<fcore::metadata::DataType> {
-    let dt = ffi_data_type_to_core(FfiDataTypeSpec {
-        data_type: col.data_type,
-        precision: col.precision as u32,
-        scale: col.scale as u32,
-        element_data_type: col.element_data_type,
-        element_precision: col.element_precision as u32,
-        element_scale: col.element_scale as u32,
-        array_nesting: col.array_nesting.max(0) as u32,
-        array_nullability: col.array_nullability.clone(),
-        nullable: col.nullable,
-        element_nullable: col.element_nullable,
-    })?;
-    Ok(dt)
+    if col.data_type == DATA_TYPE_ARRAY {
+        ffi_data_type_to_core(FfiDataTypeSpec::Array {
+            element_data_type: col.element_data_type,
+            element_precision: col.element_precision as u32,
+            element_scale: col.element_scale as u32,
+            array_nesting: col.array_nesting.max(0) as u32,
+            array_nullability: col.array_nullability.clone(),
+        })
+    } else {
+        ffi_data_type_to_core(FfiDataTypeSpec::Scalar {
+            data_type: col.data_type,
+            precision: col.precision as u32,
+            scale: col.scale as u32,
+            nullable: col.nullable,
+        })
+    }
 }
 
 fn type_precision_scale(dt: &fcore::metadata::DataType) -> (i32, i32) {
@@ -86,8 +96,9 @@ struct FlattenedLeafType {
     leaf_type: i32,
     leaf_precision: i32,
     leaf_scale: i32,
+    /// `nesting` entries for ARRAY wrappers (outermost first) plus one
+    /// trailing entry for the leaf scalar. Length = `nesting + 1`.
     array_nullability: Vec<u8>,
-    leaf_nullable: bool,
 }
 
 fn flatten_array_leaf_type(dt: &fcore::metadata::DataType) -> Result<FlattenedLeafType> {
@@ -108,6 +119,7 @@ fn flatten_array_leaf_type(dt: &fcore::metadata::DataType) -> Result<FlattenedLe
             "Unsupported ARRAY leaf type for C++ bindings: {leaf}"
         ));
     }
+    array_nullability.push(u8::from(leaf.is_nullable()));
     let (leaf_precision, leaf_scale) = type_precision_scale(leaf);
     Ok(FlattenedLeafType {
         nesting,
@@ -115,35 +127,34 @@ fn flatten_array_leaf_type(dt: &fcore::metadata::DataType) -> Result<FlattenedLe
         leaf_precision,
         leaf_scale,
         array_nullability,
-        leaf_nullable: leaf.is_nullable(),
     })
 }
 
-fn build_array_type_from_leaf(spec: &FfiDataTypeSpec) -> Result<fcore::metadata::DataType> {
-    if spec.array_nesting == 0 {
+fn build_array_type_from_leaf(
+    element_data_type: i32,
+    element_precision: u32,
+    element_scale: u32,
+    array_nesting: u32,
+    array_nullability: &[u8],
+) -> Result<fcore::metadata::DataType> {
+    if array_nesting == 0 {
         return Err(anyhow!("ARRAY nesting must be >= 1"));
     }
-    // Construct the leaf scalar type. `nullable` is set to `spec.element_nullable`
-    // to control the leaf's own nullability. `element_nullable` is unused here
-    // because the leaf is a scalar (not an array), so it defaults to `true`.
-    let mut dt = ffi_data_type_to_core(FfiDataTypeSpec {
-        data_type: spec.element_data_type,
-        precision: spec.element_precision,
-        scale: spec.element_scale,
-        element_data_type: 0,
-        element_precision: 0,
-        element_scale: 0,
-        array_nesting: 0,
-        array_nullability: Vec::new(),
-        nullable: spec.element_nullable,
-        element_nullable: true,
+    let leaf_nullable = array_nullability
+        .get(array_nesting as usize)
+        .map(|v| *v != 0)
+        .unwrap_or(true);
+    let mut dt = ffi_data_type_to_core(FfiDataTypeSpec::Scalar {
+        data_type: element_data_type,
+        precision: element_precision,
+        scale: element_scale,
+        nullable: leaf_nullable,
     })?;
-    for i in (0..spec.array_nesting).rev() {
-        let nullable = spec
-            .array_nullability
+    for i in (0..array_nesting).rev() {
+        let nullable = array_nullability
             .get(i as usize)
-            .map(|value| *value != 0)
-            .unwrap_or_else(|| if i == 0 { spec.nullable } else { true });
+            .map(|v| *v != 0)
+            .unwrap_or(true);
         dt = fcore::metadata::DataType::Array(fcore::metadata::ArrayType::with_nullable(
             nullable, dt,
         ));
@@ -152,68 +163,58 @@ fn build_array_type_from_leaf(spec: &FfiDataTypeSpec) -> Result<fcore::metadata:
 }
 
 fn ffi_data_type_to_core(spec: FfiDataTypeSpec) -> Result<fcore::metadata::DataType> {
-    let result = match spec.data_type {
-        DATA_TYPE_BOOLEAN => Ok(fcore::metadata::DataTypes::boolean()),
-        DATA_TYPE_TINYINT => Ok(fcore::metadata::DataTypes::tinyint()),
-        DATA_TYPE_SMALLINT => Ok(fcore::metadata::DataTypes::smallint()),
-        DATA_TYPE_INT => Ok(fcore::metadata::DataTypes::int()),
-        DATA_TYPE_BIGINT => Ok(fcore::metadata::DataTypes::bigint()),
-        DATA_TYPE_FLOAT => Ok(fcore::metadata::DataTypes::float()),
-        DATA_TYPE_DOUBLE => Ok(fcore::metadata::DataTypes::double()),
-        DATA_TYPE_STRING => Ok(fcore::metadata::DataTypes::string()),
-        DATA_TYPE_BYTES => Ok(fcore::metadata::DataTypes::bytes()),
-        DATA_TYPE_DATE => Ok(fcore::metadata::DataTypes::date()),
-        DATA_TYPE_TIME => Ok(fcore::metadata::DataTypes::time()),
-        DATA_TYPE_TIMESTAMP => Ok(fcore::metadata::DataTypes::timestamp_with_precision(
-            spec.precision,
-        )),
-        DATA_TYPE_TIMESTAMP_LTZ => Ok(fcore::metadata::DataTypes::timestamp_ltz_with_precision(
-            spec.precision,
-        )),
-        DATA_TYPE_DECIMAL => {
-            let dt = fcore::metadata::DecimalType::new(spec.precision, spec.scale)?;
-            Ok(fcore::metadata::DataType::Decimal(dt))
-        }
-        DATA_TYPE_CHAR => Ok(fcore::metadata::DataTypes::char(spec.precision)),
-        DATA_TYPE_BINARY => Ok(fcore::metadata::DataTypes::binary(spec.precision as usize)),
-        DATA_TYPE_ARRAY => {
-            if spec.array_nesting > 0 {
-                return build_array_type_from_leaf(&spec);
-            } else {
-                // Legacy path for single-level arrays where array_nesting == 0.
-                // Modern code always sets array_nesting >= 1 and uses
-                // build_array_type_from_leaf above; this branch exists for
-                // backward compatibility with older metadata that only carried
-                // element_data_type without an explicit nesting count.
-                if spec.element_data_type == 0 {
-                    return Err(anyhow!("ARRAY requires element type metadata"));
+    match spec {
+        FfiDataTypeSpec::Scalar {
+            data_type,
+            precision,
+            scale,
+            nullable,
+        } => {
+            let dt = match data_type {
+                DATA_TYPE_BOOLEAN => fcore::metadata::DataTypes::boolean(),
+                DATA_TYPE_TINYINT => fcore::metadata::DataTypes::tinyint(),
+                DATA_TYPE_SMALLINT => fcore::metadata::DataTypes::smallint(),
+                DATA_TYPE_INT => fcore::metadata::DataTypes::int(),
+                DATA_TYPE_BIGINT => fcore::metadata::DataTypes::bigint(),
+                DATA_TYPE_FLOAT => fcore::metadata::DataTypes::float(),
+                DATA_TYPE_DOUBLE => fcore::metadata::DataTypes::double(),
+                DATA_TYPE_STRING => fcore::metadata::DataTypes::string(),
+                DATA_TYPE_BYTES => fcore::metadata::DataTypes::bytes(),
+                DATA_TYPE_DATE => fcore::metadata::DataTypes::date(),
+                DATA_TYPE_TIME => fcore::metadata::DataTypes::time(),
+                DATA_TYPE_TIMESTAMP => {
+                    fcore::metadata::DataTypes::timestamp_with_precision(precision)
                 }
-                // Same as build_array_type_from_leaf: construct the element as a
-                // scalar, so `element_nullable` is unused and defaults to `true`.
-                let element_type = ffi_data_type_to_core(FfiDataTypeSpec {
-                    data_type: spec.element_data_type,
-                    precision: spec.element_precision,
-                    scale: spec.element_scale,
-                    element_data_type: 0,
-                    element_precision: 0,
-                    element_scale: 0,
-                    array_nesting: 0,
-                    array_nullability: Vec::new(),
-                    nullable: spec.element_nullable,
-                    element_nullable: true,
-                })?;
-                let arr = fcore::metadata::ArrayType::with_nullable(spec.nullable, element_type);
-                return Ok(fcore::metadata::DataType::Array(arr));
+                DATA_TYPE_TIMESTAMP_LTZ => {
+                    fcore::metadata::DataTypes::timestamp_ltz_with_precision(precision)
+                }
+                DATA_TYPE_DECIMAL => {
+                    let dt = fcore::metadata::DecimalType::new(precision, scale)?;
+                    fcore::metadata::DataType::Decimal(dt)
+                }
+                DATA_TYPE_CHAR => fcore::metadata::DataTypes::char(precision),
+                DATA_TYPE_BINARY => fcore::metadata::DataTypes::binary(precision as usize),
+                _ => return Err(anyhow!("Unknown data type: {}", data_type)),
+            };
+            if nullable {
+                Ok(dt)
+            } else {
+                Ok(dt.as_non_nullable())
             }
         }
-        _ => Err(anyhow!("Unknown data type: {}", spec.data_type)),
-    };
-
-    let data_type = result?;
-    if spec.nullable {
-        Ok(data_type)
-    } else {
-        Ok(data_type.as_non_nullable())
+        FfiDataTypeSpec::Array {
+            element_data_type,
+            element_precision,
+            element_scale,
+            array_nesting,
+            ref array_nullability,
+        } => build_array_type_from_leaf(
+            element_data_type,
+            element_precision,
+            element_scale,
+            array_nesting,
+            array_nullability,
+        ),
     }
 }
 
@@ -262,7 +263,6 @@ fn core_column_to_ffi(col: &fcore::metadata::Column) -> ffi::FfiColumn {
         element_data_type: flat.as_ref().map_or(0, |f| f.leaf_type),
         element_precision: flat.as_ref().map_or(0, |f| f.leaf_precision),
         element_scale: flat.as_ref().map_or(0, |f| f.leaf_scale),
-        element_nullable: flat.is_none_or(|f| f.leaf_nullable),
     }
 }
 
@@ -416,31 +416,15 @@ pub fn element_type_from_ffi(
     array_nesting: u32,
 ) -> Result<fcore::metadata::DataType> {
     if array_nesting == 0 {
-        ffi_data_type_to_core(FfiDataTypeSpec {
+        ffi_data_type_to_core(FfiDataTypeSpec::Scalar {
             data_type: leaf_dt,
             precision,
             scale,
-            element_data_type: 0,
-            element_precision: 0,
-            element_scale: 0,
-            array_nesting: 0,
-            array_nullability: Vec::new(),
             nullable: true,
-            element_nullable: true,
         })
     } else {
-        build_array_type_from_leaf(&FfiDataTypeSpec {
-            data_type: DATA_TYPE_ARRAY,
-            precision: 0,
-            scale: 0,
-            element_data_type: leaf_dt,
-            element_precision: precision,
-            element_scale: scale,
-            array_nesting,
-            array_nullability: vec![1; array_nesting as usize],
-            nullable: true,
-            element_nullable: true,
-        })
+        let array_nullability = vec![1u8; (array_nesting + 1) as usize];
+        build_array_type_from_leaf(leaf_dt, precision, scale, array_nesting, &array_nullability)
     }
 }
 

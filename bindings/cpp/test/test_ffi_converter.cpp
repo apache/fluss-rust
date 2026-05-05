@@ -25,7 +25,7 @@
 namespace {
 
 fluss::ffi::FfiColumn MakeArrayColumn(int32_t nesting, int32_t element_type,
-                                      bool nullable = true, bool element_nullable = true,
+                                      bool nullable = true, bool leaf_nullable = true,
                                       std::vector<uint8_t> per_level_nullability = {}) {
     fluss::ffi::FfiColumn col;
     col.name = rust::String("bad_array");
@@ -43,11 +43,11 @@ fluss::ffi::FfiColumn MakeArrayColumn(int32_t nesting, int32_t element_type,
         for (int32_t i = 0; i < nesting; ++i) {
             col.array_nullability.push_back((i == 0 ? nullable : true) ? 1 : 0);
         }
+        col.array_nullability.push_back(leaf_nullable ? 1 : 0);
     }
     col.element_data_type = element_type;
     col.element_precision = 0;
     col.element_scale = 0;
-    col.element_nullable = element_nullable;
     return col;
 }
 
@@ -65,7 +65,6 @@ fluss::ffi::FfiColumn MakeScalarColumn(const char* name, fluss::TypeId type_id,
     col.element_data_type = 0;
     col.element_precision = 0;
     col.element_scale = 0;
-    col.element_nullable = true;
     return col;
 }
 
@@ -155,7 +154,8 @@ TEST(FfiConverterTest, ArrayNotNullElementRoundTrip) {
     fluss::Column col{"tags", fluss::DataType::Array(fluss::DataType::String().NotNull()), ""};
     auto ffi_col = fluss::utils::to_ffi_column(col);
     EXPECT_TRUE(ffi_col.nullable);
-    EXPECT_FALSE(ffi_col.element_nullable);
+    ASSERT_EQ(ffi_col.array_nullability.size(), 2u);
+    EXPECT_EQ(ffi_col.array_nullability[1], 0);
     auto back = fluss::utils::from_ffi_column(ffi_col);
     EXPECT_TRUE(back.data_type.nullable());
     ASSERT_NE(back.data_type.element_type(), nullptr);
@@ -166,7 +166,8 @@ TEST(FfiConverterTest, NotNullArrayNullableElementRoundTrip) {
     fluss::Column col{"ids", fluss::DataType::Array(fluss::DataType::Int()).NotNull(), ""};
     auto ffi_col = fluss::utils::to_ffi_column(col);
     EXPECT_FALSE(ffi_col.nullable);
-    EXPECT_TRUE(ffi_col.element_nullable);
+    ASSERT_EQ(ffi_col.array_nullability.size(), 2u);
+    EXPECT_EQ(ffi_col.array_nullability[1], 1);
     auto back = fluss::utils::from_ffi_column(ffi_col);
     EXPECT_FALSE(back.data_type.nullable());
     ASSERT_NE(back.data_type.element_type(), nullptr);
@@ -181,7 +182,8 @@ TEST(FfiConverterTest, NotNullArrayNotNullElementRoundTrip) {
     };
     auto ffi_col = fluss::utils::to_ffi_column(col);
     EXPECT_FALSE(ffi_col.nullable);
-    EXPECT_FALSE(ffi_col.element_nullable);
+    ASSERT_EQ(ffi_col.array_nullability.size(), 2u);
+    EXPECT_EQ(ffi_col.array_nullability[1], 0);
     auto back = fluss::utils::from_ffi_column(ffi_col);
     EXPECT_FALSE(back.data_type.nullable());
     ASSERT_NE(back.data_type.element_type(), nullptr);

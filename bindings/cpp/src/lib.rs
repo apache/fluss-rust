@@ -94,7 +94,6 @@ mod ffi {
         element_data_type: i32,
         element_precision: i32,
         element_scale: i32,
-        element_nullable: bool,
     }
 
     struct FfiSchema {
