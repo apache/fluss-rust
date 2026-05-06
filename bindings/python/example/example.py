@@ -294,8 +294,14 @@ async def main():
         except Exception as e:
             print(f"Could not convert to Pandas: {e}")
 
-        # TODO: support to_arrow_batch_reader()
-        # which is reserved for streaming use cases
+        # to_arrow_batch_reader() — returns a lazy PyArrow RecordBatchReader
+        batch_scanner_reader = await table.new_scan().create_record_batch_log_scanner()
+        batch_scanner_reader.subscribe_buckets(
+            {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+        )
+        arrow_reader = batch_scanner_reader.to_arrow_batch_reader()
+        reader_table = pa.Table.from_batches(list(arrow_reader), schema=arrow_reader.schema)
+        print(f"\nVia to_arrow_batch_reader(): {reader_table.num_rows} rows")
 
         # TODO: support to_duckdb()
 

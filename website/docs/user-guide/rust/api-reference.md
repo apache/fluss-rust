@@ -178,7 +178,32 @@ Unlike `RecordBatchLogScanner` which polls indefinitely, this reader stops autom
 | `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>`                                                | Get the next batch with bucket/offset metadata, or `None` when all buckets caught up |
 | `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>`                                          | Drain all batches (with metadata) until stopping offsets are satisfied |
 | `fn schema(&self) -> SchemaRef`                                                                              | Arrow schema for produced batches                        |
-| `fn to_record_batch_reader(self, handle) -> SyncRecordBatchLogReader`                                        | Sync adapter implementing `arrow::RecordBatchReader`     |
+| `fn to_record_batch_reader(self, handle: tokio::runtime::Handle) -> SyncRecordBatchLogReader`                | Sync adapter implementing `arrow::RecordBatchReader` (see below) |
+
+## `SyncRecordBatchLogReader`
+
+Synchronous adapter for `RecordBatchLogReader`. Created via
+`RecordBatchLogReader::to_record_batch_reader(handle)`.
+
+Implements both [`Iterator`] and [`arrow::record_batch::RecordBatchReader`], so it
+plugs into the wider Arrow ecosystem — FFI, PyArrow's
+`pa.RecordBatchReader.from_batches`, the C++ Arrow `RecordBatchReader` interface,
+DataFusion sources, etc.
+
+Each `next()` call drives the underlying async reader via
+`tokio::runtime::Handle::block_on`. **Do not call from inside a Tokio worker
+thread that belongs to the same runtime** — nested `block_on` panics. Prefer
+`RecordBatchLogReader::next_batch` in async Rust code; use this adapter only at
+sync/FFI boundaries.
+
+Bucket and offset metadata carried by `ScanBatch` is **dropped** here, because
+the Arrow trait contract yields plain `RecordBatch`. If you need offsets or
+bucket identity per batch, use `next_batch` instead.
+
+| Method                                                          | Description                                      |
+|-----------------------------------------------------------------|--------------------------------------------------|
+| `fn next(&mut self) -> Option<Result<RecordBatch, ArrowError>>` | Iterator: next batch, or `None` when caught up   |
+| `fn schema(&self) -> SchemaRef`                                 | Arrow schema for produced batches                |
 
 ## `ScanRecord`
 

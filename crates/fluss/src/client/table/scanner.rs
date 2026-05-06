@@ -660,6 +660,43 @@ impl RecordBatchLogScanner {
             inner: Arc::clone(&self.inner),
         }
     }
+
+    /// Synchronous, infallible counterpart to [`unsubscribe`](Self::unsubscribe).
+    ///
+    /// Exists so [`crate::client::RecordBatchLogReader`]'s `Drop` impl can
+    /// release lingering subscriptions without `.await`. The async version is
+    /// also synchronous under the hood (it only acquires a lock and removes
+    /// from a map — no IO), so this exposes the same work without the
+    /// async wrapper. Silently no-ops on partitioned/non-partitioned mismatch
+    /// because `Drop` cannot return errors; callers must pick the correct
+    /// variant.
+    ///
+    /// **Not intended for general use** — prefer the async [`unsubscribe`].
+    #[doc(hidden)]
+    pub fn unsubscribe_sync(&self, bucket: i32) {
+        if self.inner.is_partitioned_table {
+            return;
+        }
+        let table_bucket = TableBucket::new(self.inner.table_id, bucket);
+        self.inner
+            .log_scanner_status
+            .unassign_scan_buckets(from_ref(&table_bucket));
+    }
+
+    /// Synchronous, infallible counterpart to
+    /// [`unsubscribe_partition`](Self::unsubscribe_partition). See
+    /// [`unsubscribe_sync`](Self::unsubscribe_sync) for rationale.
+    #[doc(hidden)]
+    pub fn unsubscribe_partition_sync(&self, partition_id: PartitionId, bucket: i32) {
+        if !self.inner.is_partitioned_table {
+            return;
+        }
+        let table_bucket =
+            TableBucket::new_with_partition(self.inner.table_id, Some(partition_id), bucket);
+        self.inner
+            .log_scanner_status
+            .unassign_scan_buckets(from_ref(&table_bucket));
+    }
 }
 
 struct LogFetcher {

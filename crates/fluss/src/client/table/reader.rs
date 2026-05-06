@@ -111,6 +111,15 @@ impl RecordBatchLogReader {
     }
 
     /// Create a reader with explicit stopping offsets per bucket.
+    ///
+    /// # NOTE: Every key in `stopping_offsets` **must** correspond to a bucket that is
+    /// currently subscribed on the `scanner`. If a stopping offset refers to a
+    /// bucket that will never appear in polled batches, the reader will loop
+    /// indefinitely waiting for data that never arrives.
+    ///
+    /// Use [`new_until_latest`](Self::new_until_latest) for the common case;
+    /// it queries the server and builds a validated stopping-offset map
+    /// automatically.
     pub fn new_until_offsets(
         scanner: RecordBatchLogScanner,
         stopping_offsets: HashMap<TableBucket, i64>,
@@ -196,6 +205,54 @@ impl RecordBatchLogReader {
         SyncRecordBatchLogReader {
             reader: self,
             handle,
+        }
+    }
+}
+
+/// Best-effort cleanup when the reader is dropped before all buckets reach
+/// their stopping offsets (early `break`, an exception in the consumer, etc.).
+///
+/// Why this matters even though we own the scanner:
+///
+/// In pure Rust, dropping the reader drops the owned `RecordBatchLogScanner`,
+/// which decrements the `Arc<LogScannerInner>` to zero and frees the inner
+/// state. Subscriptions die with it, so this `Drop` is a no-op in that path.
+///
+/// In the binding layer (Python today, C++/Elixir later), the binding holds
+/// its own `Arc<LogScannerInner>` and uses
+/// [`RecordBatchLogScanner::new_shared_handle`] to obtain a second handle for
+/// the reader. When the reader is dropped mid-iteration the inner state stays
+/// alive — and any buckets the reader hadn't yet completed remain in
+/// `LogScannerStatus.bucket_status_map`. The user's next operations on the
+/// original `LogScanner` would then see "ghost" subscriptions (extra buckets
+/// being polled, stale offsets, etc.).
+///
+/// The `next_batch` loop already calls `unsubscribe` on each completed bucket,
+/// so `stopping_offsets` accurately reflects the still-active set when `Drop`
+/// runs. We unsubscribe each remaining bucket synchronously via the
+/// `_sync` escape hatches (the underlying `LogScannerStatus` ops don't await),
+/// so this is safe to call from any context — sync, async, a Tokio worker, or
+/// a Python thread holding the GIL.
+///
+/// Caveats:
+/// - Batches already buffered in `LogFetcher.log_fetch_buffer` for an
+///   unsubscribed bucket are not drained here. They'll either be filtered out
+///   by the next `RecordBatchLogReader` (via the "bucket not in
+///   stopping_offsets" branch) or surface to a direct `poll_arrow` caller, who
+///   was sharing scanner state in the first place.
+/// - `Drop` cannot return errors. The `_sync` variants no-op on
+///   partitioned/non-partitioned mismatch, but that mismatch is unreachable
+///   here because the reader was constructed from this scanner and inherited
+///   its partition mode.
+impl Drop for RecordBatchLogReader {
+    fn drop(&mut self) {
+        for (tb, _) in self.stopping_offsets.drain() {
+            if let Some(partition_id) = tb.partition_id() {
+                self.scanner
+                    .unsubscribe_partition_sync(partition_id, tb.bucket_id());
+            } else {
+                self.scanner.unsubscribe_sync(tb.bucket_id());
+            }
         }
     }
 }
@@ -408,8 +465,10 @@ fn filter_batches(
 }
 
 // TODO: Add an end-to-end test with `FlussTestingCluster` (feature
-// `integration_tests`) covering `new_until_latest`, partitioned tables, and
-// `new_until_offsets` stopping semantics.
+// `integration_tests`) covering `new_until_latest`, partitioned tables,
+// `new_until_offsets` stopping semantics, and the `Drop` cleanup path
+// (drop the reader mid-iteration; assert the original scanner sees no
+// leftover subscriptions for the still-active buckets).
 #[cfg(test)]
 mod tests {
     use super::*;

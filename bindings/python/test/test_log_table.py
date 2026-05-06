@@ -388,6 +388,49 @@ async def test_to_arrow_and_to_pandas(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def test_to_arrow_batch_reader(connection, admin):
+    """Test to_arrow_batch_reader() returns a lazy PyArrow RecordBatchReader."""
+    table_path = fluss.TablePath("fluss", "py_test_to_arrow_batch_reader")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema([pa.field("id", pa.int32()), pa.field("name", pa.string())])
+    )
+    table_descriptor = fluss.TableDescriptor(schema)
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+
+    table = await connection.get_table(table_path)
+    writer = table.new_append().create_writer()
+
+    pa_schema = pa.schema([pa.field("id", pa.int32()), pa.field("name", pa.string())])
+    writer.write_arrow_batch(
+        pa.RecordBatch.from_arrays(
+            [pa.array([10, 20, 30], type=pa.int32()), pa.array(["x", "y", "z"])],
+            schema=pa_schema,
+        )
+    )
+    await writer.flush()
+
+    num_buckets = (await admin.get_table_info(table_path)).num_buckets
+
+    scanner = await table.new_scan().create_record_batch_log_scanner()
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+    reader = scanner.to_arrow_batch_reader()
+    assert isinstance(reader, pa.RecordBatchReader)
+    assert reader.schema == pa_schema
+
+    batches = list(reader)
+    total_rows = sum(b.num_rows for b in batches)
+    assert total_rows == 3
+
+    result_table = pa.Table.from_batches(batches, schema=pa_schema)
+    assert result_table.column("id").to_pylist() == [10, 20, 30]
+    assert result_table.column("name").to_pylist() == ["x", "y", "z"]
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
 async def test_partitioned_table_append_scan(connection, admin, wait_for_table_ready):
     """Test append and scan on a partitioned log table."""
     table_path = fluss.TablePath("fluss", "py_test_partitioned_log_append")
