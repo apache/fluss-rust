@@ -20,6 +20,7 @@ use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
 use bytes::{Buf, BufMut};
 
+mod api_versions;
 mod authenticate;
 mod create_database;
 mod create_partition;
@@ -49,6 +50,7 @@ mod table_exists;
 mod update_metadata;
 
 pub use crate::rpc::RpcError;
+pub use api_versions::*;
 pub use authenticate::*;
 pub use create_database::*;
 pub use create_partition::*;

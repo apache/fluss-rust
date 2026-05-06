@@ -115,6 +115,12 @@ pub enum Error {
 
     #[snafu(visibility(pub(crate)), display("Fluss API Error: {}.", api_error))]
     FlussAPIError { api_error: ApiError },
+
+    #[snafu(
+        visibility(pub(crate)),
+        display("Unsupported API version: {}.", message)
+    )]
+    UnsupportedVersion { message: String },
 }
 
 /// Convenience constructors for API errors that may be raised client-side.

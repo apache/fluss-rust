@@ -22,13 +22,15 @@ use crate::metrics::{
     CLIENT_REQUESTS_IN_FLIGHT, CLIENT_REQUESTS_TOTAL, CLIENT_RESPONSES_TOTAL, LABEL_API_KEY,
     api_key_label,
 };
+use crate::proto::PbApiVersion;
+use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::error::RpcError;
 use crate::rpc::error::RpcError::ConnectionError;
 use crate::rpc::frame::{AsyncMessageRead, AsyncMessageWrite};
 use crate::rpc::message::{
-    REQUEST_HEADER_LENGTH, ReadVersionedType, RequestBody, RequestHeader, ResponseHeader,
-    WriteVersionedType,
+    ApiVersionsRequest, REQUEST_HEADER_LENGTH, ReadVersionedType, RequestBody, RequestHeader,
+    ResponseHeader, WriteVersionedType,
 };
 use crate::rpc::transport::Transport;
 use futures::future::BoxFuture;
@@ -69,6 +71,89 @@ impl fmt::Debug for SaslConfig {
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
             .finish()
+    }
+}
+
+/// Represents the negotiated API versions between the client and a server node.
+/// Built from the server's `ApiVersionsResponse` by intersecting each API's
+/// client-supported range with the server-supported range, keeping the highest
+/// usable version.
+#[derive(Clone, Debug)]
+pub struct ServerApiVersions {
+    versions: HashMap<ApiKey, Result<ApiVersion, String>>,
+}
+
+impl ServerApiVersions {
+    /// Build from the server's advertised API version list.
+    pub fn new(server_versions: &[PbApiVersion]) -> Self {
+        let mut versions = HashMap::new();
+        for sv in server_versions {
+            let api_key = ApiKey::from(sv.api_key as i16);
+            // Skip unknown API keys — the client does not support them.
+            let client_range = match api_key.supported_versions() {
+                Some(range) => range,
+                None => continue,
+            };
+            let server_min = sv.min_version as i16;
+            let server_max = sv.max_version as i16;
+            let min_version = client_range.min().0.max(server_min);
+            let max_version = client_range.max().0.min(server_max);
+            if min_version > max_version {
+                versions.insert(
+                    api_key,
+                    Err(format!(
+                        "The server does not support {:?} with version in range [{},{}]. \
+                         The supported range is [{},{}].",
+                        api_key,
+                        client_range.min(),
+                        client_range.max(),
+                        server_min,
+                        server_max,
+                    )),
+                );
+            } else {
+                versions.insert(api_key, Ok(ApiVersion(max_version)));
+            }
+        }
+        Self { versions }
+    }
+
+    /// Get the negotiated (highest usable) version for a given API key.
+    pub fn highest_available_version(&self, api_key: ApiKey) -> Result<ApiVersion, Error> {
+        match self.versions.get(&api_key) {
+            Some(Ok(version)) => Ok(*version),
+            Some(Err(msg)) => Err(Error::UnsupportedVersion {
+                message: msg.clone(),
+            }),
+            None => Err(Error::UnsupportedVersion {
+                message: format!("The server does not support {:?}", api_key),
+            }),
+        }
+    }
+}
+
+/// Resolve the API version to use for a given API key.
+///
+/// The `ApiVersions` request itself always uses `ApiVersion(0)` since it is
+/// sent before the version negotiation handshake.
+/// For all other requests, the handshake must have been completed; otherwise
+/// an error is returned to prevent silent fallback to an incorrect version.
+fn resolve_api_version_for(
+    api_versions: Option<&ServerApiVersions>,
+    api_key: ApiKey,
+) -> Result<ApiVersion, Error> {
+    if api_key == ApiKey::ApiVersion {
+        return Ok(ApiVersion(0));
+    }
+    match api_versions {
+        Some(versions) => versions.highest_available_version(api_key),
+        None => Err(Error::IllegalArgument {
+            message: format!(
+                "API version negotiation has not been performed yet; \
+                 cannot resolve version for {:?}",
+                api_key
+            ),
+        }),
     }
 }
 
@@ -142,11 +227,23 @@ impl RpcClient {
         );
         let connection = ServerConnection::new(messenger);
 
+        // Negotiate API versions (must happen before authentication).
+        Self::check_api_versions(&connection).await?;
+
         if let Some(ref sasl) = self.sasl_config {
             Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
         }
 
         Ok(connection)
+    }
+
+    /// Send an `ApiVersionsRequest` and store the negotiated versions on the connection.
+    async fn check_api_versions(connection: &ServerConnection) -> Result<(), Error> {
+        let request = ApiVersionsRequest::new("fluss-rust", env!("CARGO_PKG_VERSION"));
+        let response = connection.request(request).await?;
+        let api_versions = ServerApiVersions::new(&response.api_versions);
+        *connection.api_versions.lock() = Some(api_versions);
+        Ok(())
     }
 
     /// Perform SASL/PLAIN authentication handshake.
@@ -325,6 +422,10 @@ pub struct ServerConnectionInner<RW> {
 
     state: Arc<Mutex<ConnectionState>>,
 
+    /// Negotiated API versions for this connection.
+    /// `None` until the ApiVersions handshake completes.
+    api_versions: Mutex<Option<ServerApiVersions>>,
+
     join_handle: JoinHandle<()>,
 }
 
@@ -396,8 +497,14 @@ where
             client_id,
             request_id: AtomicI32::new(0),
             state,
+            api_versions: Mutex::new(None),
             join_handle,
         }
+    }
+
+    fn resolve_api_version(&self, api_key: ApiKey) -> Result<ApiVersion, Error> {
+        let guard = self.api_versions.lock();
+        resolve_api_version_for(guard.as_ref(), api_key)
     }
 
     fn is_poisoned(&self) -> bool {
@@ -410,17 +517,18 @@ where
         R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
         R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
     {
+        let negotiated = self.resolve_api_version(R::API_KEY)?;
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
-            request_api_version: ApiVersion(0),
+            request_api_version: negotiated,
             request_id,
             client_id: Some(String::from(self.client_id.as_ref())),
         };
 
         let header_version = ApiVersion(0);
 
-        let body_api_version = ApiVersion(0);
+        let body_api_version = negotiated;
 
         let mut buf = Vec::new();
         // write header
@@ -873,6 +981,11 @@ mod tests {
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }]));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let request_before = counter_for_label(&before, CLIENT_REQUESTS_TOTAL, "produce_log");
@@ -913,6 +1026,11 @@ mod tests {
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1012,
+            min_version: 0,
+            max_version: 0,
+        }]));
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let request_sum_before = counter_sum(&before, CLIENT_REQUESTS_TOTAL);
         let response_sum_before = counter_sum(&before, CLIENT_RESPONSES_TOTAL);
@@ -949,6 +1067,11 @@ mod tests {
         let (client, server) = tokio::io::duplex(64);
         drop(server); // force write failure on request path
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }]));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let request_before = counter_for_label(&before, CLIENT_REQUESTS_TOTAL, "produce_log");
@@ -997,6 +1120,11 @@ mod tests {
         tokio::spawn(mock_error_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }]));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let response_before = counter_for_label(&before, CLIENT_RESPONSES_TOTAL, "produce_log");
@@ -1028,6 +1156,82 @@ mod tests {
         assert_eq!(
             inflight_after, 0.0,
             "in-flight gauge must return to zero after API error"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_api_versions_negotiation() {
+        assert!(
+            resolve_api_version_for(None, ApiKey::ProduceLog)
+                .unwrap_err()
+                .to_string()
+                .contains("API version negotiation has not been performed yet;")
+        );
+
+        let server_versions = vec![
+            // PutKv: server v0..v3, client v0 only (v1 key encoding not yet implemented) → negotiated v0
+            PbApiVersion {
+                api_key: 1016,
+                min_version: 0,
+                max_version: 3,
+            },
+            // ProduceLog: server v0..v2, client v0 only → negotiated v0
+            PbApiVersion {
+                api_key: 1014,
+                min_version: 0,
+                max_version: 2,
+            },
+            // Disjoint: server v5..v7, client v0 only → error
+            PbApiVersion {
+                api_key: 1015,
+                min_version: 5,
+                max_version: 7,
+            },
+            // Unknown key (9999) → skipped
+            PbApiVersion {
+                api_key: 9999,
+                min_version: 0,
+                max_version: 5,
+            },
+        ];
+        let negotiated = ServerApiVersions::new(&server_versions);
+
+        // Successful negotiation cases
+        assert_eq!(
+            negotiated.highest_available_version(ApiKey::PutKv).unwrap(),
+            ApiVersion(0)
+        );
+        assert_eq!(
+            negotiated
+                .highest_available_version(ApiKey::ProduceLog)
+                .unwrap(),
+            ApiVersion(0)
+        );
+
+        // Disjoint range → error
+        assert!(
+            negotiated
+                .highest_available_version(ApiKey::FetchLog)
+                .unwrap_err()
+                .to_string()
+                .contains(&format!(
+                    "The server does not support {:?}",
+                    ApiKey::FetchLog
+                ))
+        );
+
+        // Unknown key is skipped → not in map → error
+        assert!(
+            negotiated
+                .highest_available_version(ApiKey::Unknown(9999))
+                .is_err()
+        );
+
+        // Key not advertised by server → error
+        assert!(
+            ServerApiVersions::new(&[])
+                .highest_available_version(ApiKey::FetchLog)
+                .is_err()
         );
     }
 }
