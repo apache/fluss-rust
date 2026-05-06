@@ -28,11 +28,15 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use strum_macros::EnumString;
 
+/// Sentinel for a column whose stable id has not yet been assigned.
+pub const UNKNOWN_COLUMN_ID: i32 = -1;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Column {
     name: String,
     data_type: DataType,
     comment: Option<String>,
+    id: i32,
 }
 
 impl Column {
@@ -41,6 +45,7 @@ impl Column {
             name: name.into(),
             data_type,
             comment: None,
+            id: UNKNOWN_COLUMN_ID,
         }
     }
 
@@ -54,7 +59,13 @@ impl Column {
             name: self.name.clone(),
             data_type: data_type.clone(),
             comment: self.comment.clone(),
+            id: self.id,
         }
+    }
+
+    pub fn with_id(mut self, id: i32) -> Self {
+        self.id = id;
+        self
     }
 
     // Getters...
@@ -68,6 +79,12 @@ impl Column {
 
     pub fn comment(&self) -> Option<&str> {
         self.comment.as_deref()
+    }
+
+    /// Returns the stable column id, or [`UNKNOWN_COLUMN_ID`] when the
+    /// id has not yet been assigned by a [`SchemaBuilder`].
+    pub fn id(&self) -> i32 {
+        self.id
     }
 }
 
@@ -149,6 +166,31 @@ impl Schema {
 
     pub fn auto_increment_col_names(&self) -> &Vec<String> {
         &self.auto_increment_col_names
+    }
+}
+
+/// A schema together with its server-assigned version id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaInfo {
+    schema: Schema,
+    schema_id: i32,
+}
+
+impl SchemaInfo {
+    pub fn new(schema: Schema, schema_id: i32) -> Self {
+        Self { schema, schema_id }
+    }
+
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    pub fn schema_id(&self) -> i32 {
+        self.schema_id
+    }
+
+    pub fn into_parts(self) -> (Schema, i32) {
+        (self.schema, self.schema_id)
     }
 }
 
@@ -236,6 +278,7 @@ impl SchemaBuilder {
 
     pub fn build(&self) -> Result<Schema> {
         let columns = Self::normalize_columns(&self.columns, self.primary_key.as_ref())?;
+        let columns = Self::assign_column_ids(columns)?;
 
         let column_names: HashSet<_> = columns.iter().map(|c| &c.name).collect();
         for auto_inc_col in &self.auto_increment_col_names {
@@ -263,6 +306,42 @@ impl SchemaBuilder {
             row_type: RowType::new(data_fields),
             auto_increment_col_names: self.auto_increment_col_names.clone(),
         })
+    }
+
+    /// All-or-none: preserve ids if every column has one, auto-assign
+    /// 0..N-1 if none do, error on mixed input. When preserving ids,
+    /// also reject duplicates and negative-but-not-sentinel values.
+    fn assign_column_ids(columns: Vec<Column>) -> Result<Vec<Column>> {
+        let with_id = columns.iter().filter(|c| c.id != UNKNOWN_COLUMN_ID).count();
+        if with_id == 0 {
+            return Ok(columns
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| c.with_id(i as i32))
+                .collect());
+        }
+        if with_id != columns.len() {
+            return Err(IllegalArgument {
+                message: "All columns must have an id assigned, or none of them must.".to_string(),
+            });
+        }
+        let mut seen: HashSet<i32> = HashSet::with_capacity(columns.len());
+        for col in &columns {
+            if col.id < 0 {
+                return Err(IllegalArgument {
+                    message: format!(
+                        "Column '{}' has invalid id {}; ids must be non-negative",
+                        col.name, col.id
+                    ),
+                });
+            }
+            if !seen.insert(col.id) {
+                return Err(IllegalArgument {
+                    message: format!("Duplicate column id {} in schema", col.id),
+                });
+            }
+        }
+        Ok(columns)
     }
 
     fn normalize_columns(
@@ -662,7 +741,7 @@ impl LogFormat {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, EnumString)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, EnumString)]
 pub enum KvFormat {
     INDEXED,
     COMPACTED,

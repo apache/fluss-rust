@@ -45,6 +45,6 @@ impl ReadContext for TestReadContext {
     fn get_row_decoder(&self, _schema_id: i16) -> Result<Arc<dyn RowDecoder>> {
         // Directly create decoder from data types - no Schema needed!
         let row_type = RowType::with_data_types(self.data_types.clone());
-        RowDecoderFactory::create(self.kv_format.clone(), row_type)
+        RowDecoderFactory::create(self.kv_format, row_type)
     }
 }

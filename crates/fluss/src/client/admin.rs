@@ -19,13 +19,13 @@ use crate::client::metadata::Metadata;
 use crate::cluster::ServerNode;
 use crate::metadata::{
     DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, PartitionInfo, PartitionSpec,
-    PhysicalTablePath, TableBucket, TableDescriptor, TableInfo, TablePath,
+    PhysicalTablePath, Schema, SchemaInfo, TableBucket, TableDescriptor, TableInfo, TablePath,
 };
 use crate::rpc::message::{
     CreateDatabaseRequest, CreatePartitionRequest, CreateTableRequest, DatabaseExistsRequest,
     DropDatabaseRequest, DropPartitionRequest, DropTableRequest, GetDatabaseInfoRequest,
-    GetLatestLakeSnapshotRequest, GetTableRequest, ListDatabasesRequest, ListPartitionInfosRequest,
-    ListTablesRequest, TableExistsRequest,
+    GetLatestLakeSnapshotRequest, GetTableRequest, GetTableSchemaRequestMsg, ListDatabasesRequest,
+    ListPartitionInfosRequest, ListTablesRequest, TableExistsRequest,
 };
 use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
@@ -109,6 +109,27 @@ impl FlussAdmin {
             .request(DropTableRequest::new(table_path, ignore_if_not_exists))
             .await?;
         Ok(())
+    }
+
+    /// Fetch the schema for `table_path` at the given `schema_id`. Pass
+    /// `None` to request the latest.
+    pub async fn get_table_schema(
+        &self,
+        table_path: &TablePath,
+        schema_id: Option<i32>,
+    ) -> Result<SchemaInfo> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(GetTableSchemaRequestMsg::new(table_path, schema_id))
+            .await?;
+
+        let schema_node: serde_json::Value = serde_json::from_slice(&response.schema_json)
+            .map_err(|e| Error::JsonSerdeError {
+                message: format!("Failed to parse schema_json: {e}"),
+            })?;
+        let schema = Schema::deserialize_json(&schema_node)?;
+        Ok(SchemaInfo::new(schema, response.schema_id))
     }
 
     pub async fn get_table_info(&self, table_path: &TablePath) -> Result<TableInfo> {

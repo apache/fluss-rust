@@ -52,11 +52,12 @@ clap = { workspace = true }
 crc32c = "0.6.8"
 linked-hash-map = "0.5.6"
 prost = "0.14"
-rand = "0.9.1"
+rand = "0.9.3"
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = "1.0"
 log = { version = "0.4", features = ["kv_std"] }
+metrics = { workspace = true }
 tokio = { workspace = true }
 parking_lot = "0.12"
 bytes = "1.10.1"
@@ -79,6 +80,7 @@ strum_macros = "0.26"
 jiff = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
+metrics-util = "0.20"
 fluss-test-cluster = { path = "../fluss-test-cluster" }
 
 [build-dependencies]

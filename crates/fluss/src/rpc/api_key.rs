@@ -29,6 +29,7 @@ pub enum ApiKey {
     ListTables,                 // 1008
     ListPartitionInfos,         // 1009
     TableExists,                // 1010
+    GetTableSchema,             // 1011
     MetaData,                   // 1012
     ProduceLog,                 // 1014
     FetchLog,                   // 1015
@@ -39,6 +40,7 @@ pub enum ApiKey {
     InitWriter,                 // 1026
     GetLatestLakeSnapshot,      // 1032
     LimitScan,                  // 1033
+    PrefixLookup,               // 1034
     GetDatabaseInfo,            // 1035
     CreatePartition,            // 1036
     DropPartition,              // 1037
@@ -59,6 +61,7 @@ impl From<i16> for ApiKey {
             1008 => ApiKey::ListTables,
             1009 => ApiKey::ListPartitionInfos,
             1010 => ApiKey::TableExists,
+            1011 => ApiKey::GetTableSchema,
             1012 => ApiKey::MetaData,
             1014 => ApiKey::ProduceLog,
             1015 => ApiKey::FetchLog,
@@ -69,6 +72,7 @@ impl From<i16> for ApiKey {
             1026 => ApiKey::InitWriter,
             1032 => ApiKey::GetLatestLakeSnapshot,
             1033 => ApiKey::LimitScan,
+            1034 => ApiKey::PrefixLookup,
             1035 => ApiKey::GetDatabaseInfo,
             1036 => ApiKey::CreatePartition,
             1037 => ApiKey::DropPartition,
@@ -92,6 +96,7 @@ impl From<ApiKey> for i16 {
             ApiKey::ListTables => 1008,
             ApiKey::ListPartitionInfos => 1009,
             ApiKey::TableExists => 1010,
+            ApiKey::GetTableSchema => 1011,
             ApiKey::MetaData => 1012,
             ApiKey::ProduceLog => 1014,
             ApiKey::FetchLog => 1015,
@@ -102,6 +107,7 @@ impl From<ApiKey> for i16 {
             ApiKey::InitWriter => 1026,
             ApiKey::GetLatestLakeSnapshot => 1032,
             ApiKey::LimitScan => 1033,
+            ApiKey::PrefixLookup => 1034,
             ApiKey::GetDatabaseInfo => 1035,
             ApiKey::CreatePartition => 1036,
             ApiKey::DropPartition => 1037,
@@ -128,6 +134,7 @@ mod tests {
             (1008, ApiKey::ListTables),
             (1009, ApiKey::ListPartitionInfos),
             (1010, ApiKey::TableExists),
+            (1011, ApiKey::GetTableSchema),
             (1012, ApiKey::MetaData),
             (1014, ApiKey::ProduceLog),
             (1015, ApiKey::FetchLog),
@@ -138,6 +145,7 @@ mod tests {
             (1026, ApiKey::InitWriter),
             (1032, ApiKey::GetLatestLakeSnapshot),
             (1033, ApiKey::LimitScan),
+            (1034, ApiKey::PrefixLookup),
             (1035, ApiKey::GetDatabaseInfo),
             (1036, ApiKey::CreatePartition),
             (1037, ApiKey::DropPartition),

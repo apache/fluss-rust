@@ -212,4 +212,8 @@ if let Some(row) = result.get_single_row()? {
 }
 ```
 
+### Prefix Lookup on Partitioned Tables
+
+See [Prefix Lookup — Partitioned Table](./prefix-lookup.md#partitioned-table) for details and a full runnable example.
+
 > **Note:** Scanning partitioned primary key tables is not supported. Use lookup operations instead.

@@ -12,10 +12,10 @@ config = fluss.Config({"bootstrap.servers": "127.0.0.1:9123"})
 conn = await fluss.FlussConnection.create(config)
 ```
 
-The connection also supports context managers:
+The connection also supports async context managers:
 
 ```python
-with await fluss.FlussConnection.create(config) as conn:
+async with await fluss.FlussConnection.create(config) as conn:
     ...
 ```
 
@@ -45,5 +45,5 @@ conn = await fluss.FlussConnection.create(config)
 Remember to close the connection when done:
 
 ```python
-conn.close()
+await conn.close()
 ```

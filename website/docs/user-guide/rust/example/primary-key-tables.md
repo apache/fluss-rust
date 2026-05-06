@@ -120,3 +120,7 @@ let result = lookuper.lookup(&key).await?;
 let batch = result.to_record_batch()?;
 println!("Rows: {}", batch.num_rows());
 ```
+
+## Prefix Lookup
+
+To fetch all rows sharing a common primary-key prefix (by choosing a bucket key that's a strict prefix of the primary key), see [Prefix Lookup](./prefix-lookup.md).

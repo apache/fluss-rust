@@ -15,77 +15,116 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Lookup query representation for batching lookup operations.
-
+use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TablePath};
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-/// Represents a single lookup query that will be batched and sent to the server.
-pub struct LookupQuery {
-    /// The table path for this lookup
+pub struct LookupQuery<T> {
     table_path: TablePath,
-    /// The table bucket for this lookup
     table_bucket: TableBucket,
-    /// The encoded primary key bytes
     key: Bytes,
-    /// Channel to send the result back to the caller
-    result_tx: Option<oneshot::Sender<Result<Option<Vec<u8>>, crate::error::Error>>>,
-    /// Number of retry attempts
     retries: i32,
+    result_tx: Option<oneshot::Sender<Result<T>>>,
 }
 
-impl LookupQuery {
-    /// Creates a new lookup query.
+impl<T> LookupQuery<T> {
     pub fn new(
         table_path: TablePath,
         table_bucket: TableBucket,
         key: Bytes,
-        result_tx: oneshot::Sender<Result<Option<Vec<u8>>, crate::error::Error>>,
+        result_tx: oneshot::Sender<Result<T>>,
     ) -> Self {
         Self {
             table_path,
             table_bucket,
             key,
-            result_tx: Some(result_tx),
             retries: 0,
+            result_tx: Some(result_tx),
         }
     }
 
-    /// Returns the table path.
     pub fn table_path(&self) -> &TablePath {
         &self.table_path
     }
 
-    /// Returns the table bucket.
     pub fn table_bucket(&self) -> &TableBucket {
         &self.table_bucket
     }
 
-    /// Returns the encoded key bytes.
     pub fn key(&self) -> &Bytes {
         &self.key
     }
 
-    /// Returns the current retry count.
     pub fn retries(&self) -> i32 {
         self.retries
     }
 
-    /// Increments the retry counter.
     pub fn increment_retries(&mut self) {
         self.retries += 1;
     }
 
-    /// Completes the lookup with a result.
-    pub fn complete(&mut self, result: Result<Option<Vec<u8>>, crate::error::Error>) {
+    pub fn is_done(&self) -> bool {
+        self.result_tx.is_none()
+    }
+
+    pub fn complete(&mut self, result: Result<T>) {
         if let Some(tx) = self.result_tx.take() {
             let _ = tx.send(result);
         }
     }
 
-    /// Returns true if the result has already been sent.
-    pub fn is_done(&self) -> bool {
-        self.result_tx.is_none()
+    pub fn complete_with_error(&mut self, error: Error) {
+        self.complete(Err(error));
+    }
+}
+
+pub type PrimaryLookupQuery = LookupQuery<Option<Vec<u8>>>;
+pub type PrefixLookupQuery = LookupQuery<Vec<Vec<u8>>>;
+
+pub enum QueuedLookup {
+    Primary(PrimaryLookupQuery),
+    Prefix(PrefixLookupQuery),
+}
+
+impl QueuedLookup {
+    pub fn table_path(&self) -> &TablePath {
+        match self {
+            Self::Primary(q) => q.table_path(),
+            Self::Prefix(q) => q.table_path(),
+        }
+    }
+
+    pub fn table_bucket(&self) -> &TableBucket {
+        match self {
+            Self::Primary(q) => q.table_bucket(),
+            Self::Prefix(q) => q.table_bucket(),
+        }
+    }
+
+    pub fn key(&self) -> &Bytes {
+        match self {
+            Self::Primary(q) => q.key(),
+            Self::Prefix(q) => q.key(),
+        }
+    }
+
+    pub fn complete_with_error(&mut self, error: Error) {
+        match self {
+            Self::Primary(q) => q.complete_with_error(error),
+            Self::Prefix(q) => q.complete_with_error(error),
+        }
+    }
+}
+
+impl From<PrimaryLookupQuery> for QueuedLookup {
+    fn from(q: PrimaryLookupQuery) -> Self {
+        QueuedLookup::Primary(q)
+    }
+}
+
+impl From<PrefixLookupQuery> for QueuedLookup {
+    fn from(q: PrefixLookupQuery) -> Self {
+        QueuedLookup::Prefix(q)
     }
 }

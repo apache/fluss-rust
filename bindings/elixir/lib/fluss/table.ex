@@ -24,7 +24,8 @@ defmodule Fluss.Table do
 
   @type t :: reference()
 
-  @spec get(Fluss.Connection.t(), String.t(), String.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec get(Fluss.Connection.t(), String.t(), String.t()) ::
+          {:ok, t()} | {:error, Fluss.Error.t()}
   def get(conn, database, table) do
     conn
     |> Native.table_get(database, table)
@@ -35,7 +36,7 @@ defmodule Fluss.Table do
   def get!(conn, database, table) do
     case get(conn, database, table) do
       {:ok, t} -> t
-      {:error, reason} -> raise "failed to get table: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
     end
   end
 

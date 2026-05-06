@@ -26,6 +26,9 @@ pub(crate) mod column_writer;
 pub mod compacted;
 pub mod encode;
 pub mod field_getter;
+mod fixed_schema_decoder;
+mod lookup_row;
+mod projected_row;
 mod row_decoder;
 
 use crate::client::WriteFormat;
@@ -36,6 +39,9 @@ pub use compacted::CompactedRow;
 pub use datum::*;
 pub use decimal::{Decimal, MAX_COMPACT_PRECISION};
 pub use encode::KeyEncoder;
+pub(crate) use fixed_schema_decoder::FixedSchemaDecoder;
+pub use lookup_row::LookupRow;
+pub(crate) use projected_row::ProjectedRow;
 pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
 
 pub struct BinaryRow<'a> {

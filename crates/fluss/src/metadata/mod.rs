@@ -20,6 +20,7 @@ mod database;
 mod datatype;
 mod json_serde;
 mod partition;
+mod schema_util;
 mod table;
 
 pub use data_lake_format::*;
@@ -27,4 +28,5 @@ pub use database::*;
 pub use datatype::*;
 pub use json_serde::*;
 pub use partition::*;
+pub(crate) use schema_util::{UNEXIST_MAPPING, index_mapping};
 pub use table::*;

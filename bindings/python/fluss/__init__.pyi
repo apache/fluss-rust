@@ -245,9 +245,16 @@ class FlussConnection:
     async def create(config: Config) -> FlussConnection: ...
     def get_admin(self) -> FlussAdmin: ...
     async def get_table(self, table_path: TablePath) -> FlussTable: ...
-    def close(self) -> None: ...
+    async def close(self) -> None: ...
     def __enter__(self) -> FlussConnection: ...
     def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool: ...
+    async def __aenter__(self) -> FlussConnection: ...
+    async def __aexit__(
         self,
         exc_type: Optional[type],
         exc_value: Optional[BaseException],
@@ -611,6 +618,27 @@ class AppendWriter:
     def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle: ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...
     async def flush(self) -> None: ...
+    async def __aenter__(self) -> AppendWriter:
+        """
+        Enter the async context manager.
+
+        Returns:
+            The AppendWriter instance.
+        """
+        ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """
+        Exit the async context manager.
+
+        On exit, the writer is automatically flushed to ensure
+        all pending records are sent and acknowledged.
+        """
+        ...
     def __repr__(self) -> str: ...
 
 class UpsertWriter:
@@ -643,6 +671,27 @@ class UpsertWriter:
         ...
     async def flush(self) -> None:
         """Flush all pending upsert/delete operations to the server."""
+        ...
+    async def __aenter__(self) -> UpsertWriter:
+        """
+        Enter the async context manager.
+
+        Returns:
+            The UpsertWriter instance.
+        """
+        ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> bool:
+        """
+        Exit the async context manager.
+
+        On exit, the writer is automatically flushed to ensure
+        all pending records are sent and acknowledged.
+        """
         ...
     def __repr__(self) -> str: ...
 
@@ -741,7 +790,7 @@ class LogScanner:
             bucket_id: The bucket ID within the partition
         """
         ...
-    def poll(self, timeout_ms: int) -> ScanRecords:
+    async def poll(self, timeout_ms: int) -> ScanRecords:
         """Poll for individual records with metadata.
 
         Requires a record-based scanner (created with new_scan().create_log_scanner()).
@@ -758,7 +807,7 @@ class LogScanner:
             Returns an empty ScanRecords if no records are available or timeout expires.
         """
         ...
-    def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]:
+    async def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]:
         """Poll for batches with metadata.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
@@ -774,7 +823,7 @@ class LogScanner:
             Returns an empty list if no batches are available or timeout expires.
         """
         ...
-    def poll_arrow(self, timeout_ms: int) -> pa.Table:
+    async def poll_arrow(self, timeout_ms: int) -> pa.Table:
         """Poll for records as an Arrow Table.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
@@ -810,7 +859,7 @@ class LogScanner:
             ``pyarrow.RecordBatchReader`` yielding ``RecordBatch`` objects.
         """
         ...
-    def to_pandas(self) -> pd.DataFrame:
+    async def to_pandas(self) -> pd.DataFrame:
         """Convert all data to Pandas DataFrame.
 
         Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner()).
@@ -819,7 +868,7 @@ class LogScanner:
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
         ...
-    def to_arrow(self) -> pa.Table:
+    async def to_arrow(self) -> pa.Table:
         """Convert all data to Arrow Table.
 
         Batches are collected in Rust then combined into one table (no per-batch
@@ -831,6 +880,8 @@ class LogScanner:
 
         You must call subscribe(), subscribe_buckets(), or subscribe_partition() first.
         """
+        ...
+
     def __repr__(self) -> str: ...
     def __aiter__(self) -> AsyncIterator[Union[ScanRecord, RecordBatch]]: ...
 

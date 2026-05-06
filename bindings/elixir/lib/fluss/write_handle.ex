@@ -27,7 +27,7 @@ defmodule Fluss.WriteHandle do
 
   @type t :: reference()
 
-  @spec wait(t()) :: :ok | {:error, String.t()}
+  @spec wait(t()) :: :ok | {:error, Fluss.Error.t()}
   def wait(handle) do
     handle
     |> Native.write_handle_wait()
@@ -38,7 +38,7 @@ defmodule Fluss.WriteHandle do
   def wait!(handle) do
     case wait(handle) do
       :ok -> :ok
-      {:error, reason} -> raise "write failed: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
     end
   end
 end

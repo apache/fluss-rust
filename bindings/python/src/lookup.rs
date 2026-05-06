@@ -74,7 +74,7 @@ impl Lookuper {
 
             // Convert to Python with GIL
             Python::attach(|py| match row_opt {
-                Some(compacted_row) => internal_row_to_dict(py, &compacted_row, &table_info),
+                Some(row) => internal_row_to_dict(py, &row, &table_info),
                 None => Ok(py.None()),
             })
         })

@@ -36,14 +36,14 @@ impl Utils {
         })
     }
 
-    /// Convert Arrow DataType to Fluss DataType
-    pub fn arrow_type_to_fluss_type(
-        arrow_type: &arrow::datatypes::DataType,
+    /// Convert an Arrow Field to a Fluss DataType, preserving nullability.
+    pub fn arrow_field_to_fluss_type(
+        field: &arrow::datatypes::Field,
     ) -> PyResult<fcore::metadata::DataType> {
         use arrow::datatypes::DataType as ArrowDataType;
         use fcore::metadata::DataTypes;
 
-        let fluss_type = match arrow_type {
+        let fluss_type = match field.data_type() {
             ArrowDataType::Boolean => DataTypes::boolean(),
             ArrowDataType::Int8 => DataTypes::tinyint(),
             ArrowDataType::Int16 => DataTypes::smallint(),
@@ -95,23 +95,29 @@ impl Utils {
             ArrowDataType::Decimal128(precision, scale) => {
                 DataTypes::decimal(*precision as u32, *scale as u32)
             }
-            ArrowDataType::List(field) => {
-                let element_type = Utils::arrow_type_to_fluss_type(field.data_type())?;
+            ArrowDataType::List(element_field) => {
+                let element_type = Utils::arrow_field_to_fluss_type(element_field)?;
                 DataTypes::array(element_type)
             }
-            _ => {
+            other => {
                 return Err(FlussError::new_err(format!(
-                    "Unsupported Arrow data type: {arrow_type:?}"
+                    "Unsupported Arrow data type: {other:?}"
                 )));
             }
         };
 
-        Ok(fluss_type)
+        if field.is_nullable() {
+            Ok(fluss_type)
+        } else {
+            Ok(fluss_type.as_non_nullable())
+        }
     }
 
-    /// Convert Fluss DataType to string representation
+    /// Convert Fluss DataType to string representation, appending " NOT NULL"
+    /// for non-nullable types (matches Java's `withNullability` and Rust core's
+    /// `Display` impl).
     pub fn datatype_to_string(data_type: &fcore::metadata::DataType) -> String {
-        match data_type {
+        let type_str = match data_type {
             fcore::metadata::DataType::Boolean(_) => "boolean".to_string(),
             fcore::metadata::DataType::TinyInt(_) => "tinyint".to_string(),
             fcore::metadata::DataType::SmallInt(_) => "smallint".to_string(),
@@ -171,6 +177,12 @@ impl Utils {
                     .collect();
                 format!("row<{}>", fields.join(", "))
             }
+        };
+
+        if data_type.is_nullable() {
+            type_str
+        } else {
+            format!("{type_str} NOT NULL")
         }
     }
 

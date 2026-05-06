@@ -19,6 +19,7 @@
 
 #include <arrow/c/bridge.h>
 
+#include <cassert>
 #include <ctime>
 
 #include "ffi_converter.hpp"
@@ -84,6 +85,226 @@ int Date::Day() const {
     do {                                                                                  \
         if (!inner_) throw std::logic_error(name ": not available (moved-from or null)"); \
     } while (0)
+
+// ============================================================================
+// ArrayWriter — builder for array values backed by Rust ArrayWriterInner
+// ============================================================================
+
+ArrayWriter::ArrayWriter(size_t size, DataType element_type) : element_type_(std::move(element_type)) {
+    auto flat = utils::flatten_array_type(element_type_);
+    int32_t leaf_type_id = flat.nesting > 0 ? flat.leaf_type : static_cast<int32_t>(element_type_.id());
+    uint32_t leaf_precision = static_cast<uint32_t>(flat.nesting > 0 ? flat.leaf_precision
+                                                                      : element_type_.precision());
+    uint32_t leaf_scale = static_cast<uint32_t>(flat.nesting > 0 ? flat.leaf_scale : element_type_.scale());
+    uint32_t array_nesting = static_cast<uint32_t>(flat.nesting);
+
+    auto box = ffi::new_array_writer(size, leaf_type_id, leaf_precision, leaf_scale, array_nesting);
+    inner_ = box.into_raw();
+}
+
+ArrayWriter::~ArrayWriter() noexcept { Destroy(); }
+
+void ArrayWriter::Destroy() noexcept {
+    if (inner_) {
+        rust::Box<ffi::ArrayWriterInner>::from_raw(inner_);
+        inner_ = nullptr;
+    }
+}
+
+ArrayWriter::ArrayWriter(ArrayWriter&& other) noexcept
+    : inner_(other.inner_), element_type_(std::move(other.element_type_)) {
+    other.inner_ = nullptr;
+}
+
+ArrayWriter& ArrayWriter::operator=(ArrayWriter&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        inner_ = other.inner_;
+        element_type_ = std::move(other.element_type_);
+        other.inner_ = nullptr;
+    }
+    return *this;
+}
+
+bool ArrayWriter::Available() const { return inner_ != nullptr; }
+
+size_t ArrayWriter::Size() const noexcept {
+    assert(inner_ && "ArrayWriter::Size called on moved-from instance");
+    return inner_->aw_size();
+}
+
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define CHECK_AW(name)                                                                    \
+    do {                                                                                  \
+        if (!inner_) throw std::logic_error(name ": not available (moved-from or null)"); \
+    } while (0)
+
+void ArrayWriter::SetNull(size_t idx) { CHECK_AW("ArrayWriter"); inner_->aw_set_null(idx); }
+void ArrayWriter::SetBool(size_t idx, bool v) { CHECK_AW("ArrayWriter"); inner_->aw_set_bool(idx, v); }
+void ArrayWriter::SetInt32(size_t idx, int32_t v) { CHECK_AW("ArrayWriter"); inner_->aw_set_i32(idx, v); }
+void ArrayWriter::SetInt64(size_t idx, int64_t v) { CHECK_AW("ArrayWriter"); inner_->aw_set_i64(idx, v); }
+void ArrayWriter::SetFloat32(size_t idx, float v) { CHECK_AW("ArrayWriter"); inner_->aw_set_f32(idx, v); }
+void ArrayWriter::SetFloat64(size_t idx, double v) { CHECK_AW("ArrayWriter"); inner_->aw_set_f64(idx, v); }
+
+void ArrayWriter::SetString(size_t idx, const std::string& v) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_str(idx, v);
+}
+
+void ArrayWriter::SetBytes(size_t idx, const std::vector<uint8_t>& v) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_bytes(idx, rust::Slice<const uint8_t>(v.data(), v.size()));
+}
+
+void ArrayWriter::SetDate(size_t idx, fluss::Date d) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_date(idx, d.days_since_epoch);
+}
+
+void ArrayWriter::SetTime(size_t idx, fluss::Time t) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_time(idx, t.millis_since_midnight);
+}
+
+void ArrayWriter::SetTimestampNtz(size_t idx, fluss::Timestamp ts) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_ts_ntz(idx, ts.epoch_millis, ts.nano_of_millisecond);
+}
+
+void ArrayWriter::SetTimestampLtz(size_t idx, fluss::Timestamp ts) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_ts_ltz(idx, ts.epoch_millis, ts.nano_of_millisecond);
+}
+
+void ArrayWriter::SetDecimal(size_t idx, const std::string& value) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_decimal_str(idx, value);
+}
+
+void ArrayWriter::SetArray(size_t idx, ArrayWriter&& nested) {
+    CHECK_AW("ArrayWriter");
+    if (!nested.inner_) {
+        throw std::logic_error("ArrayWriter::SetArray: nested writer not available");
+    }
+    inner_->aw_set_array(idx, *nested.inner_);
+    nested.Destroy();
+}
+
+// ============================================================================
+// ArrayView — read-only recursive view into an array column value
+// ============================================================================
+
+ArrayView::~ArrayView() noexcept { Destroy(); }
+
+void ArrayView::Destroy() noexcept {
+    if (inner_) {
+        rust::Box<ffi::ArrayViewInner>::from_raw(inner_);
+        inner_ = nullptr;
+    }
+}
+
+ArrayView::ArrayView(ArrayView&& other) noexcept : inner_(other.inner_) { other.inner_ = nullptr; }
+
+ArrayView& ArrayView::operator=(ArrayView&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        inner_ = other.inner_;
+        other.inner_ = nullptr;
+    }
+    return *this;
+}
+
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define CHECK_AV()                                                                      \
+    do {                                                                                \
+        if (!inner_) throw std::logic_error("ArrayView: not available (moved-from)");  \
+    } while (0)
+
+size_t ArrayView::Size() const noexcept {
+    assert(inner_ && "ArrayView::Size called on moved-from instance");
+    return inner_->av_size();
+}
+
+TypeId ArrayView::ElementType() const noexcept {
+    assert(inner_ && "ArrayView::ElementType called on moved-from instance");
+    return static_cast<TypeId>(inner_->av_element_type_id());
+}
+
+bool ArrayView::IsNull(size_t element) const {
+    CHECK_AV();
+    return inner_->av_is_null(element);
+}
+
+bool ArrayView::GetBool(size_t element) const {
+    CHECK_AV();
+    return inner_->av_get_bool(element);
+}
+
+int32_t ArrayView::GetInt32(size_t element) const {
+    CHECK_AV();
+    return inner_->av_get_i32(element);
+}
+
+int64_t ArrayView::GetInt64(size_t element) const {
+    CHECK_AV();
+    return inner_->av_get_i64(element);
+}
+
+float ArrayView::GetFloat32(size_t element) const {
+    CHECK_AV();
+    return inner_->av_get_f32(element);
+}
+
+double ArrayView::GetFloat64(size_t element) const {
+    CHECK_AV();
+    return inner_->av_get_f64(element);
+}
+
+std::string ArrayView::GetString(size_t element) const {
+    CHECK_AV();
+    return std::string(inner_->av_get_str(element));
+}
+
+std::vector<uint8_t> ArrayView::GetBytes(size_t element) const {
+    CHECK_AV();
+    auto rv = inner_->av_get_bytes(element);
+    return {rv.data(), rv.data() + rv.size()};
+}
+
+fluss::Date ArrayView::GetDate(size_t element) const {
+    CHECK_AV();
+    return fluss::Date{inner_->av_get_date_days(element)};
+}
+
+fluss::Time ArrayView::GetTime(size_t element) const {
+    CHECK_AV();
+    return fluss::Time{inner_->av_get_time_millis(element)};
+}
+
+fluss::Timestamp ArrayView::GetTimestampNtz(size_t element) const {
+    CHECK_AV();
+    return fluss::Timestamp{inner_->av_get_ts_millis(element),
+                            inner_->av_get_ts_nanos(element)};
+}
+
+fluss::Timestamp ArrayView::GetTimestampLtz(size_t element) const {
+    CHECK_AV();
+    return fluss::Timestamp{inner_->av_get_ts_millis(element),
+                            inner_->av_get_ts_nanos(element)};
+}
+
+std::string ArrayView::GetDecimalString(size_t element) const {
+    CHECK_AV();
+    return std::string(inner_->av_get_decimal_str(element));
+}
+
+ArrayView ArrayView::GetArray(size_t element) const {
+    CHECK_AV();
+    auto box = inner_->av_get_nested(element);
+    return ArrayView(box.into_raw());
+}
+
+#undef CHECK_AV
 
 // ============================================================================
 // GenericRow — write-only row backed by opaque Rust GenericRowInner
@@ -191,6 +412,15 @@ void GenericRow::SetDecimal(size_t idx, const std::string& value) {
     inner_->gr_set_decimal_str(idx, value);
 }
 
+void GenericRow::SetArray(size_t idx, ArrayWriter&& writer) {
+    CHECK_INNER("GenericRow");
+    if (!writer.inner_) {
+        throw std::logic_error("GenericRow::SetArray: ArrayWriter not available");
+    }
+    inner_->gr_set_array(idx, *writer.inner_);
+    writer.Destroy();
+}
+
 // ============================================================================
 // ScanData — destructor must live in .cpp where rust::Box is visible
 // ============================================================================
@@ -276,6 +506,85 @@ bool RowView::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decim
 std::string RowView::GetDecimalString(size_t idx) const {
     CHECK_DATA("RowView");
     return std::string(data_->raw->sv_get_decimal_str(bucket_idx_, rec_idx_, idx));
+}
+
+size_t RowView::GetArraySize(size_t idx) const {
+    CHECK_DATA("RowView");
+    return data_->raw->sv_get_array_size(bucket_idx_, rec_idx_, idx);
+}
+
+TypeId RowView::GetArrayElementType(size_t idx) const {
+    CHECK_DATA("RowView");
+    return static_cast<TypeId>(data_->raw->sv_get_array_element_type(idx));
+}
+
+bool RowView::IsArrayElementNull(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return data_->raw->sv_get_array_is_null(bucket_idx_, rec_idx_, idx, element);
+}
+
+bool RowView::GetArrayBool(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return data_->raw->sv_get_array_bool(bucket_idx_, rec_idx_, idx, element);
+}
+
+int32_t RowView::GetArrayInt32(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return data_->raw->sv_get_array_i32(bucket_idx_, rec_idx_, idx, element);
+}
+
+int64_t RowView::GetArrayInt64(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return data_->raw->sv_get_array_i64(bucket_idx_, rec_idx_, idx, element);
+}
+
+float RowView::GetArrayFloat32(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return data_->raw->sv_get_array_f32(bucket_idx_, rec_idx_, idx, element);
+}
+
+double RowView::GetArrayFloat64(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return data_->raw->sv_get_array_f64(bucket_idx_, rec_idx_, idx, element);
+}
+
+std::string RowView::GetArrayString(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return std::string(data_->raw->sv_get_array_str(bucket_idx_, rec_idx_, idx, element));
+}
+
+std::vector<uint8_t> RowView::GetArrayBytes(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    auto rv = data_->raw->sv_get_array_bytes(bucket_idx_, rec_idx_, idx, element);
+    return {rv.data(), rv.data() + rv.size()};
+}
+
+fluss::Date RowView::GetArrayDate(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return fluss::Date{data_->raw->sv_get_array_date_days(bucket_idx_, rec_idx_, idx, element)};
+}
+
+fluss::Time RowView::GetArrayTime(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return fluss::Time{data_->raw->sv_get_array_time_millis(bucket_idx_, rec_idx_, idx, element)};
+}
+
+fluss::Timestamp RowView::GetArrayTimestamp(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    auto millis = data_->raw->sv_get_array_ts_millis(bucket_idx_, rec_idx_, idx, element);
+    auto nanos = data_->raw->sv_get_array_ts_nanos(bucket_idx_, rec_idx_, idx, element);
+    return fluss::Timestamp{millis, nanos};
+}
+
+std::string RowView::GetArrayDecimalString(size_t idx, size_t element) const {
+    CHECK_DATA("RowView");
+    return std::string(data_->raw->sv_get_array_decimal_str(bucket_idx_, rec_idx_, idx, element));
+}
+
+ArrayView RowView::GetArrayView(size_t idx) const {
+    CHECK_DATA("RowView");
+    auto box = data_->raw->sv_get_array_view(bucket_idx_, rec_idx_, idx);
+    return ArrayView(box.into_raw());
 }
 
 // ============================================================================
@@ -482,6 +791,85 @@ bool LookupResult::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::
 std::string LookupResult::GetDecimalString(size_t idx) const {
     CHECK_INNER("LookupResult");
     return std::string(inner_->lv_get_decimal_str(idx));
+}
+
+size_t LookupResult::GetArraySize(size_t idx) const {
+    CHECK_INNER("LookupResult");
+    return inner_->lv_get_array_size(idx);
+}
+
+TypeId LookupResult::GetArrayElementType(size_t idx) const {
+    CHECK_INNER("LookupResult");
+    return static_cast<TypeId>(inner_->lv_get_array_element_type(idx));
+}
+
+bool LookupResult::IsArrayElementNull(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return inner_->lv_get_array_is_null(idx, element);
+}
+
+bool LookupResult::GetArrayBool(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return inner_->lv_get_array_bool(idx, element);
+}
+
+int32_t LookupResult::GetArrayInt32(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return inner_->lv_get_array_i32(idx, element);
+}
+
+int64_t LookupResult::GetArrayInt64(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return inner_->lv_get_array_i64(idx, element);
+}
+
+float LookupResult::GetArrayFloat32(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return inner_->lv_get_array_f32(idx, element);
+}
+
+double LookupResult::GetArrayFloat64(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return inner_->lv_get_array_f64(idx, element);
+}
+
+std::string LookupResult::GetArrayString(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return std::string(inner_->lv_get_array_str(idx, element));
+}
+
+std::vector<uint8_t> LookupResult::GetArrayBytes(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    auto rv = inner_->lv_get_array_bytes(idx, element);
+    return {rv.data(), rv.data() + rv.size()};
+}
+
+fluss::Date LookupResult::GetArrayDate(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return fluss::Date{inner_->lv_get_array_date_days(idx, element)};
+}
+
+fluss::Time LookupResult::GetArrayTime(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return fluss::Time{inner_->lv_get_array_time_millis(idx, element)};
+}
+
+fluss::Timestamp LookupResult::GetArrayTimestamp(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    auto millis = inner_->lv_get_array_ts_millis(idx, element);
+    auto nanos = inner_->lv_get_array_ts_nanos(idx, element);
+    return fluss::Timestamp{millis, nanos};
+}
+
+std::string LookupResult::GetArrayDecimalString(size_t idx, size_t element) const {
+    CHECK_INNER("LookupResult");
+    return std::string(inner_->lv_get_array_decimal_str(idx, element));
+}
+
+ArrayView LookupResult::GetArrayView(size_t idx) const {
+    CHECK_INNER("LookupResult");
+    auto box = inner_->lv_get_array_view(idx);
+    return ArrayView(box.into_raw());
 }
 
 // ============================================================================

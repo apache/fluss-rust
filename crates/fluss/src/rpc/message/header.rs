@@ -23,8 +23,7 @@ use crate::rpc::message::{ReadVersionedType, WriteVersionedType};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
-#[allow(dead_code)]
-const REQUEST_HEADER_LENGTH: i32 = 8;
+pub(crate) const REQUEST_HEADER_LENGTH: usize = 8;
 const SUCCESS_RESPONSE: u8 = 0;
 #[allow(dead_code)]
 const ERROR_RESPONSE: u8 = 1;

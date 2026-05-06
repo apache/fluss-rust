@@ -535,7 +535,7 @@ impl TableScan {
                 admin,
                 table_info,
                 projected_schema,
-                projected_row_type,
+                Arc::new(projected_row_type),
             );
 
             Python::attach(|py| Py::new(py, py_scanner))
@@ -986,6 +986,35 @@ impl AppendWriter {
                 .flush()
                 .await
                 .map_err(|e| FlussError::from_core_error(&e))
+        })
+    }
+
+    // Enter the async runtime context (for 'async with' statement)
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_slf = slf.into_pyobject(py)?.unbind();
+        future_into_py(py, async move { Ok(py_slf) })
+    }
+
+    // Exit the async runtime context (for 'async with' statement)
+    /// On exit, the writer is automatically flushed.
+    #[pyo3(signature = (exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let is_exc_none = exc_type.as_ref().is_none_or(|e| e.is_none());
+        future_into_py(py, async move {
+            let res = inner.flush().await;
+            if let Err(e) = res {
+                if is_exc_none {
+                    return Err(FlussError::from_core_error(&e));
+                }
+            }
+            Ok(false)
         })
     }
 
@@ -2016,7 +2045,7 @@ pub struct LogScanner {
     /// The projected Arrow schema to use for empty table creation
     projected_schema: SchemaRef,
     /// The projected row type to use for record-based scanning
-    projected_row_type: fcore::metadata::RowType,
+    projected_row_type: Arc<fcore::metadata::RowType>,
 }
 
 #[pymethods]
@@ -2133,9 +2162,7 @@ impl LogScanner {
     ///     - Requires a record-based scanner (created with new_scan().create_log_scanner())
     ///     - Returns an empty ScanRecords if no records are available
     ///     - When timeout expires, returns an empty ScanRecords (NOT an error)
-    fn poll(&self, py: Python, timeout_ms: i64) -> PyResult<ScanRecords> {
-        let scanner = self.kind.as_record()?;
-
+    fn poll<'py>(&self, py: Python<'py>, timeout_ms: i64) -> PyResult<Bound<'py, PyAny>> {
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
                 "timeout_ms must be non-negative, got: {timeout_ms}"
@@ -2143,29 +2170,36 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scan_records = py
-            .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scanner = Arc::clone(&self.kind);
+        let projected_row_type = self.projected_row_type.clone();
 
-        // Convert core ScanRecords to Python ScanRecords grouped by bucket
-        let row_type = &self.projected_row_type;
-        let mut records_by_bucket = IndexMap::new();
-        let mut total_count = 0usize;
+        future_into_py(py, async move {
+            let scan_records = scanner
+                .as_record()?
+                .poll(timeout)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
-        for (bucket, records) in scan_records.into_records_by_buckets() {
-            let py_bucket = TableBucket::from_core(bucket);
-            let mut py_records = Vec::with_capacity(records.len());
-            for record in &records {
-                let scan_record = ScanRecord::from_core(py, record, row_type)?;
-                py_records.push(Py::new(py, scan_record)?);
-                total_count += 1;
-            }
-            records_by_bucket.insert(py_bucket, py_records);
-        }
+            Python::attach(|py| {
+                let mut records_by_bucket = IndexMap::new();
+                let mut total_count = 0usize;
 
-        Ok(ScanRecords {
-            records_by_bucket,
-            total_count,
+                for (bucket, records) in scan_records.into_records_by_buckets() {
+                    let py_bucket = TableBucket::from_core(bucket);
+                    let mut py_records = Vec::with_capacity(records.len());
+                    for record in &records {
+                        let scan_record = ScanRecord::from_core(py, record, &projected_row_type)?;
+                        py_records.push(Py::new(py, scan_record)?);
+                        total_count += 1;
+                    }
+                    records_by_bucket.insert(py_bucket, py_records);
+                }
+
+                Ok(ScanRecords {
+                    records_by_bucket,
+                    total_count,
+                })
+            })
         })
     }
 
@@ -2182,9 +2216,11 @@ impl LogScanner {
     ///     - Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner())
     ///     - Returns an empty list if no batches are available
     ///     - When timeout expires, returns an empty list (NOT an error)
-    fn poll_record_batch(&self, py: Python, timeout_ms: i64) -> PyResult<Vec<RecordBatch>> {
-        let scanner = self.kind.as_batch()?;
-
+    fn poll_record_batch<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_ms: i64,
+    ) -> PyResult<Bound<'py, PyAny>> {
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
                 "timeout_ms must be non-negative, got: {timeout_ms}"
@@ -2192,17 +2228,22 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scan_batches = py
-            .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scanner = Arc::clone(&self.kind);
 
-        // Convert ScanBatch to RecordBatch with metadata
-        let result = scan_batches
-            .into_iter()
-            .map(RecordBatch::from_scan_batch)
-            .collect();
+        future_into_py(py, async move {
+            let scan_batches = scanner
+                .as_batch()?
+                .poll(timeout)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
-        Ok(result)
+            Python::attach(|py| {
+                scan_batches
+                    .into_iter()
+                    .map(|sb| Py::new(py, RecordBatch::from_scan_batch(sb)))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })
     }
 
     /// Poll for new records as an Arrow Table.
@@ -2217,9 +2258,7 @@ impl LogScanner {
     ///     - Requires a batch-based scanner (created with new_scan().create_record_batch_log_scanner())
     ///     - Returns an empty table (with correct schema) if no records are available
     ///     - When timeout expires, returns an empty table (NOT an error)
-    fn poll_arrow(&self, py: Python, timeout_ms: i64) -> PyResult<Py<PyAny>> {
-        let scanner = self.kind.as_batch()?;
-
+    fn poll_arrow<'py>(&self, py: Python<'py>, timeout_ms: i64) -> PyResult<Bound<'py, PyAny>> {
         if timeout_ms < 0 {
             return Err(FlussError::new_err(format!(
                 "timeout_ms must be non-negative, got: {timeout_ms}"
@@ -2227,38 +2266,23 @@ impl LogScanner {
         }
 
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let scan_batches = py
-            .detach(|| TOKIO_RUNTIME.block_on(async { scanner.poll(timeout).await }))
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scanner = Arc::clone(&self.kind);
+        let projected_schema = self.projected_schema.clone();
 
-        // Convert ScanBatch to Arrow batches
-        if scan_batches.is_empty() {
-            return self.create_empty_table(py);
-        }
+        future_into_py(py, async move {
+            let scan_batches = scanner
+                .as_batch()?
+                .poll(timeout)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
-        let arrow_batches: Vec<_> = scan_batches
-            .into_iter()
-            .map(|scan_batch| Arc::new(scan_batch.into_batch()))
-            .collect();
+            let arrow_batches = scan_batches
+                .into_iter()
+                .map(|sb| Arc::new(sb.into_batch()))
+                .collect();
 
-        Utils::combine_batches_to_table(py, arrow_batches)
-    }
-
-    /// Create an empty PyArrow table with the correct (projected) schema
-    fn create_empty_table(&self, py: Python) -> PyResult<Py<PyAny>> {
-        // Use the projected schema stored in the scanner
-        let py_schema = self
-            .projected_schema
-            .as_ref()
-            .to_pyarrow(py)
-            .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
-
-        let pyarrow = py.import("pyarrow")?;
-        let empty_table = pyarrow
-            .getattr("Table")?
-            .call_method1("from_batches", (vec![] as Vec<Py<PyAny>>, py_schema))?;
-
-        Ok(empty_table.into())
+            Python::attach(|py| Self::batches_to_arrow_table(py, arrow_batches, &projected_schema))
+        })
     }
 
     /// Create a lazy Arrow RecordBatchReader that reads until latest offsets.
@@ -2321,33 +2345,33 @@ impl LogScanner {
     ///
     /// Returns:
     ///     PyArrow Table containing all data from subscribed buckets
-    fn to_arrow(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let scanner = self.kind.as_batch()?;
+    fn to_arrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let kind = Arc::clone(&self.kind);
+        let admin = Arc::clone(&self.admin);
+        let projected_schema = self.projected_schema.clone();
 
-        let batches: Vec<std::sync::Arc<ArrowRecordBatch>> = py
-            .detach(|| {
-                TOKIO_RUNTIME.block_on(async {
-                    let mut reader = fcore::client::RecordBatchLogReader::new_until_latest(
-                        scanner.new_shared_handle(),
-                        &self.admin,
-                    )
-                    .await?;
-                    let scan_batches = reader.collect_all_batches().await?;
-                    Ok::<_, fcore::error::Error>(
-                        scan_batches
-                            .into_iter()
-                            .map(|sb| std::sync::Arc::new(sb.into_batch()))
-                            .collect(),
-                    )
-                })
-            })
+        future_into_py(py, async move {
+            let scanner = kind.as_batch()?;
+
+            let mut reader = fcore::client::RecordBatchLogReader::new_until_latest(
+                scanner.new_shared_handle(),
+                &admin,
+            )
+            .await
             .map_err(|e| FlussError::from_core_error(&e))?;
 
-        if batches.is_empty() {
-            return self.create_empty_table(py);
-        }
+            let scan_batches = reader
+                .collect_all_batches()
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
-        Utils::combine_batches_to_table(py, batches)
+            let batches: Vec<Arc<ArrowRecordBatch>> = scan_batches
+                .into_iter()
+                .map(|sb| Arc::new(sb.into_batch()))
+                .collect();
+
+            Python::attach(|py| Self::batches_to_arrow_table(py, batches, &projected_schema))
+        })
     }
 
     /// Convert all data to Pandas DataFrame.
@@ -2359,12 +2383,36 @@ impl LogScanner {
     ///
     /// Returns:
     ///     Pandas DataFrame containing all data from subscribed buckets
-    fn to_pandas(&self, py: Python) -> PyResult<Py<PyAny>> {
-        let arrow_table = self.to_arrow(py)?;
+    fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let kind = Arc::clone(&self.kind);
+        let admin = Arc::clone(&self.admin);
+        let projected_schema = self.projected_schema.clone();
 
-        // Convert Arrow Table to Pandas DataFrame using pyarrow
-        let df = arrow_table.call_method0(py, "to_pandas")?;
-        Ok(df)
+        future_into_py(py, async move {
+            let scanner = kind.as_batch()?;
+
+            let mut reader = fcore::client::RecordBatchLogReader::new_until_latest(
+                scanner.new_shared_handle(),
+                &admin,
+            )
+            .await
+            .map_err(|e| FlussError::from_core_error(&e))?;
+
+            let scan_batches = reader
+                .collect_all_batches()
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
+
+            let batches: Vec<Arc<ArrowRecordBatch>> = scan_batches
+                .into_iter()
+                .map(|sb| Arc::new(sb.into_batch()))
+                .collect();
+
+            Python::attach(|py| {
+                let arrow_table = Self::batches_to_arrow_table(py, batches, &projected_schema)?;
+                arrow_table.call_method0(py, "to_pandas")
+            })
+        })
     }
 
     fn __aiter__<'py>(slf: PyRef<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
@@ -2376,14 +2424,11 @@ impl LogScanner {
         let gen_fn = ASYNC_GEN_FN.get_or_init(py, || {
             let code = pyo3::ffi::c_str!(
                 r#"
-async def _async_scan_generic(scanner, method_name):
-    # Dynamically resolve the polling method (e.g., _async_poll or _async_poll_batches)
+async def _async_scan_generic(scanner, method_name, timeout_ms):
     poll_method = getattr(scanner, method_name)
     while True:
-        items = await poll_method()
-        if items:
-            for item in items:
-                yield item
+        for item in await poll_method(timeout_ms):
+            yield item
 "#
             );
             let globals = pyo3::types::PyDict::new(py);
@@ -2395,106 +2440,16 @@ async def _async_scan_generic(scanner, method_name):
                 .unbind()
         });
 
-        // Determine which internal method to call based on the scanner kind
         let method_name = match slf.kind.as_ref() {
-            ScannerKind::Record(_) => "_async_poll",
-            ScannerKind::Batch(_) => "_async_poll_batches",
+            ScannerKind::Record(_) => "poll",
+            ScannerKind::Batch(_) => "poll_record_batch",
         };
 
-        // Instantiate the generator with the scanner instance and the target method name
-        gen_fn
-            .bind(py)
-            .call1((slf.into_bound_py_any(py)?, method_name))
-    }
-
-    /// Perform a single bounded poll and return a list of ScanRecord objects.
-    ///
-    /// This is the async building block used by `__aiter__` (record mode) to
-    /// implement `async for`. Each call does exactly one network poll (bounded
-    /// by `DEFAULT_POLL_INTERVAL_MS`), converts any results to Python ScanRecord objects,
-    /// and returns them as a list. An empty list signals a timeout (no data yet), not
-    /// end-of-stream.
-    ///
-    /// Returns:
-    ///     Awaitable that resolves to a list of ScanRecord objects
-    fn _async_poll<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let timeout = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64);
-
-        let scanner = Arc::clone(&self.kind);
-        let projected_row_type = self.projected_row_type.clone();
-
-        future_into_py(py, async move {
-            let core_scanner = match scanner.as_ref() {
-                ScannerKind::Record(s) => s,
-                ScannerKind::Batch(_) => {
-                    return Err(PyTypeError::new_err(
-                        "This internal method only supports record-based scanners. \
-                         For batch-based scanners, use 'async for' or 'poll_record_batch' instead.",
-                    ));
-                }
-            };
-
-            let scan_records = core_scanner
-                .poll(timeout)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            // Convert to Python list
-            Python::attach(|py| {
-                let mut result: Vec<Py<ScanRecord>> = Vec::new();
-                for (_, records) in scan_records.into_records_by_buckets() {
-                    for core_record in records {
-                        let scan_record =
-                            ScanRecord::from_core(py, &core_record, &projected_row_type)?;
-                        result.push(Py::new(py, scan_record)?);
-                    }
-                }
-                Ok(result)
-            })
-        })
-    }
-
-    /// Perform a single bounded poll and return a list of RecordBatch objects.
-    ///
-    /// This is the async building block used by `__aiter__` (batch mode) to
-    /// implement `async for`. Each call does exactly one network poll (bounded
-    /// by `DEFAULT_POLL_INTERVAL_MS`), converts any results to Python RecordBatch objects,
-    /// and returns them as a list. An empty list signals a timeout (no data
-    /// yet), not end-of-stream.
-    ///
-    /// Returns:
-    ///     Awaitable that resolves to a list of RecordBatch objects
-    fn _async_poll_batches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let timeout = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS as u64);
-
-        let scanner = Arc::clone(&self.kind);
-
-        future_into_py(py, async move {
-            let core_scanner = match scanner.as_ref() {
-                ScannerKind::Batch(s) => s,
-                ScannerKind::Record(_) => {
-                    return Err(PyTypeError::new_err(
-                        "This internal method only supports batch-based scanners. \
-                         For record-based scanners, use 'async for' or 'poll' instead.",
-                    ));
-                }
-            };
-
-            let scan_batches = core_scanner
-                .poll(timeout)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            // Convert to Python list of RecordBatch objects
-            Python::attach(|py| {
-                let mut result: Vec<Py<RecordBatch>> = Vec::new();
-                for scan_batch in scan_batches {
-                    let rb = RecordBatch::from_scan_batch(scan_batch);
-                    result.push(Py::new(py, rb)?);
-                }
-                Ok(result)
-            })
-        })
+        gen_fn.bind(py).call1((
+            slf.into_bound_py_any(py)?,
+            method_name,
+            DEFAULT_POLL_INTERVAL_MS,
+        ))
     }
 
     fn __repr__(&self) -> String {
@@ -2508,7 +2463,7 @@ impl LogScanner {
         admin: Arc<fcore::client::FlussAdmin>,
         table_info: fcore::metadata::TableInfo,
         projected_schema: SchemaRef,
-        projected_row_type: fcore::metadata::RowType,
+        projected_row_type: Arc<fcore::metadata::RowType>,
     ) -> Self {
         Self {
             kind: Arc::new(scanner),
@@ -2516,6 +2471,27 @@ impl LogScanner {
             table_info,
             projected_schema,
             projected_row_type,
+        }
+    }
+
+    /// Convert Arrow record batches to a PyArrow Table (or empty table if no batches).
+    fn batches_to_arrow_table(
+        py: Python<'_>,
+        batches: Vec<Arc<ArrowRecordBatch>>,
+        projected_schema: &SchemaRef,
+    ) -> PyResult<Py<PyAny>> {
+        if batches.is_empty() {
+            let py_schema = projected_schema
+                .as_ref()
+                .to_pyarrow(py)
+                .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?;
+            let pyarrow = py.import("pyarrow")?;
+            let empty_table = pyarrow
+                .getattr("Table")?
+                .call_method1("from_batches", (vec![] as Vec<Py<PyAny>>, py_schema))?;
+            Ok(empty_table.into())
+        } else {
+            Utils::combine_batches_to_table(py, batches)
         }
     }
 }

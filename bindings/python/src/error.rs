@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use fluss::error::Error;
+use fluss::rpc::FlussError as CoreFlussError;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
@@ -55,7 +57,6 @@ impl FlussError {
     /// Returns ``True`` if retrying the request may succeed. Client-side errors always return ``False``.
     #[getter]
     fn is_retriable(&self) -> bool {
-        use fluss::rpc::FlussError as CoreFlussError;
         if self.error_code == CLIENT_ERROR_CODE {
             return false;
         }
@@ -68,13 +69,12 @@ impl FlussError {
         PyErr::new::<FlussError, _>((message.to_string(), CLIENT_ERROR_CODE))
     }
 
-    /// Create a PyErr from a core Error.
-    /// `FlussAPIError` variants carry the server protocol error code directly.
-    /// All other error kinds are client-side and use CLIENT_ERROR_CODE.
-    pub fn from_core_error(error: &fluss::error::Error) -> PyErr {
-        use fluss::error::Error;
+    pub fn from_core_error(error: &Error) -> PyErr {
+        // Transport failures map to `NetworkException` (Java parity,
+        // retriable).
         let (msg, code) = match error {
             Error::FlussAPIError { api_error } => (api_error.message.clone(), api_error.code),
+            Error::RpcError { .. } => (error.to_string(), CoreFlussError::NetworkException.code()),
             _ => (error.to_string(), CLIENT_ERROR_CODE),
         };
         PyErr::new::<FlussError, _>((msg, code))

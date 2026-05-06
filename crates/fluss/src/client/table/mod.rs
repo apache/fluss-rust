@@ -17,8 +17,9 @@
 
 use crate::client::connection::FlussConnection;
 use crate::client::metadata::Metadata;
+use crate::client::schema_getter::ClientSchemaGetter;
 use crate::error::{Error, Result};
-use crate::metadata::{TableInfo, TablePath};
+use crate::metadata::{SchemaInfo, TableInfo, TablePath};
 use std::sync::Arc;
 
 pub const EARLIEST_OFFSET: i64 = -2;
@@ -34,7 +35,7 @@ mod scanner;
 mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
-pub use lookup::{LookupResult, Lookuper, TableLookup};
+pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
 pub use reader::{RecordBatchLogReader, SyncRecordBatchLogReader};
 pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
@@ -123,10 +124,22 @@ impl<'a> FlussTable<'a> {
             });
         }
         let lookup_client = self.conn.get_or_create_lookup_client()?;
+        // Pre-seed the schema getter with the table's current schema —
+        // rows written under it (the dominant case) never trigger an RPC.
+        let latest = SchemaInfo::new(
+            self.table_info.get_schema().clone(),
+            self.table_info.get_schema_id(),
+        );
+        let schema_getter = Arc::new(ClientSchemaGetter::new(
+            self.table_path.clone(),
+            self.conn.get_admin()?,
+            latest,
+        ));
         Ok(TableLookup::new(
             lookup_client,
             self.table_info.clone(),
             self.metadata.clone(),
+            schema_getter,
         ))
     }
 

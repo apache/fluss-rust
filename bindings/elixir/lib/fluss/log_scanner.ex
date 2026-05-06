@@ -20,8 +20,8 @@ defmodule Fluss.LogScanner do
   Scanner for reading records from a log table.
 
   `poll/2` is non-blocking — it returns `:ok` immediately and sends results
-  as `{:fluss_records, records}` or `{:fluss_poll_error, reason}` to the
-  calling process. No dirty scheduler threads are held during the wait.
+  as `{:fluss_records, records}` or `{:fluss_poll_error, %Fluss.Error{}}` to
+  the calling process. No dirty scheduler threads are held during the wait.
 
   Each record is an atom-keyed map: `:offset`, `:timestamp`, `:change_type`, `:row`.
   Row values are also atom-keyed (column names interned as atoms).
@@ -35,8 +35,8 @@ defmodule Fluss.LogScanner do
       receive do
         {:fluss_records, records} ->
           for record <- records, do: IO.inspect(record[:row])
-        {:fluss_poll_error, reason} ->
-          IO.puts("poll error: \#{reason}")
+        {:fluss_poll_error, %Fluss.Error{code: code, message: msg}} ->
+          IO.puts("poll error [\#{code}]: \#{msg}")
       end
 
   """
@@ -46,7 +46,7 @@ defmodule Fluss.LogScanner do
   @type t :: reference()
   @type record :: %{atom() => term()}
 
-  @spec new(Fluss.Table.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec new(Fluss.Table.t()) :: {:ok, t()} | {:error, Fluss.Error.t()}
   def new(table) do
     case Native.log_scanner_new(table) do
       {:error, _} = err -> err
@@ -58,11 +58,11 @@ defmodule Fluss.LogScanner do
   def new!(table) do
     case new(table) do
       {:ok, s} -> s
-      {:error, reason} -> raise "failed to create log scanner: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
     end
   end
 
-  @spec subscribe(t(), integer(), integer()) :: :ok | {:error, String.t()}
+  @spec subscribe(t(), integer(), integer()) :: :ok | {:error, Fluss.Error.t()}
   def subscribe(scanner, bucket, offset) do
     scanner
     |> Native.log_scanner_subscribe(bucket, offset)
@@ -72,14 +72,14 @@ defmodule Fluss.LogScanner do
   @doc """
   Subscribes to multiple buckets. Takes a list of `{bucket_id, offset}` tuples.
   """
-  @spec subscribe_buckets(t(), [{integer(), integer()}]) :: :ok | {:error, String.t()}
+  @spec subscribe_buckets(t(), [{integer(), integer()}]) :: :ok | {:error, Fluss.Error.t()}
   def subscribe_buckets(scanner, bucket_offsets) when is_list(bucket_offsets) do
     scanner
     |> Native.log_scanner_subscribe_buckets(bucket_offsets)
     |> Native.await_nif()
   end
 
-  @spec unsubscribe(t(), integer()) :: :ok | {:error, String.t()}
+  @spec unsubscribe(t(), integer()) :: :ok | {:error, Fluss.Error.t()}
   def unsubscribe(scanner, bucket) do
     scanner
     |> Native.log_scanner_unsubscribe(bucket)
@@ -88,7 +88,8 @@ defmodule Fluss.LogScanner do
 
   @doc """
   Starts a non-blocking poll. Returns `:ok` immediately.
-  Results arrive as `{:fluss_records, [record]}` or `{:fluss_poll_error, reason}`.
+  Results arrive as `{:fluss_records, [record]}` or
+  `{:fluss_poll_error, %Fluss.Error{}}`.
   """
   @spec poll(t(), non_neg_integer()) :: :ok
   def poll(scanner, timeout_ms),

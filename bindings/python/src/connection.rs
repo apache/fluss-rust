@@ -18,6 +18,7 @@
 use crate::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Connection to a Fluss cluster
 #[pyclass]
@@ -82,9 +83,19 @@ impl FlussConnection {
         })
     }
 
-    // Close the connection
-    fn close(&mut self) -> PyResult<()> {
-        Ok(())
+    /// Close the connection (async).
+    ///
+    /// Gracefully shuts down the connection by draining any pending write batches.
+    /// This method is awaitable.
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+
+        future_into_py(py, async move {
+            inner
+                .close(Duration::MAX)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))
+        })
     }
 
     // Enter the runtime context (for 'with' statement)
@@ -100,8 +111,37 @@ impl FlussConnection {
         _exc_value: Option<Bound<'_, PyAny>>,
         _traceback: Option<Bound<'_, PyAny>>,
     ) -> PyResult<bool> {
-        self.close()?;
+        // Sync exit cannot await the graceful drain, so it's a no-op here.
+        // Users should use 'async with' for graceful shutdown.
         Ok(false)
+    }
+
+    // Enter the async runtime context (for 'async with' statement)
+    fn __aenter__<'py>(slf: PyRef<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let py_slf = slf.into_pyobject(py)?.unbind();
+        future_into_py(py, async move { Ok(py_slf) })
+    }
+
+    // Exit the async runtime context (for 'async with' statement)
+    #[pyo3(signature = (exc_type=None, _exc_value=None, _traceback=None))]
+    fn __aexit__<'py>(
+        &self,
+        py: Python<'py>,
+        exc_type: Option<Bound<'py, PyAny>>,
+        _exc_value: Option<Bound<'py, PyAny>>,
+        _traceback: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let is_exc_none = exc_type.as_ref().is_none_or(|e| e.is_none());
+        future_into_py(py, async move {
+            let res = inner.close(Duration::MAX).await;
+            if let Err(e) = res {
+                if is_exc_none {
+                    return Err(FlussError::from_core_error(&e));
+                }
+            }
+            Ok(false)
+        })
     }
 
     fn __repr__(&self) -> String {

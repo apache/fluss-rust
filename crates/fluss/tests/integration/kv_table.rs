@@ -1001,6 +1001,279 @@ mod kv_table_test {
             .expect("Failed to drop table");
     }
 
+    // Strings >7 chars for `b` force the encoder's variable-length area,
+    // which is where prefix-key / primary-key byte layouts diverge.
+    #[tokio::test]
+    async fn prefix_lookup() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_prefix_lookup");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("a", DataTypes::int())
+                    .column("b", DataTypes::string())
+                    .column("c", DataTypes::bigint())
+                    .column("d", DataTypes::string())
+                    .primary_key(vec!["a", "b", "c"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .distributed_by(Some(3), vec!["a".to_string(), "b".to_string()])
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        let test_data: &[(i32, &str, i64, &str)] = &[
+            (1, "aaaaaaaaa", 1, "value1"),
+            (1, "aaaaaaaaa", 2, "value2"),
+            (1, "aaaaaaaaa", 3, "value3"),
+            (2, "aaaaaaaaa", 4, "value4"),
+        ];
+        for (a, b, c, d) in test_data {
+            let mut row = GenericRow::new(4);
+            row.set_field(0, *a);
+            row.set_field(1, *b);
+            row.set_field(2, *c);
+            row.set_field(3, *d);
+            writer.upsert(&row).expect("Failed to upsert");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let mut prefix_lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .lookup_by(vec!["a".to_string(), "b".to_string()])
+            .create_lookuper()
+            .expect("Failed to create prefix lookuper");
+
+        let mut prefix = GenericRow::new(2);
+        prefix.set_field(0, 1);
+        prefix.set_field(1, "aaaaaaaaa");
+        let result = prefix_lookuper
+            .lookup(&prefix)
+            .await
+            .expect("Failed to prefix lookup");
+        let rows = result.get_rows().expect("Failed to decode rows");
+        assert_eq!(rows.len(), 3, "Prefix (1, 'aaaaaaaaa') should match 3 rows");
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row.get_int(0).unwrap(), 1);
+            assert_eq!(row.get_string(1).unwrap(), "aaaaaaaaa");
+            assert_eq!(row.get_long(2).unwrap(), (i as i64) + 1);
+            assert_eq!(row.get_string(3).unwrap(), format!("value{}", i + 1));
+        }
+
+        let mut prefix = GenericRow::new(2);
+        prefix.set_field(0, 2);
+        prefix.set_field(1, "aaaaaaaaa");
+        let result = prefix_lookuper
+            .lookup(&prefix)
+            .await
+            .expect("Failed to prefix lookup");
+        let rows = result.get_rows().expect("Failed to decode rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get_int(0).unwrap(), 2);
+        assert_eq!(rows[0].get_string(1).unwrap(), "aaaaaaaaa");
+        assert_eq!(rows[0].get_long(2).unwrap(), 4);
+        assert_eq!(rows[0].get_string(3).unwrap(), "value4");
+
+        let mut prefix = GenericRow::new(2);
+        prefix.set_field(0, 3);
+        prefix.set_field(1, "a");
+        let result = prefix_lookuper
+            .lookup(&prefix)
+            .await
+            .expect("Failed to prefix lookup");
+        let rows = result.get_rows().expect("Failed to decode rows");
+        assert_eq!(rows.len(), 0);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn prefix_lookup_partitioned() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_prefix_lookup_partitioned");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("region", DataTypes::string())
+                    .column("a", DataTypes::int())
+                    .column("b", DataTypes::string())
+                    .column("c", DataTypes::bigint())
+                    .column("d", DataTypes::string())
+                    .primary_key(vec!["region", "a", "b", "c"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .distributed_by(Some(3), vec!["a".to_string(), "b".to_string()])
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
+
+        let connection = cluster.get_fluss_connection().await;
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        let test_data: &[(&str, i32, &str, i64, &str)] = &[
+            ("US", 1, "aaaaaaaaa", 1, "us-1"),
+            ("US", 1, "aaaaaaaaa", 2, "us-2"),
+            ("US", 2, "aaaaaaaaa", 3, "us-3"),
+            ("EU", 1, "aaaaaaaaa", 4, "eu-1"),
+            ("EU", 1, "bbbbbbbbb", 5, "eu-2"),
+        ];
+        for (region, a, b, c, d) in test_data {
+            let mut row = GenericRow::new(5);
+            row.set_field(0, *region);
+            row.set_field(1, *a);
+            row.set_field(2, *b);
+            row.set_field(3, *c);
+            row.set_field(4, *d);
+            writer.upsert(&row).expect("Failed to upsert");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let mut prefix_lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .lookup_by(vec!["region".to_string(), "a".to_string(), "b".to_string()])
+            .create_lookuper()
+            .expect("Failed to create prefix lookuper");
+
+        // Prefix (US, 1, "aaaaaaaaa") — 2 rows.
+        let mut prefix = GenericRow::new(3);
+        prefix.set_field(0, "US");
+        prefix.set_field(1, 1);
+        prefix.set_field(2, "aaaaaaaaa");
+        let result = prefix_lookuper
+            .lookup(&prefix)
+            .await
+            .expect("Failed to prefix lookup");
+        let rows = result.get_rows().expect("Failed to decode rows");
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert_eq!(row.get_string(0).unwrap(), "US");
+            assert_eq!(row.get_int(1).unwrap(), 1);
+            assert_eq!(row.get_string(2).unwrap(), "aaaaaaaaa");
+        }
+
+        // Prefix (EU, 1, "bbbbbbbbb") — 1 row.
+        let mut prefix = GenericRow::new(3);
+        prefix.set_field(0, "EU");
+        prefix.set_field(1, 1);
+        prefix.set_field(2, "bbbbbbbbb");
+        let result = prefix_lookuper
+            .lookup(&prefix)
+            .await
+            .expect("Failed to prefix lookup");
+        let rows = result.get_rows().expect("Failed to decode rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get_string(4).unwrap(), "eu-2");
+
+        let mut prefix = GenericRow::new(3);
+        prefix.set_field(0, "APAC");
+        prefix.set_field(1, 1);
+        prefix.set_field(2, "aaaaaaaaa");
+        let result = prefix_lookuper
+            .lookup(&prefix)
+            .await
+            .expect("Failed to prefix lookup");
+        let rows = result.get_rows().expect("Failed to decode rows");
+        assert_eq!(rows.len(), 0);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn prefix_lookup_validation_errors() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_prefix_lookup_validation");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("a", DataTypes::int())
+                    .column("b", DataTypes::string())
+                    .column("c", DataTypes::bigint())
+                    .primary_key(vec!["a", "b", "c"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .distributed_by(Some(3), vec!["a".to_string(), "b".to_string()])
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let err = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .lookup_by(vec!["b".to_string(), "a".to_string()])
+            .create_lookuper()
+            .err()
+            .expect("Expected validation error for wrong order");
+        assert!(err.to_string().contains("must contain all bucket keys"));
+
+        let err = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .lookup_by(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+            .create_lookuper()
+            .err()
+            .expect("Expected validation error for extra lookup columns");
+        assert!(err.to_string().contains("must contain all bucket keys"));
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
     /// Integration test for concurrent batched lookups.
     #[tokio::test]
     async fn batched_concurrent_lookups() {

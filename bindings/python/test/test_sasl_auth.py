@@ -45,7 +45,7 @@ async def test_sasl_connect_with_valid_credentials(sasl_bootstrap_servers):
 
     # Cleanup
     await admin.drop_database(db_name, ignore_if_not_exists=True, cascade=True)
-    conn.close()
+    await conn.close()
 
 
 async def test_sasl_connect_with_second_user(sasl_bootstrap_servers):
@@ -62,7 +62,7 @@ async def test_sasl_connect_with_second_user(sasl_bootstrap_servers):
 
     # Basic operation to confirm functional connection
     assert not await admin.database_exists("some_nonexistent_db_alice")
-    conn.close()
+    await conn.close()
 
 
 async def test_sasl_connect_with_wrong_password(sasl_bootstrap_servers):

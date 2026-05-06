@@ -34,7 +34,7 @@ defmodule Fluss.Connection do
 
   @type t :: reference()
 
-  @spec new(Fluss.Config.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec new(Fluss.Config.t()) :: {:ok, t()} | {:error, Fluss.Error.t()}
   def new(%Fluss.Config{} = config) do
     config
     |> Native.connection_new()
@@ -45,7 +45,7 @@ defmodule Fluss.Connection do
   def new!(%Fluss.Config{} = config) do
     case new(config) do
       {:ok, conn} -> conn
-      {:error, reason} -> raise "failed to connect to Fluss: #{reason}"
+      {:error, %Fluss.Error{} = err} -> raise err
     end
   end
 end
