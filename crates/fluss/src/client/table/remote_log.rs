@@ -778,7 +778,7 @@ impl RemoteLogDownloader {
         let fetcher = Arc::new(ProductionFetcher {
             credentials_rx,
             local_log_dir: Arc::new(local_log_dir),
-            remote_log_read_concurrency: remote_log_read_concurrency.max(1),
+            remote_log_read_concurrency,
         });
 
         Self::new_with_fetcher(fetcher, max_prefetch_segments, max_concurrent_downloads)

@@ -54,10 +54,6 @@ impl WriterClient {
     pub fn new(config: Config, metadata: Arc<Metadata>) -> Result<Self> {
         let ack = Self::get_ack(&config)?;
 
-        config
-            .validate_idempotence()
-            .map_err(|message| Error::IllegalArgument { message })?;
-
         let idempotence_manager = Arc::new(IdempotenceManager::new(
             config.writer_enable_idempotence,
             config.writer_max_inflight_requests_per_bucket,
