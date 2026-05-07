@@ -19,10 +19,9 @@ use crate::proto::LimitScanResponse;
 use crate::rpc::frame::ReadError;
 
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{impl_read_type, impl_write_type, proto};
 use prost::Message;
 
 use bytes::{Buf, BufMut};
@@ -50,9 +49,7 @@ impl RequestBody for LimitScanRequest {
     type ResponseBody = LimitScanResponse;
 
     const API_KEY: ApiKey = ApiKey::LimitScan;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(LimitScanRequest);
-impl_read_version_type!(LimitScanResponse);
+impl_write_type!(LimitScanRequest);
+impl_read_type!(LimitScanResponse);

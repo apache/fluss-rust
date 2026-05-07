@@ -19,10 +19,9 @@ use crate::proto::{
     ApiVersionsRequest as ProtoApiVersionsRequest, ApiVersionsResponse as ProtoApiVersionsResponse,
 };
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{impl_read_version_type, impl_write_version_type};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{impl_read_type, impl_write_type};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -45,8 +44,7 @@ impl ApiVersionsRequest {
 impl RequestBody for ApiVersionsRequest {
     type ResponseBody = ProtoApiVersionsResponse;
     const API_KEY: ApiKey = ApiKey::ApiVersion;
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(ApiVersionsRequest);
-impl_read_version_type!(ProtoApiVersionsResponse);
+impl_write_type!(ApiVersionsRequest);
+impl_read_type!(ProtoApiVersionsResponse);

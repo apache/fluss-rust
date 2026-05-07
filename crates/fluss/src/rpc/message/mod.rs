@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
 use bytes::{Buf, BufMut};
 
@@ -83,44 +82,36 @@ pub trait RequestBody {
     type ResponseBody;
 
     const API_KEY: ApiKey;
-
-    const REQUEST_VERSION: ApiVersion;
 }
 
 impl<T: RequestBody> RequestBody for &T {
     type ResponseBody = T::ResponseBody;
 
     const API_KEY: ApiKey = T::API_KEY;
-
-    const REQUEST_VERSION: ApiVersion = T::REQUEST_VERSION;
 }
 
-pub trait WriteVersionedType<W>: Sized
+pub trait WriteType<W>: Sized
 where
     W: BufMut,
 {
-    fn write_versioned(&self, writer: &mut W, version: ApiVersion) -> Result<(), WriteError>;
+    fn write(&self, writer: &mut W) -> Result<(), WriteError>;
 }
 
-pub trait ReadVersionedType<R>: Sized
+pub trait ReadType<R>: Sized
 where
     R: Buf,
 {
-    fn read_versioned(reader: &mut R, version: ApiVersion) -> Result<Self, ReadError>;
+    fn read(reader: &mut R) -> Result<Self, ReadError>;
 }
 
 #[macro_export]
-macro_rules! impl_write_version_type {
+macro_rules! impl_write_type {
     ($type:ty) => {
-        impl<W> WriteVersionedType<W> for $type
+        impl<W> WriteType<W> for $type
         where
             W: BufMut,
         {
-            fn write_versioned(
-                &self,
-                writer: &mut W,
-                _version: ApiVersion,
-            ) -> Result<(), WriteError> {
+            fn write(&self, writer: &mut W) -> Result<(), WriteError> {
                 Ok(self.inner_request.encode(writer).unwrap())
             }
         }
@@ -128,13 +119,13 @@ macro_rules! impl_write_version_type {
 }
 
 #[macro_export]
-macro_rules! impl_read_version_type {
+macro_rules! impl_read_type {
     ($type:ty) => {
-        impl<R> ReadVersionedType<R> for $type
+        impl<R> ReadType<R> for $type
         where
             R: Buf,
         {
-            fn read_versioned(reader: &mut R, _version: ApiVersion) -> Result<Self, ReadError> {
+            fn read(reader: &mut R) -> Result<Self, ReadError> {
                 Ok(<$type>::decode(reader).unwrap())
             }
         }

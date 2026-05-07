@@ -16,16 +16,15 @@
 // under the License.
 
 use crate::metadata::{JsonSerde, TableDescriptor, TablePath};
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
 
 use crate::error::Result as FlussResult;
 use crate::proto::CreateTableResponse;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::ReadError;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
 
 use bytes::{Buf, BufMut};
 use prost::Message;
@@ -55,9 +54,7 @@ impl RequestBody for CreateTableRequest {
     type ResponseBody = CreateTableResponse;
 
     const API_KEY: ApiKey = ApiKey::CreateTable;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(CreateTableRequest);
-impl_read_version_type!(CreateTableResponse);
+impl_write_type!(CreateTableRequest);
+impl_read_type!(CreateTableResponse);

@@ -17,10 +17,9 @@
 
 use crate::proto::{InitWriterResponse, PbTablePath};
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -42,9 +41,7 @@ impl RequestBody for InitWriterRequest {
     type ResponseBody = InitWriterResponse;
 
     const API_KEY: ApiKey = ApiKey::InitWriter;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(InitWriterRequest);
-impl_read_version_type!(InitWriterResponse);
+impl_write_type!(InitWriterRequest);
+impl_read_type!(InitWriterResponse);

@@ -29,8 +29,8 @@ use crate::rpc::error::RpcError;
 use crate::rpc::error::RpcError::ConnectionError;
 use crate::rpc::frame::{AsyncMessageRead, AsyncMessageWrite};
 use crate::rpc::message::{
-    ApiVersionsRequest, REQUEST_HEADER_LENGTH, ReadVersionedType, RequestBody, RequestHeader,
-    ResponseHeader, WriteVersionedType,
+    ApiVersionsRequest, REQUEST_HEADER_LENGTH, ReadType, RequestBody, RequestHeader,
+    ResponseHeader, WriteType,
 };
 use crate::rpc::transport::Transport;
 use futures::future::BoxFuture;
@@ -88,14 +88,14 @@ impl ServerApiVersions {
     pub fn new(server_versions: &[PbApiVersion]) -> Self {
         let mut versions = HashMap::new();
         for sv in server_versions {
-            let api_key = ApiKey::from(sv.api_key as i16);
+            let api_key = ApiKey::from(i16::try_from(sv.api_key).unwrap());
             // Skip unknown API keys — the client does not support them.
             let client_range = match api_key.supported_versions() {
                 Some(range) => range,
                 None => continue,
             };
-            let server_min = sv.min_version as i16;
-            let server_max = sv.max_version as i16;
+            let server_min = i16::try_from(sv.min_version as i16).unwrap();
+            let server_max = i16::try_from(sv.max_version).unwrap();
             let min_version = client_range.min().0.max(server_min);
             let max_version = client_range.max().0.min(server_max);
             if min_version > max_version {
@@ -147,7 +147,7 @@ fn resolve_api_version_for(
     }
     match api_versions {
         Some(versions) => versions.highest_available_version(api_key),
-        None => Err(Error::IllegalArgument {
+        None => Err(Error::UnsupportedVersion {
             message: format!(
                 "API version negotiation has not been performed yet; \
                  cannot resolve version for {:?}",
@@ -445,16 +445,13 @@ where
                     Ok(msg) => {
                         // message was read, so all subsequent errors should not poison the whole stream
                         let mut cursor = Cursor::new(msg);
-                        let header =
-                            match ResponseHeader::read_versioned(&mut cursor, ApiVersion(0)) {
-                                Ok(header) => header,
-                                Err(err) => {
-                                    log::warn!(
-                                        "Cannot read message header, ignoring message: {err:?}"
-                                    );
-                                    continue;
-                                }
-                            };
+                        let header = match ResponseHeader::read(&mut cursor) {
+                            Ok(header) => header,
+                            Err(err) => {
+                                log::warn!("Cannot read message header, ignoring message: {err:?}");
+                                continue;
+                            }
+                        };
 
                         let active_request = match state_captured.lock().deref_mut() {
                             ConnectionState::RequestMap(map) => {
@@ -514,30 +511,25 @@ where
 
     pub async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, Error>
     where
-        R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
-        R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
+        R: RequestBody + Send + WriteType<Vec<u8>>,
+        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
     {
-        let negotiated = self.resolve_api_version(R::API_KEY)?;
+        let api_version = self.resolve_api_version(R::API_KEY)?;
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
-            request_api_version: negotiated,
+            request_api_version: api_version,
             request_id,
             client_id: Some(String::from(self.client_id.as_ref())),
         };
 
-        let header_version = ApiVersion(0);
-
-        let body_api_version = negotiated;
-
         let mut buf = Vec::new();
         // write header
         header
-            .write_versioned(&mut buf, header_version)
+            .write(&mut buf)
             .map_err(RpcError::WriteMessageError)?;
         // write message body
-        msg.write_versioned(&mut buf, body_api_version)
-            .map_err(RpcError::WriteMessageError)?;
+        msg.write(&mut buf).map_err(RpcError::WriteMessageError)?;
 
         let (tx, rx) = channel();
 
@@ -581,8 +573,7 @@ where
             });
         }
 
-        let body = R::ResponseBody::read_versioned(&mut response.data, body_api_version)
-            .map_err(RpcError::ReadMessageError)?;
+        let body = R::ResponseBody::read(&mut response.data).map_err(RpcError::ReadMessageError)?;
 
         let read_bytes = response.data.position();
         let message_bytes = response.data.into_inner().len() as u64;
@@ -591,7 +582,7 @@ where
                 message_size: message_bytes,
                 read: read_bytes,
                 api_key: R::API_KEY,
-                api_version: body_api_version,
+                api_version: api_version,
             }
             .into());
         }
@@ -751,7 +742,7 @@ mod tests {
     use crate::rpc::ApiKey;
     use crate::rpc::api_version::ApiVersion;
     use crate::rpc::frame::{ReadError, WriteError};
-    use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+    use crate::rpc::message::{ReadType, RequestBody, WriteType};
     use metrics::{SharedString, Unit};
     use metrics_util::CompositeKey;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
@@ -767,17 +758,16 @@ mod tests {
     impl RequestBody for TestProduceRequest {
         type ResponseBody = TestProduceResponse;
         const API_KEY: ApiKey = ApiKey::ProduceLog;
-        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
     }
 
-    impl WriteVersionedType<Vec<u8>> for TestProduceRequest {
-        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+    impl WriteType<Vec<u8>> for TestProduceRequest {
+        fn write(&self, _w: &mut Vec<u8>) -> Result<(), WriteError> {
             Ok(())
         }
     }
 
-    impl ReadVersionedType<Cursor<Vec<u8>>> for TestProduceResponse {
-        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+    impl ReadType<Cursor<Vec<u8>>> for TestProduceResponse {
+        fn read(_r: &mut Cursor<Vec<u8>>) -> Result<Self, ReadError> {
             Ok(TestProduceResponse)
         }
     }
@@ -788,17 +778,16 @@ mod tests {
     impl RequestBody for TestMetadataRequest {
         type ResponseBody = TestMetadataResponse;
         const API_KEY: ApiKey = ApiKey::MetaData;
-        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
     }
 
-    impl WriteVersionedType<Vec<u8>> for TestMetadataRequest {
-        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+    impl WriteType<Vec<u8>> for TestMetadataRequest {
+        fn write(&self, _w: &mut Vec<u8>) -> Result<(), WriteError> {
             Ok(())
         }
     }
 
-    impl ReadVersionedType<Cursor<Vec<u8>>> for TestMetadataResponse {
-        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+    impl ReadType<Cursor<Vec<u8>>> for TestMetadataResponse {
+        fn read(_r: &mut Cursor<Vec<u8>>) -> Result<Self, ReadError> {
             Ok(TestMetadataResponse)
         }
     }

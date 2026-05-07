@@ -18,10 +18,9 @@
 use crate::rpc::frame::ReadError;
 
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -42,8 +41,7 @@ impl RequestBody for ListDatabasesRequest {
     type ResponseBody = proto::ListDatabasesResponse;
 
     const API_KEY: ApiKey = ApiKey::ListDatabases;
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(ListDatabasesRequest);
-impl_read_version_type!(proto::ListDatabasesResponse);
+impl_write_type!(ListDatabasesRequest);
+impl_read_type!(proto::ListDatabasesResponse);
