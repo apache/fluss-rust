@@ -3614,8 +3614,9 @@ impl ArrayWriterInner {
 
 /// Structural type equivalence that ignores nullability flags but preserves
 /// variant and precision/scale semantics. Used to compare ArrayWriter element
-/// types on the binding boundary, where C++ callers never control nullability
-/// explicitly.
+/// types on the binding boundary. Nullability is ignored in structural comparison
+// because the Rust-side element type is always reconstructed as nullable 
+// (encoding doesn't depend on it).
 fn structurally_compatible(a: &fcore::metadata::DataType, b: &fcore::metadata::DataType) -> bool {
     use fcore::metadata::DataType;
     match (a, b) {
