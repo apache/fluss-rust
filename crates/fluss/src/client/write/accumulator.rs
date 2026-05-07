@@ -19,6 +19,7 @@ use crate::client::broadcast;
 use crate::client::write::IdempotenceManager;
 use crate::client::write::batch::WriteBatch::{ArrowLog, Kv};
 use crate::client::write::batch::{ArrowLogWriteBatch, KvWriteBatch, WriteBatch};
+use crate::client::write::dynamic_batch_size::DynamicWriteBatchSizeEstimator;
 use crate::client::{LogWriteRecord, Record, ResultHandle, WriteRecord};
 use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::compression::ArrowCompressionRatioEstimator;
@@ -307,28 +308,32 @@ impl RecordAccumulator {
             None
         };
 
-        let (dq, compression_ratio_estimator) = {
-            let mut binding =
-                self.write_batches
-                    .entry(Arc::clone(physical_table_path))
-                    .or_insert_with(|| BucketAndWriteBatches {
-                        table_id: table_info.table_id,
+        let (dq, compression_ratio_estimator, dynamic_target) = {
+            let mut binding = self
+                .write_batches
+                .entry(Arc::clone(physical_table_path))
+                .or_insert_with(|| {
+                    BucketAndWriteBatches::new(
+                        table_info.table_id,
                         is_partitioned_table,
                         partition_id,
-                        batches: Default::default(),
-                        compression_ratio_estimator: Arc::new(
-                            ArrowCompressionRatioEstimator::default(),
-                        ),
-                    });
+                        &self.config,
+                    )
+                });
             let bucket_and_batches = binding.value_mut();
             let dq = bucket_and_batches
                 .batches
                 .entry(bucket_id)
                 .or_insert_with(|| Arc::new(Mutex::new(VecDeque::new())))
                 .clone();
+            let dynamic_target = self
+                .config
+                .writer_dynamic_batch_size_enabled
+                .then(|| bucket_and_batches.dynamic_batch_size.lock().current());
             (
                 dq,
                 Arc::clone(&bucket_and_batches.compression_ratio_estimator),
+                dynamic_target,
             )
         };
 
@@ -347,12 +352,7 @@ impl RecordAccumulator {
         // producer holds dq + blocks on memory, while sender needs dq to drain.
         drop(dq_guard);
 
-        // TODO: Implement DynamicWriteBatchSizeEstimator matching Java's
-        // client.writer.dynamic-batch-size-enabled. Adjusts the batch size target
-        // per table based on observed actual batch sizes (grow 10% when >80% full,
-        // shrink 5% when <50% full, clamped to [2*pageSize, maxBatchSize]).
-        // This would improve memory limiter utilization for tables with small rows.
-        let batch_size = self.config.writer_batch_size as usize;
+        let batch_size = dynamic_target.unwrap_or(self.config.writer_batch_size as usize);
         let record_size = record.estimated_record_size();
         let alloc_size = batch_size.max(record_size);
         let permit = self.memory_limiter.acquire(alloc_size)?;
@@ -664,6 +664,8 @@ impl RecordAccumulator {
                     let current_batch_size = batch.estimated_size_in_bytes();
                     size += current_batch_size;
 
+                    self.record_actual_batch_size(table_path, current_batch_size);
+
                     // mark the batch as drained.
                     batch.drained(current_time_ms());
                     ready.push(ReadyWriteBatch {
@@ -688,6 +690,15 @@ impl RecordAccumulator {
 
     pub fn remove_incomplete_batches(&self, batch_id: i64) {
         self.incomplete_batches.write().remove(&batch_id);
+    }
+
+    fn record_actual_batch_size(&self, table_path: &Arc<PhysicalTablePath>, actual: usize) {
+        if !self.config.writer_dynamic_batch_size_enabled {
+            return;
+        }
+        if let Some(entry) = self.write_batches.get(table_path) {
+            entry.dynamic_batch_size.lock().update(actual);
+        }
     }
 
     pub fn re_enqueue(&self, mut ready_write_batch: ReadyWriteBatch) {
@@ -785,12 +796,13 @@ impl RecordAccumulator {
         let mut binding = self
             .write_batches
             .entry(Arc::clone(physical_table_path))
-            .or_insert_with(|| BucketAndWriteBatches {
-                table_id,
-                is_partitioned_table,
-                partition_id,
-                batches: Default::default(),
-                compression_ratio_estimator: Arc::new(ArrowCompressionRatioEstimator::default()),
+            .or_insert_with(|| {
+                BucketAndWriteBatches::new(
+                    table_id,
+                    is_partitioned_table,
+                    partition_id,
+                    &self.config,
+                )
             });
         let bucket_and_batches = binding.value_mut();
         bucket_and_batches
@@ -938,6 +950,29 @@ struct BucketAndWriteBatches {
     batches: HashMap<BucketId, Arc<Mutex<VecDeque<WriteBatch>>>>,
     /// Compression ratio estimator shared across Arrow log batches for this table.
     compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
+    dynamic_batch_size: Mutex<DynamicWriteBatchSizeEstimator>,
+}
+
+impl BucketAndWriteBatches {
+    fn new(
+        table_id: TableId,
+        is_partitioned_table: bool,
+        partition_id: Option<PartitionId>,
+        config: &Config,
+    ) -> Self {
+        let estimator = DynamicWriteBatchSizeEstimator::new(
+            config.writer_batch_size_min as usize,
+            config.writer_batch_size as usize,
+        );
+        Self {
+            table_id,
+            is_partitioned_table,
+            partition_id,
+            batches: Default::default(),
+            compression_ratio_estimator: Arc::new(ArrowCompressionRatioEstimator::default()),
+            dynamic_batch_size: Mutex::new(estimator),
+        }
+    }
 }
 
 pub struct RecordAppendResult {
@@ -1562,5 +1597,78 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(100), notified)
             .await
             .expect("notified should complete after wakeup_sender");
+    }
+
+    #[test]
+    fn dynamic_batch_size_shrinks_after_small_drained_batch() {
+        let target = 256 * 1024;
+        let config = Config {
+            writer_dynamic_batch_size_enabled: true,
+            writer_batch_size: target,
+            writer_batch_size_min: 4 * 1024,
+            writer_buffer_memory_size: 1024 * 1024,
+            ..Config::default()
+        };
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+
+        accumulator.append(&record, 0, &cluster, false).unwrap();
+        assert_eq!(*accumulator.memory_limiter.state.lock(), target as usize);
+
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        let mut drained = accumulator
+            .drain(cluster.clone(), &nodes, 1024 * 1024)
+            .unwrap();
+        let mut batches = drained.remove(&1).expect("drained batches");
+        let batch = batches.pop().expect("batch");
+        accumulator.remove_incomplete_batches(batch.write_batch.batch_id());
+        assert_eq!(*accumulator.memory_limiter.state.lock(), 0);
+
+        accumulator.append(&record, 0, &cluster, false).unwrap();
+        let second = *accumulator.memory_limiter.state.lock();
+        assert!(second < target as usize, "{second} >= {target}");
+    }
+
+    #[test]
+    fn dynamic_batch_size_disabled_keeps_static_target() {
+        let target = 256 * 1024;
+        let config = Config {
+            writer_dynamic_batch_size_enabled: false,
+            writer_batch_size: target,
+            writer_batch_size_min: 4 * 1024,
+            writer_buffer_memory_size: 1024 * 1024,
+            ..Config::default()
+        };
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1)],
+        };
+        let record = WriteRecord::for_append(table_info, physical_table_path, 1, &row);
+
+        let server = cluster.get_tablet_server(1).expect("server");
+        let nodes = HashSet::from([server.clone()]);
+        for _ in 0..3 {
+            accumulator.append(&record, 0, &cluster, false).unwrap();
+            assert_eq!(*accumulator.memory_limiter.state.lock(), target as usize);
+
+            let mut drained = accumulator
+                .drain(cluster.clone(), &nodes, 1024 * 1024)
+                .unwrap();
+            let mut batches = drained.remove(&1).expect("drained batches");
+            let batch = batches.pop().expect("batch");
+            accumulator.remove_incomplete_batches(batch.write_batch.batch_id());
+        }
     }
 }
