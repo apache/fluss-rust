@@ -94,7 +94,7 @@ impl ServerApiVersions {
                 Some(range) => range,
                 None => continue,
             };
-            let server_min = i16::try_from(sv.min_version as i16).unwrap();
+            let server_min = i16::try_from(sv.min_version).unwrap();
             let server_max = i16::try_from(sv.max_version).unwrap();
             let min_version = client_range.min().0.max(server_min);
             let max_version = client_range.max().0.min(server_max);
@@ -582,7 +582,7 @@ where
                 message_size: message_bytes,
                 read: read_bytes,
                 api_key: R::API_KEY,
-                api_version: api_version,
+                api_version,
             }
             .into());
         }
