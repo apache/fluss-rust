@@ -46,9 +46,9 @@ impl DynamicWriteBatchSizeEstimator {
     pub fn update(&mut self, actual: usize) -> usize {
         let cur = self.current as f64;
         let actual = actual as f64;
-        let next = if actual >= cur * GROW_THRESHOLD {
+        let next = if actual > cur * GROW_THRESHOLD {
             cur * GROW_FACTOR
-        } else if actual <= cur * SHRINK_THRESHOLD {
+        } else if actual < cur * SHRINK_THRESHOLD {
             cur * SHRINK_FACTOR
         } else {
             cur
@@ -96,7 +96,8 @@ mod tests {
     #[test]
     fn shrinks_when_below_shrink_threshold() {
         let mut est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
-        let next = est.update((MAX as f64 * SHRINK_THRESHOLD) as usize);
+        // 0.4 sits safely below the strict 0.5 threshold.
+        let next = est.update((MAX as f64 * 0.4) as usize);
         assert_eq!(next, ((MAX as f64) * SHRINK_FACTOR) as usize);
     }
 

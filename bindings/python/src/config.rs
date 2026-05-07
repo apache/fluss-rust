@@ -60,7 +60,7 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
-                    "writer.dynamic-batch-size-enabled" => {
+                    "writer.dynamic-batch-size.enabled" => {
                         config.writer_dynamic_batch_size_enabled = match value.as_str() {
                             "true" => true,
                             "false" => false,

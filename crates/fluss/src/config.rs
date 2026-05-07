@@ -24,7 +24,7 @@ const DEFAULT_REQUEST_MAX_SIZE: i32 = 10 * 1024 * 1024;
 const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 // Mirrors Java's `2 * pageSize` floor with default pageSize = 128 KB.
 const DEFAULT_WRITER_BATCH_SIZE_MIN: i32 = 256 * 1024;
-const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED: bool = false;
+const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED: bool = true;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
@@ -80,7 +80,7 @@ pub struct Config {
     pub writer_batch_size: i32,
 
     /// Tune the per-table writer batch size from observed fill ratios.
-    /// Default: false (matching Java `client.writer.dynamic-batch-size-enabled`).
+    /// Default: true (matching Java `client.writer.dynamic-batch-size.enabled`).
     #[arg(long, default_value_t = DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED)]
     pub writer_dynamic_batch_size_enabled: bool,
 

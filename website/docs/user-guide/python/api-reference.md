@@ -15,7 +15,7 @@ Complete API reference for the Fluss Python client.
 | `writer_acks`                         | `writer.acks`                         | Get/set acknowledgment setting (`"all"` for all replicas)                               |
 | `writer_retries`                      | `writer.retries`                      | Get/set number of retries on failure                                                    |
 | `writer_batch_size`                   | `writer.batch-size`                   | Get/set write batch size in bytes (also the upper bound when dynamic sizing is enabled) |
-| `writer_dynamic_batch_size_enabled`   | `writer.dynamic-batch-size-enabled`   | Get/set whether the per-table dynamic batch size estimator is enabled (default `false`) |
+| `writer_dynamic_batch_size_enabled`   | `writer.dynamic-batch-size.enabled`   | Get/set whether the per-table dynamic batch size estimator is enabled (default `true`)  |
 | `writer_batch_size_min`               | `writer.batch-size-min`               | Get/set the lower bound for the dynamic batch size estimator (default 256 KB)           |
 | `writer_batch_timeout_ms`             | `writer.batch-timeout-ms`             | Get/set max time in ms to wait for a writer batch to fill up before sending             |
 | `writer_bucket_no_key_assigner`       | `writer.bucket.no-key-assigner`       | Get/set bucket assignment strategy (`"sticky"` or `"round_robin"`)                      |

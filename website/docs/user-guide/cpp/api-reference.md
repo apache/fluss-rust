@@ -22,7 +22,7 @@ Complete API reference for the Fluss C++ client.
 | `writer_acks`                         | `std::string` | `"all"`              | Acknowledgment setting (`"all"`, `"0"`, `"1"`, or `"-1"`)                                |
 | `writer_retries`                      | `int32_t`     | `INT32_MAX`          | Number of retries on failure                                                             |
 | `writer_batch_size`                   | `int32_t`     | `2097152` (2 MB)     | Batch size for writes in bytes (also the upper bound when dynamic sizing is enabled)     |
-| `writer_dynamic_batch_size_enabled`   | `bool`        | `false`              | Enable per-table dynamic batch sizing: target grows 10% above 80% fill, shrinks 5% below 50% |
+| `writer_dynamic_batch_size_enabled`   | `bool`        | `true`               | Enable per-table dynamic batch sizing: target grows 10% above 80% fill, shrinks 5% below 50% |
 | `writer_batch_size_min`               | `int32_t`     | `262144` (256 KB)    | Lower bound for the dynamic batch size estimator (ignored when disabled)                 |
 | `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
 | `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
