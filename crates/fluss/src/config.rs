@@ -23,7 +23,7 @@ const DEFAULT_BOOTSTRAP_SERVER: &str = "127.0.0.1:9123";
 const DEFAULT_REQUEST_MAX_SIZE: i32 = 10 * 1024 * 1024;
 const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 // Mirrors Java's `2 * pageSize` floor with default pageSize = 128 KB.
-const DEFAULT_WRITER_BATCH_SIZE_MIN: i32 = 256 * 1024;
+const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN: i32 = 256 * 1024;
 const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED: bool = true;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
@@ -86,8 +86,9 @@ pub struct Config {
 
     /// Lower bound for the dynamic batch size estimator.
     /// Default: 262144 (256 KB), matching Java's `2 * pageSize` floor.
-    #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_SIZE_MIN)]
-    pub writer_batch_size_min: i32,
+    /// Ignored when `writer_dynamic_batch_size_enabled` is false.
+    #[arg(long, default_value_t = DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN)]
+    pub writer_dynamic_batch_size_min: i32,
 
     #[arg(long, value_enum, default_value_t = NoKeyAssigner::Sticky)]
     pub writer_bucket_no_key_assigner: NoKeyAssigner,
@@ -216,7 +217,10 @@ impl std::fmt::Debug for Config {
                 "writer_dynamic_batch_size_enabled",
                 &self.writer_dynamic_batch_size_enabled,
             )
-            .field("writer_batch_size_min", &self.writer_batch_size_min)
+            .field(
+                "writer_dynamic_batch_size_min",
+                &self.writer_dynamic_batch_size_min,
+            )
             .field(
                 "writer_bucket_no_key_assigner",
                 &self.writer_bucket_no_key_assigner,
@@ -286,7 +290,7 @@ impl Default for Config {
             writer_retries: i32::MAX,
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
             writer_dynamic_batch_size_enabled: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED,
-            writer_batch_size_min: DEFAULT_WRITER_BATCH_SIZE_MIN,
+            writer_dynamic_batch_size_min: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN,
             writer_bucket_no_key_assigner: NoKeyAssigner::Sticky,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
@@ -408,11 +412,11 @@ impl Config {
         if self.writer_batch_size as usize > self.writer_buffer_memory_size {
             return Err("writer_batch_size must be <= writer_buffer_memory_size".to_string());
         }
-        if self.writer_batch_size_min <= 0 {
-            return Err("writer_batch_size_min must be > 0".to_string());
+        if self.writer_dynamic_batch_size_min <= 0 {
+            return Err("writer_dynamic_batch_size_min must be > 0".to_string());
         }
-        if self.writer_batch_size_min > self.writer_batch_size {
-            return Err("writer_batch_size_min must be <= writer_batch_size".to_string());
+        if self.writer_dynamic_batch_size_min > self.writer_batch_size {
+            return Err("writer_dynamic_batch_size_min must be <= writer_batch_size".to_string());
         }
         // idempotence checks
         if !self.writer_enable_idempotence {

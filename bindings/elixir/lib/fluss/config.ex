@@ -36,14 +36,14 @@ defmodule Fluss.Config do
             writer_batch_size: nil,
             writer_batch_timeout_ms: nil,
             writer_dynamic_batch_size_enabled: nil,
-            writer_batch_size_min: nil
+            writer_dynamic_batch_size_min: nil
 
   @type t :: %__MODULE__{
           bootstrap_servers: String.t(),
           writer_batch_size: non_neg_integer() | nil,
           writer_batch_timeout_ms: non_neg_integer() | nil,
           writer_dynamic_batch_size_enabled: boolean() | nil,
-          writer_batch_size_min: non_neg_integer() | nil
+          writer_dynamic_batch_size_min: non_neg_integer() | nil
         }
 
   @spec new(String.t()) :: t()
@@ -71,9 +71,9 @@ defmodule Fluss.Config do
       when is_boolean(enabled),
       do: %{config | writer_dynamic_batch_size_enabled: enabled}
 
-  @spec set_writer_batch_size_min(t(), non_neg_integer()) :: t()
-  def set_writer_batch_size_min(%__MODULE__{} = config, size) when is_integer(size),
-    do: %{config | writer_batch_size_min: size}
+  @spec set_writer_dynamic_batch_size_min(t(), non_neg_integer()) :: t()
+  def set_writer_dynamic_batch_size_min(%__MODULE__{} = config, size) when is_integer(size),
+    do: %{config | writer_dynamic_batch_size_min: size}
 
   @spec get_bootstrap_servers(t()) :: String.t()
   def get_bootstrap_servers(%__MODULE__{bootstrap_servers: servers}), do: servers

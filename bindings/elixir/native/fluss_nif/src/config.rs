@@ -26,7 +26,7 @@ pub struct NifConfig {
     pub writer_batch_size: Option<i32>,
     pub writer_batch_timeout_ms: Option<i64>,
     pub writer_dynamic_batch_size_enabled: Option<bool>,
-    pub writer_batch_size_min: Option<i32>,
+    pub writer_dynamic_batch_size_min: Option<i32>,
 }
 
 impl NifConfig {
@@ -44,8 +44,8 @@ impl NifConfig {
         if let Some(enabled) = self.writer_dynamic_batch_size_enabled {
             config.writer_dynamic_batch_size_enabled = enabled;
         }
-        if let Some(size) = self.writer_batch_size_min {
-            config.writer_batch_size_min = size;
+        if let Some(size) = self.writer_dynamic_batch_size_min {
+            config.writer_dynamic_batch_size_min = size;
         }
         config
     }

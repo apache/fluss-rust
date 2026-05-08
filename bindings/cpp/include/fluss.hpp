@@ -1228,7 +1228,7 @@ struct Configuration {
     // Tune the per-table writer batch size from observed fill ratios
     bool writer_dynamic_batch_size_enabled{true};
     // Lower bound (256 KB) for the dynamic batch size estimator
-    int32_t writer_batch_size_min{256 * 1024};
+    int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
     // Number of remote log batches to prefetch during scanning

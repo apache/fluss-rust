@@ -18,14 +18,16 @@
 //! Per-table batch size estimator. Mirrors Java's `DynamicWriteBatchSizeEstimator`:
 //! grow 10% above 80% fill, shrink 5% below 50%, clamped to `[min, max]`.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 const GROW_THRESHOLD: f64 = 0.8;
 const SHRINK_THRESHOLD: f64 = 0.5;
 const GROW_FACTOR: f64 = 1.1;
 const SHRINK_FACTOR: f64 = 0.95;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct DynamicWriteBatchSizeEstimator {
-    current: usize,
+    current: AtomicUsize,
     min: usize,
     max: usize,
 }
@@ -33,18 +35,20 @@ pub(crate) struct DynamicWriteBatchSizeEstimator {
 impl DynamicWriteBatchSizeEstimator {
     pub fn new(min_size: usize, max_size: usize) -> Self {
         Self {
-            current: max_size,
+            current: AtomicUsize::new(max_size),
             min: min_size.min(max_size),
             max: max_size,
         }
     }
 
     pub fn current(&self) -> usize {
-        self.current
+        self.current.load(Ordering::Relaxed)
     }
 
-    pub fn update(&mut self, actual: usize) -> usize {
-        let cur = self.current as f64;
+    /// Last-write-wins on races, matching Java's `ConcurrentHashMap.put`.
+    pub fn update(&self, actual: usize) -> usize {
+        let prev = self.current.load(Ordering::Relaxed);
+        let cur = prev as f64;
         let actual = actual as f64;
         let next = if actual > cur * GROW_THRESHOLD {
             cur * GROW_FACTOR
@@ -53,8 +57,11 @@ impl DynamicWriteBatchSizeEstimator {
         } else {
             cur
         };
-        self.current = (next as usize).clamp(self.min, self.max);
-        self.current
+        let clamped = (next as usize).clamp(self.min, self.max);
+        if clamped != prev {
+            self.current.store(clamped, Ordering::Relaxed);
+        }
+        clamped
     }
 }
 
@@ -75,14 +82,14 @@ mod tests {
 
     #[test]
     fn min_clamped_to_max_when_misconfigured() {
-        let mut est = DynamicWriteBatchSizeEstimator::new(MAX * 2, MAX);
+        let est = DynamicWriteBatchSizeEstimator::new(MAX * 2, MAX);
         assert_eq!(est.current(), MAX);
         assert_eq!(est.update(0), MAX);
     }
 
     #[test]
     fn grows_when_above_grow_threshold() {
-        let mut est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
+        let est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
         for _ in 0..CONVERGENCE_STEPS {
             est.update(0);
         }
@@ -95,7 +102,7 @@ mod tests {
 
     #[test]
     fn shrinks_when_below_shrink_threshold() {
-        let mut est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
+        let est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
         // 0.4 sits safely below the strict 0.5 threshold.
         let next = est.update((MAX as f64 * 0.4) as usize);
         assert_eq!(next, ((MAX as f64) * SHRINK_FACTOR) as usize);
@@ -103,7 +110,7 @@ mod tests {
 
     #[test]
     fn shrink_clamps_to_min() {
-        let mut est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
+        let est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
         for _ in 0..CONVERGENCE_STEPS {
             est.update(0);
         }
@@ -112,7 +119,7 @@ mod tests {
 
     #[test]
     fn grow_clamps_to_max() {
-        let mut est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
+        let est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
         for _ in 0..CONVERGENCE_STEPS {
             est.update(0);
         }
@@ -124,13 +131,13 @@ mod tests {
 
     #[test]
     fn oversized_actual_clamps_at_max() {
-        let mut est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
+        let est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
         assert_eq!(est.update(MAX * 4), MAX);
     }
 
     #[test]
     fn dead_zone_is_a_fixed_point() {
-        let mut est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
+        let est = DynamicWriteBatchSizeEstimator::new(MIN, MAX);
         let initial = est.current();
         for _ in 0..20 {
             est.update((est.current() as f64 * 0.65) as usize);

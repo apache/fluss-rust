@@ -326,10 +326,10 @@ impl RecordAccumulator {
                 .entry(bucket_id)
                 .or_insert_with(|| Arc::new(Mutex::new(VecDeque::new())))
                 .clone();
-            let dynamic_target = self
-                .config
-                .writer_dynamic_batch_size_enabled
-                .then(|| bucket_and_batches.dynamic_batch_size.lock().current());
+            let dynamic_target = bucket_and_batches
+                .dynamic_batch_size
+                .as_ref()
+                .map(|est| est.current());
             (
                 dq,
                 Arc::clone(&bucket_and_batches.compression_ratio_estimator),
@@ -693,12 +693,31 @@ impl RecordAccumulator {
     }
 
     fn record_actual_batch_size(&self, table_path: &Arc<PhysicalTablePath>, actual: usize) {
-        if !self.config.writer_dynamic_batch_size_enabled {
+        let Some(entry) = self.write_batches.get(table_path) else {
             return;
+        };
+        let Some(estimator) = entry.dynamic_batch_size.as_ref() else {
+            return;
+        };
+        let prev = estimator.current();
+        let next = estimator.update(actual);
+        if next != prev {
+            log::debug!(
+                "Set estimated batch size for {} from {} to {}",
+                table_path.as_ref(),
+                prev,
+                next
+            );
         }
-        if let Some(entry) = self.write_batches.get(table_path) {
-            entry.dynamic_batch_size.lock().update(actual);
-        }
+    }
+
+    #[cfg(test)]
+    fn estimated_batch_size(&self, table_path: &Arc<PhysicalTablePath>) -> Option<usize> {
+        self.write_batches
+            .get(table_path)?
+            .dynamic_batch_size
+            .as_ref()
+            .map(|est| est.current())
     }
 
     pub fn re_enqueue(&self, mut ready_write_batch: ReadyWriteBatch) {
@@ -950,7 +969,8 @@ struct BucketAndWriteBatches {
     batches: HashMap<BucketId, Arc<Mutex<VecDeque<WriteBatch>>>>,
     /// Compression ratio estimator shared across Arrow log batches for this table.
     compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
-    dynamic_batch_size: Mutex<DynamicWriteBatchSizeEstimator>,
+    /// `None` when `writer_dynamic_batch_size_enabled` is false.
+    dynamic_batch_size: Option<DynamicWriteBatchSizeEstimator>,
 }
 
 impl BucketAndWriteBatches {
@@ -960,17 +980,19 @@ impl BucketAndWriteBatches {
         partition_id: Option<PartitionId>,
         config: &Config,
     ) -> Self {
-        let estimator = DynamicWriteBatchSizeEstimator::new(
-            config.writer_batch_size_min as usize,
-            config.writer_batch_size as usize,
-        );
+        let dynamic_batch_size = config.writer_dynamic_batch_size_enabled.then(|| {
+            DynamicWriteBatchSizeEstimator::new(
+                config.writer_dynamic_batch_size_min as usize,
+                config.writer_batch_size as usize,
+            )
+        });
         Self {
             table_id,
             is_partitioned_table,
             partition_id,
             batches: Default::default(),
             compression_ratio_estimator: Arc::new(ArrowCompressionRatioEstimator::default()),
-            dynamic_batch_size: Mutex::new(estimator),
+            dynamic_batch_size,
         }
     }
 }
@@ -1034,9 +1056,12 @@ impl ReadyCheckResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::write::write_format::WriteFormat;
+    use crate::client::write::{RowBytes, WriteRecord};
     use crate::metadata::TablePath;
     use crate::row::{Datum, GenericRow};
     use crate::test_utils::{build_cluster, build_table_info};
+    use bytes::Bytes;
     use std::sync::Arc;
 
     fn disabled_idempotence() -> Arc<IdempotenceManager> {
@@ -1605,7 +1630,7 @@ mod tests {
         let config = Config {
             writer_dynamic_batch_size_enabled: true,
             writer_batch_size: target,
-            writer_batch_size_min: 4 * 1024,
+            writer_dynamic_batch_size_min: 4 * 1024,
             writer_buffer_memory_size: 1024 * 1024,
             ..Config::default()
         };
@@ -1638,12 +1663,72 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_batch_size_grows_after_full_drained_batch() {
+        let max = 256 * 1024;
+        let config = Config {
+            writer_dynamic_batch_size_enabled: true,
+            writer_batch_size: max,
+            writer_dynamic_batch_size_min: 4 * 1024,
+            writer_buffer_memory_size: 4 * 1024 * 1024,
+            ..Config::default()
+        };
+        let accumulator = RecordAccumulator::new(config, disabled_idempotence());
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let cluster = Arc::new(build_cluster(&table_path, 1, 1));
+        let nodes = HashSet::from([cluster.get_tablet_server(1).unwrap().clone()]);
+
+        let kv = |size: usize| {
+            WriteRecord::for_upsert(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_table_path),
+                1,
+                Bytes::from(vec![0u8; 32]),
+                None,
+                WriteFormat::CompactedKv,
+                None,
+                Some(RowBytes::Owned(Bytes::from(vec![0u8; size]))),
+            )
+        };
+        let drain_one = || {
+            let mut d = accumulator.drain(cluster.clone(), &nodes, max).unwrap();
+            let b = d.remove(&1).unwrap().pop().unwrap();
+            accumulator.remove_incomplete_batches(b.write_batch.batch_id());
+        };
+        let target = || {
+            accumulator
+                .estimated_batch_size(&physical_table_path)
+                .unwrap()
+        };
+
+        accumulator.append(&kv(1), 0, &cluster, false).unwrap();
+        drain_one();
+        let after_shrink = target();
+        assert!(
+            after_shrink < max as usize,
+            "shrink failed: after_shrink={after_shrink} max={max}"
+        );
+
+        // 0.9 sits safely above GROW_THRESHOLD (0.8) to avoid f64 boundary noise.
+        accumulator
+            .append(&kv(after_shrink * 9 / 10), 0, &cluster, false)
+            .unwrap();
+        drain_one();
+        let after_grow = target();
+        assert!(
+            after_grow > after_shrink,
+            "grow failed: after_grow={after_grow} after_shrink={after_shrink}"
+        );
+    }
+
+    #[test]
     fn dynamic_batch_size_disabled_keeps_static_target() {
         let target = 256 * 1024;
         let config = Config {
             writer_dynamic_batch_size_enabled: false,
             writer_batch_size: target,
-            writer_batch_size_min: 4 * 1024,
+            writer_dynamic_batch_size_min: 4 * 1024,
             writer_buffer_memory_size: 1024 * 1024,
             ..Config::default()
         };
