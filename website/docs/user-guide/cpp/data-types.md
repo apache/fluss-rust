@@ -23,6 +23,40 @@ sidebar_position: 3
 | `DataType::Decimal(p, s)`  | Decimal with precision and scale                               |
 | `DataType::Array(element)` | Array of the given element type (supports nesting)             |
 
+## Nullability
+
+All DataTypes are nullable by default. Use `.NotNull()` to create a `NOT NULL` type:
+
+```cpp
+auto schema = fluss::Schema::NewBuilder()
+    .AddColumn("id", fluss::DataType::Int().NotNull())
+    .AddColumn("name", fluss::DataType::String())          // nullable by default
+    .Build();
+```
+
+Primary key columns are automatically forced `NOT NULL` regardless of the `DataType` setting.
+
+For nested types, nullability is preserved at each array level and at the leaf element:
+
+```cpp
+auto schema = fluss::Schema::NewBuilder()
+    .AddColumn("tags", fluss::DataType::Array(fluss::DataType::String().NotNull()))
+    .AddColumn("ids", fluss::DataType::Array(fluss::DataType::Int()).NotNull())
+    .AddColumn("nested", fluss::DataType::Array(
+        fluss::DataType::Array(fluss::DataType::Int()).NotNull()))
+    .Build();
+// "tags":   ARRAY<STRING NOT NULL>         (outer nullable, elements NOT NULL)
+// "ids":    ARRAY<INT> NOT NULL            (outer NOT NULL, elements nullable)
+// "nested": ARRAY<ARRAY<INT> NOT NULL>     (outer nullable, inner array NOT NULL)
+```
+
+You can query nullability at runtime:
+
+```cpp
+auto info = table.GetTableInfo();
+bool is_nullable = info.schema.columns[0].data_type.nullable();
+```
+
 ## GenericRow Setters
 
 `SetInt32` is used for `TinyInt`, `SmallInt`, and `Int` columns. For `TinyInt` and `SmallInt`, the value is validated at write time — an error is returned if it overflows the column's range (e.g., \[-128, 127\] for `TinyInt`, \[-32768, 32767\] for `SmallInt`).

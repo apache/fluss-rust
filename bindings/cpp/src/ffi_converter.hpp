@@ -33,16 +33,18 @@ namespace utils {
 /// `nesting` counts the number of ARRAY wrappers stripped to reach the leaf
 /// element type. `leaf_type`/`leaf_precision`/`leaf_scale` describe that leaf
 /// scalar. A non-array input produces a zero-initialised value (nesting == 0).
+/// `array_nullability` has `nesting + 1` entries: one per ARRAY wrapper
+/// (outermost first) plus a trailing entry for the leaf scalar's nullability.
 ///
 /// Using a flat representation — rather than serialising a recursive
-/// `DataType` — keeps the cxx bridge contract small (four `i32`s inside
-/// `FfiColumn`) while preserving full schema fidelity across the FFI boundary
-/// when paired with rebuild_array_type().
+/// `DataType` — keeps the cxx bridge contract small while preserving schema
+/// fidelity across the FFI boundary when paired with rebuild_array_type().
 struct FlattenedArrayType {
     int32_t nesting{0};
     int32_t leaf_type{0};
     int32_t leaf_precision{0};
     int32_t leaf_scale{0};
+    std::vector<uint8_t> array_nullability;
 };
 
 /// Flattens an `ARRAY<ARRAY<...<leaf>>>` DataType into a FlattenedArrayType.
@@ -53,7 +55,8 @@ struct FlattenedArrayType {
 ///   - If `data_type` is an ARRAY but has a null element_type() chain (which
 ///     should only happen on malformed input), returns a zero-valued result to
 ///     signal the caller to reject the schema.
-///   - Otherwise, `nesting >= 1` and leaf_* describe the innermost scalar.
+///   - Otherwise, `nesting >= 1`, array_nullability has `nesting + 1` entries
+///     (last = leaf scalar nullability), and leaf_* describe the innermost scalar.
 inline FlattenedArrayType flatten_array_type(const DataType& data_type) {
     FlattenedArrayType out;
     if (data_type.id() != TypeId::Array) {
@@ -63,6 +66,7 @@ inline FlattenedArrayType flatten_array_type(const DataType& data_type) {
     const DataType* current = &data_type;
     while (current && current->id() == TypeId::Array) {
         out.nesting += 1;
+        out.array_nullability.push_back(current->nullable() ? 1 : 0);
         current = current->element_type();
     }
     if (!current) {
@@ -72,16 +76,29 @@ inline FlattenedArrayType flatten_array_type(const DataType& data_type) {
     out.leaf_type = static_cast<int32_t>(current->id());
     out.leaf_precision = current->precision();
     out.leaf_scale = current->scale();
+    out.array_nullability.push_back(current->nullable() ? 1 : 0);
     return out;
 }
 
 /// Inverse of flatten_array_type: rebuilds an `ARRAY<ARRAY<...<leaf>>>` type
 /// from the compact flat form. Requires `flat.nesting >= 1`; callers handle
 /// the `nesting == 0` case by using a plain scalar DataType directly.
+/// `array_nullability` must have `nesting + 1` entries (last = leaf).
 inline DataType rebuild_array_type(const FlattenedArrayType& flat) {
-    DataType dt(static_cast<TypeId>(flat.leaf_type), flat.leaf_precision, flat.leaf_scale);
-    for (int32_t i = 0; i < flat.nesting; ++i) {
-        dt = DataType::Array(std::move(dt));
+    bool leaf_nullable = (static_cast<size_t>(flat.nesting) < flat.array_nullability.size())
+                             ? (flat.array_nullability[static_cast<size_t>(flat.nesting)] != 0)
+                             : true;
+    DataType dt(static_cast<TypeId>(flat.leaf_type), flat.leaf_precision, flat.leaf_scale,
+                leaf_nullable);
+    for (int32_t i = flat.nesting - 1; i >= 0; --i) {
+        bool nullable = (static_cast<size_t>(i) < flat.array_nullability.size())
+                            ? (flat.array_nullability[static_cast<size_t>(i)] != 0)
+                            : true;
+        auto arr = DataType::Array(std::move(dt));
+        if (!nullable) {
+            arr = arr.NotNull();
+        }
+        dt = std::move(arr);
     }
     return dt;
 }
@@ -150,11 +167,15 @@ inline ffi::FfiColumn to_ffi_column(const Column& col) {
     ffi::FfiColumn ffi_col;
     ffi_col.name = rust::String(col.name);
     ffi_col.data_type = static_cast<int32_t>(col.data_type.id());
+    ffi_col.nullable = col.data_type.nullable();
     ffi_col.comment = rust::String(col.comment);
     ffi_col.precision = col.data_type.precision();
     ffi_col.scale = col.data_type.scale();
     auto flat = flatten_array_type(col.data_type);
     ffi_col.array_nesting = flat.nesting;
+    for (auto nullable : flat.array_nullability) {
+        ffi_col.array_nullability.push_back(nullable);
+    }
     if (flat.nesting > 0 && flat.leaf_type != 0) {
         ffi_col.element_data_type = flat.leaf_type;
         ffi_col.element_precision = flat.leaf_precision;
@@ -229,7 +250,6 @@ inline ffi::FfiTableDescriptor to_ffi_table_descriptor(const TableDescriptor& de
 
 inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
     auto type_id = static_cast<TypeId>(ffi_col.data_type);
-    DataType dt(type_id, ffi_col.precision, ffi_col.scale);
     if (type_id == TypeId::Array) {
         if (ffi_col.element_data_type == 0) {
             throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
@@ -273,13 +293,21 @@ inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
         }
 
         int32_t nesting = ffi_col.array_nesting > 0 ? ffi_col.array_nesting : 1;
-        dt = rebuild_array_type(FlattenedArrayType{
-            nesting,
-            ffi_col.element_data_type,
-            ffi_col.element_precision,
-            ffi_col.element_scale,
-        });
+        std::vector<uint8_t> array_nullability;
+        for (auto nullable : ffi_col.array_nullability) {
+            array_nullability.push_back(nullable);
+        }
+        auto dt = rebuild_array_type(
+            FlattenedArrayType{
+                nesting,
+                ffi_col.element_data_type,
+                ffi_col.element_precision,
+                ffi_col.element_scale,
+                std::move(array_nullability),
+            });
+        return Column{std::string(ffi_col.name), std::move(dt), std::string(ffi_col.comment)};
     }
+    DataType dt(type_id, ffi_col.precision, ffi_col.scale, ffi_col.nullable);
     return Column{std::string(ffi_col.name), std::move(dt), std::string(ffi_col.comment)};
 }
 
