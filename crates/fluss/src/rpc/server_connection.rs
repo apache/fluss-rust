@@ -1289,8 +1289,12 @@ mod tests {
             Err(Error::InvalidServerType { .. })
         ));
 
+        validate_server_type(&ServerType::TabletServer, None).ok();
         // Unknown / unmapped type id still fails, with the raw id surfaced so
         // operators can diagnose protocol drift.
-        validate_server_type(&ServerType::TabletServer, None).ok();
+        assert!(matches!(
+            validate_server_type(&ServerType::CoordinatorServer, Some(99),),
+            Err(Error::InvalidServerType { .. })
+        ));
     }
 }
