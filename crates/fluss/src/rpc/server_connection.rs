@@ -88,14 +88,14 @@ impl ServerApiVersions {
     pub fn new(server_versions: &[PbApiVersion]) -> Self {
         let mut versions = HashMap::new();
         for sv in server_versions {
-            let api_key = ApiKey::from(i16::try_from(sv.api_key).unwrap());
+            let api_key = ApiKey::from(sv.api_key as i16);
             // Skip unknown API keys — the client does not support them.
             let client_range = match api_key.supported_versions() {
                 Some(range) => range,
                 None => continue,
             };
-            let server_min = i16::try_from(sv.min_version).unwrap();
-            let server_max = i16::try_from(sv.max_version).unwrap();
+            let server_min = sv.min_version as i16;
+            let server_max = sv.max_version as i16;
             let min_version = client_range.min().0.max(server_min);
             let max_version = client_range.max().0.min(server_max);
             if min_version > max_version {
@@ -134,26 +134,26 @@ impl ServerApiVersions {
 
 /// Resolve the API version to use for a given API key.
 ///
-/// The `ApiVersions` request itself always uses `ApiVersion(0)` since it is
-/// sent before the version negotiation handshake.
-/// For all other requests, the handshake must have been completed; otherwise
-/// an error is returned to prevent silent fallback to an incorrect version.
+/// Aligned with Java `NettyClient.sendRequest`:
+/// the resolved version equals `apiKey.highestSupportedVersion` when
+/// `serverApiVersions` has not been initialized yet (e.g., when sending
+/// the `ApiVersions` request itself before the negotiation handshake
+/// completes). Once `serverApiVersions` is available, the negotiated
+/// highest-available version is used.
 fn resolve_api_version_for(
     api_versions: Option<&ServerApiVersions>,
     api_key: ApiKey,
 ) -> Result<ApiVersion, Error> {
-    if api_key == ApiKey::ApiVersion {
-        return Ok(ApiVersion(0));
-    }
+    // version equals highestSupportedVersion might happen when requesting api version check
+    // before serverApiVersions is initialized. We always use the highest version for api
+    // version checking.
+    let default_version = api_key
+        .supported_versions()
+        .map(|range| range.max())
+        .unwrap();
     match api_versions {
         Some(versions) => versions.highest_available_version(api_key),
-        None => Err(Error::UnsupportedVersion {
-            message: format!(
-                "API version negotiation has not been performed yet; \
-                 cannot resolve version for {:?}",
-                api_key
-            ),
-        }),
+        None => Ok(default_version),
     }
 }
 
@@ -1150,11 +1150,17 @@ mod tests {
 
     #[tokio::test]
     async fn server_api_versions_negotiation() {
-        assert!(
-            resolve_api_version_for(None, ApiKey::ProduceLog)
-                .unwrap_err()
-                .to_string()
-                .contains("API version negotiation has not been performed yet;")
+        // Before negotiation: fall back to the client's highest supported version
+        // (Java `NettyClient.sendRequest` parity: version = apiKey.highestSupportedVersion).
+        // ApiVersion itself only supports v0.
+        assert_eq!(
+            resolve_api_version_for(None, ApiKey::ApiVersion).unwrap(),
+            ApiVersion(0)
+        );
+
+        assert_eq!(
+            resolve_api_version_for(None, ApiKey::PutKv).unwrap(),
+            ApiVersion(0)
         );
 
         let server_versions = vec![
