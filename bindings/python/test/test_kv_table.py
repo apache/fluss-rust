@@ -358,6 +358,7 @@ async def test_all_supported_datatypes(connection, admin):
                 pa.field("col_timestamp_ntz", pa.timestamp("us")),
                 pa.field("col_timestamp_ltz", pa.timestamp("us", tz="UTC")),
                 pa.field("col_bytes", pa.binary()),
+                pa.field("col_binary", pa.binary(16)),
             ]
         ),
         primary_keys=["pk_int"],
@@ -385,6 +386,7 @@ async def test_all_supported_datatypes(connection, admin):
         "col_timestamp_ntz": datetime(2026, 1, 23, 10, 13, 47, 123000),
         "col_timestamp_ltz": datetime(2026, 1, 23, 10, 13, 47, 123000),
         "col_bytes": b"binary data",
+        "col_binary": b"binary_data_0123",
     }
 
     handle = upsert_writer.upsert(row_data)
@@ -411,6 +413,7 @@ async def test_all_supported_datatypes(connection, admin):
         2026, 1, 23, 10, 13, 47, 123000, tzinfo=timezone.utc
     )
     assert result["col_bytes"] == b"binary data"
+    assert result["col_binary"] == b"binary_data_0123"
 
     # Test with null values for all nullable columns
     null_row = {"pk_int": 2}
