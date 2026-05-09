@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cluster::ServerNode;
+use crate::cluster::{ServerNode, ServerType};
 use crate::error::Error;
 use crate::metrics::{
     CLIENT_BYTES_RECEIVED_TOTAL, CLIENT_BYTES_SENT_TOTAL, CLIENT_REQUEST_LATENCY_MS,
@@ -88,14 +88,14 @@ impl ServerApiVersions {
     pub fn new(server_versions: &[PbApiVersion]) -> Self {
         let mut versions = HashMap::new();
         for sv in server_versions {
-            let api_key = ApiKey::from(sv.api_key as i16);
+            let api_key = ApiKey::from(i16::try_from(sv.api_key).unwrap());
             // Skip unknown API keys — the client does not support them.
             let client_range = match api_key.supported_versions() {
                 Some(range) => range,
                 None => continue,
             };
-            let server_min = sv.min_version as i16;
-            let server_max = sv.max_version as i16;
+            let server_min = i16::try_from(sv.min_version).unwrap();
+            let server_max = i16::try_from(sv.max_version).unwrap();
             let min_version = client_range.min().0.max(server_min);
             let max_version = client_range.max().0.min(server_max);
             if min_version > max_version {
@@ -133,13 +133,6 @@ impl ServerApiVersions {
 }
 
 /// Resolve the API version to use for a given API key.
-///
-/// Aligned with Java `NettyClient.sendRequest`:
-/// the resolved version equals `apiKey.highestSupportedVersion` when
-/// `serverApiVersions` has not been initialized yet (e.g., when sending
-/// the `ApiVersions` request itself before the negotiation handshake
-/// completes). Once `serverApiVersions` is available, the negotiated
-/// highest-available version is used.
 fn resolve_api_version_for(
     api_versions: Option<&ServerApiVersions>,
     api_key: ApiKey,
@@ -155,6 +148,32 @@ fn resolve_api_version_for(
         Some(versions) => versions.highest_available_version(api_key),
         None => Ok(default_version),
     }
+}
+
+/// Validate that the server's advertised `server_type` matches the type we expect
+/// for the target `ServerNode`.
+fn validate_server_type(
+    expected: &ServerType,
+    response_server_type: Option<i32>,
+) -> Result<(), Error> {
+    // For forward-compat with servers that do not populate `server_type`, validation is skipped.
+    let Some(type_id) = response_server_type else {
+        return Ok(());
+    };
+    let actual = ServerType::from_type_id(type_id);
+    if actual.as_ref() == Some(expected) {
+        return Ok(());
+    }
+    let actual_desc = actual
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| format!("Unknown(type_id={type_id})"));
+    Err(Error::InvalidServerType {
+        message: format!(
+            "Expected server type {expected} but the server advertised {actual_desc}. \
+             The client may be talking to the wrong endpoint \
+             (e.g. coordinator vs tablet server)."
+        ),
+    })
 }
 
 #[derive(Debug, Default)]
@@ -228,7 +247,7 @@ impl RpcClient {
         let connection = ServerConnection::new(messenger);
 
         // Negotiate API versions (must happen before authentication).
-        Self::check_api_versions(&connection).await?;
+        Self::check_api_versions(&connection, server_node.server_type()).await?;
 
         if let Some(ref sasl) = self.sasl_config {
             Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
@@ -237,10 +256,15 @@ impl RpcClient {
         Ok(connection)
     }
 
-    /// Send an `ApiVersionsRequest` and store the negotiated versions on the connection.
-    async fn check_api_versions(connection: &ServerConnection) -> Result<(), Error> {
+    /// Send an `ApiVersionsRequest`, validate the advertised `server_type`, and
+    /// store the negotiated versions on the connection.
+    async fn check_api_versions(
+        connection: &ServerConnection,
+        expected_server_type: &ServerType,
+    ) -> Result<(), Error> {
         let request = ApiVersionsRequest::new("fluss-rust", env!("CARGO_PKG_VERSION"));
         let response = connection.request(request).await?;
+        validate_server_type(expected_server_type, response.server_type)?;
         let api_versions = ServerApiVersions::new(&response.api_versions);
         *connection.api_versions.lock() = Some(api_versions);
         Ok(())
@@ -1150,9 +1174,6 @@ mod tests {
 
     #[tokio::test]
     async fn server_api_versions_negotiation() {
-        // Before negotiation: fall back to the client's highest supported version
-        // (Java `NettyClient.sendRequest` parity: version = apiKey.highestSupportedVersion).
-        // ApiVersion itself only supports v0.
         assert_eq!(
             resolve_api_version_for(None, ApiKey::ApiVersion).unwrap(),
             ApiVersion(0)
@@ -1228,5 +1249,48 @@ mod tests {
                 .highest_available_version(ApiKey::FetchLog)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn server_type_validation() {
+        // Happy path: server advertises the expected type.
+        assert!(
+            validate_server_type(
+                &ServerType::CoordinatorServer,
+                Some(ServerType::CoordinatorServer.to_type_id()),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_server_type(
+                &ServerType::TabletServer,
+                Some(ServerType::TabletServer.to_type_id()),
+            )
+            .is_ok()
+        );
+
+        // Mismatch: connected to a coordinator while expecting a tablet server
+        // (and vice versa).
+        let err = validate_server_type(
+            &ServerType::TabletServer,
+            Some(ServerType::CoordinatorServer.to_type_id()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidServerType { .. }),
+            "expected InvalidServerType, got: {err:?}"
+        );
+
+        assert!(matches!(
+            validate_server_type(
+                &ServerType::CoordinatorServer,
+                Some(ServerType::TabletServer.to_type_id()),
+            ),
+            Err(Error::InvalidServerType { .. })
+        ));
+
+        // Unknown / unmapped type id still fails, with the raw id surfaced so
+        // operators can diagnose protocol drift.
+        validate_server_type(&ServerType::TabletServer, None).ok();
     }
 }
