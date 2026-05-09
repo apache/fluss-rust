@@ -19,12 +19,9 @@ use crate::proto::PrefixLookupResponse;
 use crate::rpc::frame::ReadError;
 
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{
-    BucketId, PartitionId, TableId, impl_read_version_type, impl_write_version_type, proto,
-};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{BucketId, PartitionId, TableId, impl_read_type, impl_write_type, proto};
 use bytes::Bytes;
 use prost::Message;
 
@@ -65,9 +62,7 @@ impl RequestBody for PrefixLookupRequest {
     type ResponseBody = PrefixLookupResponse;
 
     const API_KEY: ApiKey = ApiKey::PrefixLookup;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(PrefixLookupRequest);
-impl_read_version_type!(PrefixLookupResponse);
+impl_write_type!(PrefixLookupRequest);
+impl_read_type!(PrefixLookupResponse);

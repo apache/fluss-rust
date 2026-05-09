@@ -1404,4 +1404,75 @@ mod kv_table_test {
             .await
             .expect("Failed to drop table");
     }
+
+    /// Test that KV format v2 tables with non-default bucket key reject v0 clients.
+    /// The Rust client currently only supports API version 0 for PutKv/Lookup/PrefixLookup.
+    /// When the server creates a table with kv_format_version=2 and a non-default bucket key,
+    /// it rejects v0 clients because CompactedKeyEncoder (v1) is required.
+    // TODO(key-encoding-v1): Once v1 key encoding is implemented and the client advertises
+    //  PutKv/Lookup/PrefixLookup v1, this test should be updated to verify that v1 clients
+    //  can successfully write to and read from kv_format_v2 tables with non-default bucket keys.
+    #[tokio::test]
+    async fn kv_format_v2_table_rejects_v0_client() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().unwrap();
+
+        let table_path = TablePath::new("fluss", "test_kv_format_v2_reject_v0");
+
+        // Create a KV table with:
+        // 1. kv_format_version = 2
+        // 2. non-default bucket key ("a" is a subset of pk ("a", "b"))
+        // 3. datalake format is exist.
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("a", DataTypes::int())
+                    .column("b", DataTypes::string())
+                    .column("c", DataTypes::string())
+                    .primary_key(vec!["a", "b"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .distributed_by(Some(2), vec!["a".to_string()])
+            .property("table.kv.format-version", "2")
+            .property("table.datalake.format", "lance")
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.unwrap();
+
+        // Test PutKv with v0 client - should fail with UNSUPPORTED_VERSION
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let upsert_writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        let mut row = GenericRow::new(3);
+        row.set_field(0, 1);
+        row.set_field(1, "a");
+        row.set_field(2, "value1");
+        let upsert_result = upsert_writer
+            .upsert(&row)
+            .expect("Failed to upsert row")
+            .await;
+        assert!(
+            upsert_result.is_err(),
+            "PutKv with v0 client should be rejected for kv_format_v2 table with non-default bucket key"
+        );
+        let err_msg = upsert_result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Client API version 0 is not supported"),
+            "Expected 'Client API version 0 is not supported' error, got: {}",
+            err_msg
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
 }

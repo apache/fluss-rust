@@ -24,6 +24,23 @@ message ErrorResponse {
   optional string error_message = 2;
 }
 
+// api versions request and response
+message ApiVersionsRequest {
+  required string client_software_name = 1;
+  required string client_software_version = 2;
+}
+
+message ApiVersionsResponse {
+  repeated PbApiVersion api_versions = 1;
+  optional int32 server_type = 2;
+}
+
+message PbApiVersion {
+  required int32 api_key = 1;
+  required int32 min_version = 2;
+  required int32 max_version = 3;
+}
+
 // metadata request and response, request send from client to each server.
 message MetadataRequest {
   repeated PbTablePath table_path = 1;

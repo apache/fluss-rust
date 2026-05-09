@@ -16,14 +16,13 @@
 // under the License.
 
 use crate::metadata::TablePath;
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
 
 use crate::proto::TableExistsResponse;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
 
 use crate::rpc::frame::ReadError;
 
@@ -48,9 +47,7 @@ impl RequestBody for TableExistsRequest {
     type ResponseBody = TableExistsResponse;
 
     const API_KEY: ApiKey = ApiKey::TableExists;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(TableExistsRequest);
-impl_read_version_type!(TableExistsResponse);
+impl_write_type!(TableExistsRequest);
+impl_read_type!(TableExistsResponse);

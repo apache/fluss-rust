@@ -18,11 +18,10 @@
 use crate::metadata::{PartitionSpec, TablePath};
 use crate::proto::CreatePartitionResponse;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::{ReadError, WriteError};
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -51,9 +50,7 @@ impl RequestBody for CreatePartitionRequest {
     type ResponseBody = CreatePartitionResponse;
 
     const API_KEY: ApiKey = ApiKey::CreatePartition;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(CreatePartitionRequest);
-impl_read_version_type!(CreatePartitionResponse);
+impl_write_type!(CreatePartitionRequest);
+impl_read_type!(CreatePartitionResponse);

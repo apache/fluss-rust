@@ -16,16 +16,15 @@
 // under the License.
 
 use crate::metadata::TablePath;
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
 
 use crate::proto::DropTableResponse;
 use crate::rpc::frame::ReadError;
 
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
 
 use bytes::{Buf, BufMut};
 use prost::Message;
@@ -50,9 +49,7 @@ impl RequestBody for DropTableRequest {
     type ResponseBody = DropTableResponse;
 
     const API_KEY: ApiKey = ApiKey::DropTable;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(DropTableRequest);
-impl_read_version_type!(DropTableResponse);
+impl_write_type!(DropTableRequest);
+impl_read_type!(DropTableResponse);
