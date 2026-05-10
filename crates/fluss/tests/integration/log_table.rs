@@ -18,7 +18,9 @@
 
 #[cfg(test)]
 mod table_test {
-    use crate::integration::utils::{create_partitions, create_table, get_shared_cluster};
+    use crate::integration::utils::{
+        create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
+    };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
@@ -658,6 +660,7 @@ mod table_test {
                         "col_timestamp_ltz_ns_neg",
                         DataTypes::timestamp_ltz_with_precision(9),
                     )
+                    .column("col_array", DataTypes::array(DataTypes::string()))
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -719,6 +722,8 @@ mod table_test {
         let col_timestamp_ltz_ns_neg =
             TimestampLtz::from_millis_nanos(-301234154877, 999_999).unwrap();
 
+        let col_array = make_string_array(&[Some("fluss"), Some("rust")]);
+
         // Append a row with all datatypes
         let mut row = GenericRow::new(field_count);
         row.set_field(0, col_tinyint);
@@ -750,6 +755,7 @@ mod table_test {
         row.set_field(26, col_timestamp_ns_neg);
         row.set_field(27, col_timestamp_ltz_us_neg);
         row.set_field(28, col_timestamp_ltz_ns_neg);
+        row.set_field(29, col_array);
 
         append_writer
             .append(&row)
@@ -993,6 +999,11 @@ mod table_test {
             col_timestamp_ltz_ns_neg.get_nano_of_millisecond(),
             "col_timestamp_ltz_ns_neg nanos mismatch"
         );
+
+        let arr = found_row.get_array(29).unwrap();
+        assert_eq!(arr.size(), 2, "col_array size mismatch");
+        assert_eq!(arr.get_string(0).unwrap(), "fluss", "col_array[0] mismatch");
+        assert_eq!(arr.get_string(1).unwrap(), "rust", "col_array[1] mismatch");
 
         // Verify row with all nulls (record index 1)
         let found_row_nulls = records[1].row();
@@ -1367,6 +1378,432 @@ mod table_test {
             result.is_err(),
             "Row with mismatched types should be rejected, not panic"
         );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn append_and_scan_with_array() {
+        use fluss::row::binary_array::FlussArrayWriter;
+        use fluss::row::{Datum, FlussArray, GenericRow};
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_log_arrays");
+        let inner_array_type = DataTypes::array(DataTypes::int());
+
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("tags", DataTypes::array(DataTypes::string()))
+            .column("scores", DataTypes::array(DataTypes::int()))
+            .column("matrix", DataTypes::array(inner_array_type.clone()))
+            .build()
+            .expect("Failed to build schema");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Row 1: id=1, tags=["hello", "world"], scores=[10, 20, 30], matrix=[[1,2],[3,4]]
+        let mut row1 = GenericRow::new(4);
+        row1.set_field(0, 1_i32);
+        row1.set_field(1, make_string_array(&[Some("hello"), Some("world")]));
+        row1.set_field(2, make_int_array(&[Some(10), Some(20), Some(30)]));
+        let m1 = {
+            let mut w = FlussArrayWriter::new(2, &inner_array_type);
+            w.write_array(0, &make_int_array(&[Some(1), Some(2)]));
+            w.write_array(1, &make_int_array(&[Some(3), Some(4)]));
+            w.complete().expect("matrix1")
+        };
+        row1.set_field(3, m1);
+
+        // Row 2: id=2, tags=[null], scores=[], matrix=[[5], null, []]
+        let mut row2 = GenericRow::new(4);
+        row2.set_field(0, 2_i32);
+        row2.set_field(1, make_string_array(&[None]));
+        row2.set_field(2, make_int_array(&[]));
+        let m2 = {
+            let mut w = FlussArrayWriter::new(3, &inner_array_type);
+            w.write_array(0, &make_int_array(&[Some(5)]));
+            w.set_null_at(1);
+            w.write_array(2, &make_int_array(&[]));
+            w.complete().expect("matrix2")
+        };
+        row2.set_field(3, m2);
+
+        // Row 3: id=3, tags=null, scores=[42], matrix=null
+        let mut row3 = GenericRow::new(4);
+        row3.set_field(0, 3_i32);
+        row3.set_field(1, Datum::Null);
+        row3.set_field(2, make_int_array(&[Some(42)]));
+        row3.set_field(3, Datum::Null);
+
+        append_writer.append(&row1).expect("append row1");
+        append_writer.append(&row2).expect("append row2");
+        append_writer.append(&row3).expect("append row3");
+        append_writer.flush().await.expect("Failed to flush");
+
+        let records = scan_table(&table, |scan| scan).await;
+        assert_eq!(records.len(), 3, "expected three log records");
+
+        // Verify row 1: populated flat arrays + nested array
+        let r0 = records[0].row();
+        assert_eq!(r0.get_int(0).unwrap(), 1);
+        let tags_r0 = r0.get_array(1).unwrap();
+        assert_eq!(tags_r0.size(), 2);
+        assert_eq!(tags_r0.get_string(0).unwrap(), "hello");
+        assert_eq!(tags_r0.get_string(1).unwrap(), "world");
+        let scores_r0 = r0.get_array(2).unwrap();
+        assert_eq!(scores_r0.size(), 3);
+        assert_eq!(scores_r0.get_int(0).unwrap(), 10);
+        assert_eq!(scores_r0.get_int(1).unwrap(), 20);
+        assert_eq!(scores_r0.get_int(2).unwrap(), 30);
+        let matrix_r0: FlussArray = r0.get_array(3).unwrap();
+        assert_eq!(matrix_r0.size(), 2);
+        let mr0_0 = matrix_r0.get_array(0).unwrap();
+        assert_eq!(mr0_0.size(), 2);
+        assert_eq!(mr0_0.get_int(0).unwrap(), 1);
+        assert_eq!(mr0_0.get_int(1).unwrap(), 2);
+        let mr0_1 = matrix_r0.get_array(1).unwrap();
+        assert_eq!(mr0_1.size(), 2);
+        assert_eq!(mr0_1.get_int(0).unwrap(), 3);
+        assert_eq!(mr0_1.get_int(1).unwrap(), 4);
+
+        // Verify row 2: null element in array, empty array, nested with mixed inner
+        let r1 = records[1].row();
+        assert_eq!(r1.get_int(0).unwrap(), 2);
+        let tags_r1 = r1.get_array(1).unwrap();
+        assert_eq!(tags_r1.size(), 1);
+        assert!(tags_r1.is_null_at(0));
+        let scores_r1 = r1.get_array(2).unwrap();
+        assert_eq!(scores_r1.size(), 0);
+        let matrix_r1 = r1.get_array(3).unwrap();
+        assert_eq!(matrix_r1.size(), 3);
+        let mr1_0 = matrix_r1.get_array(0).unwrap();
+        assert_eq!(mr1_0.size(), 1);
+        assert_eq!(mr1_0.get_int(0).unwrap(), 5);
+        assert!(matrix_r1.is_null_at(1));
+        let mr1_2 = matrix_r1.get_array(2).unwrap();
+        assert_eq!(mr1_2.size(), 0);
+
+        // Verify row 3: null flat column, null nested column
+        let r2 = records[2].row();
+        assert_eq!(r2.get_int(0).unwrap(), 3);
+        assert!(r2.is_null_at(1).unwrap());
+        let scores_r2 = r2.get_array(2).unwrap();
+        assert_eq!(scores_r2.size(), 1);
+        assert_eq!(scores_r2.get_int(0).unwrap(), 42);
+        assert!(r2.is_null_at(3).unwrap());
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn append_and_scan_with_array_rich_types() {
+        use fluss::row::binary_array::FlussArrayWriter;
+        use fluss::row::{Date, Decimal, FlussArray, GenericRow, Time, TimestampNtz};
+
+        fn assert_f32_special(actual: f32, expected: f32) {
+            if expected.is_nan() {
+                assert!(actual.is_nan(), "expected NaN");
+            } else if expected.is_infinite() {
+                assert!(actual.is_infinite());
+                assert_eq!(actual.signum(), expected.signum());
+            } else {
+                assert!((actual - expected).abs() < f32::EPSILON);
+            }
+        }
+
+        fn assert_f64_special(actual: f64, expected: f64) {
+            if expected.is_nan() {
+                assert!(actual.is_nan(), "expected NaN");
+            } else if expected.is_infinite() {
+                assert!(actual.is_infinite());
+                assert_eq!(actual.signum(), expected.signum());
+            } else {
+                assert!((actual - expected).abs() < f64::EPSILON);
+            }
+        }
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_log_arrays_rich_types");
+
+        // Compact types: DECIMAL(10,2) precision<=18, TIMESTAMP(6) precision<=3 for millis
+        let dec_compact = Decimal::from_unscaled_long(12345, 10, 2).unwrap();
+        let ts_compact = TimestampNtz::from_millis_nanos(1769163227123, 456000).unwrap();
+
+        // Non-compact types: DECIMAL(22,5) precision>18, TIMESTAMP(9) precision>3
+        let dec_big = Decimal::from_unscaled_bytes(&[66, 237, 18, 59, 11, 216, 31, 4, 244], 22, 5)
+            .expect("big decimal");
+        let ts_nano = TimestampNtz::from_millis_nanos(1769163227123, 999_999).unwrap();
+
+        let d = Date::new(20476);
+        let t = Time::new(36827123);
+        let elem_bytes = &[0_u8, 1, 2, 255];
+        let fixed_a: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let fixed_b: Vec<u8> = vec![0x01, 0x02, 0x03, 0x04];
+
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("arr_bytes", DataTypes::array(DataTypes::bytes()))
+            .column("arr_date", DataTypes::array(DataTypes::date()))
+            .column(
+                "arr_time",
+                DataTypes::array(DataTypes::time_with_precision(3)),
+            )
+            .column(
+                "arr_ts_compact",
+                DataTypes::array(DataTypes::timestamp_with_precision(6)),
+            )
+            .column(
+                "arr_ts_nano",
+                DataTypes::array(DataTypes::timestamp_with_precision(9)),
+            )
+            .column(
+                "arr_decimal_compact",
+                DataTypes::array(DataTypes::decimal(10, 2)),
+            )
+            .column(
+                "arr_decimal_big",
+                DataTypes::array(DataTypes::decimal(22, 5)),
+            )
+            .column("arr_long_str", DataTypes::array(DataTypes::string()))
+            .column("arr_float", DataTypes::array(DataTypes::float()))
+            .column("arr_double", DataTypes::array(DataTypes::double()))
+            .column("arr_binary", DataTypes::array(DataTypes::binary(4)))
+            .build()
+            .expect("Failed to build schema");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(schema)
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        let mut row = GenericRow::new(12);
+        row.set_field(0, 1_i32);
+
+        // col 1: arr_bytes — binary with null element
+        let arr_bytes = {
+            let mut w = FlussArrayWriter::new(2, &DataTypes::bytes());
+            w.write_binary_bytes(0, elem_bytes);
+            w.set_null_at(1);
+            w.complete().expect("arr_bytes")
+        };
+        row.set_field(1, arr_bytes);
+
+        // col 2: arr_date
+        let arr_date = {
+            let mut w = FlussArrayWriter::new(2, &DataTypes::date());
+            w.write_date(0, d);
+            w.set_null_at(1);
+            w.complete().expect("arr_date")
+        };
+        row.set_field(2, arr_date);
+
+        // col 3: arr_time
+        let arr_time = {
+            let mut w = FlussArrayWriter::new(2, &DataTypes::time_with_precision(3));
+            w.write_time(0, t);
+            w.set_null_at(1);
+            w.complete().expect("arr_time")
+        };
+        row.set_field(3, arr_time);
+
+        // col 4: arr_ts_compact — compact timestamp (precision 6, millis+nanos)
+        let arr_ts_compact = {
+            let mut w = FlussArrayWriter::new(2, &DataTypes::timestamp_with_precision(6));
+            w.write_timestamp_ntz(0, &ts_compact, 6);
+            w.set_null_at(1);
+            w.complete().expect("arr_ts_compact")
+        };
+        row.set_field(4, arr_ts_compact);
+
+        // col 5: arr_ts_nano — non-compact timestamp (precision 9)
+        let arr_ts_nano = {
+            let mut w = FlussArrayWriter::new(1, &DataTypes::timestamp_with_precision(9));
+            w.write_timestamp_ntz(0, &ts_nano, 9);
+            w.complete().expect("arr_ts_nano")
+        };
+        row.set_field(5, arr_ts_nano);
+
+        // col 6: arr_decimal_compact — compact decimal (precision 10)
+        let arr_decimal_compact = {
+            let mut w = FlussArrayWriter::new(2, &DataTypes::decimal(10, 2));
+            w.write_decimal(0, &dec_compact, 10);
+            w.set_null_at(1);
+            w.complete().expect("arr_decimal_compact")
+        };
+        row.set_field(6, arr_decimal_compact);
+
+        // col 7: arr_decimal_big — non-compact decimal (precision 22)
+        let arr_decimal_big = {
+            let mut w = FlussArrayWriter::new(1, &DataTypes::decimal(22, 5));
+            w.write_decimal(0, &dec_big, 22);
+            w.complete().expect("arr_decimal_big")
+        };
+        row.set_field(7, arr_decimal_big);
+
+        // col 8: arr_long_str — heap-backed strings (>= 8 bytes)
+        let arr_long_str = {
+            let mut w = FlussArrayWriter::new(2, &DataTypes::string());
+            w.write_string(0, "abcdefghi");
+            w.write_string(1, "longstring_here");
+            w.complete().expect("arr_long_str")
+        };
+        row.set_field(8, arr_long_str);
+
+        // col 9: arr_float — IEEE 754 specials
+        let arr_float = {
+            let mut w = FlussArrayWriter::new(3, &DataTypes::float());
+            w.write_float(0, f32::NAN);
+            w.write_float(1, f32::INFINITY);
+            w.write_float(2, f32::NEG_INFINITY);
+            w.complete().expect("arr_float")
+        };
+        row.set_field(9, arr_float);
+
+        // col 10: arr_double — IEEE 754 specials
+        let arr_double = {
+            let mut w = FlussArrayWriter::new(3, &DataTypes::double());
+            w.write_double(0, f64::NAN);
+            w.write_double(1, f64::INFINITY);
+            w.write_double(2, f64::NEG_INFINITY);
+            w.complete().expect("arr_double")
+        };
+        row.set_field(10, arr_double);
+
+        // col 11: arr_binary — fixed-size binary(4)
+        let arr_binary = {
+            let mut w = FlussArrayWriter::new(2, &DataTypes::binary(4));
+            w.write_binary_bytes(0, &fixed_a);
+            w.write_binary_bytes(1, &fixed_b);
+            w.complete().expect("arr_binary")
+        };
+        row.set_field(11, arr_binary);
+
+        append_writer.append(&row).expect("append");
+        append_writer.flush().await.expect("Failed to flush");
+
+        let records = scan_table(&table, |scan| scan).await;
+        assert_eq!(records.len(), 1);
+        let r = records[0].row();
+
+        // Verify arr_bytes
+        let ab = r.get_array(1).unwrap();
+        assert_eq!(ab.size(), 2);
+        assert_eq!(ab.get_binary(0).unwrap(), elem_bytes);
+        assert!(ab.is_null_at(1));
+
+        // Verify arr_date
+        let ad = r.get_array(2).unwrap();
+        assert_eq!(ad.size(), 2);
+        assert_eq!(ad.get_date(0).unwrap().get_inner(), d.get_inner());
+        assert!(ad.is_null_at(1));
+
+        // Verify arr_time
+        let at = r.get_array(3).unwrap();
+        assert_eq!(at.size(), 2);
+        assert_eq!(at.get_time(0).unwrap().get_inner(), t.get_inner());
+        assert!(at.is_null_at(1));
+
+        // Verify arr_ts_compact
+        let ats = r.get_array(4).unwrap();
+        assert_eq!(ats.size(), 2);
+        let read_ts_compact = ats.get_timestamp_ntz(0, 6).unwrap();
+        assert_eq!(
+            read_ts_compact.get_millisecond(),
+            ts_compact.get_millisecond()
+        );
+        assert_eq!(
+            read_ts_compact.get_nano_of_millisecond(),
+            ts_compact.get_nano_of_millisecond()
+        );
+        assert!(ats.is_null_at(1));
+
+        // Verify arr_ts_nano
+        let ats_nano = r.get_array(5).unwrap();
+        assert_eq!(ats_nano.size(), 1);
+        let read_ts_nano = ats_nano.get_timestamp_ntz(0, 9).unwrap();
+        assert_eq!(read_ts_nano.get_millisecond(), ts_nano.get_millisecond());
+        assert_eq!(
+            read_ts_nano.get_nano_of_millisecond(),
+            ts_nano.get_nano_of_millisecond()
+        );
+
+        // Verify arr_decimal_compact
+        let adc = r.get_array(6).unwrap();
+        assert_eq!(adc.size(), 2);
+        assert_eq!(adc.get_decimal(0, 10, 2).unwrap(), dec_compact);
+        assert!(adc.is_null_at(1));
+
+        // Verify arr_decimal_big
+        let adb = r.get_array(7).unwrap();
+        assert_eq!(adb.size(), 1);
+        assert_eq!(adb.get_decimal(0, 22, 5).unwrap(), dec_big);
+
+        // Verify arr_long_str
+        let als = r.get_array(8).unwrap();
+        assert_eq!(als.size(), 2);
+        assert_eq!(als.get_string(0).unwrap(), "abcdefghi");
+        assert_eq!(als.get_string(1).unwrap(), "longstring_here");
+
+        // Verify arr_float — IEEE 754 specials
+        let af = r.get_array(9).unwrap();
+        assert_eq!(af.size(), 3);
+        assert_f32_special(af.get_float(0).unwrap(), f32::NAN);
+        assert_f32_special(af.get_float(1).unwrap(), f32::INFINITY);
+        assert_f32_special(af.get_float(2).unwrap(), f32::NEG_INFINITY);
+
+        // Verify arr_double — IEEE 754 specials
+        let adbl = r.get_array(10).unwrap();
+        assert_eq!(adbl.size(), 3);
+        assert_f64_special(adbl.get_double(0).unwrap(), f64::NAN);
+        assert_f64_special(adbl.get_double(1).unwrap(), f64::INFINITY);
+        assert_f64_special(adbl.get_double(2).unwrap(), f64::NEG_INFINITY);
+
+        // Verify arr_binary — fixed-size binary(4)
+        let fb: FlussArray = r.get_array(11).unwrap();
+        assert_eq!(fb.size(), 2);
+        assert_eq!(fb.get_binary(0).unwrap(), fixed_a.as_slice());
+        assert_eq!(fb.get_binary(1).unwrap(), fixed_b.as_slice());
 
         admin
             .drop_table(&table_path, false)

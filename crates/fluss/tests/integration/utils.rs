@@ -17,7 +17,9 @@
  */
 use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
 use fluss::client::FlussAdmin;
-use fluss::metadata::{PartitionSpec, TableDescriptor, TablePath};
+use fluss::metadata::{DataTypes, PartitionSpec, TableDescriptor, TablePath};
+use fluss::row::FlussArray;
+use fluss::row::binary_array::FlussArrayWriter;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -92,6 +94,28 @@ pub async fn create_table(
         .create_table(table_path, table_descriptor, false)
         .await
         .expect("Failed to create table");
+}
+
+pub fn make_string_array(values: &[Option<&str>]) -> FlussArray {
+    let mut writer = FlussArrayWriter::new(values.len(), &DataTypes::string());
+    for (idx, value) in values.iter().enumerate() {
+        match value {
+            Some(v) => writer.write_string(idx, v),
+            None => writer.set_null_at(idx),
+        }
+    }
+    writer.complete().expect("Failed to build string array")
+}
+
+pub fn make_int_array(values: &[Option<i32>]) -> FlussArray {
+    let mut writer = FlussArrayWriter::new(values.len(), &DataTypes::int());
+    for (idx, value) in values.iter().enumerate() {
+        match value {
+            Some(v) => writer.write_int(idx, *v),
+            None => writer.set_null_at(idx),
+        }
+    }
+    writer.complete().expect("Failed to build int array")
 }
 
 /// Similar to wait_for_cluster_ready but connects with SASL credentials.
