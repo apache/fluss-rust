@@ -117,11 +117,20 @@ Builder for creating an `UpsertWriter`. Obtain via `FlussTable.new_upsert()`.
 
 ## `TableLookup`
 
-Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
+Builder for creating a `Lookuper` or `PrefixLookuper`. Obtain via `FlussTable.new_lookup()`.
 
-| Method                           |  Description        |
-|----------------------------------|---------------------|
-| `.create_lookuper() -> Lookuper` | Create the lookuper |
+| Method                                              |  Description                              |
+|-----------------------------------------------------|-------------------------------------------|
+| `.create_lookuper() -> Lookuper`                    | Create a primary key lookuper             |
+| `.lookup_by(column_names) -> TablePrefixLookup`     | Switch to prefix-scan mode for the given columns (partition keys + bucket keys) |
+
+## `TablePrefixLookup`
+
+Builder for creating a `PrefixLookuper`. Obtain via `TableLookup.lookup_by(columns)`.
+
+| Method                                     |  Description              |
+|--------------------------------------------|---------------------------|
+| `.create_lookuper() -> PrefixLookuper`     | Create the prefix lookuper |
 
 ## `AppendWriter`
 
@@ -152,6 +161,12 @@ Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
 | Method                              |  Description                |
 |-------------------------------------|-----------------------------|
 | `await .lookup(pk) -> dict \| None` | Lookup a row by primary key |
+
+## `PrefixLookuper`
+
+| Method                                        |  Description                                |
+|-----------------------------------------------|---------------------------------------------|
+| `await .lookup(prefix) -> list[dict]`         | Lookup all rows matching a prefix key       |
 
 ## `LogScanner`
 

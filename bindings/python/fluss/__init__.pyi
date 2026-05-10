@@ -582,15 +582,43 @@ class TableUpsert:
     def __repr__(self) -> str: ...
 
 class TableLookup:
-    """Builder for creating a Lookuper.
+    """Builder for creating a Lookuper or PrefixLookuper.
 
-    Obtain via `FlussTable.new_lookup()`, then call `create_lookuper()`.
+    Obtain via `FlussTable.new_lookup()`, then call `create_lookuper()`
+    for primary key lookup, or `lookup_by(columns).create_lookuper()`
+    for prefix key lookup.
 
     Example:
         lookuper = table.new_lookup().create_lookuper()
+        prefix_lookuper = table.new_lookup().lookup_by(["a", "b"]).create_lookuper()
     """
 
     def create_lookuper(self) -> Lookuper: ...
+    def lookup_by(self, column_names: List[str]) -> "TablePrefixLookup":
+        """Switch to prefix-scan mode for the given lookup columns.
+
+        The columns must be the table's partition keys (if any) plus the
+        bucket keys, in that order.
+
+        Args:
+            column_names: List of column names forming the prefix key.
+
+        Returns:
+            TablePrefixLookup builder. Call `create_lookuper()` to get a PrefixLookuper.
+        """
+        ...
+    def __repr__(self) -> str: ...
+
+class TablePrefixLookup:
+    """Builder for creating a PrefixLookuper.
+
+    Obtain via `TableLookup.lookup_by(columns)`, then call `create_lookuper()`.
+
+    Example:
+        prefix_lookuper = table.new_lookup().lookup_by(["a", "b"]).create_lookuper()
+    """
+
+    def create_lookuper(self) -> "PrefixLookuper": ...
     def __repr__(self) -> str: ...
 
 class AppendWriter:
@@ -725,6 +753,29 @@ class Lookuper:
 
         Returns:
             A dict containing the row data if found, None otherwise.
+        """
+        ...
+    def __repr__(self) -> str: ...
+
+class PrefixLookuper:
+    """Lookuper for performing prefix key lookups on a Fluss table.
+
+    Returns all rows whose primary key starts with the given prefix.
+    Create via `table.new_lookup().lookup_by(columns).create_lookuper()`.
+    """
+
+    async def lookup(self, prefix: dict | list | tuple) -> List[Dict[str, object]]:
+        """Lookup all rows matching a prefix key.
+
+        Args:
+            prefix: A dict, list, or tuple containing only the prefix key values
+                (the columns specified in lookup_by()).
+                For dict: keys are prefix column names.
+                For list/tuple: values in prefix column order.
+
+        Returns:
+            A list of dicts, each containing the full row data.
+            Empty list if no matches.
         """
         ...
     def __repr__(self) -> str: ...
