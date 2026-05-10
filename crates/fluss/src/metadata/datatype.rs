@@ -531,7 +531,6 @@ impl DecimalType {
             });
         }
         // Validate scale
-        // Note: MIN_SCALE is 0, and scale is u32, so scale >= MIN_SCALE is always true
         if scale > precision {
             return Err(IllegalArgument {
                 message: format!(
@@ -1220,11 +1219,61 @@ impl DataTypes {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub const UNASSIGNED_FIELD_ID: i32 = -1;
+
+pub fn reassign_field_ids(data_type: &DataType, counter: &mut i32) -> DataType {
+    match data_type {
+        DataType::Array(at) => DataType::Array(ArrayType::with_nullable(
+            at.nullable,
+            reassign_field_ids(at.get_element_type(), counter),
+        )),
+        DataType::Map(mt) => DataType::Map(MapType::with_nullable(
+            mt.nullable,
+            reassign_field_ids(mt.key_type(), counter),
+            reassign_field_ids(mt.value_type(), counter),
+        )),
+        DataType::Row(rt) => {
+            let new_fields: Vec<DataField> = rt
+                .fields()
+                .iter()
+                .map(|f| {
+                    *counter += 1;
+                    let id = *counter;
+                    let new_inner = reassign_field_ids(&f.data_type, counter);
+                    DataField::with_field_id(f.name.clone(), new_inner, f.description.clone(), id)
+                })
+                .collect();
+            DataType::Row(RowType::with_nullable(rt.nullable, new_fields))
+        }
+        _ => data_type.clone(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataField {
     pub name: String,
     pub data_type: DataType,
     pub description: Option<String>,
+    pub field_id: i32,
+}
+
+// field_id is excluded from PartialEq/Eq/Hash to match Java's DataField.equals/hashCode.
+impl PartialEq for DataField {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.data_type == other.data_type
+            && self.description == other.description
+    }
+}
+
+impl Eq for DataField {}
+
+impl std::hash::Hash for DataField {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.data_type.hash(state);
+        self.description.hash(state);
+    }
 }
 
 impl DataField {
@@ -1237,6 +1286,21 @@ impl DataField {
             name: name.into(),
             data_type,
             description,
+            field_id: UNASSIGNED_FIELD_ID,
+        }
+    }
+
+    pub fn with_field_id<N: Into<String>>(
+        name: N,
+        data_type: DataType,
+        description: Option<String>,
+        field_id: i32,
+    ) -> DataField {
+        DataField {
+            name: name.into(),
+            data_type,
+            description,
+            field_id,
         }
     }
 
@@ -1246,6 +1310,10 @@ impl DataField {
 
     pub fn data_type(&self) -> &DataType {
         &self.data_type
+    }
+
+    pub fn field_id(&self) -> i32 {
+        self.field_id
     }
 }
 

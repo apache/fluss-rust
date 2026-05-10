@@ -18,10 +18,12 @@
 use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
 use bytes::Bytes;
 
+use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::Decimal;
 use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
+use crate::row::datum::{TimestampLtz, TimestampNtz};
 use delegate::delegate;
 
 /// A wrapping of [`CompactedRowWriter`] used to encode key columns.
@@ -47,12 +49,8 @@ impl CompactedKeyWriter {
     }
 
     pub fn create_value_writer(field_type: &DataType) -> Result<ValueWriter> {
-        // Java's CompactedKeyEncoder allows encoding Array types (Map/Row
-        // are not yet supported by ValueWriter). The server rejects
-        // unsupported key types at table-creation time, so encoding is
-        // allowed here to match Java parity.
-        if matches!(field_type, DataType::Map(_) | DataType::Row(_)) {
-            return Err(crate::error::Error::IllegalArgument {
+        if matches!(field_type, DataType::Map(_)) {
+            return Err(IllegalArgument {
                 message: format!("Cannot use {field_type:?} as a key column type"),
             });
         }
@@ -107,9 +105,9 @@ impl BinaryWriter for CompactedKeyWriter {
 
             fn write_time(&mut self, value: i32, precision: u32);
 
-            fn write_timestamp_ntz(&mut self, value: &crate::row::datum::TimestampNtz, precision: u32);
+            fn write_timestamp_ntz(&mut self, value: &TimestampNtz, precision: u32);
 
-            fn write_timestamp_ltz(&mut self, value: &crate::row::datum::TimestampLtz, precision: u32);
+            fn write_timestamp_ltz(&mut self, value: &TimestampLtz, precision: u32);
 
             fn write_array(&mut self, value: &[u8]);
         }

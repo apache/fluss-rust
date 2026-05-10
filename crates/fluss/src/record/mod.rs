@@ -249,7 +249,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(values))])
             .expect("record batch");
-        ColumnarRow::new_with_row_id(Arc::new(batch), row_id)
+        ColumnarRow::new(Arc::new(batch), row_id, None)
     }
 
     #[test]

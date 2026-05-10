@@ -23,7 +23,7 @@ mod compacted_row_writer;
 
 pub use compacted_key_writer::CompactedKeyWriter;
 #[allow(unused_imports)]
-pub use compacted_row::CompactedRow;
+pub use compacted_row::{CompactedRow, calculate_bit_set_width_in_bytes};
 #[allow(unused_imports)]
 pub use compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
 #[allow(unused_imports)]

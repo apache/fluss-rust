@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Error::RowConvertError;
+use crate::error::Error::{IllegalArgument, RowConvertError};
 use crate::error::Result;
+use crate::metadata::{DataType, RowType};
 use crate::row::Decimal;
 use crate::row::GenericRow;
+use crate::row::InternalRow;
 use crate::row::binary_array::FlussArray;
+use crate::row::field_getter::FieldGetter;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, ListBuilder, StringBuilder, Time32MillisecondBuilder,
-    Time32SecondBuilder, Time64MicrosecondBuilder, Time64NanosecondBuilder,
-    TimestampMicrosecondBuilder, TimestampMillisecondBuilder, TimestampNanosecondBuilder,
-    TimestampSecondBuilder,
+    Int32Builder, Int64Builder, ListBuilder, StringBuilder, StructBuilder,
+    Time32MillisecondBuilder, Time32SecondBuilder, Time64MicrosecondBuilder,
+    Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
+    TimestampNanosecondBuilder, TimestampSecondBuilder,
 };
 use arrow::datatypes as arrow_schema;
 use arrow::error::ArrowError;
@@ -142,6 +145,30 @@ impl Datum<'_> {
         match self {
             Self::Row(r) => r.as_ref(),
             _ => panic!("not a row: {self:?}"),
+        }
+    }
+}
+
+impl<'a> Datum<'a> {
+    pub fn into_owned(self) -> Datum<'static> {
+        match self {
+            Datum::Null => Datum::Null,
+            Datum::Bool(v) => Datum::Bool(v),
+            Datum::Int8(v) => Datum::Int8(v),
+            Datum::Int16(v) => Datum::Int16(v),
+            Datum::Int32(v) => Datum::Int32(v),
+            Datum::Int64(v) => Datum::Int64(v),
+            Datum::Float32(v) => Datum::Float32(v),
+            Datum::Float64(v) => Datum::Float64(v),
+            Datum::String(s) => Datum::String(Cow::Owned(s.into_owned())),
+            Datum::Blob(b) => Datum::Blob(Cow::Owned(b.into_owned())),
+            Datum::Decimal(d) => Datum::Decimal(d),
+            Datum::Date(d) => Datum::Date(d),
+            Datum::Time(t) => Datum::Time(t),
+            Datum::TimestampNtz(t) => Datum::TimestampNtz(t),
+            Datum::TimestampLtz(t) => Datum::TimestampLtz(t),
+            Datum::Array(a) => Datum::Array(a),
+            Datum::Row(boxed) => Datum::Row(Box::new(boxed.into_owned())),
         }
     }
 }
@@ -563,42 +590,29 @@ fn append_fluss_array_to_list_builder(
 fn read_datum_from_fluss_array<'a>(
     arr: &FlussArray,
     pos: usize,
-    element_type: &crate::metadata::DataType,
+    element_type: &DataType,
 ) -> Result<Datum<'a>> {
-    use crate::metadata::DataType;
+    if let DataType::Row(row_type) = element_type {
+        let compacted = arr.get_row(pos, row_type)?;
+        return Ok(Datum::Row(Box::new(internal_row_to_owned_generic(
+            &compacted, row_type,
+        )?)));
+    }
 
-    Ok(match element_type {
-        DataType::Boolean(_) => Datum::Bool(arr.get_boolean(pos)?),
-        DataType::TinyInt(_) => Datum::Int8(arr.get_byte(pos)?),
-        DataType::SmallInt(_) => Datum::Int16(arr.get_short(pos)?),
-        DataType::Int(_) => Datum::Int32(arr.get_int(pos)?),
-        DataType::BigInt(_) => Datum::Int64(arr.get_long(pos)?),
-        DataType::Float(_) => Datum::Float32(arr.get_float(pos)?.into()),
-        DataType::Double(_) => Datum::Float64(arr.get_double(pos)?.into()),
-        DataType::Char(_) | DataType::String(_) => {
-            Datum::String(Cow::Owned(arr.get_string(pos)?.to_string()))
-        }
-        DataType::Binary(_) | DataType::Bytes(_) => {
-            Datum::Blob(Cow::Owned(arr.get_binary(pos)?.to_vec()))
-        }
-        DataType::Decimal(dt) => {
-            Datum::Decimal(arr.get_decimal(pos, dt.precision(), dt.scale())?)
-        }
-        DataType::Date(_) => Datum::Date(arr.get_date(pos)?),
-        DataType::Time(_) => Datum::Time(arr.get_time(pos)?),
-        DataType::Timestamp(t) => Datum::TimestampNtz(arr.get_timestamp_ntz(pos, t.precision())?),
-        DataType::TimestampLTz(t) => {
-            Datum::TimestampLtz(arr.get_timestamp_ltz(pos, t.precision())?)
-        }
-        DataType::Array(_) => Datum::Array(arr.get_array(pos)?),
-        _ => {
-            return Err(RowConvertError {
-                message: format!(
-                    "Unsupported element type for FlussArray → Arrow conversion: {element_type:?}"
-                ),
-            });
-        }
-    })
+    let getter = FieldGetter::create(element_type, pos);
+    Ok(getter.get_field(arr)?.into_owned())
+}
+
+fn internal_row_to_owned_generic(
+    row: &dyn InternalRow,
+    row_type: &RowType,
+) -> Result<GenericRow<'static>> {
+    let mut owned = GenericRow::new(row_type.fields().len());
+    for (i, field) in row_type.fields().iter().enumerate() {
+        let getter = FieldGetter::create(field.data_type(), i);
+        owned.set_field(i, getter.get_field(row)?.into_owned());
+    }
+    Ok(owned)
 }
 
 fn append_null_for_type(
@@ -661,10 +675,72 @@ fn append_null_for_type(
         arrow_schema::DataType::List(_) => {
             downcast_null!(ListBuilder<Box<dyn ArrayBuilder>>)
         }
+        arrow_schema::DataType::Struct(fields) => {
+            // StructBuilder::append_null only flips parent validity; children must each get a null too.
+            let struct_builder = builder
+                .as_any_mut()
+                .downcast_mut::<StructBuilder>()
+                .ok_or_else(|| RowConvertError {
+                    message: format!(
+                        "Builder type mismatch: expected StructBuilder for {data_type:?}",
+                    ),
+                })?;
+            let cloned_fields = fields.clone();
+            {
+                let field_builders = struct_builder.field_builders_mut();
+                for (i, field) in cloned_fields.iter().enumerate() {
+                    append_null_for_type(field_builders[i].as_mut(), field.data_type())?;
+                }
+            }
+            struct_builder.append(false);
+            Ok(())
+        }
         _ => Err(RowConvertError {
             message: format!("Unsupported Arrow data type for null append: {data_type:?}"),
         }),
     }
+}
+
+fn append_generic_row_to_struct_builder(
+    row: &GenericRow<'_>,
+    builder: &mut dyn ArrayBuilder,
+    data_type: &arrow_schema::DataType,
+) -> Result<()> {
+    let struct_builder = builder
+        .as_any_mut()
+        .downcast_mut::<StructBuilder>()
+        .ok_or_else(|| RowConvertError {
+            message: "Builder type mismatch for Row: expected StructBuilder".to_string(),
+        })?;
+
+    let fields = match data_type {
+        arrow_schema::DataType::Struct(fields) => fields.clone(),
+        _ => {
+            return Err(RowConvertError {
+                message: format!("Expected Struct Arrow type for Row datum, got: {data_type:?}"),
+            });
+        }
+    };
+
+    if row.values.len() != fields.len() {
+        return Err(RowConvertError {
+            message: format!(
+                "Row arity mismatch: schema has {} fields, got {}",
+                fields.len(),
+                row.values.len(),
+            ),
+        });
+    }
+
+    {
+        let field_builders = struct_builder.field_builders_mut();
+        for (i, datum) in row.values.iter().enumerate() {
+            let child = field_builders[i].as_mut();
+            datum.append_to(child, fields[i].data_type())?;
+        }
+    }
+    struct_builder.append(true);
+    Ok(())
 }
 
 impl Datum<'_> {
@@ -888,10 +964,8 @@ impl Datum<'_> {
             Datum::Array(arr) => {
                 return append_fluss_array_to_list_builder(arr, builder, data_type);
             }
-            Datum::Row(_) => {
-                return Err(RowConvertError {
-                    message: "append_to is not supported for Row type".to_string(),
-                });
+            Datum::Row(row) => {
+                return append_generic_row_to_struct_builder(row, builder, data_type);
             }
         }
 
@@ -981,7 +1055,7 @@ impl TimestampNtz {
 
     pub fn from_millis_nanos(millisecond: i64, nano_of_millisecond: i32) -> Result<Self> {
         if !(0..=MAX_NANO_OF_MILLISECOND).contains(&nano_of_millisecond) {
-            return Err(crate::error::Error::IllegalArgument {
+            return Err(IllegalArgument {
                 message: format!(
                     "nanoOfMillisecond must be in range [0, {MAX_NANO_OF_MILLISECOND}], got: {nano_of_millisecond}"
                 ),
@@ -1025,7 +1099,7 @@ impl TimestampLtz {
 
     pub fn from_millis_nanos(epoch_millisecond: i64, nano_of_millisecond: i32) -> Result<Self> {
         if !(0..=MAX_NANO_OF_MILLISECOND).contains(&nano_of_millisecond) {
-            return Err(crate::error::Error::IllegalArgument {
+            return Err(IllegalArgument {
                 message: format!(
                     "nanoOfMillisecond must be in range [0, {MAX_NANO_OF_MILLISECOND}], got: {nano_of_millisecond}"
                 ),
@@ -1149,7 +1223,7 @@ mod tests {
         let err = Datum::Int32(1)
             .append_to(&mut builder, &arrow_schema::DataType::Utf8)
             .unwrap_err();
-        assert!(matches!(err, crate::error::Error::RowConvertError { .. }));
+        assert!(matches!(err, RowConvertError { .. }));
     }
 
     #[test]
@@ -1177,6 +1251,13 @@ mod tests {
 #[cfg(test)]
 mod timestamp_tests {
     use super::*;
+    use crate::metadata::{DataField, DataTypes};
+    use crate::record::to_arrow_type;
+    use crate::row::InternalRow;
+    use crate::row::column::ColumnarRow;
+    use arrow::array::{RecordBatch, StructArray, StructBuilder};
+    use arrow::datatypes::{Field, Fields, Schema};
+    use std::sync::Arc;
 
     #[test]
     fn test_timestamp_valid_nanos() {
@@ -1220,5 +1301,63 @@ mod timestamp_tests {
         let result_ltz = TimestampLtz::from_millis_nanos(1000, -1);
         assert!(result_ltz.is_err());
         assert!(result_ltz.unwrap_err().to_string().contains(&expected_msg));
+    }
+
+    #[test]
+    fn test_row_arrow_struct_round_trip() {
+        let row_type_owned = DataTypes::row(vec![
+            DataField::new("x", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+        let arrow_struct_dt = to_arrow_type(&row_type_owned).unwrap();
+        let struct_fields: Fields = match &arrow_struct_dt {
+            arrow_schema::DataType::Struct(f) => f.clone(),
+            _ => unreachable!(),
+        };
+
+        let mut struct_builder = StructBuilder::from_fields(struct_fields.clone(), 3);
+
+        let mut r0 = GenericRow::new(2);
+        r0.set_field(0, 42_i32);
+        r0.set_field(1, "hello");
+        Datum::Row(Box::new(r0))
+            .append_to(&mut struct_builder, &arrow_struct_dt)
+            .expect("append row 0");
+
+        Datum::Null
+            .append_to(&mut struct_builder, &arrow_struct_dt)
+            .expect("append null row");
+
+        let mut r2 = GenericRow::new(2);
+        r2.set_field(0, -7_i32);
+        r2.set_field(1, Datum::Null);
+        Datum::Row(Box::new(r2))
+            .append_to(&mut struct_builder, &arrow_struct_dt)
+            .expect("append row 2");
+
+        let struct_array: StructArray = struct_builder.finish();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "nested",
+            arrow_struct_dt.clone(),
+            true,
+        )]));
+        let batch = Arc::new(
+            RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).expect("record batch"),
+        );
+
+        let mut columnar = ColumnarRow::new(batch, 0, None);
+
+        let nested = columnar.get_row(0).expect("get_row 0");
+        assert_eq!(nested.get_int(0).unwrap(), 42);
+        assert_eq!(nested.get_string(1).unwrap(), "hello");
+
+        columnar.set_row_id(1);
+        assert!(columnar.is_null_at(0).unwrap(), "row 1 should be null");
+
+        columnar.set_row_id(2);
+        let nested = columnar.get_row(0).expect("get_row 2");
+        assert_eq!(nested.get_int(0).unwrap(), -7);
+        assert!(nested.is_null_at(1).unwrap(), "label should be null");
     }
 }

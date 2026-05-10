@@ -19,7 +19,9 @@ use crate::compression::ArrowCompressionInfo;
 use crate::error::Error::IllegalArgument;
 use crate::error::{Error, Result};
 use crate::metadata::DataLakeFormat;
-use crate::metadata::datatype::{DataField, DataType, RowType};
+use crate::metadata::datatype::{
+    DataField, DataType, RowType, UNASSIGNED_FIELD_ID, reassign_field_ids,
+};
 use crate::{BucketId, PartitionId, TableId};
 use core::fmt;
 use serde::{Deserialize, Serialize};
@@ -112,12 +114,55 @@ impl PrimaryKey {
     }
 }
 
+fn collect_field_id_state(data_type: &DataType, max_id: &mut i32, has_unassigned: &mut bool) {
+    match data_type {
+        DataType::Row(rt) => {
+            for f in rt.fields() {
+                if f.field_id == UNASSIGNED_FIELD_ID {
+                    *has_unassigned = true;
+                } else {
+                    *max_id = (*max_id).max(f.field_id);
+                }
+                collect_field_id_state(&f.data_type, max_id, has_unassigned);
+            }
+        }
+        DataType::Array(at) => {
+            collect_field_id_state(at.get_element_type(), max_id, has_unassigned);
+        }
+        DataType::Map(mt) => {
+            collect_field_id_state(mt.key_type(), max_id, has_unassigned);
+            collect_field_id_state(mt.value_type(), max_id, has_unassigned);
+        }
+        _ => {}
+    }
+}
+
+fn collect_nested_field_ids(data_type: &DataType, ids: &mut Vec<i32>) {
+    match data_type {
+        DataType::Row(rt) => {
+            for f in rt.fields() {
+                if f.field_id != UNASSIGNED_FIELD_ID {
+                    ids.push(f.field_id);
+                }
+                collect_nested_field_ids(&f.data_type, ids);
+            }
+        }
+        DataType::Array(at) => collect_nested_field_ids(at.get_element_type(), ids),
+        DataType::Map(mt) => {
+            collect_nested_field_ids(mt.key_type(), ids);
+            collect_nested_field_ids(mt.value_type(), ids);
+        }
+        _ => {}
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Schema {
     columns: Vec<Column>,
     primary_key: Option<PrimaryKey>,
     row_type: RowType,
     auto_increment_col_names: Vec<String>,
+    highest_field_id: i32,
 }
 
 impl Schema {
@@ -166,6 +211,10 @@ impl Schema {
 
     pub fn auto_increment_col_names(&self) -> &Vec<String> {
         &self.auto_increment_col_names
+    }
+
+    pub fn highest_field_id(&self) -> i32 {
+        self.highest_field_id
     }
 }
 
@@ -278,9 +327,9 @@ impl SchemaBuilder {
 
     pub fn build(&self) -> Result<Schema> {
         let columns = Self::normalize_columns(&self.columns, self.primary_key.as_ref())?;
-        let columns = Self::assign_column_ids(columns)?;
+        let (columns_with_ids, highest_field_id) = Self::assign_all_field_ids(columns)?;
 
-        let column_names: HashSet<_> = columns.iter().map(|c| &c.name).collect();
+        let column_names: HashSet<_> = columns_with_ids.iter().map(|c| &c.name).collect();
         for auto_inc_col in &self.auto_increment_col_names {
             if !column_names.contains(auto_inc_col) {
                 return Err(IllegalArgument {
@@ -291,26 +340,115 @@ impl SchemaBuilder {
             }
         }
 
-        let data_fields = columns
+        let data_fields = columns_with_ids
             .iter()
             .map(|c| DataField {
                 name: c.name.clone(),
                 data_type: c.data_type.clone(),
                 description: c.comment.clone(),
+                field_id: c.id,
             })
             .collect();
 
         Ok(Schema {
-            columns,
+            columns: columns_with_ids,
             primary_key: self.primary_key.clone(),
             row_type: RowType::new(data_fields),
             auto_increment_col_names: self.auto_increment_col_names.clone(),
+            highest_field_id,
         })
+    }
+
+    fn assign_all_field_ids(columns: Vec<Column>) -> Result<(Vec<Column>, i32)> {
+        let with_top_id = columns.iter().filter(|c| c.id != UNKNOWN_COLUMN_ID).count();
+        let none_set = with_top_id == 0;
+        let all_top_set = with_top_id == columns.len();
+
+        if !none_set && !all_top_set {
+            return Err(IllegalArgument {
+                message: "All columns must have an id assigned, or none of them must.".to_string(),
+            });
+        }
+
+        let mut max_nested_id = -1_i32;
+        let mut has_unassigned_nested = false;
+        for c in &columns {
+            collect_field_id_state(&c.data_type, &mut max_nested_id, &mut has_unassigned_nested);
+        }
+
+        if all_top_set && !has_unassigned_nested {
+            let mut seen: HashSet<i32> = HashSet::new();
+            let mut max_id = -1_i32;
+            for col in &columns {
+                if col.id < 0 {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Column '{}' has invalid id {}; ids must be non-negative",
+                            col.name, col.id
+                        ),
+                    });
+                }
+                if !seen.insert(col.id) {
+                    return Err(IllegalArgument {
+                        message: format!("Duplicate field id {} in schema", col.id),
+                    });
+                }
+                max_id = max_id.max(col.id);
+
+                let mut nested_ids = Vec::new();
+                collect_nested_field_ids(&col.data_type, &mut nested_ids);
+                for id in nested_ids {
+                    if id < 0 {
+                        return Err(IllegalArgument {
+                            message: format!(
+                                "Nested DataField in column '{}' has invalid id {}; ids must be non-negative",
+                                col.name, id
+                            ),
+                        });
+                    }
+                    if !seen.insert(id) {
+                        return Err(IllegalArgument {
+                            message: format!(
+                                "Duplicate field id {} in schema (column '{}')",
+                                id, col.name
+                            ),
+                        });
+                    }
+                }
+            }
+            max_id = max_id.max(max_nested_id);
+            return Ok((columns, max_id));
+        }
+
+        if all_top_set && has_unassigned_nested {
+            return Err(IllegalArgument {
+                message: "Top-level column ids are set but some nested DataField ids are unassigned; reassign all or none."
+                    .to_string(),
+            });
+        }
+
+        let mut counter: i32 = -1;
+        let new_columns: Vec<Column> = columns
+            .into_iter()
+            .map(|c| {
+                counter += 1;
+                let id = counter;
+                let new_data_type = reassign_field_ids(&c.data_type, &mut counter);
+                Column {
+                    name: c.name,
+                    data_type: new_data_type,
+                    comment: c.comment,
+                    id,
+                }
+            })
+            .collect();
+        Ok((new_columns, counter))
     }
 
     /// All-or-none: preserve ids if every column has one, auto-assign
     /// 0..N-1 if none do, error on mixed input. When preserving ids,
     /// also reject duplicates and negative-but-not-sentinel values.
+    #[allow(dead_code)]
     fn assign_column_ids(columns: Vec<Column>) -> Result<Vec<Column>> {
         let with_id = columns.iter().filter(|c| c.id != UNKNOWN_COLUMN_ID).count();
         if with_id == 0 {

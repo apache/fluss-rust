@@ -19,7 +19,9 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{DataType, RowType};
 use crate::row::Datum;
+use crate::row::Decimal;
 use crate::row::binary::BinaryRowFormat;
+use crate::row::datum::{TimestampLtz, TimestampNtz};
 
 /// Writer to write a composite data format, like row, array,
 #[allow(dead_code)]
@@ -52,7 +54,7 @@ pub trait BinaryWriter {
 
     fn write_binary(&mut self, bytes: &[u8], length: usize);
 
-    fn write_decimal(&mut self, value: &crate::row::Decimal, precision: u32);
+    fn write_decimal(&mut self, value: &Decimal, precision: u32);
 
     /// Writes a TIME value.
     ///
@@ -63,9 +65,9 @@ pub trait BinaryWriter {
     /// currently vary by precision.
     fn write_time(&mut self, value: i32, precision: u32);
 
-    fn write_timestamp_ntz(&mut self, value: &crate::row::datum::TimestampNtz, precision: u32);
+    fn write_timestamp_ntz(&mut self, value: &TimestampNtz, precision: u32);
 
-    fn write_timestamp_ltz(&mut self, value: &crate::row::datum::TimestampLtz, precision: u32);
+    fn write_timestamp_ltz(&mut self, value: &TimestampLtz, precision: u32);
 
     fn write_array(&mut self, value: &[u8]);
 
@@ -136,7 +138,36 @@ pub enum InnerValueWriter {
     TimestampNtz(u32), // precision
     TimestampLtz(u32), // precision
     Array,
-    Row(RowType),
+    Row(NestedRowWriter),
+}
+
+#[derive(Debug)]
+pub struct NestedRowWriter {
+    field_writers: Vec<InnerValueWriter>,
+    field_nullable: Vec<bool>,
+}
+
+impl NestedRowWriter {
+    fn from_row_type(row_type: &RowType) -> Result<Self> {
+        let fields = row_type.fields();
+        let mut field_writers = Vec::with_capacity(fields.len());
+        let mut field_nullable = Vec::with_capacity(fields.len());
+        for field in fields {
+            field_writers.push(InnerValueWriter::create_inner_value_writer(
+                field.data_type(),
+                None,
+            )?);
+            field_nullable.push(field.data_type().is_nullable());
+        }
+        Ok(Self {
+            field_writers,
+            field_nullable,
+        })
+    }
+
+    fn field_count(&self) -> usize {
+        self.field_writers.len()
+    }
 }
 
 /// Accessor for writing the fields/elements of a binary writer during runtime, the
@@ -176,7 +207,9 @@ impl InnerValueWriter {
                 Ok(InnerValueWriter::TimestampLtz(t.precision()))
             }
             DataType::Array(_) => Ok(InnerValueWriter::Array),
-            DataType::Row(row_type) => Ok(InnerValueWriter::Row(row_type.clone())),
+            DataType::Row(row_type) => Ok(InnerValueWriter::Row(NestedRowWriter::from_row_type(
+                row_type,
+            )?)),
             _ => unimplemented!(
                 "ValueWriter for DataType {:?} is currently not implemented",
                 data_type
@@ -242,22 +275,31 @@ impl InnerValueWriter {
             (InnerValueWriter::Array, Datum::Array(arr)) => {
                 writer.write_array(arr.as_bytes());
             }
-            (InnerValueWriter::Row(row_type), Datum::Row(inner_row)) => {
+            (InnerValueWriter::Row(nested_writer), Datum::Row(inner_row)) => {
                 use crate::row::compacted::CompactedRowWriter;
-                let field_count = row_type.fields().len();
+                let field_count = nested_writer.field_count();
+                if inner_row.values.len() != field_count {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "nested row arity mismatch: schema has {} fields, got {}",
+                            field_count,
+                            inner_row.values.len(),
+                        ),
+                    });
+                }
                 let mut nested = CompactedRowWriter::new(field_count);
-                for (i, field) in row_type.fields().iter().enumerate() {
-                    let datum = &inner_row.values[i];
+                for (i, datum) in inner_row.values.iter().enumerate() {
                     if datum.is_null() {
-                        if field.data_type.is_nullable() {
-                            nested.set_null_at(i);
+                        if !nested_writer.field_nullable[i] {
+                            return Err(IllegalArgument {
+                                message: format!(
+                                    "nested row field {i} is non-nullable but received null",
+                                ),
+                            });
                         }
+                        nested.set_null_at(i);
                     } else {
-                        let vw =
-                            InnerValueWriter::create_inner_value_writer(&field.data_type, None)
-                                .expect("create_inner_value_writer failed for nested row field");
-                        vw.write_value(&mut nested, i, datum)
-                            .expect("write_value failed for nested row field");
+                        nested_writer.field_writers[i].write_value(&mut nested, i, datum)?;
                     }
                 }
                 writer.write_bytes(nested.buffer());

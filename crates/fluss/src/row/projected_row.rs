@@ -23,7 +23,7 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::UNEXIST_MAPPING;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
-use crate::row::{Decimal, FlussArray, InternalRow};
+use crate::row::{Decimal, FlussArray, GenericRow, InternalRow};
 use std::sync::Arc;
 
 pub(crate) struct ProjectedRow<R> {
@@ -140,6 +140,10 @@ impl<R: InternalRow> InternalRow for ProjectedRow<R> {
     }
     fn get_array(&self, pos: usize) -> Result<FlussArray> {
         project!(self, get_array, pos)
+    }
+
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        project!(self, get_row, pos)
     }
 
     fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
