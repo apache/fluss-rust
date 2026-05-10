@@ -888,8 +888,55 @@ impl TableLookup {
         )
     }
 
+    /// Switch to prefix-scan mode for the given lookup columns.
+    ///
+    /// The columns must be the table's partition keys (if any) plus the
+    /// bucket keys, in that order.
+    ///
+    /// Args:
+    ///     column_names: List of column names forming the prefix key.
+    ///
+    /// Returns:
+    ///     TablePrefixLookup builder. Call `create_lookuper()` to get a PrefixLookuper.
+    pub fn lookup_by(&self, column_names: Vec<String>) -> TablePrefixLookup {
+        TablePrefixLookup {
+            connection: self.connection.clone(),
+            metadata: self.metadata.clone(),
+            table_info: self.table_info.clone(),
+            lookup_column_names: column_names,
+        }
+    }
+
     fn __repr__(&self) -> String {
         "TableLookup()".to_string()
+    }
+}
+
+/// Builder for creating a PrefixLookuper.
+///
+/// Obtain via `TableLookup.lookup_by(columns)`, then call `create_lookuper()`.
+#[pyclass]
+pub struct TablePrefixLookup {
+    connection: Arc<fcore::client::FlussConnection>,
+    metadata: Arc<fcore::client::Metadata>,
+    table_info: fcore::metadata::TableInfo,
+    lookup_column_names: Vec<String>,
+}
+
+#[pymethods]
+impl TablePrefixLookup {
+    /// Create a PrefixLookuper from this builder.
+    pub fn create_lookuper(&self) -> PyResult<crate::PrefixLookuper> {
+        crate::PrefixLookuper::new(
+            &self.connection,
+            self.metadata.clone(),
+            self.table_info.clone(),
+            self.lookup_column_names.clone(),
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        "TablePrefixLookup()".to_string()
     }
 }
 

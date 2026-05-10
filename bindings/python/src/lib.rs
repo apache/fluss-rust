@@ -113,9 +113,11 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TableAppend>()?;
     m.add_class::<TableUpsert>()?;
     m.add_class::<TableLookup>()?;
+    m.add_class::<TablePrefixLookup>()?;
     m.add_class::<AppendWriter>()?;
     m.add_class::<UpsertWriter>()?;
     m.add_class::<Lookuper>()?;
+    m.add_class::<PrefixLookuper>()?;
     m.add_class::<Schema>()?;
     m.add_class::<LogScanner>()?;
     m.add_class::<LakeSnapshot>()?;
