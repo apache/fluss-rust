@@ -530,11 +530,8 @@ async def test_all_supported_datatypes(connection, admin):
                 pa.field("col_timestamp_ntz", pa.timestamp("us")),
                 pa.field("col_timestamp_ltz", pa.timestamp("us", tz="UTC")),
                 pa.field("col_bytes", pa.binary()),
-<<<<<<< HEAD
                 pa.field("col_array", pa.list_(pa.string())),
-=======
                 pa.field("col_binary", pa.binary(16)),
->>>>>>> upstream/main
             ]
         ),
         primary_keys=["pk_int"],
