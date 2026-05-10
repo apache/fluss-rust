@@ -179,6 +179,10 @@ async def test_composite_primary_keys(connection, admin):
     assert len(rows) == 1
     assert rows[0]["event_id"] == 1
 
+    # Validate empty-result case: valid prefix shape but no matching rows.
+    rows = await prefix_lookuper.lookup({"region": "APAC", "user_id": 999})
+    assert rows == []
+
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
@@ -528,6 +532,13 @@ async def test_prefix_lookup_validation_errors(connection, admin):
     # Missing partition key in lookup columns.
     with pytest.raises(fluss.FlussError, match="partition fields"):
         partitioned_table.new_lookup().lookup_by(["user_id"]).create_lookuper()
+
+    # A non-existent partition returns empty list.
+    partitioned_prefix_lookuper = (
+        partitioned_table.new_lookup().lookup_by(["region", "user_id"]).create_lookuper()
+    )
+    rows = await partitioned_prefix_lookuper.lookup({"region": "UNKNOWN_REGION", "user_id": 1})
+    assert rows == []
 
     # After partition keys, remaining columns must equal bucket keys.
     with pytest.raises(fluss.FlussError, match="bucket keys"):
