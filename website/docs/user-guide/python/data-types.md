@@ -12,6 +12,7 @@ The Python client uses PyArrow types for schema definitions:
 | `pa.float32()` / `float64()`                    | Float / Double                    | `float`             |
 | `pa.string()`                                   | String                            | `str`               |
 | `pa.binary()`                                   | Bytes                             | `bytes`             |
+| `pa.binary(n)`                                  | Binary(n)                         | `bytes`             |
 | `pa.date32()`                                   | Date                              | `datetime.date`     |
 | `pa.time32("ms")`                               | Time                              | `datetime.time`     |
 | `pa.timestamp("us")`                            | Timestamp (NTZ)                   | `datetime.datetime` |

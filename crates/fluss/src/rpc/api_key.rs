@@ -16,9 +16,11 @@
 // under the License.
 
 use crate::rpc::api_key::ApiKey::Unknown;
+use crate::rpc::api_version::{ApiVersion, ApiVersionRange};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum ApiKey {
+    ApiVersion,                 // 1000
     CreateDatabase,             // 1001
     DropDatabase,               // 1002
     ListDatabases,              // 1003
@@ -48,9 +50,50 @@ pub enum ApiKey {
     Unknown(i16),
 }
 
+impl ApiKey {
+    /// Returns the range of versions supported by the client for this API key.
+    pub fn supported_versions(&self) -> Option<ApiVersionRange> {
+        match self {
+            // Most APIs only support v0.
+            ApiKey::ApiVersion
+            | ApiKey::CreateDatabase
+            | ApiKey::DropDatabase
+            | ApiKey::ListDatabases
+            | ApiKey::DatabaseExists
+            | ApiKey::CreateTable
+            | ApiKey::DropTable
+            | ApiKey::GetTable
+            | ApiKey::ListTables
+            | ApiKey::ListPartitionInfos
+            | ApiKey::TableExists
+            | ApiKey::GetTableSchema
+            | ApiKey::MetaData
+            | ApiKey::ProduceLog
+            | ApiKey::FetchLog
+            | ApiKey::ListOffsets
+            | ApiKey::GetFileSystemSecurityToken
+            | ApiKey::InitWriter
+            | ApiKey::GetLatestLakeSnapshot
+            | ApiKey::LimitScan
+            | ApiKey::GetDatabaseInfo
+            | ApiKey::CreatePartition
+            | ApiKey::DropPartition
+            | ApiKey::Authenticate
+            // TODO(key-encoding-v1): The Java server supports v0..v1 for these
+            // APIs, but the Rust client has not yet implemented the v1 key
+            // encoding format. Pinned to v0 until that is done.
+            | ApiKey::PutKv | ApiKey::Lookup | ApiKey::PrefixLookup => {
+                Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0)))
+            }
+            Unknown(_) => None,
+        }
+    }
+}
+
 impl From<i16> for ApiKey {
     fn from(key: i16) -> Self {
         match key {
+            1000 => ApiKey::ApiVersion,
             1001 => ApiKey::CreateDatabase,
             1002 => ApiKey::DropDatabase,
             1003 => ApiKey::ListDatabases,
@@ -86,6 +129,7 @@ impl From<i16> for ApiKey {
 impl From<ApiKey> for i16 {
     fn from(key: ApiKey) -> Self {
         match key {
+            ApiKey::ApiVersion => 1000,
             ApiKey::CreateDatabase => 1001,
             ApiKey::DropDatabase => 1002,
             ApiKey::ListDatabases => 1003,
@@ -124,6 +168,7 @@ mod tests {
     #[test]
     fn api_key_round_trip() {
         let cases = [
+            (1000, ApiKey::ApiVersion),
             (1001, ApiKey::CreateDatabase),
             (1002, ApiKey::DropDatabase),
             (1003, ApiKey::ListDatabases),

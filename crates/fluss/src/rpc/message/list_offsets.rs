@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    BucketId, PartitionId, TableId, impl_read_version_type, impl_write_version_type, proto,
-};
+use crate::{BucketId, PartitionId, TableId, impl_read_type, impl_write_type, proto};
 
 use crate::error::Result as FlussResult;
 use crate::error::{Error, FlussError};
@@ -25,9 +23,8 @@ use crate::proto::{ErrorResponse, ListOffsetsResponse};
 use crate::rpc::frame::ReadError;
 
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
 use std::collections::HashMap;
 
 use bytes::{Buf, BufMut};
@@ -98,12 +95,10 @@ impl RequestBody for ListOffsetsRequest {
     type ResponseBody = ListOffsetsResponse;
 
     const API_KEY: ApiKey = ApiKey::ListOffsets;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(ListOffsetsRequest);
-impl_read_version_type!(ListOffsetsResponse);
+impl_write_type!(ListOffsetsRequest);
+impl_read_type!(ListOffsetsResponse);
 
 impl ListOffsetsResponse {
     pub fn offsets(&self) -> FlussResult<HashMap<i32, i64>> {

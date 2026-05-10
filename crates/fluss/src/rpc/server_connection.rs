@@ -15,20 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cluster::ServerNode;
+use crate::cluster::{ServerNode, ServerType};
 use crate::error::Error;
 use crate::metrics::{
     CLIENT_BYTES_RECEIVED_TOTAL, CLIENT_BYTES_SENT_TOTAL, CLIENT_REQUEST_LATENCY_MS,
     CLIENT_REQUESTS_IN_FLIGHT, CLIENT_REQUESTS_TOTAL, CLIENT_RESPONSES_TOTAL, LABEL_API_KEY,
     api_key_label,
 };
+use crate::proto::PbApiVersion;
+use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use crate::rpc::error::RpcError;
 use crate::rpc::error::RpcError::ConnectionError;
 use crate::rpc::frame::{AsyncMessageRead, AsyncMessageWrite};
 use crate::rpc::message::{
-    REQUEST_HEADER_LENGTH, ReadVersionedType, RequestBody, RequestHeader, ResponseHeader,
-    WriteVersionedType,
+    ApiVersionsRequest, REQUEST_HEADER_LENGTH, ReadType, RequestBody, RequestHeader,
+    ResponseHeader, WriteType,
 };
 use crate::rpc::transport::Transport;
 use futures::future::BoxFuture;
@@ -70,6 +72,108 @@ impl fmt::Debug for SaslConfig {
             .field("password", &"[REDACTED]")
             .finish()
     }
+}
+
+/// Represents the negotiated API versions between the client and a server node.
+/// Built from the server's `ApiVersionsResponse` by intersecting each API's
+/// client-supported range with the server-supported range, keeping the highest
+/// usable version.
+#[derive(Clone, Debug)]
+pub struct ServerApiVersions {
+    versions: HashMap<ApiKey, Result<ApiVersion, String>>,
+}
+
+impl ServerApiVersions {
+    /// Build from the server's advertised API version list.
+    pub fn new(server_versions: &[PbApiVersion]) -> Self {
+        let mut versions = HashMap::new();
+        for sv in server_versions {
+            let api_key = ApiKey::from(i16::try_from(sv.api_key).unwrap());
+            // Skip unknown API keys — the client does not support them.
+            let client_range = match api_key.supported_versions() {
+                Some(range) => range,
+                None => continue,
+            };
+            let server_min = i16::try_from(sv.min_version).unwrap();
+            let server_max = i16::try_from(sv.max_version).unwrap();
+            let min_version = client_range.min().0.max(server_min);
+            let max_version = client_range.max().0.min(server_max);
+            if min_version > max_version {
+                versions.insert(
+                    api_key,
+                    Err(format!(
+                        "The server does not support {:?} with version in range [{},{}]. \
+                         The supported range is [{},{}].",
+                        api_key,
+                        client_range.min(),
+                        client_range.max(),
+                        server_min,
+                        server_max,
+                    )),
+                );
+            } else {
+                versions.insert(api_key, Ok(ApiVersion(max_version)));
+            }
+        }
+        Self { versions }
+    }
+
+    /// Get the negotiated (highest usable) version for a given API key.
+    pub fn highest_available_version(&self, api_key: ApiKey) -> Result<ApiVersion, Error> {
+        match self.versions.get(&api_key) {
+            Some(Ok(version)) => Ok(*version),
+            Some(Err(msg)) => Err(Error::UnsupportedVersion {
+                message: msg.clone(),
+            }),
+            None => Err(Error::UnsupportedVersion {
+                message: format!("The server does not support {:?}", api_key),
+            }),
+        }
+    }
+}
+
+/// Resolve the API version to use for a given API key.
+fn resolve_api_version_for(
+    api_versions: Option<&ServerApiVersions>,
+    api_key: ApiKey,
+) -> Result<ApiVersion, Error> {
+    // version equals highestSupportedVersion might happen when requesting api version check
+    // before serverApiVersions is initialized. We always use the highest version for api
+    // version checking.
+    let default_version = api_key
+        .supported_versions()
+        .map(|range| range.max())
+        .unwrap();
+    match api_versions {
+        Some(versions) => versions.highest_available_version(api_key),
+        None => Ok(default_version),
+    }
+}
+
+/// Validate that the server's advertised `server_type` matches the type we expect
+/// for the target `ServerNode`.
+fn validate_server_type(
+    expected: &ServerType,
+    response_server_type: Option<i32>,
+) -> Result<(), Error> {
+    // For forward-compat with servers that do not populate `server_type`, validation is skipped.
+    let Some(type_id) = response_server_type else {
+        return Ok(());
+    };
+    let actual = ServerType::from_type_id(type_id);
+    if actual.as_ref() == Some(expected) {
+        return Ok(());
+    }
+    let actual_desc = actual
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| format!("Unknown(type_id={type_id})"));
+    Err(Error::InvalidServerType {
+        message: format!(
+            "Expected server type {expected} but the server advertised {actual_desc}. \
+             The client may be talking to the wrong endpoint \
+             (e.g. coordinator vs tablet server)."
+        ),
+    })
 }
 
 #[derive(Debug, Default)]
@@ -142,11 +246,28 @@ impl RpcClient {
         );
         let connection = ServerConnection::new(messenger);
 
+        // Negotiate API versions (must happen before authentication).
+        Self::check_api_versions(&connection, server_node.server_type()).await?;
+
         if let Some(ref sasl) = self.sasl_config {
             Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
         }
 
         Ok(connection)
+    }
+
+    /// Send an `ApiVersionsRequest`, validate the advertised `server_type`, and
+    /// store the negotiated versions on the connection.
+    async fn check_api_versions(
+        connection: &ServerConnection,
+        expected_server_type: &ServerType,
+    ) -> Result<(), Error> {
+        let request = ApiVersionsRequest::new("fluss-rust", env!("CARGO_PKG_VERSION"));
+        let response = connection.request(request).await?;
+        validate_server_type(expected_server_type, response.server_type)?;
+        let api_versions = ServerApiVersions::new(&response.api_versions);
+        *connection.api_versions.lock() = Some(api_versions);
+        Ok(())
     }
 
     /// Perform SASL/PLAIN authentication handshake.
@@ -325,6 +446,10 @@ pub struct ServerConnectionInner<RW> {
 
     state: Arc<Mutex<ConnectionState>>,
 
+    /// Negotiated API versions for this connection.
+    /// `None` until the ApiVersions handshake completes.
+    api_versions: Mutex<Option<ServerApiVersions>>,
+
     join_handle: JoinHandle<()>,
 }
 
@@ -344,16 +469,13 @@ where
                     Ok(msg) => {
                         // message was read, so all subsequent errors should not poison the whole stream
                         let mut cursor = Cursor::new(msg);
-                        let header =
-                            match ResponseHeader::read_versioned(&mut cursor, ApiVersion(0)) {
-                                Ok(header) => header,
-                                Err(err) => {
-                                    log::warn!(
-                                        "Cannot read message header, ignoring message: {err:?}"
-                                    );
-                                    continue;
-                                }
-                            };
+                        let header = match ResponseHeader::read(&mut cursor) {
+                            Ok(header) => header,
+                            Err(err) => {
+                                log::warn!("Cannot read message header, ignoring message: {err:?}");
+                                continue;
+                            }
+                        };
 
                         let active_request = match state_captured.lock().deref_mut() {
                             ConnectionState::RequestMap(map) => {
@@ -396,8 +518,14 @@ where
             client_id,
             request_id: AtomicI32::new(0),
             state,
+            api_versions: Mutex::new(None),
             join_handle,
         }
+    }
+
+    fn resolve_api_version(&self, api_key: ApiKey) -> Result<ApiVersion, Error> {
+        let guard = self.api_versions.lock();
+        resolve_api_version_for(guard.as_ref(), api_key)
     }
 
     fn is_poisoned(&self) -> bool {
@@ -407,29 +535,25 @@ where
 
     pub async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, Error>
     where
-        R: RequestBody + Send + WriteVersionedType<Vec<u8>>,
-        R::ResponseBody: ReadVersionedType<Cursor<Vec<u8>>>,
+        R: RequestBody + Send + WriteType<Vec<u8>>,
+        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
     {
+        let api_version = self.resolve_api_version(R::API_KEY)?;
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
-            request_api_version: ApiVersion(0),
+            request_api_version: api_version,
             request_id,
             client_id: Some(String::from(self.client_id.as_ref())),
         };
 
-        let header_version = ApiVersion(0);
-
-        let body_api_version = ApiVersion(0);
-
         let mut buf = Vec::new();
         // write header
         header
-            .write_versioned(&mut buf, header_version)
+            .write(&mut buf)
             .map_err(RpcError::WriteMessageError)?;
         // write message body
-        msg.write_versioned(&mut buf, body_api_version)
-            .map_err(RpcError::WriteMessageError)?;
+        msg.write(&mut buf).map_err(RpcError::WriteMessageError)?;
 
         let (tx, rx) = channel();
 
@@ -473,8 +597,7 @@ where
             });
         }
 
-        let body = R::ResponseBody::read_versioned(&mut response.data, body_api_version)
-            .map_err(RpcError::ReadMessageError)?;
+        let body = R::ResponseBody::read(&mut response.data).map_err(RpcError::ReadMessageError)?;
 
         let read_bytes = response.data.position();
         let message_bytes = response.data.into_inner().len() as u64;
@@ -483,7 +606,7 @@ where
                 message_size: message_bytes,
                 read: read_bytes,
                 api_key: R::API_KEY,
-                api_version: body_api_version,
+                api_version,
             }
             .into());
         }
@@ -643,7 +766,7 @@ mod tests {
     use crate::rpc::ApiKey;
     use crate::rpc::api_version::ApiVersion;
     use crate::rpc::frame::{ReadError, WriteError};
-    use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+    use crate::rpc::message::{ReadType, RequestBody, WriteType};
     use metrics::{SharedString, Unit};
     use metrics_util::CompositeKey;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
@@ -659,17 +782,16 @@ mod tests {
     impl RequestBody for TestProduceRequest {
         type ResponseBody = TestProduceResponse;
         const API_KEY: ApiKey = ApiKey::ProduceLog;
-        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
     }
 
-    impl WriteVersionedType<Vec<u8>> for TestProduceRequest {
-        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+    impl WriteType<Vec<u8>> for TestProduceRequest {
+        fn write(&self, _w: &mut Vec<u8>) -> Result<(), WriteError> {
             Ok(())
         }
     }
 
-    impl ReadVersionedType<Cursor<Vec<u8>>> for TestProduceResponse {
-        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+    impl ReadType<Cursor<Vec<u8>>> for TestProduceResponse {
+        fn read(_r: &mut Cursor<Vec<u8>>) -> Result<Self, ReadError> {
             Ok(TestProduceResponse)
         }
     }
@@ -680,17 +802,16 @@ mod tests {
     impl RequestBody for TestMetadataRequest {
         type ResponseBody = TestMetadataResponse;
         const API_KEY: ApiKey = ApiKey::MetaData;
-        const REQUEST_VERSION: ApiVersion = ApiVersion(0);
     }
 
-    impl WriteVersionedType<Vec<u8>> for TestMetadataRequest {
-        fn write_versioned(&self, _w: &mut Vec<u8>, _v: ApiVersion) -> Result<(), WriteError> {
+    impl WriteType<Vec<u8>> for TestMetadataRequest {
+        fn write(&self, _w: &mut Vec<u8>) -> Result<(), WriteError> {
             Ok(())
         }
     }
 
-    impl ReadVersionedType<Cursor<Vec<u8>>> for TestMetadataResponse {
-        fn read_versioned(_r: &mut Cursor<Vec<u8>>, _v: ApiVersion) -> Result<Self, ReadError> {
+    impl ReadType<Cursor<Vec<u8>>> for TestMetadataResponse {
+        fn read(_r: &mut Cursor<Vec<u8>>) -> Result<Self, ReadError> {
             Ok(TestMetadataResponse)
         }
     }
@@ -873,6 +994,11 @@ mod tests {
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }]));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let request_before = counter_for_label(&before, CLIENT_REQUESTS_TOTAL, "produce_log");
@@ -913,6 +1039,11 @@ mod tests {
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1012,
+            min_version: 0,
+            max_version: 0,
+        }]));
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let request_sum_before = counter_sum(&before, CLIENT_REQUESTS_TOTAL);
         let response_sum_before = counter_sum(&before, CLIENT_RESPONSES_TOTAL);
@@ -949,6 +1080,11 @@ mod tests {
         let (client, server) = tokio::io::duplex(64);
         drop(server); // force write failure on request path
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }]));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let request_before = counter_for_label(&before, CLIENT_REQUESTS_TOTAL, "produce_log");
@@ -997,6 +1133,11 @@ mod tests {
         tokio::spawn(mock_error_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }]));
 
         let before: Vec<_> = snapshotter.snapshot().into_vec();
         let response_before = counter_for_label(&before, CLIENT_RESPONSES_TOTAL, "produce_log");
@@ -1029,5 +1170,131 @@ mod tests {
             inflight_after, 0.0,
             "in-flight gauge must return to zero after API error"
         );
+    }
+
+    #[tokio::test]
+    async fn server_api_versions_negotiation() {
+        assert_eq!(
+            resolve_api_version_for(None, ApiKey::ApiVersion).unwrap(),
+            ApiVersion(0)
+        );
+
+        assert_eq!(
+            resolve_api_version_for(None, ApiKey::PutKv).unwrap(),
+            ApiVersion(0)
+        );
+
+        let server_versions = vec![
+            // PutKv: server v0..v3, client v0 only (v1 key encoding not yet implemented) → negotiated v0
+            PbApiVersion {
+                api_key: 1016,
+                min_version: 0,
+                max_version: 3,
+            },
+            // ProduceLog: server v0..v2, client v0 only → negotiated v0
+            PbApiVersion {
+                api_key: 1014,
+                min_version: 0,
+                max_version: 2,
+            },
+            // Disjoint: server v5..v7, client v0 only → error
+            PbApiVersion {
+                api_key: 1015,
+                min_version: 5,
+                max_version: 7,
+            },
+            // Unknown key (9999) → skipped
+            PbApiVersion {
+                api_key: 9999,
+                min_version: 0,
+                max_version: 5,
+            },
+        ];
+        let negotiated = ServerApiVersions::new(&server_versions);
+
+        // Successful negotiation cases
+        assert_eq!(
+            negotiated.highest_available_version(ApiKey::PutKv).unwrap(),
+            ApiVersion(0)
+        );
+        assert_eq!(
+            negotiated
+                .highest_available_version(ApiKey::ProduceLog)
+                .unwrap(),
+            ApiVersion(0)
+        );
+
+        // Disjoint range → error
+        assert!(
+            negotiated
+                .highest_available_version(ApiKey::FetchLog)
+                .unwrap_err()
+                .to_string()
+                .contains(&format!(
+                    "The server does not support {:?}",
+                    ApiKey::FetchLog
+                ))
+        );
+
+        // Unknown key is skipped → not in map → error
+        assert!(
+            negotiated
+                .highest_available_version(ApiKey::Unknown(9999))
+                .is_err()
+        );
+
+        // Key not advertised by server → error
+        assert!(
+            ServerApiVersions::new(&[])
+                .highest_available_version(ApiKey::FetchLog)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn server_type_validation() {
+        // Happy path: server advertises the expected type.
+        assert!(
+            validate_server_type(
+                &ServerType::CoordinatorServer,
+                Some(ServerType::CoordinatorServer.to_type_id()),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_server_type(
+                &ServerType::TabletServer,
+                Some(ServerType::TabletServer.to_type_id()),
+            )
+            .is_ok()
+        );
+
+        // Mismatch: connected to a coordinator while expecting a tablet server
+        // (and vice versa).
+        let err = validate_server_type(
+            &ServerType::TabletServer,
+            Some(ServerType::CoordinatorServer.to_type_id()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidServerType { .. }),
+            "expected InvalidServerType, got: {err:?}"
+        );
+
+        assert!(matches!(
+            validate_server_type(
+                &ServerType::CoordinatorServer,
+                Some(ServerType::TabletServer.to_type_id()),
+            ),
+            Err(Error::InvalidServerType { .. })
+        ));
+
+        validate_server_type(&ServerType::TabletServer, None).ok();
+        // Unknown / unmapped type id still fails, with the raw id surfaced so
+        // operators can diagnose protocol drift.
+        assert!(matches!(
+            validate_server_type(&ServerType::CoordinatorServer, Some(99),),
+            Err(Error::InvalidServerType { .. })
+        ));
     }
 }

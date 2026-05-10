@@ -22,9 +22,7 @@ use crate::error::{Error, FlussError, Result};
 use crate::metadata::{TableBucket, TablePath};
 use crate::proto::{LookupResponse, PrefixLookupResponse};
 use crate::rpc::ServerConnection;
-use crate::rpc::message::{
-    LookupRequest, PrefixLookupRequest, ReadVersionedType, RequestBody, WriteVersionedType,
-};
+use crate::rpc::message::{LookupRequest, PrefixLookupRequest, ReadType, RequestBody, WriteType};
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -51,8 +49,8 @@ struct BucketResponse<V> {
 }
 
 trait LookupProtocol {
-    type Request: RequestBody<ResponseBody = Self::Response> + Send + WriteVersionedType<Vec<u8>>;
-    type Response: ReadVersionedType<Cursor<Vec<u8>>> + Send;
+    type Request: RequestBody<ResponseBody = Self::Response> + Send + WriteType<Vec<u8>>;
+    type Response: ReadType<Cursor<Vec<u8>>> + Send;
     type Value: Send;
 
     const OP_NAME: &'static str;

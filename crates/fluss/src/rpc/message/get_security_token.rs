@@ -17,10 +17,9 @@
 
 use crate::proto::{GetFileSystemSecurityTokenRequest, GetFileSystemSecurityTokenResponse};
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
-use crate::{impl_read_version_type, impl_write_version_type};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{impl_read_type, impl_write_type};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -46,8 +45,7 @@ impl Default for GetSecurityTokenRequest {
 impl RequestBody for GetSecurityTokenRequest {
     type ResponseBody = GetFileSystemSecurityTokenResponse;
     const API_KEY: ApiKey = ApiKey::GetFileSystemSecurityToken;
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(GetSecurityTokenRequest);
-impl_read_version_type!(GetFileSystemSecurityTokenResponse);
+impl_write_type!(GetSecurityTokenRequest);
+impl_read_type!(GetFileSystemSecurityTokenResponse);
