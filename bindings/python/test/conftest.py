@@ -109,6 +109,8 @@ def pytest_unconfigure(config):
         return
     if hasattr(config, "workerinput"):
         return
+    if os.environ.get("FLUSS_SKIP_CLUSTER_TEARDOWN"):
+        return
     _stop_cluster()
 
 

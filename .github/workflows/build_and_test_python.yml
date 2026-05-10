@@ -81,3 +81,20 @@ jobs:
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
+          FLUSS_SKIP_CLUSTER_TEARDOWN: "1"
+
+      - name: Dump fluss cluster container logs
+        if: always()
+        run: |
+          mkdir -p cluster-logs
+          for c in $(docker ps -a --filter "name=shared-test" --format '{{.Names}}'); do
+            docker logs "$c" > "cluster-logs/$c.log" 2>&1 || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cluster-logs-${{ matrix.python }}
+          path: cluster-logs/
+          if-no-files-found: ignore
+          retention-days: 3
