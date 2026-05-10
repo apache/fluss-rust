@@ -13,7 +13,9 @@ Complete API reference for the Fluss Rust client.
 | `writer_request_max_size`             | `i32`           | `10485760` (10 MB) | Maximum request size in bytes                                                        |
 | `writer_acks`                         | `String`        | `"all"`            | Acknowledgment setting (`"all"` waits for all replicas)                              |
 | `writer_retries`                      | `i32`           | `i32::MAX`         | Number of retries on failure                                                         |
-| `writer_batch_size`                   | `i32`           | `2097152` (2 MB)   | Batch size for writes in bytes                                                       |
+| `writer_batch_size`                   | `i32`           | `2097152` (2 MB)   | Batch size for writes in bytes. Upper bound when dynamic sizing is on; fixed batch size when off. |
+| `writer_dynamic_batch_size_enabled`   | `bool`          | `true`             | Enable per-table dynamic batch sizing: target grows 10% above 80% fill, shrinks 5% below 50%, clamped to `[writer_dynamic_batch_size_min, writer_batch_size]` |
+| `writer_dynamic_batch_size_min`       | `i32`           | `262144` (256 KB)  | Lower bound for the dynamic batch size estimator (ignored when `writer_dynamic_batch_size_enabled` is `false`) |
 | `writer_batch_timeout_ms`             | `i64`           | `100`              | Maximum time in ms to wait for a writer batch to fill up before sending              |
 | `writer_bucket_no_key_assigner`       | `NoKeyAssigner` | `sticky`           | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin` |
 | `scanner_remote_log_prefetch_num`     | `usize`         | `4`                | Number of remote log segments to prefetch                                            |

@@ -60,6 +60,25 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "writer.dynamic-batch-size.enabled" => {
+                        config.writer_dynamic_batch_size_enabled = match value.as_str() {
+                            "true" => true,
+                            "false" => false,
+                            other => {
+                                return Err(FlussError::new_err(format!(
+                                    "Invalid value '{other}' for '{key}', expected 'true' or 'false'"
+                                )));
+                            }
+                        };
+                    }
+                    "writer.dynamic-batch-size-min" => {
+                        config.writer_dynamic_batch_size_min =
+                            value.parse::<i32>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
                     "writer.batch-timeout-ms" => {
                         config.writer_batch_timeout_ms = value.parse::<i64>().map_err(|e| {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
@@ -248,6 +267,30 @@ impl Config {
     #[setter]
     fn set_writer_batch_size(&mut self, size: i32) {
         self.inner.writer_batch_size = size;
+    }
+
+    /// Get whether the per-table dynamic batch size estimator is enabled
+    #[getter]
+    fn writer_dynamic_batch_size_enabled(&self) -> bool {
+        self.inner.writer_dynamic_batch_size_enabled
+    }
+
+    /// Set whether the per-table dynamic batch size estimator is enabled
+    #[setter]
+    fn set_writer_dynamic_batch_size_enabled(&mut self, enabled: bool) {
+        self.inner.writer_dynamic_batch_size_enabled = enabled;
+    }
+
+    /// Get the lower bound used by the dynamic batch size estimator
+    #[getter]
+    fn writer_dynamic_batch_size_min(&self) -> i32 {
+        self.inner.writer_dynamic_batch_size_min
+    }
+
+    /// Set the lower bound used by the dynamic batch size estimator
+    #[setter]
+    fn set_writer_dynamic_batch_size_min(&mut self, size: i32) {
+        self.inner.writer_dynamic_batch_size_min = size;
     }
 
     /// Get the scanner remote log prefetch num
