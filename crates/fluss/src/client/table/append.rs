@@ -126,7 +126,7 @@ impl AppendWriter {
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
     pub fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture> {
         let physical_table_path = if self.partition_getter.is_some() && batch.num_rows() > 0 {
-            let first_row = ColumnarRow::new(Arc::new(batch.clone()));
+            let first_row = ColumnarRow::new(Arc::new(batch.clone()), 0, None);
             Arc::new(get_physical_path(
                 &self.table_path,
                 self.partition_getter.as_ref(),

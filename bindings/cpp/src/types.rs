@@ -529,7 +529,7 @@ pub fn resolve_row_types(
             Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
             Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
             Datum::Array(a) => Datum::Array(a.clone()),
-            Datum::Row(r) => Datum::Row(Box::new(resolve_row_types(r, None)?)),
+            Datum::Row(_) => return Err(anyhow!("Row datum is not yet supported in C++ bindings")),
         };
         out.set_field(idx, resolved);
     }

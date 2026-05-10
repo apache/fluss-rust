@@ -17,7 +17,10 @@
 
 use crate::error::Error::JsonSerdeError;
 use crate::error::{Error, Result};
-use crate::metadata::datatype::{DataField, DataType, DataTypes};
+use crate::metadata::datatype::{
+    DataField, DataType, DataTypes, DecimalType, TimeType, TimestampLTzType, TimestampType,
+    UNASSIGNED_FIELD_ID,
+};
 use crate::metadata::table::{Column, Schema, TableDescriptor};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -202,12 +205,11 @@ impl JsonSerde for DataType {
                     .get(Self::FIELD_NAME_SCALE)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
-                DataType::Decimal(
-                    crate::metadata::datatype::DecimalType::with_nullable(true, precision, scale)
-                        .map_err(|e| Error::JsonSerdeError {
+                DataType::Decimal(DecimalType::with_nullable(true, precision, scale).map_err(
+                    |e| Error::JsonSerdeError {
                         message: format!("Invalid DECIMAL parameters: {e}"),
-                    })?,
-                )
+                    },
+                )?)
             }
             "DATE" => DataTypes::date(),
             "TIME_WITHOUT_TIME_ZONE" => {
@@ -215,39 +217,33 @@ impl JsonSerde for DataType {
                     .get(Self::FIELD_NAME_PRECISION)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
-                DataType::Time(
-                    crate::metadata::datatype::TimeType::with_nullable(true, precision).map_err(
-                        |e| Error::JsonSerdeError {
-                            message: format!("Invalid TIME_WITHOUT_TIME_ZONE precision: {e}"),
-                        },
-                    )?,
-                )
+                DataType::Time(TimeType::with_nullable(true, precision).map_err(|e| {
+                    Error::JsonSerdeError {
+                        message: format!("Invalid TIME_WITHOUT_TIME_ZONE precision: {e}"),
+                    }
+                })?)
             }
             "TIMESTAMP_WITHOUT_TIME_ZONE" => {
                 let precision = node
                     .get(Self::FIELD_NAME_PRECISION)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(6) as u32;
-                DataType::Timestamp(
-                    crate::metadata::datatype::TimestampType::with_nullable(true, precision)
-                        .map_err(|e| Error::JsonSerdeError {
-                            message: format!("Invalid TIMESTAMP_WITHOUT_TIME_ZONE precision: {e}"),
-                        })?,
-                )
+                DataType::Timestamp(TimestampType::with_nullable(true, precision).map_err(|e| {
+                    Error::JsonSerdeError {
+                        message: format!("Invalid TIMESTAMP_WITHOUT_TIME_ZONE precision: {e}"),
+                    }
+                })?)
             }
             "TIMESTAMP_WITH_LOCAL_TIME_ZONE" => {
                 let precision = node
                     .get(Self::FIELD_NAME_PRECISION)
                     .and_then(|v| v.as_u64())
                     .unwrap_or(6) as u32;
-                DataType::TimestampLTz(
-                    crate::metadata::datatype::TimestampLTzType::with_nullable(true, precision)
-                        .map_err(|e| Error::JsonSerdeError {
-                            message: format!(
-                                "Invalid TIMESTAMP_WITH_LOCAL_TIME_ZONE precision: {e}"
-                            ),
-                        })?,
-                )
+                DataType::TimestampLTz(TimestampLTzType::with_nullable(true, precision).map_err(
+                    |e| Error::JsonSerdeError {
+                        message: format!("Invalid TIMESTAMP_WITH_LOCAL_TIME_ZONE precision: {e}"),
+                    },
+                )?)
             }
             "BYTES" => DataTypes::bytes(),
             "BINARY" => {
@@ -328,6 +324,7 @@ impl DataField {
     const NAME: &'static str = "name";
     const FIELD_TYPE: &'static str = "field_type";
     const DESCRIPTION: &'static str = "description";
+    const FIELD_ID: &'static str = "field_id";
 }
 
 impl JsonSerde for DataField {
@@ -343,6 +340,8 @@ impl JsonSerde for DataField {
         if let Some(description) = &self.description {
             obj.insert(Self::DESCRIPTION.to_string(), json!(description));
         }
+
+        obj.insert(Self::FIELD_ID.to_string(), json!(self.field_id()));
 
         Ok(Value::Object(obj))
     }
@@ -369,7 +368,18 @@ impl JsonSerde for DataField {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        Ok(DataField::new(name, data_type, description))
+        let field_id = node
+            .get(Self::FIELD_ID)
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
+            .unwrap_or(UNASSIGNED_FIELD_ID);
+
+        Ok(DataField::with_field_id(
+            name,
+            data_type,
+            description,
+            field_id,
+        ))
     }
 }
 
@@ -439,6 +449,7 @@ impl JsonSerde for Column {
 impl Schema {
     const COLUMNS_NAME: &'static str = "columns";
     const PRIMARY_KEY_NAME: &'static str = "primary_key";
+    const HIGHEST_FIELD_ID: &'static str = "highest_field_id";
     const VERSION_KEY: &'static str = "version";
     const VERSION: u32 = 1;
 }
@@ -467,6 +478,12 @@ impl JsonSerde for Schema {
                 .collect();
             obj.insert(Self::PRIMARY_KEY_NAME.to_string(), json!(pk_values));
         }
+
+        obj.insert(
+            Self::HIGHEST_FIELD_ID.to_string(),
+            json!(self.highest_field_id()),
+        );
+
         Ok(Value::Object(obj))
     }
 
@@ -682,12 +699,13 @@ impl JsonSerde for TableDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::DataTypes;
+    use crate::metadata::reassign_field_ids;
+    use crate::metadata::{
+        Column, DataField, DataType, DataTypes as DT, DataTypes, MapType, Schema,
+    };
 
     #[test]
     fn column_id_round_trip_through_json() {
-        use crate::metadata::Column;
-
         let col = Column::new("a", DataTypes::int())
             .with_id(7)
             .with_comment("desc");
@@ -699,8 +717,6 @@ mod tests {
 
     #[test]
     fn schema_assigns_ids_when_absent_and_preserves_when_present() {
-        use crate::metadata::{Column, Schema};
-
         let auto = Schema::builder()
             .column("a", DataTypes::int())
             .column("b", DataTypes::string())
@@ -722,7 +738,6 @@ mod tests {
 
     #[test]
     fn schema_rejects_duplicate_ids() {
-        use crate::metadata::Column;
         let err = Schema::builder()
             .with_columns(vec![
                 Column::new("a", DataTypes::int()).with_id(7),
@@ -730,12 +745,11 @@ mod tests {
             ])
             .build()
             .unwrap_err();
-        assert!(err.to_string().contains("Duplicate column id 7"), "{err}");
+        assert!(err.to_string().contains("Duplicate field id 7"), "{err}");
     }
 
     #[test]
     fn schema_rejects_negative_non_sentinel_ids() {
-        use crate::metadata::Column;
         let err = Schema::builder()
             .with_columns(vec![Column::new("a", DataTypes::int()).with_id(-7)])
             .build()
@@ -745,7 +759,6 @@ mod tests {
 
     #[test]
     fn column_json_id_overflow_errors() {
-        use crate::metadata::Column;
         let json = serde_json::json!({
             "name": "a",
             "data_type": Column::new("a", DataTypes::int()).serialize_json().unwrap()
@@ -758,8 +771,6 @@ mod tests {
 
     #[test]
     fn schema_rejects_partially_assigned_ids() {
-        use crate::metadata::Column;
-
         let err = Schema::builder()
             .with_columns(vec![
                 Column::new("a", DataTypes::int()).with_id(0),
@@ -771,6 +782,259 @@ mod tests {
             err.to_string().contains("All columns must have an id"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn schema_assigns_nested_field_ids_in_java_dfs_order() {
+        let inner_row = DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
+        let nested_row = DataTypes::row(vec![
+            DataField::new("x", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+        let deep_row = DataTypes::row(vec![DataField::new("inner", inner_row, None)]);
+
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("nested", nested_row)
+            .column("deep", deep_row)
+            .build()
+            .unwrap();
+
+        let top_ids: Vec<i32> = schema.columns().iter().map(|c| c.id()).collect();
+        assert_eq!(top_ids, vec![0, 1, 4]);
+
+        fn nested_field(dt: &DataType, idx: usize) -> &DataField {
+            match dt {
+                DataType::Row(rt) => &rt.fields()[idx],
+                _ => panic!("not a Row"),
+            }
+        }
+        let nested_dt = schema.columns()[1].data_type();
+        assert_eq!(nested_field(nested_dt, 0).field_id(), 2); // x
+        assert_eq!(nested_field(nested_dt, 1).field_id(), 3); // label
+
+        let deep_dt = schema.columns()[2].data_type();
+        let inner_field = nested_field(deep_dt, 0); // inner
+        assert_eq!(inner_field.field_id(), 5);
+        let n_field = nested_field(inner_field.data_type(), 0); // n
+        assert_eq!(n_field.field_id(), 6);
+
+        assert_eq!(schema.highest_field_id(), 6);
+
+        for c in schema.columns() {
+            assert_ne!(c.id(), UNASSIGNED_FIELD_ID);
+        }
+    }
+
+    #[test]
+    fn schema_array_of_row_assigns_nested_ids() {
+        let elem = DataTypes::row(vec![
+            DataField::new("seq", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("events", DataTypes::array(elem))
+            .build()
+            .unwrap();
+        assert_eq!(schema.highest_field_id(), 3);
+        let array_dt = schema.columns()[1].data_type();
+        let elem_dt = match array_dt {
+            DataType::Array(at) => at.get_element_type(),
+            _ => unreachable!(),
+        };
+        let fields = match elem_dt {
+            DataType::Row(rt) => rt.fields(),
+            _ => unreachable!(),
+        };
+        assert_eq!(fields[0].field_id(), 2);
+        assert_eq!(fields[1].field_id(), 3);
+    }
+
+    #[test]
+    fn schema_nested_row_round_trips_through_json() {
+        let nested = DataTypes::row(vec![
+            DataField::new("x", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+        let original = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("nested", nested)
+            .build()
+            .unwrap();
+
+        let json = original.serialize_json().unwrap();
+
+        assert_eq!(
+            json.get("highest_field_id").and_then(|v| v.as_i64()),
+            Some(3)
+        );
+
+        let round_tripped = Schema::deserialize_json(&json).unwrap();
+        assert_eq!(round_tripped.highest_field_id(), 3);
+        assert_eq!(
+            round_tripped
+                .columns()
+                .iter()
+                .map(|c| c.id())
+                .collect::<Vec<_>>(),
+            vec![0, 1],
+        );
+        assert_eq!(round_tripped, original);
+    }
+
+    #[test]
+    fn schema_rejects_duplicate_nested_field_ids() {
+        let nested = DataTypes::row(vec![
+            DataField::with_field_id("x", DT::int(), None, 0),
+            DataField::with_field_id("y", DT::int(), None, 2),
+        ]);
+        let err = Schema::builder()
+            .with_columns(vec![
+                Column::new("a", DT::int()).with_id(0),
+                Column::new("b", nested).with_id(1),
+            ])
+            .build()
+            .unwrap_err();
+        assert!(err.to_string().contains("Duplicate field id 0"), "{err}");
+    }
+
+    #[test]
+    fn schema_rejects_partially_assigned_nested_field_ids() {
+        let nested = DataTypes::row(vec![DataField::new("x", DT::int(), None)]);
+        let err = Schema::builder()
+            .with_columns(vec![
+                Column::new("a", DT::int()).with_id(0),
+                Column::new("b", nested).with_id(1),
+            ])
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("nested DataField ids are unassigned"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn schema_preserves_nested_ids_with_gaps() {
+        // n2.m1=11), f2=2 (nested n0=9, n1=10).
+        let inner_for_n2 = DataTypes::row(vec![DataField::with_field_id(
+            "m1",
+            DataTypes::tinyint(),
+            None,
+            11,
+        )]);
+        let f1_row = DataTypes::row(vec![
+            DataField::with_field_id("n0", DataTypes::tinyint(), None, 6),
+            DataField::with_field_id("n1", DataTypes::string(), None, 7),
+            DataField::with_field_id("n2", inner_for_n2, None, 8),
+        ]);
+        let f2_row = DataTypes::row(vec![
+            DataField::with_field_id("n0", DataTypes::tinyint(), None, 9),
+            DataField::with_field_id("n1", DataTypes::string(), None, 10),
+        ]);
+
+        let schema = Schema::builder()
+            .with_columns(vec![
+                Column::new("f0", DataTypes::string().as_non_nullable()).with_id(0),
+                Column::new("f1", f1_row).with_id(1),
+                Column::new("f2", f2_row).with_id(2),
+            ])
+            .build()
+            .unwrap();
+
+        let top_ids: Vec<i32> = schema.columns().iter().map(|c| c.id()).collect();
+        assert_eq!(top_ids, vec![0, 1, 2]);
+
+        fn row_fields(dt: &DataType) -> &[DataField] {
+            match dt {
+                DataType::Row(rt) => rt.fields(),
+                _ => panic!("not a Row"),
+            }
+        }
+        let f1_fields = row_fields(schema.columns()[1].data_type());
+        assert_eq!(f1_fields[0].field_id(), 6); // n0
+        assert_eq!(f1_fields[1].field_id(), 7); // n1
+        assert_eq!(f1_fields[2].field_id(), 8); // n2
+        let n2_fields = row_fields(f1_fields[2].data_type());
+        assert_eq!(n2_fields[0].field_id(), 11); // m1 — the "gap"
+
+        let f2_fields = row_fields(schema.columns()[2].data_type());
+        assert_eq!(f2_fields[0].field_id(), 9);
+        assert_eq!(f2_fields[1].field_id(), 10);
+
+        assert_eq!(schema.highest_field_id(), 11);
+    }
+
+    #[test]
+    fn schema_deserializes_legacy_json_without_column_ids() {
+        let legacy_json: Value = serde_json::from_str(
+            r#"{
+                "version": 1,
+                "columns": [
+                    {"name": "a", "data_type": {"type": "INTEGER", "nullable": false}, "comment": "first"},
+                    {"name": "b", "data_type": {"type": "STRING"}, "comment": "second"},
+                    {"name": "c", "data_type": {"type": "CHAR", "nullable": false, "length": 10}, "comment": "third"}
+                ],
+                "primary_key": ["a", "c"]
+            }"#,
+        )
+        .unwrap();
+
+        let schema = Schema::deserialize_json(&legacy_json).expect("legacy JSON must deserialize");
+        let ids: Vec<i32> = schema.columns().iter().map(|c| c.id()).collect();
+        assert_eq!(ids, vec![0, 1, 2], "missing IDs auto-assigned 0..N-1");
+        assert_eq!(schema.highest_field_id(), 2);
+        assert!(schema.primary_key().is_some());
+    }
+
+    #[test]
+    fn empty_schema_has_minus_one_highest_field_id() {
+        let s = Schema::builder().build().unwrap();
+        assert_eq!(s.highest_field_id(), -1);
+        let json = s.serialize_json().unwrap();
+        assert_eq!(
+            json.get("highest_field_id").and_then(|v| v.as_i64()),
+            Some(-1)
+        );
+    }
+
+    #[test]
+    fn reassign_field_ids_walks_array_map_row() {
+        let dt = DataTypes::array(DataTypes::row(vec![
+            DataField::new("a", DataTypes::int(), None),
+            DataField::new("b", DataTypes::string(), None),
+        ]));
+        let mut counter = -1_i32;
+        let assigned = reassign_field_ids(&dt, &mut counter);
+        match assigned {
+            DataType::Array(at) => match at.get_element_type() {
+                DataType::Row(rt) => {
+                    assert_eq!(rt.fields()[0].field_id(), 0);
+                    assert_eq!(rt.fields()[1].field_id(), 1);
+                }
+                _ => panic!("expected Row"),
+            },
+            _ => panic!("expected Array"),
+        }
+        assert_eq!(counter, 1);
+
+        let dt = DataType::Map(MapType::new(
+            DataTypes::int(),
+            DataTypes::row(vec![DataField::new("x", DataTypes::int(), None)]),
+        ));
+        let mut counter = -1_i32;
+        let assigned = reassign_field_ids(&dt, &mut counter);
+        let value_type = match &assigned {
+            DataType::Map(mt) => mt.value_type(),
+            _ => panic!("expected Map"),
+        };
+        match value_type {
+            DataType::Row(rt) => assert_eq!(rt.fields()[0].field_id(), 0),
+            _ => panic!("expected Row"),
+        }
+        assert_eq!(counter, 0);
     }
 
     #[test]

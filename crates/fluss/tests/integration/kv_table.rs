@@ -21,9 +21,11 @@ mod kv_table_test {
     use crate::integration::utils::{
         create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
     };
-    use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
+    use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
-    use fluss::row::{FlussArray, GenericRow, InternalRow};
+    use fluss::row::{
+        Date, Datum, Decimal, FlussArray, GenericRow, InternalRow, Time, TimestampLtz, TimestampNtz,
+    };
 
     fn make_key(id: i32) -> GenericRow<'static> {
         make_key_with_field_count(id, 3)
@@ -284,14 +286,17 @@ mod kv_table_test {
 
     #[tokio::test]
     async fn partial_update() {
-        use fluss::row::Datum;
-
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
         let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_partial_update");
+
+        let nested_type = DataTypes::row(vec![
+            DataField::new("seq", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
 
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -300,6 +305,7 @@ mod kv_table_test {
                     .column("name", DataTypes::string())
                     .column("age", DataTypes::bigint())
                     .column("score", DataTypes::bigint())
+                    .column("nested", nested_type)
                     .primary_key(vec!["id"])
                     .build()
                     .expect("Failed to build schema"),
@@ -314,24 +320,26 @@ mod kv_table_test {
             .await
             .expect("Failed to get table");
 
-        // Insert initial record with all columns
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
         let upsert_writer = table_upsert
             .create_writer()
             .expect("Failed to create writer");
 
-        let mut row = GenericRow::new(4);
+        let mut nested0 = GenericRow::new(2);
+        nested0.set_field(0, 10_i32);
+        nested0.set_field(1, "alpha");
+        let mut row = GenericRow::new(5);
         row.set_field(0, 1);
         row.set_field(1, "Verso");
         row.set_field(2, 32i64);
         row.set_field(3, 6942i64);
+        row.set_field(4, Datum::Row(Box::new(nested0)));
         upsert_writer
             .upsert(&row)
             .expect("Failed to upsert initial row")
             .await
             .expect("Failed to wait for upsert acknowledgment");
 
-        // Verify initial record
         let mut lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
@@ -351,8 +359,10 @@ mod kv_table_test {
         assert_eq!(found_row.get_string(1).unwrap(), "Verso");
         assert_eq!(found_row.get_long(2).unwrap(), 32i64);
         assert_eq!(found_row.get_long(3).unwrap(), 6942i64);
+        let nested = found_row.get_row(4).unwrap();
+        assert_eq!(nested.get_int(0).unwrap(), 10);
+        assert_eq!(nested.get_string(1).unwrap(), "alpha");
 
-        // Create partial update writer to update only score column
         let partial_upsert = table_upsert
             .partial_update_with_column_names(&["id", "score"])
             .expect("Failed to create TableUpsert with partial update");
@@ -360,19 +370,18 @@ mod kv_table_test {
             .create_writer()
             .expect("Failed to create UpsertWriter with partial write");
 
-        // Update only the score column (await acknowledgment)
-        let mut partial_row = GenericRow::new(4);
+        let mut partial_row = GenericRow::new(5);
         partial_row.set_field(0, 1);
-        partial_row.set_field(1, Datum::Null); // not in partial update column
-        partial_row.set_field(2, Datum::Null); // not in partial update column
+        partial_row.set_field(1, Datum::Null);
+        partial_row.set_field(2, Datum::Null);
         partial_row.set_field(3, 420i64);
+        partial_row.set_field(4, Datum::Null);
         partial_writer
             .upsert(&partial_row)
             .expect("Failed to upsert")
             .await
             .expect("Failed to wait for upsert acknowledgment");
 
-        // Verify partial update - name and age should remain unchanged
         let result = lookuper
             .lookup(&make_key(1))
             .await
@@ -398,6 +407,56 @@ mod kv_table_test {
             420,
             "score should be updated to 420"
         );
+        let nested = found_row.get_row(4).unwrap();
+        assert_eq!(
+            nested.get_int(0).unwrap(),
+            10,
+            "ROW preserved across non-ROW partial update"
+        );
+        assert_eq!(nested.get_string(1).unwrap(), "alpha");
+
+        let partial_nested_upsert = table_upsert
+            .partial_update_with_column_names(&["id", "nested"])
+            .expect("partial_update_with_column_names");
+        let partial_nested_writer = partial_nested_upsert
+            .create_writer()
+            .expect("partial writer");
+        let mut new_nested = GenericRow::new(2);
+        new_nested.set_field(0, 99_i32);
+        new_nested.set_field(1, "omega");
+        let mut partial_nested = GenericRow::new(5);
+        partial_nested.set_field(0, 1);
+        partial_nested.set_field(1, Datum::Null);
+        partial_nested.set_field(2, Datum::Null);
+        partial_nested.set_field(3, Datum::Null);
+        partial_nested.set_field(4, Datum::Row(Box::new(new_nested)));
+        partial_nested_writer
+            .upsert(&partial_nested)
+            .expect("partial upsert")
+            .await
+            .expect("partial ack");
+
+        let result = lookuper
+            .lookup(&make_key(1))
+            .await
+            .expect("Failed to lookup after nested partial");
+        let found_row = result
+            .get_single_row()
+            .expect("Failed to get row")
+            .expect("Row should exist");
+        assert_eq!(
+            found_row.get_string(1).unwrap(),
+            "Verso",
+            "name preserved when ROW updated"
+        );
+        assert_eq!(
+            found_row.get_long(3).unwrap(),
+            420,
+            "score preserved when ROW updated"
+        );
+        let nested = found_row.get_row(4).unwrap();
+        assert_eq!(nested.get_int(0).unwrap(), 99);
+        assert_eq!(nested.get_string(1).unwrap(), "omega");
 
         admin
             .drop_table(&table_path, false)
@@ -414,7 +473,11 @@ mod kv_table_test {
 
         let table_path = TablePath::new("fluss", "test_partitioned_kv_table");
 
-        // Create a partitioned KV table with region as partition key
+        let nested_type = DataTypes::row(vec![
+            DataField::new("seq", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+
         let table_descriptor = TableDescriptor::builder()
             .schema(
                 Schema::builder()
@@ -422,6 +485,7 @@ mod kv_table_test {
                     .column("user_id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .column("score", DataTypes::bigint())
+                    .column("nested", nested_type)
                     .primary_key(vec!["region", "user_id"])
                     .build()
                     .expect("Failed to build schema"),
@@ -432,7 +496,6 @@ mod kv_table_test {
 
         create_table(&admin, &table_path, &table_descriptor).await;
 
-        // Create partitions for each region before inserting data
         create_partitions(&admin, &table_path, "region", &["US", "EU", "APAC"]).await;
 
         let connection = cluster.get_fluss_connection().await;
@@ -448,35 +511,38 @@ mod kv_table_test {
             .create_writer()
             .expect("Failed to create writer");
 
-        // Insert records with different partitions
         let test_data = [
-            ("US", 1, "Gustave", 100i64),
-            ("US", 2, "Lune", 200i64),
-            ("EU", 1, "Sciel", 150i64),
-            ("EU", 2, "Maelle", 250i64),
-            ("APAC", 1, "Noco", 300i64),
+            ("US", 1, "Gustave", 100i64, 11_i32, "a"),
+            ("US", 2, "Lune", 200i64, 22, "b"),
+            ("EU", 1, "Sciel", 150i64, 33, "c"),
+            ("EU", 2, "Maelle", 250i64, 44, "d"),
+            ("APAC", 1, "Noco", 300i64, 55, "e"),
         ];
 
-        for (region, user_id, name, score) in &test_data {
-            let mut row = GenericRow::new(4);
+        for (region, user_id, name, score, seq, label) in &test_data {
+            let mut nested = GenericRow::new(2);
+            nested.set_field(0, *seq);
+            nested.set_field(1, *label);
+            let mut row = GenericRow::new(5);
             row.set_field(0, *region);
             row.set_field(1, *user_id);
             row.set_field(2, *name);
             row.set_field(3, *score);
+            row.set_field(4, Datum::Row(Box::new(nested)));
             upsert_writer.upsert(&row).expect("Failed to upsert");
         }
         upsert_writer.flush().await.expect("Failed to flush");
 
-        // Create lookuper
         let mut lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
             .expect("Failed to create lookuper");
 
-        // Lookup records - the lookup key includes partition key columns
-        for (region, user_id, expected_name, expected_score) in &test_data {
-            let mut key = GenericRow::new(4);
+        for (region, user_id, expected_name, expected_score, expected_seq, expected_label) in
+            &test_data
+        {
+            let mut key = GenericRow::new(5);
             key.set_field(0, *region);
             key.set_field(1, *user_id);
 
@@ -490,14 +556,28 @@ mod kv_table_test {
             assert_eq!(row.get_int(1).unwrap(), *user_id, "user_id mismatch");
             assert_eq!(row.get_string(2).unwrap(), *expected_name, "name mismatch");
             assert_eq!(row.get_long(3).unwrap(), *expected_score, "score mismatch");
+            let nested = row.get_row(4).unwrap();
+            assert_eq!(
+                nested.get_int(0).unwrap(),
+                *expected_seq,
+                "ROW seq mismatch"
+            );
+            assert_eq!(
+                nested.get_string(1).unwrap(),
+                *expected_label,
+                "ROW label mismatch"
+            );
         }
 
-        // Test update within a partition (await acknowledgment)
-        let mut updated_row = GenericRow::new(4);
+        let mut updated_nested = GenericRow::new(2);
+        updated_nested.set_field(0, 999_i32);
+        updated_nested.set_field(1, "updated");
+        let mut updated_row = GenericRow::new(5);
         updated_row.set_field(0, "US");
         updated_row.set_field(1, 1);
         updated_row.set_field(2, "Gustave Updated");
         updated_row.set_field(3, 999i64);
+        updated_row.set_field(4, Datum::Row(Box::new(updated_nested)));
         upsert_writer
             .upsert(&updated_row)
             .expect("Failed to upsert updated row")
@@ -505,7 +585,7 @@ mod kv_table_test {
             .expect("Failed to wait for upsert acknowledgment");
 
         // Verify the update
-        let mut key = GenericRow::new(4);
+        let mut key = GenericRow::new(5);
         key.set_field(0, "US");
         key.set_field(1, 1);
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -515,9 +595,12 @@ mod kv_table_test {
             .expect("Row should exist");
         assert_eq!(row.get_string(2).unwrap(), "Gustave Updated");
         assert_eq!(row.get_long(3).unwrap(), 999);
+        let nested = row.get_row(4).unwrap();
+        assert_eq!(nested.get_int(0).unwrap(), 999);
+        assert_eq!(nested.get_string(1).unwrap(), "updated");
 
         // Lookup in non-existent partition should return empty result
-        let mut non_existent_key = GenericRow::new(4);
+        let mut non_existent_key = GenericRow::new(5);
         non_existent_key.set_field(0, "UNKNOWN_REGION");
         non_existent_key.set_field(1, 1);
         let result = lookuper
@@ -533,7 +616,7 @@ mod kv_table_test {
         );
 
         // Delete a record within a partition (await acknowledgment)
-        let mut delete_key = GenericRow::new(4);
+        let mut delete_key = GenericRow::new(5);
         delete_key.set_field(0, "EU");
         delete_key.set_field(1, 1);
         upsert_writer
@@ -543,7 +626,7 @@ mod kv_table_test {
             .expect("Failed to wait for delete acknowledgment");
 
         // Verify deletion
-        let mut key = GenericRow::new(4);
+        let mut key = GenericRow::new(5);
         key.set_field(0, "EU");
         key.set_field(1, 1);
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -556,7 +639,7 @@ mod kv_table_test {
         );
 
         // Verify other records in the same partition still exist
-        let mut key = GenericRow::new(4);
+        let mut key = GenericRow::new(5);
         key.set_field(0, "EU");
         key.set_field(1, 2);
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -572,11 +655,122 @@ mod kv_table_test {
             .expect("Failed to drop table");
     }
 
+    #[tokio::test]
+    async fn upsert_and_lookup_with_row_rich_types() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_row_rich_types");
+
+        let row_type_owned = DataTypes::row(vec![
+            DataField::new("f_bool", DataTypes::boolean(), None),
+            DataField::new("f_long", DataTypes::bigint(), None),
+            DataField::new("f_float", DataTypes::float(), None),
+            DataField::new("f_double", DataTypes::double(), None),
+            DataField::new("f_str", DataTypes::string(), None),
+            DataField::new("f_bytes", DataTypes::bytes(), None),
+            DataField::new("f_decimal", DataTypes::decimal(10, 2), None),
+            DataField::new("f_date", DataTypes::date(), None),
+            DataField::new("f_time", DataTypes::time_with_precision(3), None),
+            DataField::new("f_ts_ntz", DataTypes::timestamp_with_precision(6), None),
+            DataField::new("f_ts_ltz", DataTypes::timestamp_ltz_with_precision(6), None),
+        ]);
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("nested", row_type_owned)
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let upsert = table.new_upsert().expect("Failed to create upsert");
+        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
+
+        let mut nested = GenericRow::new(11);
+        nested.set_field(0, true);
+        nested.set_field(1, 9_876_543_210_i64);
+        nested.set_field(2, f32::NEG_INFINITY);
+        nested.set_field(3, f64::NAN);
+        nested.set_field(4, "rich types here");
+        nested.set_field(5, b"opaque".as_slice());
+        nested.set_field(6, Decimal::from_unscaled_long(54321, 10, 2).unwrap());
+        nested.set_field(7, Datum::Date(Date::new(20476)));
+        nested.set_field(8, Datum::Time(Time::new(36_827_123)));
+        nested.set_field(9, Datum::TimestampNtz(TimestampNtz::new(1_769_163_227_123)));
+        nested.set_field(
+            10,
+            Datum::TimestampLtz(TimestampLtz::new(1_769_163_227_123)),
+        );
+
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1_i32);
+        row.set_field(1, Datum::Row(Box::new(nested)));
+
+        upsert_writer
+            .upsert(&row)
+            .expect("upsert")
+            .await
+            .expect("ack");
+
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        let result = lookuper
+            .lookup(&make_key_with_field_count(1, 2))
+            .await
+            .expect("lookup");
+        let r = result
+            .get_single_row()
+            .expect("get row")
+            .expect("row should exist");
+
+        let n = r.get_row(1).unwrap();
+        assert!(n.get_boolean(0).unwrap());
+        assert_eq!(n.get_long(1).unwrap(), 9_876_543_210);
+        assert!(n.get_float(2).unwrap().is_infinite());
+        assert!(n.get_float(2).unwrap().is_sign_negative());
+        assert!(n.get_double(3).unwrap().is_nan());
+        assert_eq!(n.get_string(4).unwrap(), "rich types here");
+        assert_eq!(n.get_bytes(5).unwrap(), b"opaque");
+        assert_eq!(
+            n.get_decimal(6, 10, 2).unwrap(),
+            Decimal::from_unscaled_long(54321, 10, 2).unwrap(),
+        );
+        assert_eq!(n.get_date(7).unwrap().get_inner(), 20476);
+        assert_eq!(n.get_time(8).unwrap().get_inner(), 36_827_123);
+        assert_eq!(
+            n.get_timestamp_ntz(9, 6).unwrap().get_millisecond(),
+            1_769_163_227_123,
+        );
+        assert_eq!(
+            n.get_timestamp_ltz(10, 6).unwrap().get_epoch_millisecond(),
+            1_769_163_227_123,
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
     /// Integration test covering put and get operations for all supported datatypes.
     #[tokio::test]
     async fn all_supported_datatypes() {
-        use fluss::row::{Date, Datum, Decimal, Time, TimestampLtz, TimestampNtz};
-
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
@@ -614,6 +808,13 @@ mod kv_table_test {
                     .column("col_bytes", DataTypes::bytes())
                     .column("col_binary", DataTypes::binary(20))
                     .column("col_array", DataTypes::array(DataTypes::string()))
+                    .column(
+                        "col_row",
+                        DataTypes::row(vec![
+                            DataField::new("seq", DataTypes::int(), None),
+                            DataField::new("label", DataTypes::string(), None),
+                        ]),
+                    )
                     .primary_key(vec!["pk_int"])
                     .build()
                     .expect("Failed to build schema"),
@@ -654,8 +855,12 @@ mod kv_table_test {
 
         let col_array = make_string_array(&[Some("fluss"), Some("rust")]);
 
+        let mut col_row_inner = GenericRow::new(2);
+        col_row_inner.set_field(0, 7_i32);
+        col_row_inner.set_field(1, "lumiere");
+
         // Upsert a row with all datatypes
-        let mut row = GenericRow::new(18);
+        let mut row = GenericRow::new(19);
         row.set_field(0, pk_int);
         row.set_field(1, col_boolean);
         row.set_field(2, col_tinyint);
@@ -674,6 +879,7 @@ mod kv_table_test {
         row.set_field(15, col_bytes);
         row.set_field(16, col_binary);
         row.set_field(17, col_array);
+        row.set_field(18, Datum::Row(Box::new(col_row_inner)));
 
         upsert_writer
             .upsert(&row)
@@ -688,7 +894,7 @@ mod kv_table_test {
             .create_lookuper()
             .expect("Failed to create lookuper");
 
-        let mut key = GenericRow::new(18);
+        let mut key = GenericRow::new(19);
         key.set_field(0, pk_int);
 
         let result = lookuper.lookup(&key).await.expect("Failed to lookup");
@@ -787,10 +993,17 @@ mod kv_table_test {
         assert_eq!(arr.size(), 2, "col_array size mismatch");
         assert_eq!(arr.get_string(0).unwrap(), "fluss", "col_array[0] mismatch");
         assert_eq!(arr.get_string(1).unwrap(), "rust", "col_array[1] mismatch");
+        let nested = found_row.get_row(18).unwrap();
+        assert_eq!(nested.get_int(0).unwrap(), 7, "col_row.seq mismatch");
+        assert_eq!(
+            nested.get_string(1).unwrap(),
+            "lumiere",
+            "col_row.label mismatch"
+        );
 
         // Test with null values for nullable columns
         let pk_int_2 = 2i32;
-        let mut row_with_nulls = GenericRow::new(18);
+        let mut row_with_nulls = GenericRow::new(19);
         row_with_nulls.set_field(0, pk_int_2);
         row_with_nulls.set_field(1, Datum::Null); // col_boolean
         row_with_nulls.set_field(2, Datum::Null); // col_tinyint
@@ -809,6 +1022,7 @@ mod kv_table_test {
         row_with_nulls.set_field(15, Datum::Null); // col_bytes
         row_with_nulls.set_field(16, Datum::Null); // col_binary
         row_with_nulls.set_field(17, Datum::Null); // col_array
+        row_with_nulls.set_field(18, Datum::Null); // col_row
 
         upsert_writer
             .upsert(&row_with_nulls)
@@ -817,7 +1031,7 @@ mod kv_table_test {
             .expect("Failed to wait for upsert acknowledgment");
 
         // Lookup row with nulls
-        let mut key2 = GenericRow::new(18);
+        let mut key2 = GenericRow::new(19);
         key2.set_field(0, pk_int_2);
 
         let result = lookuper.lookup(&key2).await.expect("Failed to lookup");
@@ -900,6 +1114,310 @@ mod kv_table_test {
             found_row_nulls.is_null_at(17).unwrap(),
             "col_array should be null"
         );
+        assert!(
+            found_row_nulls.is_null_at(18).unwrap(),
+            "col_row should be null"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn upsert_and_lookup_with_row() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_rows");
+        let nested_row_type = DataTypes::row(vec![
+            DataField::new("x", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+        let deep_inner_row_type = DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
+        let deep_row_type =
+            DataTypes::row(vec![DataField::new("inner", deep_inner_row_type, None)]);
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("nested", nested_row_type)
+                    .column("deep", deep_row_type)
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let upsert = table.new_upsert().expect("Failed to create upsert");
+        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
+
+        let mut nested1 = GenericRow::new(2);
+        nested1.set_field(0, 42_i32);
+        nested1.set_field(1, "hello");
+
+        let mut deep_inner1 = GenericRow::new(1);
+        deep_inner1.set_field(0, 99_i32);
+        let mut deep1 = GenericRow::new(1);
+        deep1.set_field(0, Datum::Row(Box::new(deep_inner1)));
+
+        let mut row1 = GenericRow::new(3);
+        row1.set_field(0, 1_i32);
+        row1.set_field(1, Datum::Row(Box::new(nested1)));
+        row1.set_field(2, Datum::Row(Box::new(deep1)));
+
+        upsert_writer
+            .upsert(&row1)
+            .expect("upsert row1")
+            .await
+            .expect("ack row1");
+
+        let mut nested2 = GenericRow::new(2);
+        nested2.set_field(0, 7_i32);
+        nested2.set_field(1, Datum::Null);
+
+        let mut row2 = GenericRow::new(3);
+        row2.set_field(0, 2_i32);
+        row2.set_field(1, Datum::Row(Box::new(nested2)));
+        row2.set_field(2, Datum::Null);
+
+        upsert_writer
+            .upsert(&row2)
+            .expect("upsert row2")
+            .await
+            .expect("ack row2");
+
+        let mut deep_inner3 = GenericRow::new(1);
+        deep_inner3.set_field(0, -1_i32);
+        let mut deep3 = GenericRow::new(1);
+        deep3.set_field(0, Datum::Row(Box::new(deep_inner3)));
+
+        let mut row3 = GenericRow::new(3);
+        row3.set_field(0, 3_i32);
+        row3.set_field(1, Datum::Null);
+        row3.set_field(2, Datum::Row(Box::new(deep3)));
+
+        upsert_writer
+            .upsert(&row3)
+            .expect("upsert row3")
+            .await
+            .expect("ack row3");
+
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        let result1 = lookuper
+            .lookup(&make_key_with_field_count(1, 3))
+            .await
+            .expect("lookup row1");
+        let r1 = result1
+            .get_single_row()
+            .expect("get row1")
+            .expect("row1 should exist");
+        assert_eq!(r1.get_int(0).unwrap(), 1);
+        let nested_r1 = r1.get_row(1).unwrap();
+        assert_eq!(nested_r1.get_int(0).unwrap(), 42);
+        assert_eq!(nested_r1.get_string(1).unwrap(), "hello");
+        let deep_r1 = r1.get_row(2).unwrap();
+        let deep_inner_r1 = deep_r1.get_row(0).unwrap();
+        assert_eq!(deep_inner_r1.get_int(0).unwrap(), 99);
+
+        let result2 = lookuper
+            .lookup(&make_key_with_field_count(2, 3))
+            .await
+            .expect("lookup row2");
+        let r2 = result2
+            .get_single_row()
+            .expect("get row2")
+            .expect("row2 should exist");
+        assert_eq!(r2.get_int(0).unwrap(), 2);
+        let nested_r2 = r2.get_row(1).unwrap();
+        assert_eq!(nested_r2.get_int(0).unwrap(), 7);
+        assert!(nested_r2.is_null_at(1).unwrap());
+        assert!(r2.is_null_at(2).unwrap());
+
+        let result3 = lookuper
+            .lookup(&make_key_with_field_count(3, 3))
+            .await
+            .expect("lookup row3");
+        let r3 = result3
+            .get_single_row()
+            .expect("get row3")
+            .expect("row3 should exist");
+        assert_eq!(r3.get_int(0).unwrap(), 3);
+        assert!(r3.is_null_at(1).unwrap());
+        let deep_r3 = r3.get_row(2).unwrap();
+        let deep_inner_r3 = deep_r3.get_row(0).unwrap();
+        assert_eq!(deep_inner_r3.get_int(0).unwrap(), -1);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn upsert_and_lookup_with_array_of_row() {
+        use fluss::metadata::{DataField, DataType};
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_array_of_row");
+
+        let event_row_type_owned = DataTypes::row(vec![
+            DataField::new("seq", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+        let array_of_row_type = DataTypes::array(event_row_type_owned.clone());
+
+        let event_row_type = match &event_row_type_owned {
+            DataType::Row(rt) => rt.clone(),
+            _ => unreachable!(),
+        };
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("events", array_of_row_type.clone())
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        let upsert = table.new_upsert().expect("Failed to create upsert");
+        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
+
+        let mut events1 = FlussArrayWriter::new(2, &event_row_type_owned);
+        let mut e0 = GenericRow::new(2);
+        e0.set_field(0, 1_i32);
+        e0.set_field(1, "open");
+        events1.write_row(0, &e0).expect("write e0");
+        let mut e1 = GenericRow::new(2);
+        e1.set_field(0, 2_i32);
+        e1.set_field(1, "close");
+        events1.write_row(1, &e1).expect("write e1");
+        let events1 = events1.complete().expect("events1");
+
+        let mut row1 = GenericRow::new(2);
+        row1.set_field(0, 1_i32);
+        row1.set_field(1, events1);
+
+        upsert_writer
+            .upsert(&row1)
+            .expect("upsert row1")
+            .await
+            .expect("ack row1");
+
+        let mut events2 = FlussArrayWriter::new(3, &event_row_type_owned);
+        let mut e2 = GenericRow::new(2);
+        e2.set_field(0, 7_i32);
+        e2.set_field(1, "x");
+        events2.write_row(0, &e2).expect("write e2");
+        events2.set_null_at(1);
+        let mut e3 = GenericRow::new(2);
+        e3.set_field(0, 8_i32);
+        e3.set_field(1, "y");
+        events2.write_row(2, &e3).expect("write e3");
+        let events2 = events2.complete().expect("events2");
+
+        let mut row2 = GenericRow::new(2);
+        row2.set_field(0, 2_i32);
+        row2.set_field(1, events2);
+
+        upsert_writer
+            .upsert(&row2)
+            .expect("upsert row2")
+            .await
+            .expect("ack row2");
+
+        let mut row3 = GenericRow::new(2);
+        row3.set_field(0, 3_i32);
+        row3.set_field(1, Datum::Null);
+
+        upsert_writer
+            .upsert(&row3)
+            .expect("upsert row3")
+            .await
+            .expect("ack row3");
+
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        let result1 = lookuper
+            .lookup(&make_key_with_field_count(1, 2))
+            .await
+            .expect("lookup row1");
+        let r1 = result1
+            .get_single_row()
+            .expect("get row1")
+            .expect("row1 should exist");
+        assert_eq!(r1.get_int(0).unwrap(), 1);
+        let events_r1 = r1.get_array(1).unwrap();
+        assert_eq!(events_r1.size(), 2);
+        let e0_r1 = events_r1.get_row(0, &event_row_type).unwrap();
+        assert_eq!(e0_r1.get_int(0).unwrap(), 1);
+        assert_eq!(e0_r1.get_string(1).unwrap(), "open");
+        let e1_r1 = events_r1.get_row(1, &event_row_type).unwrap();
+        assert_eq!(e1_r1.get_int(0).unwrap(), 2);
+        assert_eq!(e1_r1.get_string(1).unwrap(), "close");
+
+        let result2 = lookuper
+            .lookup(&make_key_with_field_count(2, 2))
+            .await
+            .expect("lookup row2");
+        let r2 = result2
+            .get_single_row()
+            .expect("get row2")
+            .expect("row2 should exist");
+        let events_r2 = r2.get_array(1).unwrap();
+        assert_eq!(events_r2.size(), 3);
+        let e0_r2 = events_r2.get_row(0, &event_row_type).unwrap();
+        assert_eq!(e0_r2.get_int(0).unwrap(), 7);
+        assert_eq!(e0_r2.get_string(1).unwrap(), "x");
+        assert!(events_r2.is_null_at(1));
+        let e2_r2 = events_r2.get_row(2, &event_row_type).unwrap();
+        assert_eq!(e2_r2.get_int(0).unwrap(), 8);
+        assert_eq!(e2_r2.get_string(1).unwrap(), "y");
+
+        let result3 = lookuper
+            .lookup(&make_key_with_field_count(3, 2))
+            .await
+            .expect("lookup row3");
+        let r3 = result3
+            .get_single_row()
+            .expect("get row3")
+            .expect("row3 should exist");
+        assert_eq!(r3.get_int(0).unwrap(), 3);
+        assert!(r3.is_null_at(1).unwrap());
 
         admin
             .drop_table(&table_path, false)
@@ -909,8 +1427,6 @@ mod kv_table_test {
 
     #[tokio::test]
     async fn upsert_and_lookup_with_array() {
-        use fluss::row::Datum;
-
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().expect("Failed to get admin");
@@ -942,7 +1458,6 @@ mod kv_table_test {
         let upsert = table.new_upsert().expect("Failed to create upsert");
         let upsert_writer = upsert.create_writer().expect("Failed to create writer");
 
-        // Row 1: id=1, tags=["hello", "world"], scores=[10, 20, 30], matrix=[[1,2],[3,4]]
         let mut row1 = GenericRow::new(4);
         row1.set_field(0, 1_i32);
         row1.set_field(1, make_string_array(&[Some("hello"), Some("world")]));
@@ -961,7 +1476,6 @@ mod kv_table_test {
             .await
             .expect("ack row1");
 
-        // Row 2: id=2, tags=[null element], scores=[] (empty), matrix=null
         let mut row2 = GenericRow::new(4);
         row2.set_field(0, 2_i32);
         row2.set_field(1, make_string_array(&[None]));
@@ -974,7 +1488,6 @@ mod kv_table_test {
             .await
             .expect("ack row2");
 
-        // Row 3: id=3, tags=null, scores=[42], matrix=[[5], null, []]
         let mut row3 = GenericRow::new(4);
         row3.set_field(0, 3_i32);
         row3.set_field(1, Datum::Null);
@@ -1001,7 +1514,6 @@ mod kv_table_test {
             .create_lookuper()
             .expect("Failed to create lookuper");
 
-        // Verify row 1: populated flat arrays + nested array
         let result1 = lookuper
             .lookup(&make_key_with_field_count(1, 4))
             .await
@@ -1031,7 +1543,6 @@ mod kv_table_test {
         assert_eq!(mr1_1.get_int(0).unwrap(), 3);
         assert_eq!(mr1_1.get_int(1).unwrap(), 4);
 
-        // Verify row 2: null element in array, empty array, null nested column
         let result2 = lookuper
             .lookup(&make_key_with_field_count(2, 4))
             .await
@@ -1048,7 +1559,6 @@ mod kv_table_test {
         assert_eq!(scores_r2.size(), 0);
         assert!(r2.is_null_at(3).unwrap());
 
-        // Verify row 3: null flat column, nested array with mixed inner (value, null, empty)
         let result3 = lookuper
             .lookup(&make_key_with_field_count(3, 4))
             .await

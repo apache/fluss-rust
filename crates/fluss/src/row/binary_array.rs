@@ -26,9 +26,13 @@
 
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::DataType;
+use crate::metadata::{DataType, RowType};
 use crate::row::Decimal;
+use crate::row::InternalRow;
+use crate::row::binary::{BinaryRowFormat, ValueWriter};
+use crate::row::compacted::{CompactedRow, CompactedRowWriter, calculate_bit_set_width_in_bytes};
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+use crate::row::field_getter::FieldGetter;
 use bytes::Bytes;
 use serde::Serialize;
 use std::fmt;
@@ -418,6 +422,48 @@ impl FlussArray {
         let (start, len) = self.read_var_len_span(pos)?;
         FlussArray::from_owned_bytes(self.data.slice(start..start + len))
     }
+
+    pub fn get_row<'a>(&'a self, pos: usize, row_type: &'a RowType) -> Result<CompactedRow<'a>> {
+        let bytes = self.read_var_len_bytes(pos)?;
+        let header_size = calculate_bit_set_width_in_bytes(row_type.fields().len());
+        if bytes.len() < header_size {
+            return Err(IllegalArgument {
+                message: format!(
+                    "FlussArray row bytes at position {} are too short for row type with {} fields: \
+                     need at least {} header bytes, got {}",
+                    pos,
+                    row_type.fields().len(),
+                    header_size,
+                    bytes.len()
+                ),
+            });
+        }
+        Ok(CompactedRow::from_bytes(row_type, bytes))
+    }
+}
+
+struct RowFieldAccessor {
+    getter: FieldGetter,
+    writer: ValueWriter,
+    nullable: bool,
+}
+
+fn build_row_accessors(row_type: &RowType) -> Result<Vec<RowFieldAccessor>> {
+    row_type
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            Ok(RowFieldAccessor {
+                getter: FieldGetter::create(f.data_type(), i),
+                writer: ValueWriter::create_value_writer(
+                    f.data_type(),
+                    Some(&BinaryRowFormat::Compacted),
+                )?,
+                nullable: f.data_type().is_nullable(),
+            })
+        })
+        .collect()
 }
 
 /// Writer for building a `FlussArray` element by element.
@@ -429,17 +475,34 @@ pub struct FlussArrayWriter {
     element_size: usize,
     cursor: usize,
     num_elements: usize,
+    // Some(_) only when constructed with a DataType::Row(_) element type.
+    row_accessors: Option<Vec<RowFieldAccessor>>,
 }
 
 impl FlussArrayWriter {
     /// Creates a new writer for an array with `num_elements` elements of the given element type.
     pub fn new(num_elements: usize, element_type: &DataType) -> Self {
         let element_size = calculate_fix_length_part_size(element_type);
-        Self::with_element_size(num_elements, element_size)
+        let row_accessors = match element_type {
+            DataType::Row(rt) => Some(
+                build_row_accessors(rt)
+                    .expect("ROW element type contains a field with no ValueWriter"),
+            ),
+            _ => None,
+        };
+        Self::with_state(num_elements, element_size, row_accessors)
     }
 
-    /// Creates a new writer with an explicit element size (in bytes).
+    /// Creates a new writer with an explicit element size (in bytes). Does not support `write_row`.
     pub fn with_element_size(num_elements: usize, element_size: usize) -> Self {
+        Self::with_state(num_elements, element_size, None)
+    }
+
+    fn with_state(
+        num_elements: usize,
+        element_size: usize,
+        row_accessors: Option<Vec<RowFieldAccessor>>,
+    ) -> Self {
         let header_in_bytes = calculate_header_in_bytes(num_elements);
         let fixed_size = round_to_nearest_word(header_in_bytes + element_size * num_elements);
         let mut data = vec![0u8; fixed_size];
@@ -454,6 +517,7 @@ impl FlussArrayWriter {
             element_size,
             cursor: fixed_size,
             num_elements,
+            row_accessors,
         }
     }
 
@@ -608,6 +672,26 @@ impl FlussArrayWriter {
         self.write_bytes_to_var_len_part(pos, value.as_bytes());
     }
 
+    /// Writes a nested row at `pos`. Requires the writer to have been
+    /// constructed via [`new`](Self::new) with a `DataType::Row(_)` element type.
+    pub fn write_row(&mut self, pos: usize, row: &dyn InternalRow) -> Result<()> {
+        let accessors = self.row_accessors.as_ref().ok_or_else(|| IllegalArgument {
+            message: "write_row requires a DataType::Row element type".to_string(),
+        })?;
+        let mut nested = CompactedRowWriter::new(accessors.len());
+        for (i, accessor) in accessors.iter().enumerate() {
+            if !accessor.nullable && row.is_null_at(i)? {
+                return Err(IllegalArgument {
+                    message: format!("nested row field {i} is non-nullable but received null"),
+                });
+            }
+            let datum = accessor.getter.get_field(row)?;
+            accessor.writer.write_value(&mut nested, i, &datum)?;
+        }
+        self.write_bytes_to_var_len_part(pos, nested.buffer());
+        Ok(())
+    }
+
     /// Finalizes the writer and returns the completed FlussArray.
     pub fn complete(self) -> Result<FlussArray> {
         let mut data = self.data;
@@ -621,7 +705,7 @@ impl FlussArrayWriter {
     }
 }
 
-impl crate::row::InternalRow for FlussArray {
+impl InternalRow for FlussArray {
     fn get_field_count(&self) -> usize {
         self.size()
     }
@@ -693,7 +777,10 @@ impl crate::row::InternalRow for FlussArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::DataTypes;
+    use crate::metadata::{DataField, DataTypes};
+    use crate::row::binary::BinaryWriter as BinaryWriterTrait;
+    use crate::row::compacted::CompactedRowWriter;
+    use crate::row::{Datum, GenericRow};
 
     #[test]
     fn test_header_calculation() {
@@ -844,17 +931,231 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_array_of_row() {
+        let row_type_owned = DataTypes::row(vec![
+            DataField::new("x", DataTypes::int(), None),
+            DataField::new("label", DataTypes::string(), None),
+        ]);
+        let element_type = row_type_owned.clone();
+        let row_type = match &row_type_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+
+        // Build array<row<int, string>> with two rows: (42, "hello"), (-1, null)
+        let mut writer = FlussArrayWriter::new(2, &element_type);
+
+        let mut r0 = GenericRow::new(2);
+        r0.set_field(0, 42_i32);
+        r0.set_field(1, "hello");
+        writer.write_row(0, &r0).expect("write row 0");
+
+        let mut r1 = GenericRow::new(2);
+        r1.set_field(0, -1_i32);
+        r1.set_field(1, Datum::Null);
+        writer.write_row(1, &r1).expect("write row 1");
+
+        let array = writer.complete().unwrap();
+        assert_eq!(array.size(), 2);
+
+        let row0 = array.get_row(0, row_type).expect("get row 0");
+        assert_eq!(row0.get_int(0).unwrap(), 42);
+        assert_eq!(row0.get_string(1).unwrap(), "hello");
+
+        let row1 = array.get_row(1, row_type).expect("get row 1");
+        assert_eq!(row1.get_int(0).unwrap(), -1);
+        assert!(row1.is_null_at(1).unwrap());
+    }
+
+    #[test]
+    fn test_get_row_rejects_oversized_row_type() {
+        let small_row_type_owned =
+            DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
+        let small_row_type = match &small_row_type_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+        let mut writer = FlussArrayWriter::new(1, &small_row_type_owned);
+        let mut row = GenericRow::new(1);
+        row.set_field(0, 7_i32);
+        writer.write_row(0, &row).unwrap();
+        let array = writer.complete().unwrap();
+
+        let oversized_owned = DataTypes::row(
+            (0..10)
+                .map(|i| DataField::new(format!("f{i}"), DataTypes::int(), None))
+                .collect(),
+        );
+        let oversized_row_type = match &oversized_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+        let huge_owned = DataTypes::row(
+            (0..100)
+                .map(|i| DataField::new(format!("f{i}"), DataTypes::int(), None))
+                .collect(),
+        );
+        let huge_row_type = match &huge_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+        match array.get_row(0, huge_row_type) {
+            Err(e) => assert!(
+                e.to_string().contains("too short for row type"),
+                "unexpected error: {e}"
+            ),
+            Ok(_) => panic!("expected oversized row_type to be rejected"),
+        }
+
+        let recovered = array.get_row(0, small_row_type).unwrap();
+        assert_eq!(recovered.get_int(0).unwrap(), 7);
+
+        let _ = oversized_row_type;
+    }
+
+    #[test]
+    fn test_round_trip_array_of_row_with_nullable_element() {
+        let row_type_owned = DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
+        let element_type = row_type_owned.clone();
+        let row_type = match &row_type_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+
+        let mut writer = FlussArrayWriter::new(3, &element_type);
+
+        let mut r0 = GenericRow::new(1);
+        r0.set_field(0, 7_i32);
+        writer.write_row(0, &r0).expect("write row 0");
+
+        writer.set_null_at(1);
+
+        let mut r2 = GenericRow::new(1);
+        r2.set_field(0, 8_i32);
+        writer.write_row(2, &r2).expect("write row 2");
+
+        let array = writer.complete().unwrap();
+
+        let row0 = array.get_row(0, row_type).unwrap();
+        assert_eq!(row0.get_int(0).unwrap(), 7);
+        assert!(array.is_null_at(1));
+        let row2 = array.get_row(2, row_type).unwrap();
+        assert_eq!(row2.get_int(0).unwrap(), 8);
+
+        let strict_row_type_owned = DataTypes::row(vec![DataField::new(
+            "n",
+            DataTypes::int().as_non_nullable(),
+            None,
+        )]);
+        let mut bad_writer = FlussArrayWriter::new(1, &strict_row_type_owned);
+        let mut bad = GenericRow::new(1);
+        bad.set_field(0, Datum::Null);
+        let err = bad_writer.write_row(0, &bad).unwrap_err();
+        assert!(
+            err.to_string().contains("non-nullable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_round_trip_array_of_row_of_array_of_string() {
+        let inner_array_type = DataTypes::array(DataTypes::string());
+        let inner_row_type_owned =
+            DataTypes::row(vec![DataField::new("tags", inner_array_type.clone(), None)]);
+        let inner_row_type = match &inner_row_type_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+
+        let mut tags1 = FlussArrayWriter::new(2, &DataTypes::string());
+        tags1.write_string(0, "alpha");
+        tags1.write_string(1, "beta");
+        let tags1 = tags1.complete().unwrap();
+        let mut row1 = GenericRow::new(1);
+        row1.set_field(0, tags1);
+
+        let mut tags2 = FlussArrayWriter::new(3, &DataTypes::string());
+        tags2.write_string(0, "x");
+        tags2.set_null_at(1);
+        tags2.write_string(2, "z");
+        let tags2 = tags2.complete().unwrap();
+        let mut row2 = GenericRow::new(1);
+        row2.set_field(0, tags2);
+
+        let mut outer_writer = FlussArrayWriter::new(2, &inner_row_type_owned);
+        outer_writer.write_row(0, &row1).unwrap();
+        outer_writer.write_row(1, &row2).unwrap();
+        let outer = outer_writer.complete().unwrap();
+
+        assert_eq!(outer.size(), 2);
+
+        let r0 = outer.get_row(0, inner_row_type).unwrap();
+        let r0_tags = r0.get_array(0).unwrap();
+        assert_eq!(r0_tags.size(), 2);
+        assert_eq!(r0_tags.get_string(0).unwrap(), "alpha");
+        assert_eq!(r0_tags.get_string(1).unwrap(), "beta");
+
+        let r1 = outer.get_row(1, inner_row_type).unwrap();
+        let r1_tags = r1.get_array(0).unwrap();
+        assert_eq!(r1_tags.size(), 3);
+        assert_eq!(r1_tags.get_string(0).unwrap(), "x");
+        assert!(r1_tags.is_null_at(1));
+        assert_eq!(r1_tags.get_string(2).unwrap(), "z");
+    }
+
+    #[test]
+    fn test_round_trip_row_of_array_of_row() {
+        let inner_row_type_owned =
+            DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
+        let inner_array_type = DataTypes::array(inner_row_type_owned.clone());
+        let outer_row_type_owned =
+            DataTypes::row(vec![DataField::new("arr", inner_array_type.clone(), None)]);
+
+        let outer_row_type = match &outer_row_type_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+        let inner_row_type = match &inner_row_type_owned {
+            DataType::Row(rt) => rt,
+            _ => unreachable!(),
+        };
+
+        let mut arr_writer = FlussArrayWriter::new(2, &inner_row_type_owned);
+        let mut r0 = GenericRow::new(1);
+        r0.set_field(0, 1_i32);
+        arr_writer.write_row(0, &r0).unwrap();
+        let mut r1 = GenericRow::new(1);
+        r1.set_field(0, 2_i32);
+        arr_writer.write_row(1, &r1).unwrap();
+        let inner_arr = arr_writer.complete().unwrap();
+
+        let mut outer = GenericRow::new(1);
+        outer.set_field(0, inner_arr.clone());
+
+        let mut writer = CompactedRowWriter::new(1);
+        writer.write_array(inner_arr.as_bytes());
+        let bytes = writer.to_bytes();
+
+        let outer_compacted = CompactedRow::from_bytes(outer_row_type, &bytes);
+        let recovered_arr = outer_compacted.get_array(0).unwrap();
+        assert_eq!(recovered_arr.size(), 2);
+
+        let recovered_r0 = recovered_arr.get_row(0, inner_row_type).unwrap();
+        assert_eq!(recovered_r0.get_int(0).unwrap(), 1);
+        let recovered_r1 = recovered_arr.get_row(1, inner_row_type).unwrap();
+        assert_eq!(recovered_r1.get_int(0).unwrap(), 2);
+    }
+
+    #[test]
     fn test_round_trip_nested_array() {
         let inner_type = DataTypes::int();
         let outer_type = DataTypes::array(DataTypes::int());
 
-        // Build inner array [1, 2]
         let mut inner_writer = FlussArrayWriter::new(2, &inner_type);
         inner_writer.write_int(0, 1);
         inner_writer.write_int(1, 2);
         let inner_array = inner_writer.complete().unwrap();
 
-        // Build outer array containing the inner array
         let mut outer_writer = FlussArrayWriter::new(1, &outer_type);
         outer_writer.write_array(0, &inner_array);
         let outer_array = outer_writer.complete().unwrap();

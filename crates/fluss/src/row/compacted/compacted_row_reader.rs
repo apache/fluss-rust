@@ -15,34 +15,59 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::RowType;
+use crate::error::Error::IllegalArgument;
+use crate::error::Result;
+use crate::metadata::{DataType, RowType};
 use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
-use crate::{
-    error::{Error::IllegalArgument, Result},
-    metadata::DataType,
-    row::{Datum, Decimal, GenericRow, compacted::compacted_row_writer::CompactedRowWriter},
-    util::varint::{read_unsigned_varint_at, read_unsigned_varint_u64_at},
-};
+use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
+use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+use crate::row::{Datum, Decimal, FlussArray, GenericRow};
+use crate::util::varint::{read_unsigned_varint_at, read_unsigned_varint_u64_at};
 use std::borrow::Cow;
 use std::str::from_utf8;
+use std::sync::Arc;
 
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct CompactedRowDeserializer<'a> {
     row_type: Cow<'a, RowType>,
+    // Index-parallel to row_type.fields(); Some(_) only for ROW-typed fields.
+    nested: Vec<Option<Arc<CompactedRowDeserializer<'a>>>>,
+}
+
+fn build_nested_deserializers<'a>(
+    row_type: &RowType,
+) -> Vec<Option<Arc<CompactedRowDeserializer<'a>>>> {
+    row_type
+        .fields()
+        .iter()
+        .map(|f| {
+            if let DataType::Row(inner) = &f.data_type {
+                Some(Arc::new(CompactedRowDeserializer::new_from_owned(
+                    inner.clone(),
+                )))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 #[allow(dead_code)]
 impl<'a> CompactedRowDeserializer<'a> {
     pub fn new(row_type: &'a RowType) -> Self {
+        let nested = build_nested_deserializers(row_type);
         Self {
             row_type: Cow::Borrowed(row_type),
+            nested,
         }
     }
 
     pub fn new_from_owned(row_type: RowType) -> Self {
+        let nested = build_nested_deserializers(&row_type);
         Self {
             row_type: Cow::Owned(row_type),
+            nested,
         }
     }
 
@@ -127,65 +152,52 @@ impl<'a> CompactedRowDeserializer<'a> {
                 }
                 DataType::Date(_) => {
                     let (val, next) = reader.read_int(cursor)?;
-                    (Datum::Date(crate::row::datum::Date::new(val)), next)
+                    (Datum::Date(Date::new(val)), next)
                 }
                 DataType::Time(_) => {
                     let (val, next) = reader.read_int(cursor)?;
-                    (Datum::Time(crate::row::datum::Time::new(val)), next)
+                    (Datum::Time(Time::new(val)), next)
                 }
                 DataType::Timestamp(timestamp_type) => {
                     let precision = timestamp_type.precision();
-                    if crate::row::datum::TimestampNtz::is_compact(precision) {
-                        // Compact: only milliseconds
+                    if TimestampNtz::is_compact(precision) {
                         let (millis, next) = reader.read_long(cursor)?;
-                        (
-                            Datum::TimestampNtz(crate::row::datum::TimestampNtz::new(millis)),
-                            next,
-                        )
+                        (Datum::TimestampNtz(TimestampNtz::new(millis)), next)
                     } else {
-                        // Non-compact: milliseconds + nanos
                         let (millis, mid) = reader.read_long(cursor)?;
                         let (nanos, next) = reader.read_int(mid)?;
-                        let timestamp = crate::row::datum::TimestampNtz::from_millis_nanos(
-                            millis, nanos,
-                        )
-                        .map_err(|e| IllegalArgument {
-                            message: format!(
-                                "Invalid nano_of_millisecond value in compacted row timestamp: {e}"
-                            ),
-                        })?;
+                        let timestamp = TimestampNtz::from_millis_nanos(millis, nanos).map_err(
+                            |e| IllegalArgument {
+                                message: format!(
+                                    "Invalid nano_of_millisecond value in compacted row timestamp: {e}"
+                                ),
+                            },
+                        )?;
                         (Datum::TimestampNtz(timestamp), next)
                     }
                 }
                 DataType::TimestampLTz(timestamp_ltz_type) => {
                     let precision = timestamp_ltz_type.precision();
-                    if crate::row::datum::TimestampLtz::is_compact(precision) {
-                        // Compact: only epoch milliseconds
+                    if TimestampLtz::is_compact(precision) {
                         let (epoch_millis, next) = reader.read_long(cursor)?;
-                        (
-                            Datum::TimestampLtz(crate::row::datum::TimestampLtz::new(epoch_millis)),
-                            next,
-                        )
+                        (Datum::TimestampLtz(TimestampLtz::new(epoch_millis)), next)
                     } else {
-                        // Non-compact: epoch milliseconds + nanos
                         let (epoch_millis, mid) = reader.read_long(cursor)?;
                         let (nanos, next) = reader.read_int(mid)?;
-                        let timestamp_ltz = crate::row::datum::TimestampLtz::from_millis_nanos(
-                            epoch_millis,
-                            nanos,
-                        )
-                        .map_err(|e| IllegalArgument {
-                            message: format!(
-                                "Invalid nano_of_millisecond value in compacted row timestamp_ltz: {e}"
-                            ),
-                        })?;
+                        let timestamp_ltz =
+                            TimestampLtz::from_millis_nanos(epoch_millis, nanos).map_err(|e| {
+                                IllegalArgument {
+                                    message: format!(
+                                        "Invalid nano_of_millisecond value in compacted row timestamp_ltz: {e}"
+                                    ),
+                                }
+                            })?;
                         (Datum::TimestampLtz(timestamp_ltz), next)
                     }
                 }
                 DataType::Array(_) => {
                     let (bytes, next) = reader.read_bytes(cursor)?;
-                    let array = crate::row::binary_array::FlussArray::from_bytes(bytes)?;
-                    (Datum::Array(array), next)
+                    (Datum::Array(FlussArray::from_bytes(bytes)?), next)
                 }
                 DataType::Row(row_type) => {
                     let (nested_bytes, next) = reader.read_bytes(cursor)?;
@@ -195,7 +207,9 @@ impl<'a> CompactedRowDeserializer<'a> {
                         0,
                         nested_bytes.len(),
                     );
-                    let nested_deser = CompactedRowDeserializer::new_from_owned(row_type.clone());
+                    let nested_deser = self.nested[col_pos]
+                        .as_ref()
+                        .expect("ROW field must have nested deserializer");
                     let nested_row = nested_deser.deserialize(&nested_reader)?;
                     (Datum::Row(Box::new(nested_row)), next)
                 }
@@ -342,9 +356,12 @@ impl<'a> CompactedRowReader<'a> {
 #[cfg(test)]
 mod row_type_tests {
     use crate::metadata::{DataType, DataTypes, RowType};
-    use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
-    use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
     use crate::row::binary::ValueWriter;
+    use crate::row::compacted::compacted_row_reader::{
+        CompactedRowDeserializer, CompactedRowReader,
+    };
+    use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
+    use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
     use crate::row::field_getter::FieldGetter;
     use crate::row::{Datum, GenericRow, InternalRow};
 
@@ -374,13 +391,12 @@ mod row_type_tests {
             0,
             bytes.len(),
         );
-        let result = deser.deserialize(&reader);
+        let result = deser.deserialize(&reader).expect("deserialize");
         verify(&result);
     }
 
     #[test]
     fn test_row_simple_nesting() {
-        // ROW<INT, STRING> nested inside an outer row
         let inner_row_type = RowType::with_data_types_and_field_names(
             vec![DataTypes::int(), DataTypes::string()],
             vec!["x", "label"],
@@ -408,11 +424,8 @@ mod row_type_tests {
 
     #[test]
     fn test_row_deep_nesting() {
-        // ROW<ROW<INT>> — two levels of nesting
-        let inner_inner_row_type = RowType::with_data_types_and_field_names(
-            vec![DataTypes::int()],
-            vec!["n"],
-        );
+        let inner_inner_row_type =
+            RowType::with_data_types_and_field_names(vec![DataTypes::int()], vec!["n"]);
         let inner_row_type = RowType::with_data_types_and_field_names(
             vec![DataType::Row(inner_inner_row_type.clone())],
             vec!["inner"],
@@ -474,6 +487,81 @@ mod row_type_tests {
         round_trip(&outer_row_type, &outer_null, |result2| {
             assert_eq!(result2.get_int(0).unwrap(), 20);
             assert!(result2.is_null_at(1).unwrap());
+        });
+    }
+
+    #[test]
+    fn test_row_all_primitives_round_trip() {
+        let inner_row_type = RowType::with_data_types_and_field_names(
+            vec![
+                DataTypes::boolean(),
+                DataTypes::tinyint(),
+                DataTypes::smallint(),
+                DataTypes::int(),
+                DataTypes::bigint(),
+                DataTypes::float(),
+                DataTypes::double(),
+                DataTypes::string(),
+                DataTypes::bytes(),
+                DataTypes::date(),
+                DataTypes::time(),
+                DataTypes::timestamp(),
+                DataTypes::timestamp_ltz(),
+            ],
+            vec![
+                "b", "tin", "sm", "i", "lo", "fl", "db", "str", "by", "dt", "ti", "tsn", "tsl",
+            ],
+        );
+        let outer_row_type = RowType::with_data_types_and_field_names(
+            vec![DataType::Row(inner_row_type.clone())],
+            vec!["nested"],
+        );
+
+        let mut inner = GenericRow::new(13);
+        inner.set_field(0, true);
+        inner.set_field(1, 7_i8);
+        inner.set_field(2, -42_i16);
+        inner.set_field(3, 100_000_i32);
+        inner.set_field(4, 9_876_543_210_i64);
+        inner.set_field(5, std::f32::consts::PI);
+        inner.set_field(6, std::f64::consts::E);
+        inner.set_field(7, "hello world");
+        inner.set_field(8, b"binary".as_slice());
+        inner.set_field(9, Datum::Date(Date::new(20476)));
+        inner.set_field(10, Datum::Time(Time::new(36_827_123)));
+        inner.set_field(
+            11,
+            Datum::TimestampNtz(TimestampNtz::new(1_769_163_227_123)),
+        );
+        inner.set_field(
+            12,
+            Datum::TimestampLtz(TimestampLtz::new(1_769_163_227_123)),
+        );
+
+        let mut outer = GenericRow::new(1);
+        outer.set_field(0, Datum::Row(Box::new(inner)));
+
+        round_trip(&outer_row_type, &outer, |result| {
+            let n = result.get_row(0).unwrap();
+            assert!(n.get_boolean(0).unwrap());
+            assert_eq!(n.get_byte(1).unwrap(), 7);
+            assert_eq!(n.get_short(2).unwrap(), -42);
+            assert_eq!(n.get_int(3).unwrap(), 100_000);
+            assert_eq!(n.get_long(4).unwrap(), 9_876_543_210);
+            assert!((n.get_float(5).unwrap() - std::f32::consts::PI).abs() < f32::EPSILON);
+            assert!((n.get_double(6).unwrap() - std::f64::consts::E).abs() < f64::EPSILON);
+            assert_eq!(n.get_string(7).unwrap(), "hello world");
+            assert_eq!(n.get_bytes(8).unwrap(), b"binary");
+            assert_eq!(n.get_date(9).unwrap().get_inner(), 20476);
+            assert_eq!(n.get_time(10).unwrap().get_inner(), 36_827_123);
+            assert_eq!(
+                n.get_timestamp_ntz(11, 6).unwrap().get_millisecond(),
+                1_769_163_227_123,
+            );
+            assert_eq!(
+                n.get_timestamp_ltz(12, 6).unwrap().get_epoch_millisecond(),
+                1_769_163_227_123,
+            );
         });
     }
 }

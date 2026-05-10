@@ -16,12 +16,17 @@
 // under the License.
 
 use crate::client::WriteFormat;
+use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::RowType;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
-use crate::row::{Decimal, GenericRow, InternalRow};
+use crate::row::{Decimal, FlussArray, GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
+
+pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
+    arity.div_ceil(8)
+}
 
 // Reference implementation:
 // https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/row/compacted/CompactedRow.java
@@ -33,10 +38,6 @@ pub struct CompactedRow<'a> {
     deserializer: Arc<CompactedRowDeserializer<'a>>,
     reader: CompactedRowReader<'a>,
     data: &'a [u8],
-}
-
-pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
-    arity.div_ceil(8)
 }
 
 #[allow(dead_code)]
@@ -93,7 +94,7 @@ impl<'a> InternalRow for CompactedRow<'a> {
     fn is_null_at(&self, pos: usize) -> Result<bool> {
         let fields = self.deserializer.get_row_type().fields();
         if pos >= fields.len() {
-            return Err(crate::error::Error::IllegalArgument {
+            return Err(IllegalArgument {
                 message: format!(
                     "position {pos} out of bounds (row has {} fields)",
                     fields.len()
@@ -167,12 +168,12 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.decoded_row()?.get_bytes(pos)
     }
 
-    fn get_array(&self, pos: usize) -> Result<crate::row::FlussArray> {
+    fn get_array(&self, pos: usize) -> Result<FlussArray> {
         self.decoded_row()?.get_array(pos)
     }
 
     fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
-        self.decoded_row().get_row(pos)
+        self.decoded_row()?.get_row(pos)
     }
 
     fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
@@ -187,13 +188,14 @@ impl<'a> InternalRow for CompactedRow<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::row::binary::BinaryWriter;
-
     use crate::metadata::{
-        BigIntType, BooleanType, BytesType, DataType, DoubleType, FloatType, IntType, SmallIntType,
-        StringType, TinyIntType,
+        BigIntType, BooleanType, BytesType, DataType, DataTypes, DecimalType, DoubleType,
+        FloatType, IntType, SmallIntType, StringType, TimestampLTzType, TimestampType, TinyIntType,
     };
+    use crate::row::binary::BinaryWriter;
+    use crate::row::binary_array::FlussArrayWriter;
     use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
+    use crate::row::datum::{TimestampLtz, TimestampNtz};
 
     #[test]
     fn test_compacted_row() {
@@ -263,9 +265,6 @@ mod tests {
     #[test]
     fn test_compacted_row_temporal_and_decimal_types() {
         // Comprehensive test covering DATE, TIME, TIMESTAMP (compact/non-compact), and DECIMAL (compact/non-compact)
-        use crate::metadata::{DataTypes, DecimalType, TimestampLTzType, TimestampType};
-        use crate::row::Decimal;
-        use crate::row::datum::{TimestampLtz, TimestampNtz};
         use bigdecimal::{BigDecimal, num_bigint::BigInt};
 
         let row_type = RowType::with_data_types(vec![
@@ -345,9 +344,6 @@ mod tests {
 
     #[test]
     fn test_compacted_row_int_array() {
-        use crate::metadata::DataTypes;
-        use crate::row::binary_array::FlussArrayWriter;
-
         let row_type =
             RowType::with_data_types(vec![DataTypes::int(), DataTypes::array(DataTypes::int())]);
 
@@ -375,9 +371,6 @@ mod tests {
 
     #[test]
     fn test_compacted_row_string_array() {
-        use crate::metadata::DataTypes;
-        use crate::row::binary_array::FlussArrayWriter;
-
         let row_type = RowType::with_data_types(vec![DataTypes::array(DataTypes::string())]);
 
         let mut writer = CompactedRowWriter::new(row_type.fields().len());
@@ -402,9 +395,6 @@ mod tests {
 
     #[test]
     fn test_compacted_row_array_with_nulls() {
-        use crate::metadata::DataTypes;
-        use crate::row::binary_array::FlussArrayWriter;
-
         let row_type = RowType::with_data_types(vec![DataTypes::array(DataTypes::int())]);
 
         let mut writer = CompactedRowWriter::new(row_type.fields().len());
@@ -431,9 +421,6 @@ mod tests {
 
     #[test]
     fn test_compacted_row_empty_array() {
-        use crate::metadata::DataTypes;
-        use crate::row::binary_array::FlussArrayWriter;
-
         let row_type = RowType::with_data_types(vec![DataTypes::array(DataTypes::int())]);
 
         let mut writer = CompactedRowWriter::new(row_type.fields().len());
@@ -452,9 +439,6 @@ mod tests {
 
     #[test]
     fn test_compacted_row_nested_array() {
-        use crate::metadata::DataTypes;
-        use crate::row::binary_array::FlussArrayWriter;
-
         let row_type =
             RowType::with_data_types(vec![DataTypes::array(DataTypes::array(DataTypes::int()))]);
 

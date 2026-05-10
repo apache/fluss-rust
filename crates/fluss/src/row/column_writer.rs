@@ -21,7 +21,7 @@
 
 use crate::error::Error::RowConvertError;
 use crate::error::{Error, Result};
-use crate::metadata::DataType;
+use crate::metadata::{DataType, RowType};
 use crate::row::InternalRow;
 use crate::row::datum::{
     MICROS_PER_MILLI, MILLIS_PER_SECOND, NANOS_PER_MILLI, append_decimal_to_builder,
@@ -123,6 +123,12 @@ enum TypedWriter {
         offsets: Vec<i32>,
         validity: Vec<bool>,
     },
+    Struct {
+        field_writers: Vec<ColumnWriter>,
+        validity: Vec<bool>,
+        fields: arrow_schema::Fields,
+        row_type: RowType,
+    },
 }
 
 /// Dispatch to the inner builder across all `TypedWriter` variants.
@@ -156,6 +162,7 @@ macro_rules! with_builder {
             TypedWriter::TimestampLtzMicrosecond { builder: $b, .. } => $body,
             TypedWriter::TimestampLtzNanosecond { builder: $b, .. } => $body,
             TypedWriter::List { .. } => panic!("List variant not supported in with_builder!"),
+            TypedWriter::Struct { .. } => panic!("Struct variant not supported in with_builder!"),
         }
     };
 }
@@ -354,6 +361,39 @@ impl ColumnWriter {
                     validity: Vec::with_capacity(capacity),
                 }
             }
+            DataType::Row(row_type) => {
+                let arrow_fields = match arrow_type {
+                    ArrowDataType::Struct(fields) => fields.clone(),
+                    _ => {
+                        return Err(Error::IllegalArgument {
+                            message: format!(
+                                "Expected Struct Arrow type for Row, got: {arrow_type:?}"
+                            ),
+                        });
+                    }
+                };
+                if arrow_fields.len() != row_type.fields().len() {
+                    return Err(Error::IllegalArgument {
+                        message: format!(
+                            "Row arity mismatch: Fluss type has {} fields, Arrow type has {}",
+                            row_type.fields().len(),
+                            arrow_fields.len(),
+                        ),
+                    });
+                }
+                let field_writers: Result<Vec<_>> = row_type
+                    .fields()
+                    .iter()
+                    .zip(arrow_fields.iter())
+                    .map(|(f, af)| ColumnWriter::create(&f.data_type, af.data_type(), 0, capacity))
+                    .collect();
+                TypedWriter::Struct {
+                    field_writers: field_writers?,
+                    validity: Vec::with_capacity(capacity),
+                    fields: arrow_fields,
+                    row_type: row_type.clone(),
+                }
+            }
             _ => {
                 return Err(Error::IllegalArgument {
                     message: format!("Unsupported Fluss DataType: {fluss_type:?}"),
@@ -399,6 +439,17 @@ impl ColumnWriter {
                 let taken_offsets = std::mem::replace(offsets, vec![0]);
                 let taken_validity = std::mem::take(validity);
                 finish_list_array(values, item_nullable, &taken_offsets, &taken_validity)
+            }
+            TypedWriter::Struct {
+                field_writers,
+                validity,
+                fields,
+                ..
+            } => {
+                let taken_validity = std::mem::take(validity);
+                let child_arrays: Vec<ArrayRef> =
+                    field_writers.iter_mut().map(|w| w.finish()).collect();
+                finish_struct_array(fields.clone(), child_arrays, &taken_validity)
             }
             _ => with_builder!(&mut self.inner, b => (b as &mut dyn ArrayBuilder).finish()),
         }
@@ -476,6 +527,15 @@ impl ColumnWriter {
                 let offsets_bytes = round_up_to_8(offsets.len() * std::mem::size_of::<i32>());
                 validity_bytes + offsets_bytes + element_writer.buffer_size()
             }
+            TypedWriter::Struct {
+                field_writers,
+                validity,
+                ..
+            } => {
+                let validity_bytes = round_up_to_8(validity.len().div_ceil(8));
+                let children_bytes: usize = field_writers.iter().map(|w| w.buffer_size()).sum();
+                validity_bytes + children_bytes
+            }
         }
     }
 
@@ -486,6 +546,17 @@ impl ColumnWriter {
             } => {
                 let last = *offsets.last().unwrap_or(&0);
                 offsets.push(last);
+                validity.push(false);
+            }
+            TypedWriter::Struct {
+                field_writers,
+                validity,
+                ..
+            } => {
+                // Arrow StructArray children must match parent length.
+                for child in field_writers.iter_mut() {
+                    child.append_null();
+                }
                 validity.push(false);
             }
             _ => with_builder!(&mut self.inner, b => b.append_null()),
@@ -676,20 +747,73 @@ impl ColumnWriter {
                 validity,
             } => {
                 let array = row.get_array(pos)?;
-                for i in 0..array.size() {
-                    element_writer.write_field_at(&array, i)?;
+                let size = array.size();
+                if let TypedWriter::Struct {
+                    field_writers,
+                    validity: child_validity,
+                    row_type,
+                    ..
+                } = &mut element_writer.inner
+                {
+                    for i in 0..size {
+                        if array.is_null_at(i) {
+                            for child in field_writers.iter_mut() {
+                                child.append_null();
+                            }
+                            child_validity.push(false);
+                        } else {
+                            let nested = array.get_row(i, row_type)?;
+                            for (j, child) in field_writers.iter_mut().enumerate() {
+                                child.write_field_at(&nested, j)?;
+                            }
+                            child_validity.push(true);
+                        }
+                    }
+                } else {
+                    for i in 0..size {
+                        element_writer.write_field_at(&array, i)?;
+                    }
                 }
                 let last = *offsets.last().unwrap();
                 offsets.push(
-                    last + i32::try_from(array.size()).map_err(|_| RowConvertError {
-                        message: format!("Array size {} exceeds i32 range", array.size()),
+                    last + i32::try_from(size).map_err(|_| RowConvertError {
+                        message: format!("Array size {size} exceeds i32 range"),
                     })?,
                 );
                 validity.push(true);
                 Ok(())
             }
+            TypedWriter::Struct {
+                field_writers,
+                validity,
+                ..
+            } => {
+                let nested = row.get_row(pos)?;
+                for (i, child) in field_writers.iter_mut().enumerate() {
+                    child.write_field_at(nested, i)?;
+                }
+                validity.push(true);
+                Ok(())
+            }
         }
     }
+}
+
+fn finish_struct_array(
+    fields: arrow_schema::Fields,
+    child_arrays: Vec<ArrayRef>,
+    validity: &[bool],
+) -> ArrayRef {
+    use arrow::array::StructArray;
+    use arrow::buffer::NullBuffer;
+    use std::sync::Arc;
+
+    let null_buffer = if validity.iter().any(|v| !v) {
+        Some(NullBuffer::from(validity.to_vec()))
+    } else {
+        None
+    };
+    Arc::new(StructArray::new(fields, child_arrays, null_buffer))
 }
 
 fn finish_list_array(
@@ -726,7 +850,7 @@ mod tests {
     use crate::metadata::DataTypes;
     use crate::record::to_arrow_type;
     use crate::row::binary_array::FlussArrayWriter;
-    use crate::row::{Date, Datum, GenericRow, Time, TimestampLtz, TimestampNtz};
+    use crate::row::{Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz};
     use arrow::array::*;
     use bigdecimal::BigDecimal;
     use std::str::FromStr;
@@ -857,8 +981,7 @@ mod tests {
 
         // Decimal
         let decimal =
-            crate::row::Decimal::from_big_decimal(BigDecimal::from_str("123.45").unwrap(), 10, 2)
-                .unwrap();
+            Decimal::from_big_decimal(BigDecimal::from_str("123.45").unwrap(), 10, 2).unwrap();
         let arr = write_one(&DataTypes::decimal(10, 2), Datum::Decimal(decimal));
         assert_eq!(
             arr.as_any()

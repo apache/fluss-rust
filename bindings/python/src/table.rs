@@ -1322,6 +1322,11 @@ fn python_value_to_datum(
                             }
                         }
                         Datum::Array(v) => writer.write_array(i, &v),
+                        Datum::Row(_) => {
+                            return Err(FlussError::new_err(
+                                "Row datum is not supported as an array element",
+                            ));
+                        }
                     }
                 }
             }

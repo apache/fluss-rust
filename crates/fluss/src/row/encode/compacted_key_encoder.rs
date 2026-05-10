@@ -111,9 +111,10 @@ mod tests {
     use super::*;
     use crate::metadata::{DataType, DataTypes};
     use crate::row::binary_array::FlussArrayWriter;
-    use crate::row::{Datum, GenericRow};
+    use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+    use crate::row::{Datum, Decimal, FlussArray, GenericRow};
 
-    fn build_int_array(values: &[i32]) -> crate::row::FlussArray {
+    fn build_int_array(values: &[i32]) -> FlussArray {
         let mut w = FlussArrayWriter::new(values.len(), &DataTypes::int());
         for (i, v) in values.iter().enumerate() {
             w.write_int(i, *v);
@@ -121,7 +122,7 @@ mod tests {
         w.complete().unwrap()
     }
 
-    fn build_nullable_int_array(values: &[Option<i32>]) -> crate::row::FlussArray {
+    fn build_nullable_int_array(values: &[Option<i32>]) -> FlussArray {
         let mut w = FlussArrayWriter::new(values.len(), &DataTypes::int());
         for (i, v) in values.iter().enumerate() {
             match v {
@@ -132,7 +133,7 @@ mod tests {
         w.complete().unwrap()
     }
 
-    fn build_float_array(values: &[f32]) -> crate::row::FlussArray {
+    fn build_float_array(values: &[f32]) -> FlussArray {
         let mut w = FlussArrayWriter::new(values.len(), &DataTypes::float().as_non_nullable());
         for (i, v) in values.iter().enumerate() {
             w.write_float(i, *v);
@@ -140,7 +141,7 @@ mod tests {
         w.complete().unwrap()
     }
 
-    fn build_nested_string_array() -> crate::row::FlussArray {
+    fn build_nested_string_array() -> FlussArray {
         let mut inner_1 = FlussArrayWriter::new(3, &DataTypes::string());
         inner_1.write_string(0, "a");
         inner_1.set_null_at(1);
@@ -369,32 +370,32 @@ mod tests {
 
         // Exact values from Java's IndexedRowTest.genRecordForAllTypes()
         let row = GenericRow::from_data(vec![
-            Datum::from(true),                                   // BOOLEAN: true
-            Datum::from(2i8),                                    // TINYINT: 2
-            Datum::from(10i16),                                  // SMALLINT: 10
-            Datum::from(100i32),                                 // INT: 100
-            Datum::from(-6101065172474983726i64),                // BIGINT
-            Datum::from(13.2f32),                                // FLOAT: 13.2
-            Datum::from(15.21f64),                               // DOUBLE: 15.21
-            Datum::Date(crate::row::datum::Date::new(19655)), // DATE: 2023-10-25 (19655 days since epoch)
-            Datum::Time(crate::row::datum::Time::new(34200000)), // TIME: 09:30:00.0
-            Datum::from("1234567890".as_bytes()),             // BINARY(20)
-            Datum::from("20".as_bytes()),                     // BYTES
-            Datum::from("1"),                                 // CHAR(2): "1"
-            Datum::from("hello"),                             // STRING: "hello"
-            Datum::Decimal(crate::row::Decimal::from_unscaled_long(9, 5, 2).unwrap()), // DECIMAL(5,2)
+            Datum::from(true),                                             // BOOLEAN: true
+            Datum::from(2i8),                                              // TINYINT: 2
+            Datum::from(10i16),                                            // SMALLINT: 10
+            Datum::from(100i32),                                           // INT: 100
+            Datum::from(-6101065172474983726i64),                          // BIGINT
+            Datum::from(13.2f32),                                          // FLOAT: 13.2
+            Datum::from(15.21f64),                                         // DOUBLE: 15.21
+            Datum::Date(Date::new(19655)), // DATE: 2023-10-25 (19655 days since epoch)
+            Datum::Time(Time::new(34200000)), // TIME: 09:30:00.0
+            Datum::from("1234567890".as_bytes()), // BINARY(20)
+            Datum::from("20".as_bytes()),  // BYTES
+            Datum::from("1"),              // CHAR(2): "1"
+            Datum::from("hello"),          // STRING: "hello"
+            Datum::Decimal(Decimal::from_unscaled_long(9, 5, 2).unwrap()), // DECIMAL(5,2)
             Datum::Decimal(
-                crate::row::Decimal::from_big_decimal(
+                Decimal::from_big_decimal(
                     bigdecimal::BigDecimal::new(bigdecimal::num_bigint::BigInt::from(10), 0),
                     20,
                     0,
                 )
                 .unwrap(),
             ), // DECIMAL(20,0)
-            Datum::TimestampNtz(crate::row::datum::TimestampNtz::new(1698235273182)), // TIMESTAMP(1)
-            Datum::TimestampNtz(crate::row::datum::TimestampNtz::new(1698235273182)), // TIMESTAMP(5)
-            Datum::TimestampLtz(crate::row::datum::TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(1)
-            Datum::TimestampLtz(crate::row::datum::TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(5)
+            Datum::TimestampNtz(TimestampNtz::new(1698235273182)), // TIMESTAMP(1)
+            Datum::TimestampNtz(TimestampNtz::new(1698235273182)), // TIMESTAMP(5)
+            Datum::TimestampLtz(TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(1)
+            Datum::TimestampLtz(TimestampLtz::new(1698235273182)), // TIMESTAMP_LTZ(5)
             Datum::Array(build_nullable_int_array(&[
                 Some(1),
                 Some(2),
@@ -502,10 +503,7 @@ mod tests {
             vec!["x", "label"],
         );
         let row_type = RowType::with_data_types_and_field_names(
-            vec![
-                DataTypes::int(),
-                DataType::Row(inner_row_type.clone()),
-            ],
+            vec![DataTypes::int(), DataType::Row(inner_row_type.clone())],
             vec!["id", "nested"],
         );
 
