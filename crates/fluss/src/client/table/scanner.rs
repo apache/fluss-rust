@@ -271,6 +271,9 @@ struct LogScannerInner {
     log_fetcher: LogFetcher,
     is_partitioned_table: bool,
     arrow_schema: SchemaRef,
+    /// Guards against subscription changes while a
+    /// [`crate::client::RecordBatchLogReader`] is iterating.
+    reader_active: std::sync::atomic::AtomicBool,
 }
 
 impl LogScannerInner {
@@ -311,7 +314,22 @@ impl LogScannerInner {
                 projected_fields,
             )?,
             arrow_schema,
+            reader_active: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    fn check_no_active_reader(&self) -> Result<()> {
+        if self
+            .reader_active
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(Error::IllegalArgument {
+                message: "Cannot modify subscriptions while a RecordBatchLogReader is active. \
+                          Drop the reader first."
+                    .to_string(),
+            });
+        }
+        Ok(())
     }
 
     async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
@@ -354,6 +372,7 @@ impl LogScannerInner {
     }
 
     async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+        self.check_no_active_reader()?;
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message: "The table is a partitioned table, please use \"subscribe_partition\" to \
@@ -371,6 +390,7 @@ impl LogScannerInner {
     }
 
     async fn subscribe_buckets(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.check_no_active_reader()?;
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message:
@@ -393,6 +413,7 @@ impl LogScannerInner {
         bucket: i32,
         offset: i64,
     ) -> Result<()> {
+        self.check_no_active_reader()?;
         if !self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message: "The table is not a partitioned table, please use \"subscribe\" to \
@@ -414,6 +435,7 @@ impl LogScannerInner {
         &self,
         partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
     ) -> Result<()> {
+        self.check_no_active_reader()?;
         if !self.is_partitioned_table {
             return Err(UnsupportedOperation {
                 message: "The table is not a partitioned table, please use \"subscribe_buckets\" \
@@ -448,6 +470,7 @@ impl LogScannerInner {
     }
 
     async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+        self.check_no_active_reader()?;
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message:
@@ -463,6 +486,7 @@ impl LogScannerInner {
     }
 
     async fn unsubscribe_partition(&self, partition_id: PartitionId, bucket: i32) -> Result<()> {
+        self.check_no_active_reader()?;
         if !self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message: "Can't unsubscribe a partition for a non-partitioned table.".to_string(),
@@ -659,6 +683,32 @@ impl RecordBatchLogScanner {
         RecordBatchLogScanner {
             inner: Arc::clone(&self.inner),
         }
+    }
+
+    /// Atomically marks the scanner as having an active reader.
+    ///
+    /// Returns `Err(IllegalArgument)` if another reader is already active on
+    /// this scanner — only one [`crate::client::RecordBatchLogReader`] may
+    /// iterate per scanner at a time. This mirrors Java's
+    /// `LogScannerImpl.acquire()` single-consumer guard.
+    pub(crate) fn try_set_reader_active(&self) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        self.inner
+            .reader_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| Error::IllegalArgument {
+                message: "Another RecordBatchLogReader is already active on this scanner. \
+                          Drop the existing reader first."
+                    .to_string(),
+            })
+    }
+
+    /// Clears the active-reader guard, re-enabling subscription changes.
+    pub(crate) fn clear_reader_active(&self) {
+        self.inner
+            .reader_active
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Synchronous, infallible counterpart to [`unsubscribe`](Self::unsubscribe).

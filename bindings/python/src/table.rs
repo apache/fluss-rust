@@ -2287,13 +2287,26 @@ impl LogScanner {
 
     /// Create a lazy Arrow RecordBatchReader that reads until latest offsets.
     ///
+    /// This is a **blocking / synchronous** API: construction queries the
+    /// server for latest offsets (via ``block_on``), and each
+    /// ``RecordBatchReader.__next__()`` call blocks the calling thread until
+    /// the next batch is available. It is suitable for Arrow interop
+    /// (feeding into DuckDB, Polars, etc.) but should not be used
+    /// from ``asyncio`` coroutines -- see issue #545 for a planned
+    /// asyncio-native streaming alternative.
+    /// TODO(#545): Add asyncio-native streaming counterpart.
+    ///
     /// Returns a PyArrow RecordBatchReader that lazily polls batches one at a
     /// time. This is more memory-efficient than ``to_arrow()`` which loads all
     /// data into a single table.
     ///
-    /// **Concurrency:** The reader shares the same underlying scanner state as
-    /// this ``LogScanner``. Do not call ``poll_arrow``, ``poll_record_batch``,
-    /// or other poll methods while iterating this reader.
+    /// **Concurrency:** While this reader is alive, ``subscribe*`` and
+    /// ``unsubscribe*`` calls on the scanner are rejected with an error.
+    /// You should also avoid calling ``poll_arrow`` / ``poll_record_batch``
+    /// on the same scanner — these are not blocked by the guard, but they
+    /// share the underlying fetch buffer with the reader and would
+    /// interleave batches between both consumers. Drop the reader before
+    /// resuming any of these operations.
     ///
     /// You must call subscribe(), subscribe_buckets(), subscribe_partition(),
     /// or subscribe_partition_buckets() first.

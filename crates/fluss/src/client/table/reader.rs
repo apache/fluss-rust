@@ -99,7 +99,17 @@ impl RecordBatchLogReader {
             });
         }
 
-        let stopping_offsets = query_latest_offsets(admin, &scanner, &subscribed).await?;
+        // Acquire the active-reader guard before any fallible work that might
+        // leak it. We release it in `Drop` (or below if construction fails).
+        scanner.try_set_reader_active()?;
+
+        let stopping_offsets = match query_latest_offsets(admin, &scanner, &subscribed).await {
+            Ok(o) => o,
+            Err(e) => {
+                scanner.clear_reader_active();
+                return Err(e);
+            }
+        };
         let schema = scanner.schema();
 
         Ok(Self {
@@ -123,14 +133,15 @@ impl RecordBatchLogReader {
     pub fn new_until_offsets(
         scanner: RecordBatchLogScanner,
         stopping_offsets: HashMap<TableBucket, i64>,
-    ) -> Self {
+    ) -> Result<Self> {
+        scanner.try_set_reader_active()?;
         let schema = scanner.schema();
-        Self {
+        Ok(Self {
             scanner,
             stopping_offsets,
             buffer: VecDeque::new(),
             schema,
-        }
+        })
     }
 
     /// Returns the Arrow schema for batches produced by this reader.
@@ -178,13 +189,19 @@ impl RecordBatchLogReader {
             let completed =
                 filter_batches(scan_batches, &mut self.stopping_offsets, &mut self.buffer);
 
+            // Use the `_sync` unsubscribe variants here: the active-reader
+            // guard rejects calls to the async `unsubscribe*` methods, but
+            // the reader is allowed to clean up its own completed buckets.
+            // The sync variants do the same map removal without the guard
+            // check, and the partitioned/non-partitioned mismatch they
+            // silently ignore is unreachable since the reader inherits the
+            // scanner's partition mode.
             for tb in completed {
                 if let Some(partition_id) = tb.partition_id() {
                     self.scanner
-                        .unsubscribe_partition(partition_id, tb.bucket_id())
-                        .await?;
+                        .unsubscribe_partition_sync(partition_id, tb.bucket_id());
                 } else {
-                    self.scanner.unsubscribe(tb.bucket_id()).await?;
+                    self.scanner.unsubscribe_sync(tb.bucket_id());
                 }
             }
         }
@@ -234,6 +251,9 @@ impl RecordBatchLogReader {
 /// so this is safe to call from any context — sync, async, a Tokio worker, or
 /// a Python thread holding the GIL.
 ///
+/// After cleanup, the `reader_active` guard is cleared so that the original
+/// scanner (held by the binding layer) can accept new subscriptions again.
+///
 /// Caveats:
 /// - Batches already buffered in `LogFetcher.log_fetch_buffer` for an
 ///   unsubscribed bucket are not drained here. They'll either be filtered out
@@ -254,6 +274,7 @@ impl Drop for RecordBatchLogReader {
                 self.scanner.unsubscribe_sync(tb.bucket_id());
             }
         }
+        self.scanner.clear_reader_active();
     }
 }
 
@@ -328,10 +349,10 @@ async fn query_latest_offsets(
                 if *latest_offset == 0 {
                     return false;
                 }
-                let subscribed_offset = subscribed_offset_by_bucket
-                    .get(bucket_id)
-                    .copied()
-                    .unwrap_or(0);
+                let Some(&subscribed_offset) = subscribed_offset_by_bucket.get(bucket_id)
+                else {
+                    return false;
+                };
                 subscribed_offset < *latest_offset
             })
             .map(|(bucket_id, offset)| (TableBucket::new(table_id, bucket_id), offset))
@@ -397,7 +418,9 @@ async fn query_partitioned_offsets(
                 continue;
             }
             let tb = TableBucket::new_with_partition(table_id, Some(partition_id), bucket_id);
-            let subscribed_offset = subscribed_offset_map.get(&tb).copied().unwrap_or(0);
+            let Some(&subscribed_offset) = subscribed_offset_map.get(&tb) else {
+                continue;
+            };
             if subscribed_offset < latest_offset {
                 result.insert(tb, latest_offset);
             }
@@ -464,11 +487,11 @@ fn filter_batches(
     completed
 }
 
-// TODO: Add an end-to-end test with `FlussTestingCluster` (feature
+// TODO: Add Rust-level end-to-end tests with `FlussTestingCluster` (feature
 // `integration_tests`) covering `new_until_latest`, partitioned tables,
-// `new_until_offsets` stopping semantics, and the `Drop` cleanup path
-// (drop the reader mid-iteration; assert the original scanner sees no
-// leftover subscriptions for the still-active buckets).
+// and `new_until_offsets` stopping semantics. Drop cleanup and the
+// reader-active guard are covered by the Python integration test
+// `test_to_arrow_batch_reader_drop_and_guard`.
 #[cfg(test)]
 mod tests {
     use super::*;
