@@ -416,17 +416,22 @@ async def test_to_arrow_batch_reader(connection, admin):
     scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    reader = scanner.to_arrow_batch_reader()
-    assert isinstance(reader, pa.RecordBatchReader)
-    assert reader.schema == pa_schema
+    # to_arrow_batch_reader() is a blocking/sync API; run in a thread to
+    # avoid starving the asyncio event loop (see docstring warning).
+    def _read_all():
+        reader = scanner.to_arrow_batch_reader()
+        assert isinstance(reader, pa.RecordBatchReader)
+        assert reader.schema == pa_schema
 
-    batches = list(reader)
-    total_rows = sum(b.num_rows for b in batches)
-    assert total_rows == 3
+        batches = list(reader)
+        total_rows = sum(b.num_rows for b in batches)
+        assert total_rows == 3
 
-    result_table = pa.Table.from_batches(batches, schema=pa_schema)
-    assert result_table.column("id").to_pylist() == [10, 20, 30]
-    assert result_table.column("name").to_pylist() == ["x", "y", "z"]
+        result_table = pa.Table.from_batches(batches, schema=pa_schema)
+        assert result_table.column("id").to_pylist() == [10, 20, 30]
+        assert result_table.column("name").to_pylist() == ["x", "y", "z"]
+
+    await asyncio.to_thread(_read_all)
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
@@ -474,28 +479,35 @@ async def test_to_arrow_batch_reader_drop_and_guard(connection, admin):
     scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
-    # --- Guard blocks subscribe / unsubscribe while reader is active ---
-    reader = scanner.to_arrow_batch_reader()
-    with pytest.raises(fluss.FlussError, match="RecordBatchLogReader is active"):
-        scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
-    with pytest.raises(fluss.FlussError, match="RecordBatchLogReader is active"):
-        scanner.unsubscribe(0)
+    # to_arrow_batch_reader() is a blocking/sync API; run all blocking
+    # interactions in a thread to avoid starving the asyncio event loop.
+    def _test_guard_and_drop():
+        # --- Guard blocks subscribe / unsubscribe while reader is active ---
+        reader = scanner.to_arrow_batch_reader()
+        with pytest.raises(fluss.FlussError, match="RecordBatchLogReader is active"):
+            scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+        with pytest.raises(fluss.FlussError, match="RecordBatchLogReader is active"):
+            scanner.unsubscribe(0)
 
-    # --- Drop mid-iteration: read one batch, then discard ---
-    first_batch = next(reader)
-    assert first_batch.num_rows > 0
-    del reader
+        # --- Drop mid-iteration: read one batch, then discard ---
+        first_batch = next(reader)
+        assert first_batch.num_rows > 0
+        del reader
 
-    # --- Drop unsubscribed leftover buckets: creating a reader without
-    #     re-subscribing must fail with "No buckets subscribed" ---
-    with pytest.raises(fluss.FlussError, match="No buckets subscribed"):
-        scanner.to_arrow_batch_reader()
+        # --- Drop unsubscribed leftover buckets: creating a reader without
+        #     re-subscribing must fail with "No buckets subscribed" ---
+        with pytest.raises(fluss.FlussError, match="No buckets subscribed"):
+            scanner.to_arrow_batch_reader()
 
-    # --- Guard cleared after drop: scanner is reusable from a fresh subscribe ---
-    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
-    reader2 = scanner.to_arrow_batch_reader()
-    batches = list(reader2)
-    assert sum(b.num_rows for b in batches) == total_rows
+        # --- Guard cleared after drop: scanner is reusable from a fresh subscribe ---
+        scanner.subscribe_buckets(
+            {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
+        )
+        reader2 = scanner.to_arrow_batch_reader()
+        batches = list(reader2)
+        assert sum(b.num_rows for b in batches) == total_rows
+
+    await asyncio.to_thread(_test_guard_and_drop)
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
