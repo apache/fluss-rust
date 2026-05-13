@@ -722,8 +722,7 @@ impl RecordBatchLogScanner {
     /// variant.
     ///
     /// **Not intended for general use** — prefer the async [`unsubscribe`].
-    #[doc(hidden)]
-    pub fn unsubscribe_sync(&self, bucket: i32) {
+    pub(crate) fn unsubscribe_sync(&self, bucket: i32) {
         if self.inner.is_partitioned_table {
             return;
         }
@@ -736,8 +735,7 @@ impl RecordBatchLogScanner {
     /// Synchronous, infallible counterpart to
     /// [`unsubscribe_partition`](Self::unsubscribe_partition). See
     /// [`unsubscribe_sync`](Self::unsubscribe_sync) for rationale.
-    #[doc(hidden)]
-    pub fn unsubscribe_partition_sync(&self, partition_id: PartitionId, bucket: i32) {
+    pub(crate) fn unsubscribe_partition_sync(&self, partition_id: PartitionId, bucket: i32) {
         if !self.inner.is_partitioned_table {
             return;
         }

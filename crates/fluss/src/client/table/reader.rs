@@ -91,17 +91,18 @@ impl RecordBatchLogReader {
         scanner: RecordBatchLogScanner,
         admin: &FlussAdmin,
     ) -> Result<Self> {
+        // Acquire the guard first so no concurrent unsubscribe can mutate
+        // state between reading subscriptions and using them.
+        scanner.try_set_reader_active()?;
+
         let subscribed = scanner.get_subscribed_buckets();
         if subscribed.is_empty() {
+            scanner.clear_reader_active();
             return Err(Error::IllegalArgument {
                 message: "No buckets subscribed. Call subscribe() before creating a reader."
                     .to_string(),
             });
         }
-
-        // Acquire the active-reader guard before any fallible work that might
-        // leak it. We release it in `Drop` (or below if construction fails).
-        scanner.try_set_reader_active()?;
 
         let stopping_offsets = match query_latest_offsets(admin, &scanner, &subscribed).await {
             Ok(o) => o,
