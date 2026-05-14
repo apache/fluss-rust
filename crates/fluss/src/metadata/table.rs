@@ -905,6 +905,47 @@ impl KvFormat {
     }
 }
 
+/// KV layout version from `table.kv.format-version` (Java `ConfigOptions.TABLE_KV_FORMAT_VERSION`).
+///
+/// Unset or unparseable values resolve to [`KvFormatVersion::V1`], matching Java
+/// `getKvFormatVersion().orElse(1)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum KvFormatVersion {
+    V1,
+    V2,
+}
+
+impl Default for KvFormatVersion {
+    fn default() -> Self {
+        Self::V1
+    }
+}
+
+impl KvFormatVersion {
+    /// Parse the `table.kv.format-version` property value.
+    ///
+    /// Whitespace-only and non-numeric garbage fall back to [`Default::default`] ([`V1`](Self::V1)).
+    /// Only `1` and `2` are recognized as explicit versions; other integers also fall back to `V1`.
+    pub fn parse_property(raw: Option<&str>) -> Self {
+        let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Self::default();
+        };
+        match s {
+            "1" => Self::V1,
+            "2" => Self::V2,
+            _ => s
+                .parse::<i32>()
+                .ok()
+                .and_then(|n| match n {
+                    1 => Some(Self::V1),
+                    2 => Some(Self::V2),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct TablePath {
     database: String,
@@ -1170,6 +1211,17 @@ impl TableConfig {
             .map(String::as_str)
             .unwrap_or(DEFAULT_KV_FORMAT);
         kv_format.parse().map_err(Into::into)
+    }
+
+    /// KV layout version from `table.kv.format-version` (Java `ConfigOptions.TABLE_KV_FORMAT_VERSION`).
+    ///
+    /// When unset or invalid, returns [`KvFormatVersion::V1`] (same as Java `getKvFormatVersion().orElse(1)`).
+    pub fn get_kv_format_version(&self) -> KvFormatVersion {
+        KvFormatVersion::parse_property(
+            self.properties
+                .get("table.kv.format-version")
+                .map(String::as_str),
+        )
     }
 
     pub fn get_log_format(&self) -> Result<LogFormat> {
@@ -1642,5 +1694,47 @@ mod tests {
             0,
         );
         assert!(table_info.is_auto_partitioned());
+    }
+
+    #[test]
+    fn kv_format_version_parse_property_defaults() {
+        assert_eq!(KvFormatVersion::parse_property(None), KvFormatVersion::V1);
+        assert_eq!(
+            KvFormatVersion::parse_property(Some("")),
+            KvFormatVersion::V1
+        );
+        assert_eq!(
+            KvFormatVersion::parse_property(Some("  ")),
+            KvFormatVersion::V1
+        );
+        assert_eq!(
+            KvFormatVersion::parse_property(Some("1")),
+            KvFormatVersion::V1
+        );
+        assert_eq!(
+            KvFormatVersion::parse_property(Some(" 2 ")),
+            KvFormatVersion::V2
+        );
+        assert_eq!(
+            KvFormatVersion::parse_property(Some("99")),
+            KvFormatVersion::V1
+        );
+        assert_eq!(
+            KvFormatVersion::parse_property(Some("nope")),
+            KvFormatVersion::V1
+        );
+    }
+
+    #[test]
+    fn table_config_get_kv_format_version() {
+        let empty = TableConfig::from_properties(HashMap::new());
+        assert_eq!(empty.get_kv_format_version(), KvFormatVersion::V1);
+
+        let mut m = HashMap::new();
+        m.insert("table.kv.format-version".to_string(), "2".to_string());
+        assert_eq!(
+            TableConfig::from_properties(m).get_kv_format_version(),
+            KvFormatVersion::V2
+        );
     }
 }
