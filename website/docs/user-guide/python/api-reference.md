@@ -181,8 +181,11 @@ Builder for creating a `PrefixLookuper`. Obtain via `TableLookup.lookup_by(colum
 | `await .poll(timeout_ms) -> ScanRecords`                      | Poll individual records (record scanner only)                                    |
 | `await .poll_arrow(timeout_ms) -> pa.Table`                   | Poll as Arrow Table (batch scanner only)                                         |
 | `await .poll_record_batch(timeout_ms) -> list[RecordBatch]`   | Poll batches with metadata (batch scanner only)                                  |
+| `.to_arrow_batch_reader() -> pa.RecordBatchReader`            | Lazy Arrow RecordBatchReader reading until latest offsets (batch scanner only)    |
 | `await .to_arrow() -> pa.Table`                               | Read all subscribed data as Arrow Table (batch scanner only)                     |
 | `await .to_pandas() -> pd.DataFrame`                          | Read all subscribed data as DataFrame (batch scanner only)                       |
+
+> **Note:** Overlapping `poll_*` / `to_arrow*` / `to_arrow_batch_reader` calls on the same underlying scanner are not supported. Use only one active polling/consumption path at a time.
 
 ## `ScanRecords`
 

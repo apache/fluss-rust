@@ -257,6 +257,10 @@ pub struct LogScanner {
 ///
 /// More efficient than [`LogScanner`] for batch-level analytics where per-record
 /// metadata (offsets, timestamps) is not needed.
+///
+/// This type is intentionally **not** `Clone`. To perform a bounded read, move
+/// the scanner into a [`crate::client::RecordBatchLogReader`] — the compiler
+/// then prevents concurrent polls by construction.
 pub struct RecordBatchLogScanner {
     inner: Arc<LogScannerInner>,
 }
@@ -269,6 +273,10 @@ struct LogScannerInner {
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
     is_partitioned_table: bool,
+    arrow_schema: SchemaRef,
+    /// Guards against subscription changes while a
+    /// [`crate::client::RecordBatchLogReader`] is iterating.
+    reader_active: std::sync::atomic::AtomicBool,
 }
 
 impl LogScannerInner {
@@ -280,6 +288,20 @@ impl LogScannerInner {
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
+
+        let full_row_type = table_info.get_row_type();
+        let arrow_schema = match &projected_fields {
+            Some(indices) => {
+                let projected_fields_vec: Vec<_> = indices
+                    .iter()
+                    .map(|&i| full_row_type.fields()[i].clone())
+                    .collect();
+                let projected_row_type = crate::metadata::RowType::new(projected_fields_vec);
+                to_arrow_schema(&projected_row_type)?
+            }
+            None => to_arrow_schema(full_row_type)?,
+        };
+
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
@@ -288,13 +310,29 @@ impl LogScannerInner {
             log_scanner_status: log_scanner_status.clone(),
             log_fetcher: LogFetcher::new(
                 table_info.clone(),
-                connections.clone(),
-                metadata.clone(),
+                connections,
+                metadata,
                 log_scanner_status.clone(),
                 config,
                 projected_fields,
             )?,
+            arrow_schema,
+            reader_active: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    fn check_no_active_reader(&self) -> Result<()> {
+        if self
+            .reader_active
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(Error::IllegalArgument {
+                message: "Cannot modify subscriptions while a RecordBatchLogReader is active. \
+                          Drop the reader first."
+                    .to_string(),
+            });
+        }
+        Ok(())
     }
 
     async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
@@ -337,6 +375,7 @@ impl LogScannerInner {
     }
 
     async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
+        self.check_no_active_reader()?;
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message: "The table is a partitioned table, please use \"subscribe_partition\" to \
@@ -354,6 +393,7 @@ impl LogScannerInner {
     }
 
     async fn subscribe_buckets(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.check_no_active_reader()?;
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message:
@@ -376,6 +416,7 @@ impl LogScannerInner {
         bucket: i32,
         offset: i64,
     ) -> Result<()> {
+        self.check_no_active_reader()?;
         if !self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message: "The table is not a partitioned table, please use \"subscribe\" to \
@@ -397,6 +438,7 @@ impl LogScannerInner {
         &self,
         partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
     ) -> Result<()> {
+        self.check_no_active_reader()?;
         if !self.is_partitioned_table {
             return Err(UnsupportedOperation {
                 message: "The table is not a partitioned table, please use \"subscribe_buckets\" \
@@ -431,6 +473,7 @@ impl LogScannerInner {
     }
 
     async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+        self.check_no_active_reader()?;
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message:
@@ -446,6 +489,7 @@ impl LogScannerInner {
     }
 
     async fn unsubscribe_partition(&self, partition_id: PartitionId, bucket: i32) -> Result<()> {
+        self.check_no_active_reader()?;
         if !self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message: "Can't unsubscribe a partition for a non-partitioned table.".to_string(),
@@ -614,6 +658,95 @@ impl RecordBatchLogScanner {
         bucket: i32,
     ) -> Result<()> {
         self.inner.unsubscribe_partition(partition_id, bucket).await
+    }
+
+    /// Returns the Arrow schema for batches produced by this scanner.
+    pub fn schema(&self) -> SchemaRef {
+        self.inner.arrow_schema.clone()
+    }
+
+    pub fn table_path(&self) -> &TablePath {
+        &self.inner.table_path
+    }
+
+    pub fn table_id(&self) -> TableId {
+        self.inner.table_id
+    }
+
+    /// Creates a new handle to the same underlying scanner state.
+    ///
+    /// Binding layers (Python, C++) that hold the scanner behind shared
+    /// ownership (`Arc`) cannot move it into a [`crate::client::RecordBatchLogReader`].
+    /// This method produces a second handle so the reader can take ownership
+    /// while the binding retains its reference for subscription management.
+    ///
+    /// **Not intended for general use** — prefer moving the scanner directly.
+    #[doc(hidden)]
+    pub fn new_shared_handle(&self) -> Self {
+        RecordBatchLogScanner {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    /// Atomically marks the scanner as having an active reader.
+    ///
+    /// Returns `Err(IllegalArgument)` if another reader is already active on
+    /// this scanner — only one [`crate::client::RecordBatchLogReader`] may
+    /// iterate per scanner at a time. This mirrors Java's
+    /// `LogScannerImpl.acquire()` single-consumer guard.
+    pub(crate) fn try_set_reader_active(&self) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        self.inner
+            .reader_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| Error::IllegalArgument {
+                message: "Another RecordBatchLogReader is already active on this scanner. \
+                          Drop the existing reader first."
+                    .to_string(),
+            })
+    }
+
+    /// Clears the active-reader guard, re-enabling subscription changes.
+    pub(crate) fn clear_reader_active(&self) {
+        self.inner
+            .reader_active
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Synchronous, infallible counterpart to [`unsubscribe`](Self::unsubscribe).
+    ///
+    /// Exists so [`crate::client::RecordBatchLogReader`]'s `Drop` impl can
+    /// release lingering subscriptions without `.await`. The async version is
+    /// also synchronous under the hood (it only acquires a lock and removes
+    /// from a map — no IO), so this exposes the same work without the
+    /// async wrapper. Silently no-ops on partitioned/non-partitioned mismatch
+    /// because `Drop` cannot return errors; callers must pick the correct
+    /// variant.
+    ///
+    /// **Not intended for general use** — prefer the async [`unsubscribe`].
+    pub(crate) fn unsubscribe_sync(&self, bucket: i32) {
+        if self.inner.is_partitioned_table {
+            return;
+        }
+        let table_bucket = TableBucket::new(self.inner.table_id, bucket);
+        self.inner
+            .log_scanner_status
+            .unassign_scan_buckets(from_ref(&table_bucket));
+    }
+
+    /// Synchronous, infallible counterpart to
+    /// [`unsubscribe_partition`](Self::unsubscribe_partition). See
+    /// [`unsubscribe_sync`](Self::unsubscribe_sync) for rationale.
+    pub(crate) fn unsubscribe_partition_sync(&self, partition_id: PartitionId, bucket: i32) {
+        if !self.inner.is_partitioned_table {
+            return;
+        }
+        let table_bucket =
+            TableBucket::new_with_partition(self.inner.table_id, Some(partition_id), bucket);
+        self.inner
+            .log_scanner_status
+            .unassign_scan_buckets(from_ref(&table_bucket));
     }
 }
 
@@ -2009,6 +2142,7 @@ mod tests {
         let result = validate_scan_support(&table_path, &table_info);
         assert!(result.is_ok());
     }
+
     #[tokio::test]
     async fn prepare_fetch_log_requests_uses_configured_fetch_params() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
