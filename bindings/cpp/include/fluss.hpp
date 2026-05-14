@@ -283,8 +283,8 @@ enum class TypeId {
 
 class DataType {
    public:
-    explicit DataType(TypeId id, int32_t p = 0, int32_t s = 0)
-        : id_(id), precision_(p), scale_(s) {}
+    explicit DataType(TypeId id, int32_t p = 0, int32_t s = 0, bool nullable = true)
+        : id_(id), precision_(p), scale_(s), nullable_(nullable) {}
 
     static DataType Boolean() { return DataType(TypeId::Boolean); }
     static DataType TinyInt() { return DataType(TypeId::TinyInt); }
@@ -321,15 +321,24 @@ class DataType {
     TypeId id() const { return id_; }
     int32_t precision() const { return precision_; }
     int32_t scale() const { return scale_; }
+    bool nullable() const { return nullable_; }
     /// Returns the element type of an ARRAY. Returns `nullptr` for non-array
     /// types. The returned pointer is valid as long as this DataType (or a
     /// copy holding the same shared element) is alive.
     const DataType* element_type() const { return element_type_.get(); }
 
+    /// Returns a copy of this DataType with nullable set to false.
+    DataType NotNull() const {
+        DataType dt(id_, precision_, scale_, false);
+        dt.element_type_ = element_type_;
+        return dt;
+    }
+
    private:
     TypeId id_;
     int32_t precision_{0};
     int32_t scale_{0};
+    bool nullable_{true};
     std::shared_ptr<DataType> element_type_;
 };
 
@@ -1223,8 +1232,12 @@ struct Configuration {
     std::string writer_acks{"all"};
     // Max number of writer retries
     int32_t writer_retries{std::numeric_limits<int32_t>::max()};
-    // Writer batch size in bytes (2 MB)
+    // Writer batch size in bytes (2 MB), also the upper bound when dynamic sizing is on
     int32_t writer_batch_size{2 * 1024 * 1024};
+    // Tune the per-table writer batch size from observed fill ratios
+    bool writer_dynamic_batch_size_enabled{true};
+    // Lower bound (256 KB) for the dynamic batch size estimator
+    int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
     // Number of remote log batches to prefetch during scanning

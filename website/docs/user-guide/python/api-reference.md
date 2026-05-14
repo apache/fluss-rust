@@ -14,7 +14,9 @@ Complete API reference for the Fluss Python client.
 | `writer_request_max_size`             | `writer.request-max-size`             | Get/set max request size in bytes                                                       |
 | `writer_acks`                         | `writer.acks`                         | Get/set acknowledgment setting (`"all"` for all replicas)                               |
 | `writer_retries`                      | `writer.retries`                      | Get/set number of retries on failure                                                    |
-| `writer_batch_size`                   | `writer.batch-size`                   | Get/set write batch size in bytes                                                       |
+| `writer_batch_size`                   | `writer.batch-size`                   | Get/set write batch size in bytes. Upper bound when dynamic sizing is on; fixed batch size when off |
+| `writer_dynamic_batch_size_enabled`   | `writer.dynamic-batch-size.enabled`   | Get/set whether the per-table dynamic batch size estimator is enabled (default `true`)  |
+| `writer_dynamic_batch_size_min`       | `writer.dynamic-batch-size-min`       | Get/set the lower bound for the dynamic batch size estimator (default 256 KB; ignored when disabled) |
 | `writer_batch_timeout_ms`             | `writer.batch-timeout-ms`             | Get/set max time in ms to wait for a writer batch to fill up before sending             |
 | `writer_bucket_no_key_assigner`       | `writer.bucket.no-key-assigner`       | Get/set bucket assignment strategy (`"sticky"` or `"round_robin"`)                      |
 | `scanner_remote_log_prefetch_num`     | `scanner.remote-log.prefetch-num`     | Get/set number of remote log segments to prefetch                                       |
@@ -115,11 +117,20 @@ Builder for creating an `UpsertWriter`. Obtain via `FlussTable.new_upsert()`.
 
 ## `TableLookup`
 
-Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
+Builder for creating a `Lookuper` or `PrefixLookuper`. Obtain via `FlussTable.new_lookup()`.
 
-| Method                           |  Description        |
-|----------------------------------|---------------------|
-| `.create_lookuper() -> Lookuper` | Create the lookuper |
+| Method                                              |  Description                              |
+|-----------------------------------------------------|-------------------------------------------|
+| `.create_lookuper() -> Lookuper`                    | Create a primary key lookuper             |
+| `.lookup_by(column_names) -> TablePrefixLookup`     | Switch to prefix-scan mode for the given columns (partition keys + bucket keys) |
+
+## `TablePrefixLookup`
+
+Builder for creating a `PrefixLookuper`. Obtain via `TableLookup.lookup_by(columns)`.
+
+| Method                                     |  Description              |
+|--------------------------------------------|---------------------------|
+| `.create_lookuper() -> PrefixLookuper`     | Create the prefix lookuper |
 
 ## `AppendWriter`
 
@@ -150,6 +161,12 @@ Builder for creating a `Lookuper`. Obtain via `FlussTable.new_lookup()`.
 | Method                              |  Description                |
 |-------------------------------------|-----------------------------|
 | `await .lookup(pk) -> dict \| None` | Lookup a row by primary key |
+
+## `PrefixLookuper`
+
+| Method                                        |  Description                                |
+|-----------------------------------------------|---------------------------------------------|
+| `await .lookup(prefix) -> list[dict]`         | Lookup all rows matching a prefix key       |
 
 ## `LogScanner`
 

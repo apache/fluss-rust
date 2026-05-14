@@ -115,6 +115,18 @@ pub enum Error {
 
     #[snafu(visibility(pub(crate)), display("Fluss API Error: {}.", api_error))]
     FlussAPIError { api_error: ApiError },
+
+    #[snafu(
+        visibility(pub(crate)),
+        display("Unsupported API version: {}.", message)
+    )]
+    UnsupportedVersion { message: String },
+
+    /// The server advertised a `server_type` that does not match the one expected
+    /// for the target `ServerNode` (e.g. connecting to a coordinator on a tablet
+    /// server address).
+    #[snafu(visibility(pub(crate)), display("Invalid server type: {}.", message))]
+    InvalidServerType { message: String },
 }
 
 /// Convenience constructors for API errors that may be raised client-side.

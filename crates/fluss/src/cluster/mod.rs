@@ -79,6 +79,23 @@ pub enum ServerType {
     CoordinatorServer,
 }
 
+impl ServerType {
+    pub fn to_type_id(&self) -> i32 {
+        match self {
+            ServerType::CoordinatorServer => 1,
+            ServerType::TabletServer => 2,
+        }
+    }
+
+    pub fn from_type_id(type_id: i32) -> Option<ServerType> {
+        match type_id {
+            1 => Some(ServerType::CoordinatorServer),
+            2 => Some(ServerType::TabletServer),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for ServerType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

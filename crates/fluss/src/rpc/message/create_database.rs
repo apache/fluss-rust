@@ -16,15 +16,14 @@
 // under the License.
 
 use crate::metadata::DatabaseDescriptor;
-use crate::{impl_read_version_type, impl_write_version_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
 
 use crate::error::Result as FlussResult;
 use crate::proto::CreateDatabaseResponse;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::ReadError;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
 
 use bytes::{Buf, BufMut};
 use prost::Message;
@@ -60,9 +59,7 @@ impl RequestBody for CreateDatabaseRequest {
     type ResponseBody = CreateDatabaseResponse;
 
     const API_KEY: ApiKey = ApiKey::CreateDatabase;
-
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(CreateDatabaseRequest);
-impl_read_version_type!(CreateDatabaseResponse);
+impl_write_type!(CreateDatabaseRequest);
+impl_read_type!(CreateDatabaseResponse);

@@ -17,11 +17,17 @@
 
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::row::InternalRow;
-use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
+use crate::metadata::{DataType, RowType};
+use crate::record::from_arrow_type;
+use crate::row::binary_array::FlussArrayWriter;
+use crate::row::datum::{Date, Datum, Time, TimestampLtz, TimestampNtz};
+use crate::row::{Decimal, FlussArray, GenericRow, InternalRow};
 use arrow::array::{
-    Array, AsArray, BinaryArray, BooleanArray, FixedSizeBinaryArray, ListArray, RecordBatch,
-    StringArray,
+    Array, AsArray, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
+    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, ListArray,
+    RecordBatch, StringArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::datatypes::{
     DataType as ArrowDataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
@@ -35,25 +41,71 @@ use std::sync::Arc;
 pub struct ColumnarRow {
     record_batch: Arc<RecordBatch>,
     row_id: usize,
+    fluss_row_type: Option<Arc<RowType>>,
+    row_column_indices: Arc<[usize]>,
+    row_caches: Box<[std::sync::OnceLock<GenericRow<'static>>]>,
+}
+
+pub(crate) fn fluss_row_column_indices(row_type: &RowType) -> Arc<[usize]> {
+    row_type
+        .fields()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| matches!(f.data_type, DataType::Row(_)).then_some(i))
+        .collect()
+}
+
+pub(crate) fn arrow_row_column_indices(batch: &RecordBatch) -> Arc<[usize]> {
+    batch
+        .columns()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| matches!(c.data_type(), ArrowDataType::Struct(_)).then_some(i))
+        .collect()
+}
+
+fn make_row_caches(indices: &[usize]) -> Box<[std::sync::OnceLock<GenericRow<'static>>]> {
+    indices.iter().map(|_| std::sync::OnceLock::new()).collect()
 }
 
 impl ColumnarRow {
-    pub fn new(batch: Arc<RecordBatch>) -> Self {
+    pub fn new(
+        batch: Arc<RecordBatch>,
+        row_id: usize,
+        fluss_row_type: Option<Arc<RowType>>,
+    ) -> Self {
+        let row_column_indices = match &fluss_row_type {
+            Some(rt) => fluss_row_column_indices(rt),
+            None => arrow_row_column_indices(&batch),
+        };
+        Self::with_indices(batch, row_id, fluss_row_type, row_column_indices)
+    }
+
+    pub(crate) fn with_indices(
+        batch: Arc<RecordBatch>,
+        row_id: usize,
+        fluss_row_type: Option<Arc<RowType>>,
+        row_column_indices: Arc<[usize]>,
+    ) -> Self {
+        let row_caches = make_row_caches(&row_column_indices);
         ColumnarRow {
             record_batch: batch,
-            row_id: 0,
+            row_id,
+            fluss_row_type,
+            row_column_indices,
+            row_caches,
         }
     }
 
-    pub fn new_with_row_id(bach: Arc<RecordBatch>, row_id: usize) -> Self {
-        ColumnarRow {
-            record_batch: bach,
-            row_id,
-        }
+    pub fn fluss_row_type(&self) -> Option<&Arc<RowType>> {
+        self.fluss_row_type.as_ref()
     }
 
     pub fn set_row_id(&mut self, row_id: usize) {
-        self.row_id = row_id
+        self.row_id = row_id;
+        for lock in self.row_caches.iter_mut() {
+            *lock = std::sync::OnceLock::new();
+        }
     }
 
     pub fn get_row_id(&self) -> usize {
@@ -214,6 +266,162 @@ impl ColumnarRow {
     }
 }
 
+fn extract_struct_from_array(
+    array: &dyn Array,
+    row_id: usize,
+    row_type: Option<&RowType>,
+) -> Result<GenericRow<'static>> {
+    let sa = array
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| IllegalArgument {
+            message: format!("expected StructArray, got {:?}", array.data_type()),
+        })?;
+    if let Some(rt) = row_type
+        && rt.fields().len() != sa.num_columns()
+    {
+        return Err(IllegalArgument {
+            message: format!(
+                "Fluss RowType has {} fields but Arrow StructArray has {}",
+                rt.fields().len(),
+                sa.num_columns(),
+            ),
+        });
+    }
+    let mut values = Vec::with_capacity(sa.num_columns());
+    for i in 0..sa.num_columns() {
+        let child = sa.column(i);
+        let fluss_type = row_type.map(|rt| &rt.fields()[i].data_type);
+        values.push(arrow_value_to_datum(child.as_ref(), row_id, fluss_type)?);
+    }
+    Ok(GenericRow { values })
+}
+
+fn arrow_value_to_datum(
+    array: &dyn Array,
+    row_id: usize,
+    fluss_type: Option<&DataType>,
+) -> Result<Datum<'static>> {
+    if array.is_null(row_id) {
+        return Ok(Datum::Null);
+    }
+
+    macro_rules! downcast {
+        ($ty:ty) => {
+            array
+                .as_any()
+                .downcast_ref::<$ty>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!(
+                        "expected {} for arrow type {:?}",
+                        stringify!($ty),
+                        array.data_type()
+                    ),
+                })?
+        };
+    }
+
+    match array.data_type() {
+        ArrowDataType::Boolean => Ok(Datum::Bool(downcast!(BooleanArray).value(row_id))),
+        ArrowDataType::Int8 => Ok(Datum::Int8(downcast!(Int8Array).value(row_id))),
+        ArrowDataType::Int16 => Ok(Datum::Int16(downcast!(Int16Array).value(row_id))),
+        ArrowDataType::Int32 => Ok(Datum::Int32(downcast!(Int32Array).value(row_id))),
+        ArrowDataType::Int64 => Ok(Datum::Int64(downcast!(Int64Array).value(row_id))),
+        ArrowDataType::Float32 => Ok(Datum::Float32(downcast!(Float32Array).value(row_id).into())),
+        ArrowDataType::Float64 => Ok(Datum::Float64(downcast!(Float64Array).value(row_id).into())),
+        ArrowDataType::Utf8 => Ok(Datum::String(std::borrow::Cow::Owned(
+            downcast!(StringArray).value(row_id).to_owned(),
+        ))),
+        ArrowDataType::Binary => Ok(Datum::Blob(std::borrow::Cow::Owned(
+            downcast!(BinaryArray).value(row_id).to_vec(),
+        ))),
+        ArrowDataType::FixedSizeBinary(_) => Ok(Datum::Blob(std::borrow::Cow::Owned(
+            downcast!(FixedSizeBinaryArray).value(row_id).to_vec(),
+        ))),
+        ArrowDataType::Decimal128(p, s) => {
+            let (p, s) = (*p, *s);
+            let i128_val = downcast!(Decimal128Array).value(row_id);
+            Ok(Datum::Decimal(Decimal::from_arrow_decimal128(
+                i128_val, s as i64, p as u32, s as u32,
+            )?))
+        }
+        ArrowDataType::Date32 => Ok(Datum::Date(Date::new(downcast!(Date32Array).value(row_id)))),
+        ArrowDataType::Time32(TimeUnit::Second) => Ok(Datum::Time(Time::new(
+            downcast!(Time32SecondArray).value(row_id) * 1000,
+        ))),
+        ArrowDataType::Time32(TimeUnit::Millisecond) => Ok(Datum::Time(Time::new(
+            downcast!(Time32MillisecondArray).value(row_id),
+        ))),
+        ArrowDataType::Time64(TimeUnit::Microsecond) => Ok(Datum::Time(Time::new(
+            (downcast!(Time64MicrosecondArray).value(row_id) / 1000) as i32,
+        ))),
+        ArrowDataType::Time64(TimeUnit::Nanosecond) => Ok(Datum::Time(Time::new(
+            (downcast!(Time64NanosecondArray).value(row_id) / 1_000_000) as i32,
+        ))),
+        ArrowDataType::Timestamp(time_unit, _tz) => {
+            let value: i64 = match time_unit {
+                TimeUnit::Second => downcast!(TimestampSecondArray).value(row_id),
+                TimeUnit::Millisecond => downcast!(TimestampMillisecondArray).value(row_id),
+                TimeUnit::Microsecond => downcast!(TimestampMicrosecondArray).value(row_id),
+                TimeUnit::Nanosecond => downcast!(TimestampNanosecondArray).value(row_id),
+            };
+            let (millis, nanos) = match time_unit {
+                TimeUnit::Second => (value * 1000, 0i32),
+                TimeUnit::Millisecond => (value, 0i32),
+                TimeUnit::Microsecond => {
+                    let millis = value.div_euclid(1000);
+                    let nanos = (value.rem_euclid(1000) * 1000) as i32;
+                    (millis, nanos)
+                }
+                TimeUnit::Nanosecond => {
+                    let millis = value.div_euclid(1_000_000);
+                    let nanos = value.rem_euclid(1_000_000) as i32;
+                    (millis, nanos)
+                }
+            };
+            // TIMESTAMP and TIMESTAMP_LTZ both map to `Timestamp(unit, None)` in Arrow.
+            let is_ltz = matches!(fluss_type, Some(DataType::TimestampLTz(_)));
+            if is_ltz {
+                if nanos == 0 {
+                    Ok(Datum::TimestampLtz(TimestampLtz::new(millis)))
+                } else {
+                    Ok(Datum::TimestampLtz(TimestampLtz::from_millis_nanos(
+                        millis, nanos,
+                    )?))
+                }
+            } else if nanos == 0 {
+                Ok(Datum::TimestampNtz(TimestampNtz::new(millis)))
+            } else {
+                Ok(Datum::TimestampNtz(TimestampNtz::from_millis_nanos(
+                    millis, nanos,
+                )?))
+            }
+        }
+        ArrowDataType::Struct(_) => {
+            let nested_row_type = fluss_type.and_then(|t| match t {
+                DataType::Row(rt) => Some(rt),
+                _ => None,
+            });
+            let nested = extract_struct_from_array(array, row_id, nested_row_type)?;
+            Ok(Datum::Row(Box::new(nested)))
+        }
+        ArrowDataType::List(field) => {
+            let list_arr = downcast!(ListArray);
+            let values = list_arr.value(row_id);
+            let element_fluss_type = match fluss_type {
+                Some(DataType::Array(at)) => at.get_element_type().clone(),
+                _ => from_arrow_type(field.data_type())?,
+            };
+            let mut writer = FlussArrayWriter::new(values.len(), &element_fluss_type);
+            write_arrow_values_to_fluss_array(&*values, &element_fluss_type, &mut writer)?;
+            Ok(Datum::Array(writer.complete()?))
+        }
+        other => Err(IllegalArgument {
+            message: format!("unsupported Arrow data type for nested row extraction: {other:?}"),
+        }),
+    }
+}
+
 impl InternalRow for ColumnarRow {
     fn get_field_count(&self) -> usize {
         self.record_batch.num_columns()
@@ -315,14 +523,7 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id))
     }
 
-    fn get_decimal(
-        &self,
-        pos: usize,
-        precision: usize,
-        scale: usize,
-    ) -> Result<crate::row::Decimal> {
-        use arrow::datatypes::DataType;
-
+    fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Result<Decimal> {
         let column = self.column(pos)?;
         let array = column
             .as_primitive_opt::<Decimal128Type>()
@@ -341,9 +542,8 @@ impl InternalRow for ColumnarRow {
             self.row_id
         );
 
-        // Read scale from Arrow column data type
         let arrow_scale = match column.data_type() {
-            DataType::Decimal128(_p, s) => *s as i64,
+            ArrowDataType::Decimal128(_p, s) => *s as i64,
             dt => {
                 return Err(IllegalArgument {
                     message: format!(
@@ -353,11 +553,8 @@ impl InternalRow for ColumnarRow {
             }
         };
 
-        let i128_val = array.value(self.row_id);
-
-        // Convert Arrow Decimal128 to Fluss Decimal (handles rescaling and validation)
-        crate::row::Decimal::from_arrow_decimal128(
-            i128_val,
+        Decimal::from_arrow_decimal128(
+            array.value(self.row_id),
             arrow_scale,
             precision as u32,
             scale as u32,
@@ -411,10 +608,7 @@ impl InternalRow for ColumnarRow {
             .value(self.row_id))
     }
 
-    fn get_array(&self, pos: usize) -> Result<crate::row::FlussArray> {
-        use crate::record::from_arrow_type;
-        use crate::row::binary_array::FlussArrayWriter;
-
+    fn get_array(&self, pos: usize) -> Result<FlussArray> {
         let column = self.column(pos)?;
         let values = if let Some(list_arr) = column.as_any().downcast_ref::<ListArray>() {
             list_arr.value(self.row_id)
@@ -433,6 +627,40 @@ impl InternalRow for ColumnarRow {
         write_arrow_values_to_fluss_array(&*values, &element_fluss_type, &mut writer)?;
         writer.complete()
     }
+
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        let cache_idx = self
+            .row_column_indices
+            .iter()
+            .position(|&i| i == pos)
+            .ok_or_else(|| IllegalArgument {
+                message: format!("get_row called on non-ROW column at position {pos}"),
+            })?;
+        let column = self.record_batch.column(pos);
+        // Children of a null parent may carry stale bytes; caller must
+        // check is_null_at first rather than rely on what we'd read.
+        if column.is_null(self.row_id) {
+            return Err(IllegalArgument {
+                message: format!(
+                    "get_row called on null ROW cell at position {pos}, row {}; \
+                     check is_null_at({pos}) first",
+                    self.row_id
+                ),
+            });
+        }
+        let lock = &self.row_caches[cache_idx];
+        if let Some(row) = lock.get() {
+            return Ok(row);
+        }
+        let nested_row_type = self.fluss_row_type.as_ref().and_then(|rt| {
+            rt.fields().get(pos).and_then(|f| match &f.data_type {
+                DataType::Row(inner) => Some(inner),
+                _ => None,
+            })
+        });
+        let extracted = extract_struct_from_array(column.as_ref(), self.row_id, nested_row_type)?;
+        Ok(lock.get_or_init(|| extracted))
+    }
 }
 
 /// Downcast to a primitive Arrow array type, then loop with null checks calling a writer method.
@@ -442,7 +670,7 @@ macro_rules! write_primitive_elements {
             .as_primitive_opt::<$arrow_type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!(
-                    "Expected {} for {:?} element",
+                    "expected {} for {:?} element",
                     stringify!($arrow_type),
                     $element_type
                 ),
@@ -465,7 +693,7 @@ macro_rules! write_downcast_elements {
             .downcast_ref::<$array_type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!(
-                    "Expected {} for {:?} element",
+                    "expected {} for {:?} element",
                     stringify!($array_type),
                     $element_type
                 ),
@@ -488,7 +716,7 @@ macro_rules! write_list_elements {
             .downcast_ref::<$list_array_type>()
             .ok_or_else(|| IllegalArgument {
                 message: format!(
-                    "Expected {} for {:?} element",
+                    "expected {} for {:?} element",
                     stringify!($list_array_type),
                     $element_type
                 ),
@@ -517,13 +745,9 @@ macro_rules! write_list_elements {
 /// the Arrow array once per call rather than per element.
 fn write_arrow_values_to_fluss_array(
     values: &dyn Array,
-    element_type: &crate::metadata::DataType,
-    writer: &mut crate::row::binary_array::FlussArrayWriter,
+    element_type: &DataType,
+    writer: &mut FlussArrayWriter,
 ) -> Result<()> {
-    use crate::metadata::DataType;
-    use crate::record::from_arrow_type;
-    use crate::row::binary_array::FlussArrayWriter;
-
     let len = values.len();
 
     match element_type {
@@ -574,14 +798,14 @@ fn write_arrow_values_to_fluss_array(
                 values
                     .as_primitive_opt::<Decimal128Type>()
                     .ok_or_else(|| IllegalArgument {
-                        message: format!("Expected Decimal128Array for {element_type:?} element"),
+                        message: format!("expected Decimal128Array for {element_type:?} element"),
                     })?;
             let arrow_scale = match values.data_type() {
                 ArrowDataType::Decimal128(_p, s) => *s as i64,
                 other => {
                     return Err(IllegalArgument {
                         message: format!(
-                            "Expected Decimal128 data type for {element_type:?} element, got {other:?}"
+                            "expected Decimal128 data type for {element_type:?} element, got {other:?}"
                         ),
                     });
                 }
@@ -592,7 +816,7 @@ fn write_arrow_values_to_fluss_array(
                 if arr.is_null(i) {
                     writer.set_null_at(i);
                 } else {
-                    let d = crate::row::Decimal::from_arrow_decimal128(
+                    let d = Decimal::from_arrow_decimal128(
                         arr.value(i),
                         arrow_scale,
                         precision,
@@ -606,7 +830,7 @@ fn write_arrow_values_to_fluss_array(
             let arr = values
                 .as_primitive_opt::<Date32Type>()
                 .ok_or_else(|| IllegalArgument {
-                    message: format!("Expected Date32Array for {element_type:?} element"),
+                    message: format!("expected Date32Array for {element_type:?} element"),
                 })?;
             for i in 0..len {
                 if arr.is_null(i) {
@@ -647,16 +871,35 @@ fn write_arrow_values_to_fluss_array(
             } else {
                 return Err(IllegalArgument {
                     message: format!(
-                        "Expected ListArray for {element_type:?} element, got {:?}",
+                        "expected ListArray for {element_type:?} element, got {:?}",
                         values.data_type()
                     ),
                 });
             }
         }
+        DataType::Row(row_type) => {
+            let struct_arr = values
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| IllegalArgument {
+                    message: format!(
+                        "expected StructArray for {element_type:?} element, got {:?}",
+                        values.data_type()
+                    ),
+                })?;
+            for i in 0..len {
+                if struct_arr.is_null(i) {
+                    writer.set_null_at(i);
+                } else {
+                    let nested = extract_struct_from_array(struct_arr, i, Some(row_type))?;
+                    writer.write_row(i, &nested)?;
+                }
+            }
+        }
         _ => {
             return Err(IllegalArgument {
                 message: format!(
-                    "Unsupported element type for Arrow → FlussArray conversion: {element_type:?}"
+                    "unsupported element type for Arrow → FlussArray conversion: {element_type:?}"
                 ),
             });
         }
@@ -666,8 +909,8 @@ fn write_arrow_values_to_fluss_array(
 
 fn write_time_elements(
     values: &dyn Array,
-    element_type: &crate::metadata::DataType,
-    writer: &mut crate::row::binary_array::FlussArrayWriter,
+    element_type: &DataType,
+    writer: &mut FlussArrayWriter,
 ) -> Result<()> {
     macro_rules! process_time {
         ($arrow_type:ty, $to_millis:expr) => {{
@@ -675,7 +918,7 @@ fn write_time_elements(
                 .as_primitive_opt::<$arrow_type>()
                 .ok_or_else(|| IllegalArgument {
                     message: format!(
-                        "Expected {} for {:?} element",
+                        "expected {} for {:?} element",
                         stringify!($arrow_type),
                         element_type
                     ),
@@ -707,7 +950,7 @@ fn write_time_elements(
         other => {
             return Err(IllegalArgument {
                 message: format!(
-                    "Expected Time column for {element_type:?} element, got {other:?}"
+                    "expected Time column for {element_type:?} element, got {other:?}"
                 ),
             });
         }
@@ -734,19 +977,19 @@ fn convert_timestamp_raw(raw: i64, unit: &TimeUnit) -> (i64, i32) {
 
 fn write_timestamp_elements<T>(
     values: &dyn Array,
-    element_type: &crate::metadata::DataType,
-    writer: &mut crate::row::binary_array::FlussArrayWriter,
+    element_type: &DataType,
+    writer: &mut FlussArrayWriter,
     precision: u32,
     construct_compact: impl Fn(i64) -> T,
     construct_with_nanos: impl Fn(i64, i32) -> Result<T>,
-    write_fn: impl Fn(&mut crate::row::binary_array::FlussArrayWriter, usize, T, u32),
+    write_fn: impl Fn(&mut FlussArrayWriter, usize, T, u32),
 ) -> Result<()> {
     let unit = match values.data_type() {
         ArrowDataType::Timestamp(unit, _) => unit,
         other => {
             return Err(IllegalArgument {
                 message: format!(
-                    "Expected Timestamp column for {element_type:?} element, got {other:?}"
+                    "expected Timestamp column for {element_type:?} element, got {other:?}"
                 ),
             });
         }
@@ -758,7 +1001,7 @@ fn write_timestamp_elements<T>(
                 .as_primitive_opt::<$arrow_type>()
                 .ok_or_else(|| IllegalArgument {
                     message: format!(
-                        "Expected {} for {:?} element",
+                        "expected {} for {:?} element",
                         stringify!($arrow_type),
                         element_type
                     ),
@@ -794,14 +1037,14 @@ mod tests {
     use arrow::array::{
         ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array,
         Int8Array, Int16Array, Int32Array, Int32Builder, Int64Array, ListBuilder, StringArray,
-        UInt32Builder,
+        StructArray, UInt32Builder,
     };
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Fields, Schema};
 
     fn single_column_row(array: ArrayRef) -> ColumnarRow {
         let batch =
             RecordBatch::try_from_iter(vec![("arr", array)]).expect("record batch with one column");
-        ColumnarRow::new(Arc::new(batch))
+        ColumnarRow::new(Arc::new(batch), 0, None)
     }
 
     #[test]
@@ -836,7 +1079,7 @@ mod tests {
         )
         .expect("record batch");
 
-        let mut row = ColumnarRow::new(Arc::new(batch));
+        let mut row = ColumnarRow::new(Arc::new(batch), 0, None);
         assert_eq!(row.get_field_count(), 10);
         assert!(row.get_boolean(0).unwrap());
         assert_eq!(row.get_byte(1).unwrap(), 1);
@@ -891,27 +1134,21 @@ mod tests {
         )
         .expect("record batch");
 
-        let row = ColumnarRow::new(Arc::new(batch));
+        let row = ColumnarRow::new(Arc::new(batch), 0, None);
         assert_eq!(row.get_field_count(), 3);
 
         // Verify decimal values
         assert_eq!(
             row.get_decimal(0, 10, 2).unwrap(),
-            crate::row::Decimal::from_big_decimal(BigDecimal::new(BigInt::from(12345), 2), 10, 2)
-                .unwrap()
+            Decimal::from_big_decimal(BigDecimal::new(BigInt::from(12345), 2), 10, 2).unwrap()
         );
         assert_eq!(
             row.get_decimal(1, 20, 5).unwrap(),
-            crate::row::Decimal::from_big_decimal(
-                BigDecimal::new(BigInt::from(1234567890), 5),
-                20,
-                5
-            )
-            .unwrap()
+            Decimal::from_big_decimal(BigDecimal::new(BigInt::from(1234567890), 5), 20, 5).unwrap()
         );
         assert_eq!(
             row.get_decimal(2, 38, 10).unwrap(),
-            crate::row::Decimal::from_big_decimal(
+            Decimal::from_big_decimal(
                 BigDecimal::new(BigInt::from(999999999999999999i128), 10),
                 38,
                 10
@@ -1010,5 +1247,112 @@ mod tests {
                 .contains("Cannot convert Arrow type to Fluss type"),
             "unexpected error: {err}"
         );
+    }
+
+    fn make_struct_batch(
+        field_name: &str,
+        child_fields: Fields,
+        child_arrays: Vec<Arc<dyn Array>>,
+        _num_rows: usize,
+    ) -> Arc<RecordBatch> {
+        let struct_array = StructArray::new(child_fields.clone(), child_arrays, None);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            field_name,
+            DataType::Struct(child_fields),
+            false,
+        )]));
+        Arc::new(RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).expect("record batch"))
+    }
+
+    #[test]
+    fn columnar_row_reads_nested_row() {
+        let child_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, false),
+        ]);
+        let child_arrays: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int32Array::from(vec![42, 99])),
+            Arc::new(StringArray::from(vec!["hello", "world"])),
+        ];
+        let batch = make_struct_batch("nested", child_fields, child_arrays, 2);
+
+        let mut row = ColumnarRow::new(batch, 0, None);
+
+        // row_id = 0
+        let nested = row.get_row(0).unwrap();
+        assert_eq!(nested.get_field_count(), 2);
+        assert_eq!(nested.get_int(0).unwrap(), 42);
+        assert_eq!(nested.get_string(1).unwrap(), "hello");
+
+        // row_id = 1
+        row.set_row_id(1);
+        let nested = row.get_row(0).unwrap();
+        assert_eq!(nested.get_int(0).unwrap(), 99);
+        assert_eq!(nested.get_string(1).unwrap(), "world");
+    }
+
+    #[test]
+    fn columnar_row_reads_deeply_nested_row() {
+        // Build: outer struct { i32, inner struct { string } }
+        let inner_fields = Fields::from(vec![Field::new("s", DataType::Utf8, false)]);
+        let inner_array = Arc::new(StructArray::new(
+            inner_fields.clone(),
+            vec![Arc::new(StringArray::from(vec!["deep", "deeper"])) as Arc<dyn Array>],
+            None,
+        ));
+
+        let outer_fields = Fields::from(vec![
+            Field::new("n", DataType::Int32, false),
+            Field::new("inner", DataType::Struct(inner_fields), false),
+        ]);
+        let outer_array = Arc::new(StructArray::new(
+            outer_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as Arc<dyn Array>,
+                inner_array as Arc<dyn Array>,
+            ],
+            None,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "outer",
+            DataType::Struct(outer_fields),
+            false,
+        )]));
+        let batch =
+            Arc::new(RecordBatch::try_new(schema, vec![outer_array]).expect("record batch"));
+
+        let mut row = ColumnarRow::new(batch, 0, None);
+
+        // row_id = 0
+        let outer = row.get_row(0).unwrap();
+        assert_eq!(outer.get_int(0).unwrap(), 1);
+        let inner = outer.get_row(1).unwrap();
+        assert_eq!(inner.get_string(0).unwrap(), "deep");
+
+        // row_id = 1
+        row.set_row_id(1);
+        let outer = row.get_row(0).unwrap();
+        assert_eq!(outer.get_int(0).unwrap(), 2);
+        let inner = outer.get_row(1).unwrap();
+        assert_eq!(inner.get_string(0).unwrap(), "deeper");
+    }
+
+    #[test]
+    fn columnar_row_get_row_cache_invalidated_on_set_row_id() {
+        let child_fields = Fields::from(vec![Field::new("x", DataType::Int32, false)]);
+        let child_arrays: Vec<Arc<dyn Array>> = vec![Arc::new(Int32Array::from(vec![10, 20]))];
+        let batch = make_struct_batch("s", child_fields, child_arrays, 2);
+
+        let mut row = ColumnarRow::new(batch, 0, None);
+
+        // row_id = 0: nested x = 10
+        let nested_0 = row.get_row(0).unwrap();
+        assert_eq!(nested_0.get_int(0).unwrap(), 10);
+
+        // After set_row_id(1), cache is cleared → nested x = 20
+        row.set_row_id(1);
+        let nested_1 = row.get_row(0).unwrap();
+        assert_eq!(nested_1.get_int(0).unwrap(), 20);
     }
 }

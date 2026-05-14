@@ -57,6 +57,7 @@ impl Utils {
             ArrowDataType::Float64 => DataTypes::double(),
             ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 => DataTypes::string(),
             ArrowDataType::Binary | ArrowDataType::LargeBinary => DataTypes::bytes(),
+            ArrowDataType::FixedSizeBinary(n) => DataTypes::binary(*n as usize),
             ArrowDataType::Date32 => DataTypes::date(),
             ArrowDataType::Date64 => DataTypes::date(),
             ArrowDataType::Time32(unit) => match unit {

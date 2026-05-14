@@ -17,14 +17,13 @@
 
 use crate::proto::{GetTableSchemaRequest, GetTableSchemaResponse, PbTablePath};
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadVersionedType, RequestBody, WriteVersionedType};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
 
 use crate::metadata::TablePath;
 use crate::rpc::frame::ReadError;
 
-use crate::{impl_read_version_type, impl_write_version_type};
+use crate::{impl_read_type, impl_write_type};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -50,8 +49,7 @@ impl GetTableSchemaRequestMsg {
 impl RequestBody for GetTableSchemaRequestMsg {
     type ResponseBody = GetTableSchemaResponse;
     const API_KEY: ApiKey = ApiKey::GetTableSchema;
-    const REQUEST_VERSION: ApiVersion = ApiVersion(0);
 }
 
-impl_write_version_type!(GetTableSchemaRequestMsg);
-impl_read_version_type!(GetTableSchemaResponse);
+impl_write_type!(GetTableSchemaRequestMsg);
+impl_read_type!(GetTableSchemaResponse);

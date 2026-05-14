@@ -17,6 +17,7 @@
 
 mod accumulator;
 mod batch;
+mod dynamic_batch_size;
 mod idempotence;
 
 use crate::client::broadcast::{self as client_broadcast, BatchWriteResult, BroadcastOnceReceiver};

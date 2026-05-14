@@ -23,10 +23,13 @@ use crate::client::table::log_fetch_buffer::{
     LogFetchBuffer, RemotePendingFetch,
 };
 use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
+use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
-use crate::metadata::{LogFormat, PhysicalTablePath, TableBucket, TableInfo, TablePath};
-use crate::proto::{ErrorResponse, FetchLogRequest, PbFetchLogReqForBucket, PbFetchLogReqForTable};
+use crate::metadata::{LogFormat, PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
+use crate::proto::{
+    ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
+};
 use crate::record::{
     LogRecordsBatches, ReadContext, ScanBatch, ScanRecord, ScanRecords, to_arrow_schema,
 };
@@ -281,7 +284,7 @@ impl LogScannerInner {
         table_info: &TableInfo,
         metadata: Arc<Metadata>,
         connections: Arc<RpcClient>,
-        config: &crate::config::Config,
+        config: &Config,
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
@@ -784,14 +787,26 @@ impl LogFetcher {
         conns: Arc<RpcClient>,
         metadata: Arc<Metadata>,
         log_scanner_status: Arc<LogScannerStatus>,
-        config: &crate::config::Config,
+        config: &Config,
         projected_fields: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let full_arrow_schema = to_arrow_schema(table_info.get_row_type())?;
+        let full_row_type = table_info.get_row_type();
+        let full_arrow_schema = to_arrow_schema(full_row_type)?;
+        let projected_row_type = match &projected_fields {
+            None => Arc::new(full_row_type.clone()),
+            Some(fields) => Arc::new(RowType::new(
+                fields
+                    .iter()
+                    .map(|&i| full_row_type.fields()[i].clone())
+                    .collect(),
+            )),
+        };
         let read_context =
-            Self::create_read_context(full_arrow_schema.clone(), projected_fields.clone(), false)?;
+            Self::create_read_context(full_arrow_schema.clone(), projected_fields.clone(), false)?
+                .with_fluss_row_type(projected_row_type.clone());
         let remote_read_context =
-            Self::create_read_context(full_arrow_schema, projected_fields.clone(), true)?;
+            Self::create_read_context(full_arrow_schema, projected_fields.clone(), true)?
+                .with_fluss_row_type(projected_row_type);
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
         let log_fetch_buffer = Arc::new(LogFetchBuffer::new(read_context.clone()));
@@ -1061,7 +1076,7 @@ impl LogFetcher {
 
     /// Handle fetch response and add completed fetches to buffer
     async fn handle_fetch_response(
-        fetch_response: crate::proto::FetchLogResponse,
+        fetch_response: FetchLogResponse,
         context: FetchResponseContext,
     ) {
         let FetchResponseContext {
@@ -1837,6 +1852,7 @@ mod tests {
         DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath};
+    use crate::proto::{PbFetchLogRespForBucket, PbFetchLogRespForTable};
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
@@ -1876,7 +1892,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata,
             status.clone(),
-            &crate::config::Config::default(),
+            &Config::default(),
             None,
         )?;
 
@@ -1908,7 +1924,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata,
             status,
-            &crate::config::Config::default(),
+            &Config::default(),
             None,
         )?;
 
@@ -1944,7 +1960,7 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata,
             status,
-            &crate::config::Config::default(),
+            &Config::default(),
             None,
         )?;
 
@@ -1968,14 +1984,14 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata.clone(),
             status.clone(),
-            &crate::config::Config::default(),
+            &Config::default(),
             None,
         )?;
 
-        let response = crate::proto::FetchLogResponse {
-            tables_resp: vec![crate::proto::PbFetchLogRespForTable {
+        let response = FetchLogResponse {
+            tables_resp: vec![PbFetchLogRespForTable {
                 table_id: 1,
-                buckets_resp: vec![crate::proto::PbFetchLogRespForBucket {
+                buckets_resp: vec![PbFetchLogRespForBucket {
                     partition_id: None,
                     bucket_id: 0,
                     error_code: Some(FlussError::AuthorizationException.code()),
@@ -2018,17 +2034,17 @@ mod tests {
             Arc::new(RpcClient::new()),
             metadata.clone(),
             status.clone(),
-            &crate::config::Config::default(),
+            &Config::default(),
             None,
         )?;
 
         let bucket = TableBucket::new(1, 0);
         assert!(metadata.leader_for(&table_path, &bucket).await?.is_some());
 
-        let response = crate::proto::FetchLogResponse {
-            tables_resp: vec![crate::proto::PbFetchLogRespForTable {
+        let response = FetchLogResponse {
+            tables_resp: vec![PbFetchLogRespForTable {
                 table_id: 1,
-                buckets_resp: vec![crate::proto::PbFetchLogRespForBucket {
+                buckets_resp: vec![PbFetchLogRespForBucket {
                     partition_id: None,
                     bucket_id: 0,
                     error_code: Some(FlussError::NotLeaderOrFollower.code()),
@@ -2136,12 +2152,12 @@ mod tests {
         let status = Arc::new(LogScannerStatus::new());
         status.assign_scan_bucket(TableBucket::new(1, 0), 0);
 
-        let config = crate::config::Config {
+        let config = Config {
             scanner_log_fetch_max_bytes: 1234,
             scanner_log_fetch_min_bytes: 7,
             scanner_log_fetch_wait_max_time_ms: 89,
             scanner_log_fetch_max_bytes_for_bucket: 512,
-            ..crate::config::Config::default()
+            ..Config::default()
         };
 
         let fetcher = LogFetcher::new(

@@ -43,6 +43,7 @@ pub(crate) use fixed_schema_decoder::FixedSchemaDecoder;
 pub use lookup_row::LookupRow;
 pub(crate) use projected_row::ProjectedRow;
 pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
+use serde::Serialize;
 
 pub struct BinaryRow<'a> {
     data: BinaryDataWrapper<'a>,
@@ -130,13 +131,20 @@ pub trait InternalRow: Send + Sync {
     /// Returns the array value at the given position
     fn get_array(&self, pos: usize) -> Result<FlussArray>;
 
+    /// Returns the nested row value at the given position
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        Err(IllegalArgument {
+            message: format!("get_row not supported at position {pos}"),
+        })
+    }
+
     /// Returns encoded bytes if already encoded
     fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
         None
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct GenericRow<'a> {
     pub values: Vec<Datum<'a>>,
 }
@@ -292,6 +300,26 @@ impl<'a> InternalRow for GenericRow<'a> {
             other => Err(IllegalArgument {
                 message: format!("type mismatch at position {pos}: expected Array, got {other:?}"),
             }),
+        }
+    }
+
+    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+        match self.get_value(pos)? {
+            Datum::Row(r) => Ok(r.as_ref()),
+            other => Err(IllegalArgument {
+                message: format!("type mismatch at position {pos}: expected Row, got {other:?}"),
+            }),
+        }
+    }
+}
+
+impl<'a> GenericRow<'a> {
+    /// Consumes this row and returns one whose `Datum` values are all
+    /// `'static` (borrowed `Cow`s are promoted to owned, nested rows recurse).
+    /// Lets a row outlive the bytes it was decoded from.
+    pub fn into_owned(self) -> GenericRow<'static> {
+        GenericRow {
+            values: self.values.into_iter().map(Datum::into_owned).collect(),
         }
     }
 }
