@@ -909,16 +909,11 @@ impl KvFormat {
 ///
 /// Unset or unparseable values resolve to [`KvFormatVersion::V1`], matching Java
 /// `getKvFormatVersion().orElse(1)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum KvFormatVersion {
+    #[default]
     V1,
     V2,
-}
-
-impl Default for KvFormatVersion {
-    fn default() -> Self {
-        Self::V1
-    }
 }
 
 impl KvFormatVersion {
