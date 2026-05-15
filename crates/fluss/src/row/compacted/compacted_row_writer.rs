@@ -17,6 +17,8 @@
 
 use crate::row::Decimal;
 use crate::row::binary::BinaryWriter;
+use crate::row::binary_array::FlussArray;
+use crate::row::binary_map::FlussMap;
 use crate::row::compacted::compacted_row::calculate_bit_set_width_in_bytes;
 use crate::util::varint::{write_unsigned_varint_to_slice, write_unsigned_varint_u64_to_slice};
 use bytes::{Bytes, BytesMut};
@@ -165,8 +167,12 @@ impl BinaryWriter for CompactedRowWriter {
         self.write_bytes(&bytes[..length.min(bytes.len())])
     }
 
-    fn write_array(&mut self, value: &[u8]) {
-        self.write_bytes(value)
+    fn write_array(&mut self, value: &FlussArray) {
+        self.write_bytes(value.as_bytes())
+    }
+
+    fn write_map(&mut self, value: &FlussMap) {
+        self.write_bytes(value.as_bytes())
     }
 
     fn complete(&mut self) {

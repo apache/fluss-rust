@@ -1042,6 +1042,90 @@ mod table_test {
     }
 
     #[tokio::test]
+    async fn test_map_datatype_roundtrip() {
+        use fluss::row::binary_map::FlussMapWriter;
+        use fluss::row::{Datum, GenericRow};
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_map_datatype_roundtrip");
+
+        let key_type = DataTypes::string();
+        let value_type = DataTypes::int();
+        let map_type = DataTypes::map(key_type.clone(), value_type.clone());
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("map_col", map_type.clone())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+
+        // 1. Construct FlussMap
+        let mut map_writer = FlussMapWriter::new(3, &key_type, &value_type);
+        map_writer.write_entry("k1".into(), 10.into()).unwrap();
+        map_writer.write_entry("k2".into(), 20.into()).unwrap();
+        map_writer.write_entry("k3".into(), 30.into()).unwrap();
+        let fluss_map = map_writer.complete().unwrap();
+
+        // 2. Insert Row
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 1i32);
+        row.set_field(1, Datum::Map(fluss_map));
+
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        append_writer.append(&row).expect("Failed to append row");
+        append_writer.flush().await.expect("Failed to flush");
+
+        // 3. Fetch Row
+        let records = scan_table(&table, |scan| scan).await;
+        assert_eq!(records.len(), 1, "Expected 1 record");
+
+        let found_row = records[0].row();
+        assert_eq!(found_row.get_int(0).unwrap(), 1);
+
+        // 4. Assert Map
+        let decoded_map = found_row
+            .get_map(1, &key_type, &value_type)
+            .expect("Failed to get map");
+        assert_eq!(decoded_map.size(), 3);
+
+        let decoded_keys = decoded_map.key_array();
+        let decoded_values = decoded_map.value_array();
+
+        assert_eq!(decoded_keys.get_string(0).unwrap(), "k1");
+        assert_eq!(decoded_keys.get_string(1).unwrap(), "k2");
+        assert_eq!(decoded_keys.get_string(2).unwrap(), "k3");
+
+        assert_eq!(decoded_values.get_int(0).unwrap(), 10);
+        assert_eq!(decoded_values.get_int(1).unwrap(), 20);
+        assert_eq!(decoded_values.get_int(2).unwrap(), 30);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
     async fn partitioned_table_append_scan() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;

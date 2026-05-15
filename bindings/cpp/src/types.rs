@@ -529,6 +529,7 @@ pub fn resolve_row_types(
             Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
             Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
             Datum::Array(a) => Datum::Array(a.clone()),
+            Datum::Map(m) => Datum::Map(m.clone()),
             Datum::Row(_) => return Err(anyhow!("Row datum is not yet supported in C++ bindings")),
         };
         out.set_field(idx, resolved);
@@ -588,6 +589,9 @@ pub fn compacted_row_to_owned(
                 Datum::Blob(Cow::Owned(row.get_binary(i, dt.length())?.to_vec()))
             }
             fcore::metadata::DataType::Array(_) => Datum::Array(row.get_array(i)?),
+            fcore::metadata::DataType::Map(mt) => {
+                Datum::Map(row.get_map(i, mt.key_type(), mt.value_type())?)
+            }
             other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
         };
 

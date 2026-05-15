@@ -801,12 +801,20 @@ impl LogFetcher {
                     .collect(),
             )),
         };
-        let read_context =
-            Self::create_read_context(full_arrow_schema.clone(), projected_fields.clone(), false)?
-                .with_fluss_row_type(projected_row_type.clone());
-        let remote_read_context =
-            Self::create_read_context(full_arrow_schema, projected_fields.clone(), true)?
-                .with_fluss_row_type(projected_row_type);
+        let read_context = Self::create_read_context(
+            full_arrow_schema.clone(),
+            projected_row_type.clone(),
+            projected_fields.clone(),
+            false,
+        )?
+        .with_fluss_row_type(projected_row_type.clone());
+        let remote_read_context = Self::create_read_context(
+            full_arrow_schema,
+            projected_row_type.clone(),
+            projected_fields.clone(),
+            true,
+        )?
+        .with_fluss_row_type(projected_row_type);
 
         let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
         let log_fetch_buffer = Arc::new(LogFetchBuffer::new(read_context.clone()));
@@ -851,14 +859,22 @@ impl LogFetcher {
 
     fn create_read_context(
         full_arrow_schema: SchemaRef,
+        row_type: Arc<RowType>,
         projected_fields: Option<Vec<usize>>,
         is_from_remote: bool,
     ) -> Result<ReadContext> {
         match projected_fields {
-            None => Ok(ReadContext::new(full_arrow_schema, is_from_remote)),
-            Some(fields) => {
-                ReadContext::with_projection_pushdown(full_arrow_schema, fields, is_from_remote)
-            }
+            None => Ok(ReadContext::new(
+                full_arrow_schema,
+                row_type,
+                is_from_remote,
+            )),
+            Some(fields) => ReadContext::with_projection_pushdown(
+                full_arrow_schema,
+                row_type,
+                fields,
+                is_from_remote,
+            ),
         }
     }
 
@@ -1901,7 +1917,8 @@ mod tests {
 
         let data = build_records(&table_info, Arc::new(table_path))?;
         let log_records = LogRecordsBatches::new(data.clone());
-        let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type())?, false);
+        let row_type = Arc::new(table_info.get_row_type().clone());
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, row_type, false);
         let completed =
             DefaultCompletedFetch::new(bucket.clone(), log_records, data.len(), read_context, 0, 0);
         fetcher.log_fetch_buffer.add(Box::new(completed));
@@ -1931,7 +1948,8 @@ mod tests {
         let bucket = TableBucket::new(1, 0);
         let data = build_records(&table_info, Arc::new(table_path))?;
         let log_records = LogRecordsBatches::new(data.clone());
-        let read_context = ReadContext::new(to_arrow_schema(table_info.get_row_type())?, false);
+        let row_type = Arc::new(table_info.get_row_type().clone());
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, row_type, false);
         let mut completed: Box<dyn CompletedFetch> = Box::new(DefaultCompletedFetch::new(
             bucket,
             log_records,

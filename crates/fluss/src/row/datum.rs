@@ -22,11 +22,12 @@ use crate::row::Decimal;
 use crate::row::GenericRow;
 use crate::row::InternalRow;
 use crate::row::binary_array::FlussArray;
+use crate::row::binary_map::FlussMap;
 use crate::row::field_getter::FieldGetter;
 use arrow::array::{
     ArrayBuilder, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
-    Int32Builder, Int64Builder, ListBuilder, StringBuilder, StructBuilder,
+    Int32Builder, Int64Builder, ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     Time32MillisecondBuilder, Time32SecondBuilder, Time64MicrosecondBuilder,
     Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampMillisecondBuilder,
     TimestampNanosecondBuilder, TimestampSecondBuilder,
@@ -76,6 +77,8 @@ pub enum Datum<'a> {
     TimestampLtz(TimestampLtz),
     #[display("{0}")]
     Array(FlussArray),
+    #[display("{0}")]
+    Map(FlussMap),
     #[display("{0:?}")]
     Row(Box<GenericRow<'a>>),
 }
@@ -141,6 +144,17 @@ impl Datum<'_> {
         }
     }
 
+    pub fn is_map(&self) -> bool {
+        matches!(self, Datum::Map(_))
+    }
+
+    pub fn as_map(&self) -> &FlussMap {
+        match self {
+            Self::Map(m) => m,
+            _ => panic!("not a map: {self:?}"),
+        }
+    }
+
     pub fn as_row(&self) -> &GenericRow<'_> {
         match self {
             Self::Row(r) => r.as_ref(),
@@ -168,6 +182,7 @@ impl<'a> Datum<'a> {
             Datum::TimestampNtz(t) => Datum::TimestampNtz(t),
             Datum::TimestampLtz(t) => Datum::TimestampLtz(t),
             Datum::Array(a) => Datum::Array(a),
+            Datum::Map(m) => Datum::Map(m),
             Datum::Row(boxed) => Datum::Row(Box::new(boxed.into_owned())),
         }
     }
@@ -443,11 +458,19 @@ impl<'a> From<FlussArray> for Datum<'a> {
     }
 }
 
+impl<'a> From<FlussMap> for Datum<'a> {
+    #[inline]
+    fn from(map: FlussMap) -> Datum<'a> {
+        Datum::Map(map)
+    }
+}
+
 pub trait ToArrow {
     fn append_to(
         &self,
         builder: &mut dyn ArrayBuilder,
-        data_type: &arrow_schema::DataType,
+        fluss_type: &crate::metadata::DataType,
+        arrow_type: &arrow_schema::DataType,
     ) -> Result<()>;
 }
 
@@ -552,10 +575,9 @@ impl AppendResult for std::result::Result<(), ArrowError> {
 fn append_fluss_array_to_list_builder(
     arr: &FlussArray,
     builder: &mut dyn ArrayBuilder,
-    data_type: &arrow_schema::DataType,
+    fluss_type: &crate::metadata::DataType,
+    arrow_type: &arrow_schema::DataType,
 ) -> Result<()> {
-    use crate::record::from_arrow_type;
-
     let list_builder = builder
         .as_any_mut()
         .downcast_mut::<ListBuilder<Box<dyn ArrayBuilder>>>()
@@ -563,34 +585,106 @@ fn append_fluss_array_to_list_builder(
             message: "Builder type mismatch for Array: expected ListBuilder".to_string(),
         })?;
 
-    let element_arrow_type = match data_type {
-        arrow_schema::DataType::List(field) => field.data_type().clone(),
+    let element_fluss_type = match fluss_type {
+        crate::metadata::DataType::Array(a) => a.get_element_type(),
         _ => {
             return Err(RowConvertError {
-                message: format!("Expected List Arrow type for Array datum, got: {data_type:?}"),
+                message: format!("Expected Array Fluss type for Array datum, got: {fluss_type:?}"),
             });
         }
     };
 
-    let element_fluss_type = from_arrow_type(&element_arrow_type)?;
+    let element_arrow_type = match arrow_type {
+        arrow_schema::DataType::List(field) => field.data_type().clone(),
+        _ => {
+            return Err(RowConvertError {
+                message: format!("Expected List Arrow type for Array datum, got: {arrow_type:?}"),
+            });
+        }
+    };
+
     let values_builder = list_builder.values();
 
     for i in 0..arr.size() {
         if arr.is_null_at(i) {
             append_null_for_type(values_builder, &element_arrow_type)?;
         } else {
-            let datum = read_datum_from_fluss_array(arr, i, &element_fluss_type)?;
-            datum.append_to(values_builder, &element_arrow_type)?;
+            let datum = read_datum_from_fluss_array(arr, i, element_fluss_type)?;
+            datum.append_to(values_builder, element_fluss_type, &element_arrow_type)?;
         }
     }
     list_builder.append(true);
     Ok(())
 }
 
+fn append_fluss_map_to_map_builder(
+    map: &crate::row::FlussMap,
+    builder: &mut dyn ArrayBuilder,
+    fluss_type: &crate::metadata::DataType,
+    arrow_type: &arrow_schema::DataType,
+) -> Result<()> {
+    let map_builder = builder
+        .as_any_mut()
+        .downcast_mut::<MapBuilder<Box<dyn ArrayBuilder>, Box<dyn ArrayBuilder>>>()
+        .ok_or_else(|| RowConvertError {
+            message: "Builder type mismatch for Map: expected MapBuilder".to_string(),
+        })?;
+
+    let expected_map_type = match fluss_type {
+        crate::metadata::DataType::Map(m) => m,
+        _ => {
+            return Err(RowConvertError {
+                message: format!("Expected Map Fluss type for Map datum, got: {fluss_type:?}"),
+            });
+        }
+    };
+
+    let (key_arrow_type, value_arrow_type) = match arrow_type {
+        arrow_schema::DataType::Map(entries_field, _) => match entries_field.data_type() {
+            arrow_schema::DataType::Struct(fields) if fields.len() == 2 => {
+                (fields[0].data_type().clone(), fields[1].data_type().clone())
+            }
+            other => {
+                return Err(RowConvertError {
+                    message: format!(
+                        "Expected Struct with 2 fields for Map entries, got: {other:?}"
+                    ),
+                });
+            }
+        },
+        _ => {
+            return Err(RowConvertError {
+                message: format!("Expected Map Arrow type for Map datum, got: {arrow_type:?}"),
+            });
+        }
+    };
+
+    let key_fluss_type = expected_map_type.key_type();
+    let value_fluss_type = expected_map_type.value_type();
+    let key_array = map.key_array();
+    let value_array = map.value_array();
+
+    for i in 0..map.size() {
+        let key_datum = read_datum_from_fluss_array(key_array, i, key_fluss_type)?;
+        key_datum.append_to(map_builder.keys(), key_fluss_type, &key_arrow_type)?;
+
+        if value_array.is_null_at(i) {
+            append_null_for_type(map_builder.values(), &value_arrow_type)?;
+        } else {
+            let val_datum = read_datum_from_fluss_array(value_array, i, value_fluss_type)?;
+            val_datum.append_to(map_builder.values(), value_fluss_type, &value_arrow_type)?;
+        }
+    }
+    map_builder.append(true).map_err(|e| RowConvertError {
+        message: format!("Failed to append Map entries: {e}"),
+    })?;
+    Ok(())
+}
+
 fn read_datum_from_fluss_array<'a>(
     arr: &FlussArray,
     pos: usize,
-    element_type: &DataType,
+    element_type: &crate::metadata::DataType,
 ) -> Result<Datum<'a>> {
     if let DataType::Row(row_type) = element_type {
         let compacted = arr.get_row(pos, row_type)?;
@@ -675,6 +769,20 @@ fn append_null_for_type(
         arrow_schema::DataType::List(_) => {
             downcast_null!(ListBuilder<Box<dyn ArrayBuilder>>)
         }
+        arrow_schema::DataType::Map(_, _) => {
+            let b = builder
+                .as_any_mut()
+                .downcast_mut::<MapBuilder<Box<dyn ArrayBuilder>, Box<dyn ArrayBuilder>>>()
+                .ok_or_else(|| RowConvertError {
+                    message: format!(
+                        "Builder type mismatch: expected MapBuilder for {data_type:?}",
+                    ),
+                })?;
+            b.append(false).map_err(|e| RowConvertError {
+                message: format!("Failed to append null Map entries: {e}"),
+            })?;
+            Ok(())
+        }
         arrow_schema::DataType::Struct(fields) => {
             // StructBuilder::append_null only flips parent validity; children must each get a null too.
             let struct_builder = builder
@@ -704,7 +812,8 @@ fn append_null_for_type(
 fn append_generic_row_to_struct_builder(
     row: &GenericRow<'_>,
     builder: &mut dyn ArrayBuilder,
-    data_type: &arrow_schema::DataType,
+    fluss_type: &crate::metadata::DataType,
+    arrow_type: &arrow_schema::DataType,
 ) -> Result<()> {
     let struct_builder = builder
         .as_any_mut()
@@ -713,11 +822,20 @@ fn append_generic_row_to_struct_builder(
             message: "Builder type mismatch for Row: expected StructBuilder".to_string(),
         })?;
 
-    let fields = match data_type {
+    let row_type = match fluss_type {
+        crate::metadata::DataType::Row(rt) => rt,
+        _ => {
+            return Err(RowConvertError {
+                message: format!("Expected Row Fluss type for Row datum, got: {fluss_type:?}"),
+            });
+        }
+    };
+
+    let fields = match arrow_type {
         arrow_schema::DataType::Struct(fields) => fields.clone(),
         _ => {
             return Err(RowConvertError {
-                message: format!("Expected Struct Arrow type for Row datum, got: {data_type:?}"),
+                message: format!("Expected Struct Arrow type for Row datum, got: {arrow_type:?}"),
             });
         }
     };
@@ -736,7 +854,8 @@ fn append_generic_row_to_struct_builder(
         let field_builders = struct_builder.field_builders_mut();
         for (i, datum) in row.values.iter().enumerate() {
             let child = field_builders[i].as_mut();
-            datum.append_to(child, fields[i].data_type())?;
+            let child_fluss_type = row_type.fields()[i].data_type();
+            datum.append_to(child, child_fluss_type, fields[i].data_type())?;
         }
     }
     struct_builder.append(true);
@@ -747,7 +866,8 @@ impl Datum<'_> {
     pub fn append_to(
         &self,
         builder: &mut dyn ArrayBuilder,
-        data_type: &arrow_schema::DataType,
+        fluss_type: &crate::metadata::DataType,
+        arrow_type: &arrow_schema::DataType,
     ) -> Result<()> {
         macro_rules! append_value_to_arrow {
             ($builder_type:ty, $value:expr) => {
@@ -759,7 +879,7 @@ impl Datum<'_> {
         }
 
         match self {
-            Datum::Null => return append_null_for_type(builder, data_type),
+            Datum::Null => return append_null_for_type(builder, arrow_type),
             Datum::Bool(v) => append_value_to_arrow!(BooleanBuilder, *v),
             Datum::Int8(v) => append_value_to_arrow!(Int8Builder, *v),
             Datum::Int16(v) => append_value_to_arrow!(Int16Builder, *v),
@@ -768,7 +888,7 @@ impl Datum<'_> {
             Datum::Float32(v) => append_value_to_arrow!(Float32Builder, v.into_inner()),
             Datum::Float64(v) => append_value_to_arrow!(Float64Builder, v.into_inner()),
             Datum::String(v) => append_value_to_arrow!(StringBuilder, v.as_ref()),
-            Datum::Blob(v) => match data_type {
+            Datum::Blob(v) => match arrow_type {
                 arrow_schema::DataType::Binary => {
                     append_value_to_arrow!(BinaryBuilder, v.as_ref());
                 }
@@ -778,18 +898,18 @@ impl Datum<'_> {
                 _ => {
                     return Err(RowConvertError {
                         message: format!(
-                            "Expected Binary or FixedSizeBinary Arrow type, got: {data_type:?}"
+                            "Expected Binary or FixedSizeBinary Arrow type, got: {arrow_type:?}"
                         ),
                     });
                 }
             },
             Datum::Decimal(decimal) => {
                 // Extract target precision and scale from Arrow schema
-                let (p, s) = match data_type {
+                let (p, s) = match arrow_type {
                     arrow_schema::DataType::Decimal128(p, s) => (*p, *s),
                     _ => {
                         return Err(RowConvertError {
-                            message: format!("Expected Decimal128 Arrow type, got: {data_type:?}"),
+                            message: format!("Expected Decimal128 Arrow type, got: {arrow_type:?}"),
                         });
                     }
                 };
@@ -817,7 +937,7 @@ impl Datum<'_> {
                 // Convert to Arrow's time unit based on schema
                 let millis = time.get_inner();
 
-                match data_type {
+                match arrow_type {
                     arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second) => {
                         if let Some(b) = builder.as_any_mut().downcast_mut::<Time32SecondBuilder>()
                         {
@@ -877,7 +997,7 @@ impl Datum<'_> {
                     _ => {
                         return Err(RowConvertError {
                             message: format!(
-                                "Expected Time32/Time64 Arrow type, got: {data_type:?}"
+                                "Expected Time32/Time64 Arrow type, got: {arrow_type:?}"
                             ),
                         });
                     }
@@ -962,10 +1082,13 @@ impl Datum<'_> {
                 });
             }
             Datum::Array(arr) => {
-                return append_fluss_array_to_list_builder(arr, builder, data_type);
+                return append_fluss_array_to_list_builder(arr, builder, fluss_type, arrow_type);
+            }
+            Datum::Map(map) => {
+                return append_fluss_map_to_map_builder(map, builder, fluss_type, arrow_type);
             }
             Datum::Row(row) => {
-                return append_generic_row_to_struct_builder(row, builder, data_type);
+                return append_generic_row_to_struct_builder(row, builder, fluss_type, arrow_type);
             }
         }
 
@@ -985,7 +1108,8 @@ macro_rules! impl_to_arrow {
             fn append_to(
                 &self,
                 builder: &mut dyn ArrayBuilder,
-                _data_type: &arrow_schema::DataType,
+                _fluss_type: &crate::metadata::DataType,
+                _arrow_type: &arrow_schema::DataType,
             ) -> Result<()> {
                 if let Some(b) = builder.as_any_mut().downcast_mut::<$variant>() {
                     b.append_value(*self);
@@ -1208,20 +1332,23 @@ mod tests {
 
     #[test]
     fn datum_append_to_builder() {
+        use crate::metadata::DataTypes;
         let mut builder = Int32Builder::new();
+        let int_type = DataTypes::int();
         Datum::Null
-            .append_to(&mut builder, &arrow_schema::DataType::Int32)
+            .append_to(&mut builder, &int_type, &arrow_schema::DataType::Int32)
             .unwrap();
         Datum::Int32(5)
-            .append_to(&mut builder, &arrow_schema::DataType::Int32)
+            .append_to(&mut builder, &int_type, &arrow_schema::DataType::Int32)
             .unwrap();
         let array = builder.finish();
         assert!(array.is_null(0));
         assert_eq!(array.value(1), 5);
 
         let mut builder = StringBuilder::new();
+        let string_type = DataTypes::string();
         let err = Datum::Int32(1)
-            .append_to(&mut builder, &arrow_schema::DataType::Utf8)
+            .append_to(&mut builder, &string_type, &arrow_schema::DataType::Utf8)
             .unwrap_err();
         assert!(matches!(err, RowConvertError { .. }));
     }
@@ -1245,6 +1372,94 @@ mod tests {
         assert_eq!(date.year(), 1970);
         assert_eq!(date.month(), 1);
         assert_eq!(date.day(), 1);
+    }
+    #[test]
+    fn test_datum_map_appends_to_arrow() {
+        use crate::metadata::DataTypes;
+        use crate::row::binary_map::FlussMapWriter;
+        use arrow::array::MapBuilder;
+        use std::sync::Arc;
+
+        let mut writer = FlussMapWriter::new(1, &DataTypes::int(), &DataTypes::string());
+        writer.write_entry(99.into(), "arrow_test".into()).unwrap();
+        let map = writer.complete().unwrap();
+
+        let arrow_type = arrow_schema::DataType::Map(
+            Arc::new(arrow_schema::Field::new(
+                "entries",
+                arrow_schema::DataType::Struct(arrow_schema::Fields::from(vec![
+                    arrow_schema::Field::new("key", arrow_schema::DataType::Int32, false),
+                    arrow_schema::Field::new("value", arrow_schema::DataType::Utf8, true),
+                ])),
+                false,
+            )),
+            false,
+        );
+
+        let mut map_builder: MapBuilder<
+            Box<dyn arrow::array::ArrayBuilder>,
+            Box<dyn arrow::array::ArrayBuilder>,
+        > = MapBuilder::new(
+            None,
+            Box::new(Int32Builder::new()),
+            Box::new(StringBuilder::new()),
+        );
+
+        let map_type = DataTypes::map(DataTypes::int(), DataTypes::string());
+        Datum::Map(map)
+            .append_to(&mut map_builder, &map_type, &arrow_type)
+            .unwrap();
+
+        let array = map_builder.finish();
+        assert_eq!(array.len(), 1);
+        assert!(!array.is_null(0));
+    }
+
+    #[test]
+    fn test_datum_map_append_type_mismatch() {
+        use crate::metadata::DataTypes;
+        use crate::row::binary_map::FlussMapWriter;
+        use arrow::array::{Float64Builder, MapBuilder, StringBuilder};
+        use std::sync::Arc;
+
+        // 1. Construct a Map with Keys: String, Values: Float64
+        let mut writer = FlussMapWriter::new(1, &DataTypes::string(), &DataTypes::double());
+        writer.write_entry("key1".into(), 1.23.into()).unwrap();
+        let map = writer.complete().unwrap();
+
+        // 2. Define an Arrow Map builder for (String, Float64) using Boxed builders
+        let mut map_builder: MapBuilder<
+            Box<dyn arrow::array::ArrayBuilder>,
+            Box<dyn arrow::array::ArrayBuilder>,
+        > = MapBuilder::new(
+            None,
+            Box::new(StringBuilder::new()),
+            Box::new(Float64Builder::new()),
+        );
+
+        // 3. Define an INCOMPATIBLE expected Fluss type (Int32 instead of Map)
+        let mismatched_type = DataTypes::int();
+
+        // 4. Define the Arrow type (must match the builder structure)
+        let arrow_type = arrow_schema::DataType::Map(
+            Arc::new(arrow_schema::Field::new(
+                "entries",
+                arrow_schema::DataType::Struct(arrow_schema::Fields::from(vec![
+                    arrow_schema::Field::new("key", arrow_schema::DataType::Utf8, false),
+                    arrow_schema::Field::new("value", arrow_schema::DataType::Float64, true),
+                ])),
+                false,
+            )),
+            false,
+        );
+
+        // 5. Assert that append_to returns an error
+        let result = Datum::Map(map).append_to(&mut map_builder, &mismatched_type, &arrow_type);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("row convert error Expected Map Fluss type for Map datum"));
+        assert!(err.contains("Int(IntType { nullable: true })"));
     }
 }
 
@@ -1305,10 +1520,11 @@ mod timestamp_tests {
 
     #[test]
     fn test_row_arrow_struct_round_trip() {
-        let row_type_owned = DataTypes::row(vec![
+        let row_type = crate::metadata::RowType::new(vec![
             DataField::new("x", DataTypes::int(), None),
             DataField::new("label", DataTypes::string(), None),
         ]);
+        let row_type_owned = DataType::Row(row_type.clone());
         let arrow_struct_dt = to_arrow_type(&row_type_owned).unwrap();
         let struct_fields: Fields = match &arrow_struct_dt {
             arrow_schema::DataType::Struct(f) => f.clone(),
@@ -1321,18 +1537,18 @@ mod timestamp_tests {
         r0.set_field(0, 42_i32);
         r0.set_field(1, "hello");
         Datum::Row(Box::new(r0))
-            .append_to(&mut struct_builder, &arrow_struct_dt)
+            .append_to(&mut struct_builder, &row_type_owned, &arrow_struct_dt)
             .expect("append row 0");
 
         Datum::Null
-            .append_to(&mut struct_builder, &arrow_struct_dt)
+            .append_to(&mut struct_builder, &row_type_owned, &arrow_struct_dt)
             .expect("append null row");
 
         let mut r2 = GenericRow::new(2);
         r2.set_field(0, -7_i32);
         r2.set_field(1, Datum::Null);
         Datum::Row(Box::new(r2))
-            .append_to(&mut struct_builder, &arrow_struct_dt)
+            .append_to(&mut struct_builder, &row_type_owned, &arrow_struct_dt)
             .expect("append row 2");
 
         let struct_array: StructArray = struct_builder.finish();
@@ -1346,7 +1562,7 @@ mod timestamp_tests {
             RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).expect("record batch"),
         );
 
-        let mut columnar = ColumnarRow::new(batch, 0, None);
+        let mut columnar = ColumnarRow::new(batch, Arc::new(row_type), 0, None);
 
         let nested = columnar.get_row(0).expect("get_row 0");
         assert_eq!(nested.get_int(0).unwrap(), 42);

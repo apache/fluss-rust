@@ -213,12 +213,14 @@ impl<'a> CompactedRowDeserializer<'a> {
                     let nested_row = nested_deser.deserialize(&nested_reader)?;
                     (Datum::Row(Box::new(nested_row)), next)
                 }
-                _ => {
-                    return Err(IllegalArgument {
-                        message: format!(
-                            "Unsupported DataType in CompactedRowDeserializer: {dtype:?}"
-                        ),
-                    });
+                DataType::Map(map_type) => {
+                    let (bytes, next) = reader.read_bytes(cursor)?;
+                    let map = crate::row::binary_map::FlussMap::from_bytes(
+                        bytes,
+                        map_type.key_type(),
+                        map_type.value_type(),
+                    )?;
+                    (Datum::Map(map), next)
                 }
             };
             cursor = next_cursor;

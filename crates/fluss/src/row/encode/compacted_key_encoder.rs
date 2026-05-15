@@ -166,6 +166,22 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_map_rejected() {
+        let row_type =
+            RowType::with_data_types(vec![DataTypes::map(DataTypes::string(), DataTypes::int())]);
+
+        let res = CompactedKeyEncoder::new(&row_type, vec![0]);
+        assert!(res.is_err());
+        if let Err(e) = res {
+            assert!(
+                e.to_string().contains("Cannot use Map"),
+                "Expected error to contain 'Cannot use Map', got '{}'",
+                e
+            );
+        }
+    }
+
+    #[test]
     fn test_encode_key() {
         let row_type = RowType::with_data_types(vec![
             DataTypes::int(),
@@ -364,7 +380,7 @@ mod tests {
             DataTypes::array(DataTypes::int()), // ARRAY<INT>
             DataTypes::array(DataTypes::float().as_non_nullable()), // ARRAY<FLOAT NOT NULL>
             DataTypes::array(DataTypes::array(DataTypes::string())), // ARRAY<ARRAY<STRING>>
-                                                // TODO: Add support for MAP type
+                                                // Note: MAP is rejected as a key type (see test_encode_map_rejected)
                                                 // TODO: Add support for ROW type
         ]);
 

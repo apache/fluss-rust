@@ -935,7 +935,7 @@ impl MapType {
     pub fn with_nullable(nullable: bool, key_type: DataType, value_type: DataType) -> Self {
         Self {
             nullable,
-            key_type: Box::new(key_type),
+            key_type: Box::new(key_type.as_non_nullable()),
             value_type: Box::new(value_type),
         }
     }
@@ -1452,16 +1452,22 @@ fn test_array_display() {
 #[test]
 fn test_map_display() {
     let map_type = MapType::new(DataTypes::string(), DataTypes::int());
-    assert_eq!(map_type.to_string(), "MAP<STRING, INT>");
+    assert_eq!(map_type.to_string(), "MAP<STRING NOT NULL, INT>");
 
     let map_type_non_null = MapType::with_nullable(false, DataTypes::int(), DataTypes::string());
-    assert_eq!(map_type_non_null.to_string(), "MAP<INT, STRING> NOT NULL");
+    assert_eq!(
+        map_type_non_null.to_string(),
+        "MAP<INT NOT NULL, STRING> NOT NULL"
+    );
 
     let nested_map = MapType::new(
         DataTypes::string(),
         DataTypes::map(DataTypes::int(), DataTypes::boolean()),
     );
-    assert_eq!(nested_map.to_string(), "MAP<STRING, MAP<INT, BOOLEAN>>");
+    assert_eq!(
+        nested_map.to_string(),
+        "MAP<STRING NOT NULL, MAP<INT NOT NULL, BOOLEAN>>"
+    );
 }
 
 #[test]
@@ -1497,7 +1503,7 @@ fn test_datatype_display() {
     assert_eq!(DataTypes::array(DataTypes::int()).to_string(), "ARRAY<INT>");
     assert_eq!(
         DataTypes::map(DataTypes::string(), DataTypes::int()).to_string(),
-        "MAP<STRING, INT>"
+        "MAP<STRING NOT NULL, INT>"
     );
 }
 
@@ -1525,7 +1531,7 @@ fn test_complex_nested_display() {
     ]);
     assert_eq!(
         row_type.to_string(),
-        "ROW<id INT, tags ARRAY<STRING>, metadata MAP<STRING, STRING>>"
+        "ROW<id INT, tags ARRAY<STRING>, metadata MAP<STRING NOT NULL, STRING>>"
     );
 }
 
@@ -1547,7 +1553,10 @@ fn test_deeply_nested_types() {
             DataTypes::field("y", DataTypes::int()),
         ]),
     ));
-    assert_eq!(nested.to_string(), "ARRAY<MAP<STRING, ROW<x INT, y INT>>>");
+    assert_eq!(
+        nested.to_string(),
+        "ARRAY<MAP<STRING NOT NULL, ROW<x INT, y INT>>>"
+    );
 }
 
 // ============================================================================

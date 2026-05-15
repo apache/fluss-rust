@@ -246,10 +246,14 @@ mod tests {
     use std::sync::Arc;
 
     fn make_row(values: Vec<i32>, row_id: usize) -> ColumnarRow {
+        use crate::metadata::RowType;
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(values))])
             .expect("record batch");
-        ColumnarRow::new(Arc::new(batch), row_id, None)
+        let row_type = Arc::new(RowType::with_data_types(vec![
+            crate::metadata::DataType::Int(crate::metadata::IntType::new()),
+        ]));
+        ColumnarRow::new(Arc::new(batch), row_type, row_id, None)
     }
 
     #[test]

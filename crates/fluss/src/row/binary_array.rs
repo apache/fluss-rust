@@ -30,6 +30,7 @@ use crate::metadata::{DataType, RowType};
 use crate::row::Decimal;
 use crate::row::InternalRow;
 use crate::row::binary::{BinaryRowFormat, ValueWriter};
+use crate::row::binary_map::FlussMap;
 use crate::row::compacted::{CompactedRow, CompactedRowWriter, calculate_bit_set_width_in_bytes};
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use crate::row::field_getter::FieldGetter;
@@ -74,6 +75,22 @@ pub fn calculate_fix_length_part_size(element_type: &DataType) -> usize {
 /// Matches Java's `roundNumberOfBytesToNearestWord`.
 fn round_to_nearest_word(num_bytes: usize) -> usize {
     (num_bytes + 7) & !7
+}
+
+fn is_variable_length_type(dt: &DataType) -> bool {
+    match dt {
+        DataType::Char(_)
+        | DataType::String(_)
+        | DataType::Binary(_)
+        | DataType::Bytes(_)
+        | DataType::Array(_)
+        | DataType::Map(_)
+        | DataType::Row(_) => true,
+        DataType::Decimal(d) => !Decimal::is_compact_precision(d.precision()),
+        DataType::Timestamp(t) => !TimestampNtz::is_compact(t.precision()),
+        DataType::TimestampLTz(t) => !TimestampLtz::is_compact(t.precision()),
+        _ => false,
+    }
 }
 
 /// A Fluss binary array, wire-compatible with Java's `BinaryArray`.
@@ -217,6 +234,33 @@ impl FlussArray {
         let byte_index = pos >> 3;
         let bit = pos & 7;
         (self.data[4 + byte_index] & (1u8 << bit)) != 0
+    }
+
+    /// Returns the logically occupied bytes of this array, including the variable-length part.
+    /// This is used to detect trailing garbage in binary containers.
+    pub fn extent(&self, element_type: &DataType) -> Result<usize> {
+        let header_size = calculate_header_in_bytes(self.size);
+        let element_size = calculate_fix_length_part_size(element_type);
+        let fixed_part_size = round_to_nearest_word(header_size + self.size * element_size);
+
+        if !is_variable_length_type(element_type) {
+            return Ok(fixed_part_size);
+        }
+
+        let mut max_extent = fixed_part_size;
+        for i in 0..self.size {
+            if !self.is_null_at(i) {
+                let packed = self.read_i64(i, "extent calculation")? as u64;
+                let mark = packed & HIGHEST_FIRST_BIT;
+                if mark == 0 {
+                    let offset = (packed >> 32) as usize;
+                    let len = (packed & 0xFFFF_FFFF) as usize;
+                    max_extent = max_extent.max(offset + len);
+                }
+            }
+        }
+
+        Ok(round_to_nearest_word(max_extent))
     }
 
     fn checked_slice(&self, start: usize, len: usize, context: &str) -> Result<&[u8]> {
@@ -421,6 +465,16 @@ impl FlussArray {
     pub fn get_array(&self, pos: usize) -> Result<FlussArray> {
         let (start, len) = self.read_var_len_span(pos)?;
         FlussArray::from_owned_bytes(self.data.slice(start..start + len))
+    }
+
+    pub fn get_map(
+        &self,
+        pos: usize,
+        key_type: &DataType,
+        value_type: &DataType,
+    ) -> Result<FlussMap> {
+        let (start, len) = self.read_var_len_span(pos)?;
+        FlussMap::from_owned_bytes(self.data.slice(start..start + len), key_type, value_type)
     }
 
     pub fn get_row<'a>(&'a self, pos: usize, row_type: &'a RowType) -> Result<CompactedRow<'a>> {
@@ -672,6 +726,11 @@ impl FlussArrayWriter {
         self.write_bytes_to_var_len_part(pos, value.as_bytes());
     }
 
+    /// Writes a nested FlussMap into this array at position `pos`.
+    pub fn write_map(&mut self, pos: usize, value: &FlussMap) {
+        self.write_bytes_to_var_len_part(pos, value.as_bytes());
+    }
+
     /// Writes a nested row at `pos`. Requires the writer to have been
     /// constructed via [`new`](Self::new) with a `DataType::Row(_)` element type.
     pub fn write_row(&mut self, pos: usize, row: &dyn InternalRow) -> Result<()> {
@@ -771,6 +830,10 @@ impl InternalRow for FlussArray {
 
     fn get_array(&self, pos: usize) -> Result<FlussArray> {
         self.get_array(pos)
+    }
+
+    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap> {
+        self.get_map(pos, key_type, value_type)
     }
 }
 
@@ -1133,7 +1196,7 @@ mod tests {
         outer.set_field(0, inner_arr.clone());
 
         let mut writer = CompactedRowWriter::new(1);
-        writer.write_array(inner_arr.as_bytes());
+        writer.write_array(&inner_arr);
         let bytes = writer.to_bytes();
 
         let outer_compacted = CompactedRow::from_bytes(outer_row_type, &bytes);
