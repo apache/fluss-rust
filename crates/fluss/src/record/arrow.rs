@@ -994,6 +994,7 @@ impl LogRecordBatch {
         let record_batch = read_context.record_batch(data)?;
         let arrow_reader = ArrowReader::new_with_fluss_row_type(
             Arc::new(record_batch),
+            read_context.row_type.clone(),
             read_context.fluss_row_type().cloned(),
         );
         let log_record_iterator = LogRecordIterator::Arrow(ArrowLogRecordIterator {
@@ -1020,6 +1021,7 @@ impl LogRecordBatch {
             Some(record_batch) => {
                 let arrow_reader = ArrowReader::new_with_fluss_row_type(
                     Arc::new(record_batch),
+                    read_context.row_type.clone(),
                     read_context.fluss_row_type().cloned(),
                 );
                 LogRecordIterator::Arrow(ArrowLogRecordIterator {
@@ -1237,7 +1239,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
                 Arc::new(Field::new(
                     "entries",
                     ArrowDataType::Struct(arrow_schema::Fields::from(entry_fields)),
-                    fluss_type.is_nullable(),
+                    false,
                 )),
                 false,
             )
@@ -1341,6 +1343,7 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
 pub struct ReadContext {
     target_schema: SchemaRef,
     full_schema: SchemaRef,
+    row_type: Arc<RowType>,
     projection: Option<Projection>,
     is_from_remote: bool,
     fluss_row_type: Option<Arc<RowType>>,
@@ -1357,10 +1360,15 @@ struct Projection {
 }
 
 impl ReadContext {
-    pub fn new(arrow_schema: SchemaRef, is_from_remote: bool) -> ReadContext {
+    pub fn new(
+        arrow_schema: SchemaRef,
+        row_type: Arc<RowType>,
+        is_from_remote: bool,
+    ) -> ReadContext {
         ReadContext {
             target_schema: arrow_schema.clone(),
             full_schema: arrow_schema,
+            row_type,
             projection: None,
             is_from_remote,
             fluss_row_type: None,
@@ -1378,6 +1386,7 @@ impl ReadContext {
 
     pub fn with_projection_pushdown(
         arrow_schema: SchemaRef,
+        row_type: Arc<RowType>,
         projected_fields: Vec<usize>,
         is_from_remote: bool,
     ) -> Result<ReadContext> {
@@ -1442,6 +1451,7 @@ impl ReadContext {
         Ok(ReadContext {
             target_schema,
             full_schema: arrow_schema,
+            row_type,
             projection: Some(project),
             is_from_remote,
             fluss_row_type: None,
@@ -1635,15 +1645,17 @@ impl Iterator for ArrowLogRecordIterator {
 
 pub struct ArrowReader {
     record_batch: Arc<RecordBatch>,
+    row_type: Arc<RowType>,
     fluss_row_type: Option<Arc<RowType>>,
     row_column_indices: Arc<[usize]>,
 }
 
 impl ArrowReader {
-    pub fn new(record_batch: Arc<RecordBatch>) -> Self {
+    pub fn new(record_batch: Arc<RecordBatch>, row_type: Arc<RowType>) -> Self {
         let row_column_indices = arrow_row_column_indices(&record_batch);
         ArrowReader {
             record_batch,
+            row_type,
             fluss_row_type: None,
             row_column_indices,
         }
@@ -1651,6 +1663,7 @@ impl ArrowReader {
 
     pub fn new_with_fluss_row_type(
         record_batch: Arc<RecordBatch>,
+        row_type: Arc<RowType>,
         fluss_row_type: Option<Arc<RowType>>,
     ) -> Self {
         let row_column_indices = match &fluss_row_type {
@@ -1659,6 +1672,7 @@ impl ArrowReader {
         };
         ArrowReader {
             record_batch,
+            row_type,
             fluss_row_type,
             row_column_indices,
         }
@@ -1671,6 +1685,7 @@ impl ArrowReader {
     pub fn read(&self, row_id: usize) -> ColumnarRow {
         ColumnarRow::with_indices(
             self.record_batch.clone(),
+            self.row_type.clone(),
             row_id,
             self.fluss_row_type.clone(),
             self.row_column_indices.clone(),
@@ -1799,10 +1814,10 @@ mod tests {
                 Arc::new(Field::new(
                     "entries",
                     ArrowDataType::Struct(arrow_schema::Fields::from(vec![
-                        Field::new("key", ArrowDataType::Utf8, true),
+                        Field::new("key", ArrowDataType::Utf8, false),
                         Field::new("value", ArrowDataType::Int32, true),
                     ])),
-                    true,
+                    false,
                 )),
                 false,
             )
@@ -1819,6 +1834,21 @@ mod tests {
                 Field::new("f2", ArrowDataType::Utf8, true),
             ]))
         );
+    }
+
+    #[test]
+    fn test_arrow_map_schema_strictness() {
+        let map_type = DataTypes::map(DataTypes::string(), DataTypes::int());
+        let arrow_type = to_arrow_type(&map_type).unwrap();
+
+        if let ArrowDataType::Map(entries_field, _) = arrow_type {
+            assert!(
+                !entries_field.is_nullable(),
+                "Arrow Map 'entries' field must be strictly non-nullable"
+            );
+        } else {
+            panic!("Expected ArrowDataType::Map, got {:?}", arrow_type);
+        }
     }
 
     #[test]
@@ -1878,7 +1908,8 @@ mod tests {
             DataField::new("name", DataTypes::string(), None),
         ]);
         let schema = to_arrow_schema(&row_type).unwrap();
-        let result = ReadContext::with_projection_pushdown(schema, vec![0, 2], false);
+        let result =
+            ReadContext::with_projection_pushdown(schema, Arc::new(row_type), vec![0, 2], false);
 
         assert!(matches!(result, Err(IllegalArgument { .. })));
     }

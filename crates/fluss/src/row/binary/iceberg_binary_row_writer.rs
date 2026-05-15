@@ -21,6 +21,8 @@ use crate::error::{Error, Result};
 use crate::metadata::DataType;
 use crate::row::Decimal;
 use crate::row::binary::{BinaryWriter, ValueWriter};
+use crate::row::binary_array::FlussArray;
+use crate::row::binary_map::FlussMap;
 
 const MICROS_PER_MILLI: i64 = 1_000;
 
@@ -225,8 +227,12 @@ impl BinaryWriter for IcebergBinaryRowWriter {
         self.write_raw(&micros.to_le_bytes());
     }
 
-    fn write_array(&mut self, _value: &[u8]) {
-        panic!("Iceberg key columns do not support array values");
+    fn write_array(&mut self, _value: &FlussArray) {
+        unreachable!("Array/Map types are rejected during value writer creation");
+    }
+
+    fn write_map(&mut self, _value: &FlussMap) {
+        unreachable!("Array/Map types are rejected during value writer creation");
     }
 
     fn complete(&mut self) {

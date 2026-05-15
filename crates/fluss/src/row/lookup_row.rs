@@ -21,10 +21,11 @@
 
 use crate::client::WriteFormat;
 use crate::error::Result;
+use crate::metadata::DataType;
 use crate::row::compacted::CompactedRow;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use crate::row::projected_row::ProjectedRow;
-use crate::row::{Decimal, FlussArray, GenericRow, InternalRow};
+use crate::row::{Decimal, FlussArray, FlussMap, GenericRow, InternalRow};
 
 pub struct LookupRow<'a> {
     inner: Inner<'a>,
@@ -115,6 +116,9 @@ impl<'a> InternalRow for LookupRow<'a> {
     }
     fn get_array(&self, pos: usize) -> Result<FlussArray> {
         delegate!(self, get_array, pos)
+    }
+    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap> {
+        delegate!(self, get_map, pos, key_type, value_type)
     }
     fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
         delegate!(self, get_row, pos)

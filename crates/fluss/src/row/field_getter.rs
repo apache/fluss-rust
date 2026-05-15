@@ -82,10 +82,13 @@ impl FieldGetter {
                 pos,
                 precision: t.precision(),
             },
-            // TODO: add Map variant when get_map is available in InternalRow.
             DataType::Array(_) => InnerFieldGetter::Array { pos },
+            DataType::Map(m) => InnerFieldGetter::Map {
+                pos,
+                key_type: m.key_type().clone(),
+                value_type: m.value_type().clone(),
+            },
             DataType::Row(_) => InnerFieldGetter::Row { pos },
-            _ => unimplemented!("DataType {:?} is currently unimplemented", data_type),
         };
 
         if data_type.is_nullable() {
@@ -155,6 +158,11 @@ pub enum InnerFieldGetter {
     Array {
         pos: usize,
     },
+    Map {
+        pos: usize,
+        key_type: DataType,
+        value_type: DataType,
+    },
     Row {
         pos: usize,
     },
@@ -187,8 +195,12 @@ impl InnerFieldGetter {
             InnerFieldGetter::TimestampLtz { pos, precision } => {
                 Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision)?)
             }
-            // TODO: add Map field getter support once its binary form is implemented.
             InnerFieldGetter::Array { pos } => Datum::Array(row.get_array(*pos)?),
+            InnerFieldGetter::Map {
+                pos,
+                key_type,
+                value_type,
+            } => Datum::Map(row.get_map(*pos, key_type, value_type)?),
             InnerFieldGetter::Row { pos } => Datum::Row(Box::new(row.get_row(*pos)?.clone())),
         })
     }
@@ -212,6 +224,7 @@ impl InnerFieldGetter {
             | Self::Timestamp { pos, .. }
             | Self::TimestampLtz { pos, .. }
             | Self::Array { pos }
+            | Self::Map { pos, .. }
             | Self::Row { pos } => *pos,
         }
     }
@@ -223,6 +236,7 @@ mod tests {
     use crate::metadata::DataTypes;
     use crate::row::GenericRow;
     use crate::row::binary_array::FlussArrayWriter;
+    use crate::row::binary_map::FlussMapWriter;
 
     #[test]
     fn test_field_getter_array() {
@@ -254,6 +268,40 @@ mod tests {
         let row = GenericRow::from_data(vec![Datum::Null]);
 
         let data_type = DataTypes::array(DataTypes::int());
+        let getter = FieldGetter::create(&data_type, 0);
+        let datum = getter.get_field(&row).unwrap();
+        assert!(datum.is_null());
+    }
+
+    #[test]
+    fn test_field_getter_map() {
+        let mut map_writer = FlussMapWriter::new(1, &DataTypes::int(), &DataTypes::string());
+        map_writer.write_entry(42.into(), "value".into()).unwrap();
+        let map = map_writer.complete().unwrap();
+
+        let mut row = GenericRow::new(2);
+        row.set_field(0, Datum::Int32(1));
+        row.set_field(1, Datum::Map(map));
+
+        let data_type = DataTypes::map(DataTypes::int(), DataTypes::string());
+        let getter = FieldGetter::create(&data_type, 1);
+        let datum = getter.get_field(&row).unwrap();
+
+        match datum {
+            Datum::Map(m) => {
+                assert_eq!(m.size(), 1);
+                assert_eq!(m.key_array().get_int(0).unwrap(), 42);
+                assert_eq!(m.value_array().get_string(0).unwrap(), "value");
+            }
+            _ => panic!("Expected Map datum"),
+        }
+    }
+
+    #[test]
+    fn test_field_getter_nullable_map() {
+        let row = GenericRow::from_data(vec![Datum::Null]);
+
+        let data_type = DataTypes::map(DataTypes::int(), DataTypes::string());
         let getter = FieldGetter::create(&data_type, 0);
         let datum = getter.get_field(&row).unwrap();
         assert!(datum.is_null());

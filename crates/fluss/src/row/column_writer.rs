@@ -123,6 +123,14 @@ enum TypedWriter {
         offsets: Vec<i32>,
         validity: Vec<bool>,
     },
+    Map {
+        key_writer: Box<ColumnWriter>,
+        value_writer: Box<ColumnWriter>,
+        key_type: DataType,
+        value_type: DataType,
+        offsets: Vec<i32>,
+        validity: Vec<bool>,
+    },
     Struct {
         field_writers: Vec<ColumnWriter>,
         validity: Vec<bool>,
@@ -162,6 +170,7 @@ macro_rules! with_builder {
             TypedWriter::TimestampLtzMicrosecond { builder: $b, .. } => $body,
             TypedWriter::TimestampLtzNanosecond { builder: $b, .. } => $body,
             TypedWriter::List { .. } => panic!("List variant not supported in with_builder!"),
+            TypedWriter::Map { .. } => panic!("Map variant not supported in with_builder!"),
             TypedWriter::Struct { .. } => panic!("Struct variant not supported in with_builder!"),
         }
     };
@@ -361,6 +370,50 @@ impl ColumnWriter {
                     validity: Vec::with_capacity(capacity),
                 }
             }
+            DataType::Map(m) => {
+                let (key_arrow_type, value_arrow_type) = match arrow_type {
+                    ArrowDataType::Map(field, _) => match field.data_type() {
+                        ArrowDataType::Struct(fields) => {
+                            if fields.len() != 2 {
+                                return Err(Error::IllegalArgument {
+                                    message: format!(
+                                        "Expected Struct with 2 fields for Map, got {}",
+                                        fields.len()
+                                    ),
+                                });
+                            }
+                            (fields[0].data_type().clone(), fields[1].data_type().clone())
+                        }
+                        struct_type => {
+                            return Err(Error::IllegalArgument {
+                                message: format!(
+                                    "Expected Struct within Map Arrow type, got {:?}",
+                                    struct_type
+                                ),
+                            });
+                        }
+                    },
+                    _ => {
+                        return Err(Error::IllegalArgument {
+                            message: format!(
+                                "Expected Map Arrow type for Map, got: {arrow_type:?}"
+                            ),
+                        });
+                    }
+                };
+
+                let key_writer = ColumnWriter::create(m.key_type(), &key_arrow_type, 0, capacity)?;
+                let value_writer =
+                    ColumnWriter::create(m.value_type(), &value_arrow_type, 1, capacity)?;
+                TypedWriter::Map {
+                    key_writer: Box::new(key_writer),
+                    value_writer: Box::new(value_writer),
+                    key_type: m.key_type().clone(),
+                    value_type: m.value_type().clone(),
+                    offsets: vec![0],
+                    validity: Vec::with_capacity(capacity),
+                }
+            }
             DataType::Row(row_type) => {
                 let arrow_fields = match arrow_type {
                     ArrowDataType::Struct(fields) => fields.clone(),
@@ -393,11 +446,6 @@ impl ColumnWriter {
                     fields: arrow_fields,
                     row_type: row_type.clone(),
                 }
-            }
-            _ => {
-                return Err(Error::IllegalArgument {
-                    message: format!("Unsupported Fluss DataType: {fluss_type:?}"),
-                });
             }
         };
 
@@ -439,6 +487,26 @@ impl ColumnWriter {
                 let taken_offsets = std::mem::replace(offsets, vec![0]);
                 let taken_validity = std::mem::take(validity);
                 finish_list_array(values, item_nullable, &taken_offsets, &taken_validity)
+            }
+            TypedWriter::Map {
+                key_writer,
+                value_writer,
+                offsets,
+                validity,
+                ..
+            } => {
+                let value_nullable = value_writer.nullable;
+                let keys = key_writer.finish();
+                let values = value_writer.finish();
+                let taken_offsets = std::mem::replace(offsets, vec![0]);
+                let taken_validity = std::mem::take(validity);
+                finish_map_array(
+                    keys,
+                    values,
+                    value_nullable,
+                    &taken_offsets,
+                    &taken_validity,
+                )
             }
             TypedWriter::Struct {
                 field_writers,
@@ -527,6 +595,20 @@ impl ColumnWriter {
                 let offsets_bytes = round_up_to_8(offsets.len() * std::mem::size_of::<i32>());
                 validity_bytes + offsets_bytes + element_writer.buffer_size()
             }
+            TypedWriter::Map {
+                key_writer,
+                value_writer,
+                offsets,
+                validity,
+                ..
+            } => {
+                let validity_bytes = round_up_to_8(validity.len().div_ceil(8));
+                let offsets_bytes = round_up_to_8(offsets.len() * std::mem::size_of::<i32>());
+                validity_bytes
+                    + offsets_bytes
+                    + key_writer.buffer_size()
+                    + value_writer.buffer_size()
+            }
             TypedWriter::Struct {
                 field_writers,
                 validity,
@@ -542,6 +624,9 @@ impl ColumnWriter {
     fn append_null(&mut self) {
         match &mut self.inner {
             TypedWriter::List {
+                offsets, validity, ..
+            }
+            | TypedWriter::Map {
                 offsets, validity, ..
             } => {
                 let last = *offsets.last().unwrap_or(&0);
@@ -783,6 +868,30 @@ impl ColumnWriter {
                 validity.push(true);
                 Ok(())
             }
+            TypedWriter::Map {
+                key_writer,
+                value_writer,
+                key_type,
+                value_type,
+                offsets,
+                validity,
+            } => {
+                let map = row.get_map(pos, key_type, value_type)?;
+                let key_array = map.key_array();
+                let value_array = map.value_array();
+                for i in 0..map.size() {
+                    key_writer.write_field_at(key_array, i)?;
+                    value_writer.write_field_at(value_array, i)?;
+                }
+                let last = *offsets.last().unwrap();
+                offsets.push(
+                    last + i32::try_from(map.size()).map_err(|_| RowConvertError {
+                        message: format!("Map size {} exceeds i32 range", map.size()),
+                    })?,
+                );
+                validity.push(true);
+                Ok(())
+            }
             TypedWriter::Struct {
                 field_writers,
                 validity,
@@ -844,12 +953,52 @@ fn finish_list_array(
     ))
 }
 
+fn finish_map_array(
+    keys: ArrayRef,
+    values: ArrayRef,
+    value_nullable: bool,
+    offsets: &[i32],
+    validity: &[bool],
+) -> ArrayRef {
+    use arrow::array::{Array, MapArray, StructArray};
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::Field;
+    use std::sync::Arc;
+
+    let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets.to_vec()));
+    let null_buffer = NullBuffer::from(validity.to_vec());
+
+    let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
+    let value_field = Arc::new(Field::new(
+        "value",
+        values.data_type().clone(),
+        value_nullable,
+    ));
+
+    let struct_array = StructArray::from(vec![(key_field, keys), (value_field, values)]);
+
+    let entries_field = Arc::new(Field::new(
+        "entries",
+        struct_array.data_type().clone(),
+        false,
+    ));
+
+    Arc::new(MapArray::new(
+        entries_field,
+        offsets_buffer,
+        struct_array,
+        Some(null_buffer),
+        false,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::metadata::DataTypes;
     use crate::record::to_arrow_type;
     use crate::row::binary_array::FlussArrayWriter;
+    use crate::row::binary_map::FlussMapWriter;
     use crate::row::{Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz};
     use arrow::array::*;
     use bigdecimal::BigDecimal;
@@ -1115,5 +1264,57 @@ mod tests {
             !list_field.is_nullable(),
             "Arrow field inside the list should be non-nullable"
         );
+    }
+
+    #[test]
+    fn test_write_map_type() {
+        use crate::metadata::DataTypes;
+        let key_type = DataTypes::int();
+        let value_type = DataTypes::string();
+        let fluss_type = DataTypes::map(key_type.clone(), value_type.clone());
+
+        let mut map_writer = FlussMapWriter::new(2, &key_type, &value_type);
+        map_writer.write_entry(1.into(), "a".into()).unwrap();
+        map_writer.write_entry(2.into(), "b".into()).unwrap();
+        let map = map_writer.complete().unwrap();
+
+        let arr = write_one(&fluss_type, Datum::Map(map));
+        let map_arr = arr.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map_arr.len(), 1);
+
+        let entries = map_arr.value(0);
+        let struct_arr = entries.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_arr.num_columns(), 2);
+
+        let keys = struct_arr
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let values = struct_arr
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys.value(0), 1);
+        assert_eq!(keys.value(1), 2);
+
+        assert_eq!(values.len(), 2);
+        assert_eq!(values.value(0), "a");
+        assert_eq!(values.value(1), "b");
+    }
+
+    #[test]
+    fn test_write_null_map_type() {
+        use crate::metadata::DataTypes;
+
+        let fluss_type = DataTypes::map(DataTypes::int(), DataTypes::string());
+        let arr = write_one(&fluss_type, Datum::Null);
+        let map_arr = arr.as_any().downcast_ref::<MapArray>().unwrap();
+
+        assert_eq!(map_arr.len(), 1);
+        assert!(map_arr.is_null(0));
     }
 }

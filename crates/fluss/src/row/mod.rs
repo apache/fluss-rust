@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod binary_array;
+pub mod binary_map;
 mod column;
 
 pub(crate) mod datum;
@@ -32,7 +33,9 @@ mod projected_row;
 mod row_decoder;
 
 use crate::client::WriteFormat;
-pub use binary_array::FlussArray;
+use crate::metadata::DataType;
+pub use binary_array::{FlussArray, FlussArrayWriter};
+pub use binary_map::{FlussMap, FlussMapWriter};
 use bytes::Bytes;
 pub use column::*;
 pub use compacted::CompactedRow;
@@ -131,7 +134,10 @@ pub trait InternalRow: Send + Sync {
     /// Returns the array value at the given position
     fn get_array(&self, pos: usize) -> Result<FlussArray>;
 
-    /// Returns the nested row value at the given position
+    /// Returns the map value at the given position
+    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap>;
+
+    /// Returns     the nested row value at the given position
     fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
         Err(IllegalArgument {
             message: format!("get_row not supported at position {pos}"),
@@ -299,6 +305,20 @@ impl<'a> InternalRow for GenericRow<'a> {
             Datum::Array(a) => Ok(a.clone()),
             other => Err(IllegalArgument {
                 message: format!("type mismatch at position {pos}: expected Array, got {other:?}"),
+            }),
+        }
+    }
+
+    fn get_map(
+        &self,
+        pos: usize,
+        _key_type: &DataType,
+        _value_type: &DataType,
+    ) -> Result<FlussMap> {
+        match self.get_value(pos)? {
+            Datum::Map(m) => Ok(m.clone()),
+            other => Err(IllegalArgument {
+                message: format!("type mismatch at position {pos}: expected Map, got {other:?}"),
             }),
         }
     }

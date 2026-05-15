@@ -23,6 +23,8 @@ use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::Decimal;
 use crate::row::binary::{BinaryRowFormat, BinaryWriter, ValueWriter};
+use crate::row::binary_array::FlussArray;
+use crate::row::binary_map::FlussMap;
 use crate::row::datum::{TimestampLtz, TimestampNtz};
 use delegate::delegate;
 
@@ -109,7 +111,9 @@ impl BinaryWriter for CompactedKeyWriter {
 
             fn write_timestamp_ltz(&mut self, value: &TimestampLtz, precision: u32);
 
-            fn write_array(&mut self, value: &[u8]);
+            fn write_array(&mut self, value: &FlussArray);
+
+            fn write_map(&mut self, value: &FlussMap);
         }
     }
 

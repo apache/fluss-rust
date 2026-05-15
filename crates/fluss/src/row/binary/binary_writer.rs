@@ -18,10 +18,10 @@
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{DataType, RowType};
-use crate::row::Datum;
 use crate::row::Decimal;
 use crate::row::binary::BinaryRowFormat;
 use crate::row::datum::{TimestampLtz, TimestampNtz};
+use crate::row::{Datum, FlussArray, FlussMap};
 
 /// Writer to write a composite data format, like row, array,
 #[allow(dead_code)]
@@ -69,7 +69,9 @@ pub trait BinaryWriter {
 
     fn write_timestamp_ltz(&mut self, value: &TimestampLtz, precision: u32);
 
-    fn write_array(&mut self, value: &[u8]);
+    fn write_array(&mut self, value: &FlussArray);
+
+    fn write_map(&mut self, value: &FlussMap);
 
     // TODO Row serializer
     // fn write_row(&mut self, pos: i32, value: &InternalRow);
@@ -138,6 +140,7 @@ pub enum InnerValueWriter {
     TimestampNtz(u32), // precision
     TimestampLtz(u32), // precision
     Array,
+    Map,
     Row(NestedRowWriter),
 }
 
@@ -207,13 +210,10 @@ impl InnerValueWriter {
                 Ok(InnerValueWriter::TimestampLtz(t.precision()))
             }
             DataType::Array(_) => Ok(InnerValueWriter::Array),
+            DataType::Map(_) => Ok(InnerValueWriter::Map),
             DataType::Row(row_type) => Ok(InnerValueWriter::Row(NestedRowWriter::from_row_type(
                 row_type,
             )?)),
-            _ => unimplemented!(
-                "ValueWriter for DataType {:?} is currently not implemented",
-                data_type
-            ),
         }
     }
     pub fn write_value<W: BinaryWriter>(
@@ -273,7 +273,10 @@ impl InnerValueWriter {
                 writer.write_timestamp_ltz(ts, *p);
             }
             (InnerValueWriter::Array, Datum::Array(arr)) => {
-                writer.write_array(arr.as_bytes());
+                writer.write_array(arr);
+            }
+            (InnerValueWriter::Map, Datum::Map(map)) => {
+                writer.write_map(map);
             }
             (InnerValueWriter::Row(nested_writer), Datum::Row(inner_row)) => {
                 use crate::row::compacted::CompactedRowWriter;

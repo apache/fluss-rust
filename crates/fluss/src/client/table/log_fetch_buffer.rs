@@ -842,7 +842,11 @@ mod tests {
 
     fn test_read_context() -> Result<ReadContext> {
         let row_type = RowType::new(vec![DataField::new("id", DataTypes::int(), None)]);
-        Ok(ReadContext::new(to_arrow_schema(&row_type)?, false))
+        Ok(ReadContext::new(
+            to_arrow_schema(&row_type)?,
+            Arc::new(row_type),
+            false,
+        ))
     }
 
     struct ErrorPendingFetch {
@@ -921,7 +925,7 @@ mod tests {
 
         let data = builder.build()?;
         let log_records = LogRecordsBatches::new(data.clone());
-        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, false);
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
         let mut fetch = DefaultCompletedFetch::new(
             TableBucket::new(1, 0),
             log_records,
