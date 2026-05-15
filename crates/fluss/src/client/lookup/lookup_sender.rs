@@ -197,7 +197,7 @@ impl<T> LookupBatch<T> {
             return;
         }
 
-        for (lookup, value) in self.lookups.iter_mut().zip(values.into_iter()) {
+        for (lookup, value) in self.lookups.iter_mut().zip(values) {
             lookup.complete(Ok(value));
         }
     }
