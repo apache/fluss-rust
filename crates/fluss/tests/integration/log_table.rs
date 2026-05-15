@@ -1102,9 +1102,17 @@ mod table_test {
         let found_row = records[0].row();
         assert_eq!(found_row.get_int(0).unwrap(), 1);
 
-        // 4. Assert Map
+        // 4. Assert Map. Look the types up from `map_type` rather than reusing
+        // the locally-stashed `key_type`/`value_type`: `MapType::with_nullable`
+        // forces the stored key non-nullable, which exercises the same
+        // (non-nullable schema) vs (Arrow-derived nullable) comparison realistic
+        // callers hit.
+        let (mt_key, mt_value) = match &map_type {
+            fluss::metadata::DataType::Map(m) => (m.key_type(), m.value_type()),
+            _ => unreachable!("map_type is a MAP"),
+        };
         let decoded_map = found_row
-            .get_map(1, &key_type, &value_type)
+            .get_map(1, mt_key, mt_value)
             .expect("Failed to get map");
         assert_eq!(decoded_map.size(), 3);
 

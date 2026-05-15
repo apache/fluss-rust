@@ -18,7 +18,7 @@
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{DataType, RowType};
-use crate::record::from_arrow_type;
+use crate::record::from_arrow_field;
 use crate::row::binary_array::FlussArrayWriter;
 use crate::row::binary_map::FlussMap;
 use crate::row::datum::{Date, Datum, Time, TimestampLtz, TimestampNtz};
@@ -413,13 +413,47 @@ fn arrow_value_to_datum(
         ArrowDataType::List(field) => {
             let list_arr = downcast!(ListArray);
             let values = list_arr.value(row_id);
+            // Infer via from_arrow_field so the inferred element type
+            // matches what `arrow_map_entry_to_fluss_map` / strict `==`
+            // expect when there's no upstream Fluss schema.
             let element_fluss_type = match fluss_type {
                 Some(DataType::Array(at)) => at.get_element_type().clone(),
-                _ => from_arrow_type(field.data_type())?,
+                _ => from_arrow_field(field)?,
             };
             let mut writer = FlussArrayWriter::new(values.len(), &element_fluss_type);
             write_arrow_values_to_fluss_array(&*values, &element_fluss_type, &mut writer)?;
             Ok(Datum::Array(writer.complete()?))
+        }
+        ArrowDataType::Map(entries_field, _) => {
+            let map_arr = downcast!(MapArray);
+            let entries = map_arr.value(row_id);
+            let (key_type, value_type) = match fluss_type {
+                Some(DataType::Map(m)) => (m.key_type().clone(), m.value_type().clone()),
+                _ => {
+                    let fields = match entries_field.data_type() {
+                        ArrowDataType::Struct(f) => f,
+                        other => {
+                            return Err(IllegalArgument {
+                                message: format!("expected Struct for Map entries, got {other:?}"),
+                            });
+                        }
+                    };
+                    if fields.len() != 2 {
+                        return Err(IllegalArgument {
+                            message: format!(
+                                "Map entries Struct must have 2 fields, got {}",
+                                fields.len()
+                            ),
+                        });
+                    }
+                    (from_arrow_field(&fields[0])?, from_arrow_field(&fields[1])?)
+                }
+            };
+            Ok(Datum::Map(arrow_map_entry_to_fluss_map(
+                &entries,
+                &key_type,
+                &value_type,
+            )?))
         }
         other => Err(IllegalArgument {
             message: format!("unsupported Arrow data type for nested row extraction: {other:?}"),
@@ -627,19 +661,16 @@ impl InternalRow for ColumnarRow {
         };
 
         let column = self.column(pos)?;
-        let values = if let Some(list_arr) = column.as_any().downcast_ref::<ListArray>() {
-            list_arr.value(self.row_id)
-        } else {
-            return Err(IllegalArgument {
-                message: format!(
-                    "expected List array at position {pos}, got {:?}",
-                    column.data_type()
-                ),
-            });
+        let element_field = match column.data_type() {
+            ArrowDataType::List(field) => field,
+            other => {
+                return Err(IllegalArgument {
+                    message: format!("expected List array at position {pos}, got {other:?}"),
+                });
+            }
         };
 
-        // Validate that the Arrow element type matches the expected Fluss element type
-        let actual_element_type = from_arrow_type(values.data_type())?;
+        let actual_element_type = from_arrow_field(element_field)?;
         if actual_element_type != *element_fluss_type {
             return Err(IllegalArgument {
                 message: format!(
@@ -649,8 +680,12 @@ impl InternalRow for ColumnarRow {
             });
         }
 
+        let list_arr = column
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("data_type matched List but downcast failed; arrow-rs invariant violated");
+        let values = list_arr.value(self.row_id);
         let mut writer = FlussArrayWriter::new(values.len(), element_fluss_type);
-
         write_arrow_values_to_fluss_array(&*values, element_fluss_type, &mut writer)?;
         writer.complete()
     }
@@ -668,27 +703,6 @@ impl InternalRow for ColumnarRow {
                     ),
                 })?;
 
-        // Validate the Arrow element type matches the expected Fluss types
-        let actual_key_type = from_arrow_type(map_arr.key_type())?;
-        if actual_key_type != *key_type {
-            return Err(IllegalArgument {
-                message: format!(
-                    "Arrow map key type {:?} does not match expected Fluss type {:?}",
-                    actual_key_type, key_type
-                ),
-            });
-        }
-        let actual_value_type = from_arrow_type(map_arr.value_type())?;
-        if actual_value_type != *value_type {
-            return Err(IllegalArgument {
-                message: format!(
-                    "Arrow map value type {:?} does not match expected Fluss type {:?}",
-                    actual_value_type, value_type
-                ),
-            });
-        }
-
-        // Get the entries for this specific row
         arrow_map_entry_to_fluss_map(&map_arr.value(self.row_id), key_type, value_type)
     }
 
@@ -733,20 +747,24 @@ fn arrow_map_entry_to_fluss_map(
     key_type: &DataType,
     value_type: &DataType,
 ) -> Result<FlussMap> {
-    if struct_arr.num_columns() != 2 {
+    let fields = match struct_arr.data_type() {
+        ArrowDataType::Struct(f) => f,
+        other => {
+            return Err(IllegalArgument {
+                message: format!("expected Struct for Map entries, got {other:?}"),
+            });
+        }
+    };
+    if fields.len() != 2 {
         return Err(IllegalArgument {
             message: format!(
                 "Expected 2 columns in Map entries struct, got {}",
-                struct_arr.num_columns()
+                fields.len()
             ),
         });
     }
 
-    let keys_arrow = struct_arr.column(0);
-    let values_arrow = struct_arr.column(1);
-
-    // Validate that the Arrow key/value types match the expected Fluss types
-    let actual_key_type = from_arrow_type(keys_arrow.data_type())?;
+    let actual_key_type = from_arrow_field(&fields[0])?;
     if actual_key_type != *key_type {
         return Err(IllegalArgument {
             message: format!(
@@ -756,7 +774,7 @@ fn arrow_map_entry_to_fluss_map(
         });
     }
 
-    let actual_value_type = from_arrow_type(values_arrow.data_type())?;
+    let actual_value_type = from_arrow_field(&fields[1])?;
     if actual_value_type != *value_type {
         return Err(IllegalArgument {
             message: format!(
@@ -765,6 +783,9 @@ fn arrow_map_entry_to_fluss_map(
             ),
         });
     }
+
+    let keys_arrow = struct_arr.column(0);
+    let values_arrow = struct_arr.column(1);
 
     let len = keys_arrow.len();
 
@@ -1519,5 +1540,199 @@ mod tests {
         row.set_row_id(1);
         let nested_1 = row.get_row(0).unwrap();
         assert_eq!(nested_1.get_int(0).unwrap(), 20);
+    }
+
+    #[test]
+    fn columnar_row_get_map_accepts_non_nullable_key_from_map_type() {
+        use crate::metadata::DataTypes;
+        use arrow::array::{MapBuilder, StringBuilder};
+
+        // Arrow map column with INT keys, STRING values.
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), StringBuilder::new());
+        builder.keys().append_value(1);
+        builder.values().append_value("a");
+        builder.append(true).unwrap();
+        let map_arr = builder.finish();
+
+        let map_arrow_type = map_arr.data_type().clone();
+        let schema = Arc::new(Schema::new(vec![Field::new("m", map_arrow_type, true)]));
+        let batch =
+            Arc::new(RecordBatch::try_new(schema, vec![Arc::new(map_arr)]).expect("record batch"));
+
+        let map_type = DataTypes::map(DataTypes::int(), DataTypes::string());
+        let row_type = Arc::new(RowType::with_data_types(vec![map_type.clone()]));
+        let row = ColumnarRow::new(batch, row_type, 0, None);
+
+        let (k, v) = match &map_type {
+            crate::metadata::DataType::Map(m) => (m.key_type(), m.value_type()),
+            _ => unreachable!(),
+        };
+        let fluss_map = row
+            .get_map(0, k, v)
+            .expect("get_map should accept non-nullable key from MapType");
+        assert_eq!(fluss_map.size(), 1);
+        assert_eq!(fluss_map.key_array().get_int(0).unwrap(), 1);
+        assert_eq!(fluss_map.value_array().get_string(0).unwrap(), "a");
+    }
+
+    #[test]
+    fn columnar_row_reads_row_containing_map() {
+        use crate::metadata::DataTypes;
+        use arrow::array::{MapBuilder, StringBuilder};
+
+        // Inner Map<String, Int> Arrow column with one entry per row, 2 rows.
+        let mut mb = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        mb.keys().append_value("k1");
+        mb.values().append_value(42);
+        mb.append(true).unwrap();
+        mb.keys().append_value("k2");
+        mb.values().append_value(7);
+        mb.append(true).unwrap();
+        let map_arr = mb.finish();
+
+        // Struct { id: Int32, m: Map<String, Int> }
+        let id_arr = Int32Array::from(vec![10, 20]);
+        let struct_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("m", map_arr.data_type().clone(), false),
+        ]);
+        let struct_arr = Arc::new(StructArray::new(
+            struct_fields.clone(),
+            vec![Arc::new(id_arr), Arc::new(map_arr)],
+            None,
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "outer",
+            DataType::Struct(struct_fields),
+            false,
+        )]));
+        let batch = Arc::new(RecordBatch::try_new(schema, vec![struct_arr]).expect("record batch"));
+
+        // Fluss outer ROW<id INT, m MAP<STRING, INT>>
+        let inner_row_type = RowType::with_data_types(vec![
+            DataTypes::int(),
+            DataTypes::map(DataTypes::string(), DataTypes::int()),
+        ]);
+        let outer_row_type = Arc::new(RowType::with_data_types(vec![
+            crate::metadata::DataType::Row(inner_row_type),
+        ]));
+
+        let mut row = ColumnarRow::new(
+            batch,
+            outer_row_type.clone(),
+            0,
+            Some(outer_row_type.clone()),
+        );
+
+        let nested = row
+            .get_row(0)
+            .expect("reading row with Map field must succeed");
+        assert_eq!(nested.get_int(0).unwrap(), 10);
+        let inner_map = nested
+            .get_map(1, &DataTypes::string(), &DataTypes::int())
+            .expect("nested map should be accessible");
+        assert_eq!(inner_map.size(), 1);
+        assert_eq!(inner_map.key_array().get_string(0).unwrap(), "k1");
+        assert_eq!(inner_map.value_array().get_int(0).unwrap(), 42);
+
+        // Verify cache invalidation across rows works for Row-with-Map too.
+        row.set_row_id(1);
+        let nested = row.get_row(0).expect("row 1 must read");
+        assert_eq!(nested.get_int(0).unwrap(), 20);
+        let inner_map = nested
+            .get_map(1, &DataTypes::string(), &DataTypes::int())
+            .unwrap();
+        assert_eq!(inner_map.key_array().get_string(0).unwrap(), "k2");
+        assert_eq!(inner_map.value_array().get_int(0).unwrap(), 7);
+    }
+
+    #[test]
+    fn columnar_row_reads_array_of_maps() {
+        use crate::metadata::DataTypes;
+        use arrow::array::{ListBuilder, MapBuilder, StringBuilder};
+
+        // One row whose ARRAY<MAP<STRING, INT>> contains two maps:
+        // [{"k1" -> 1}, {"k2" -> 2, "k3" -> 3}].
+        let mut outer = ListBuilder::new(MapBuilder::new(
+            None,
+            StringBuilder::new(),
+            Int32Builder::new(),
+        ));
+        {
+            let mb = outer.values();
+            // Map 0: {"k1" -> 1}
+            mb.keys().append_value("k1");
+            mb.values().append_value(1);
+            mb.append(true).unwrap();
+            // Map 1: {"k2" -> 2, "k3" -> 3}
+            mb.keys().append_value("k2");
+            mb.values().append_value(2);
+            mb.keys().append_value("k3");
+            mb.values().append_value(3);
+            mb.append(true).unwrap();
+        }
+        outer.append(true);
+        let list_arr = outer.finish();
+        let arrow_dt = list_arr.data_type().clone();
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", arrow_dt, false)]));
+        let batch =
+            Arc::new(RecordBatch::try_new(schema, vec![Arc::new(list_arr)]).expect("record batch"));
+
+        let array_type = DataTypes::array(DataTypes::map(DataTypes::string(), DataTypes::int()));
+        let row_type = Arc::new(RowType::with_data_types(vec![array_type]));
+        let row = ColumnarRow::new(batch, row_type, 0, None);
+
+        let arr = row.get_array(0).expect("get_array on ARRAY<MAP> must work");
+        assert_eq!(arr.size(), 2);
+
+        let m0 = arr
+            .get_map(0, &DataTypes::string(), &DataTypes::int())
+            .unwrap();
+        assert_eq!(m0.size(), 1);
+        assert_eq!(m0.key_array().get_string(0).unwrap(), "k1");
+        assert_eq!(m0.value_array().get_int(0).unwrap(), 1);
+
+        let m1 = arr
+            .get_map(1, &DataTypes::string(), &DataTypes::int())
+            .unwrap();
+        assert_eq!(m1.size(), 2);
+        assert_eq!(m1.key_array().get_string(0).unwrap(), "k2");
+        assert_eq!(m1.value_array().get_int(0).unwrap(), 2);
+        assert_eq!(m1.key_array().get_string(1).unwrap(), "k3");
+        assert_eq!(m1.value_array().get_int(1).unwrap(), 3);
+    }
+
+    #[test]
+    fn columnar_row_get_map_rejects_real_type_mismatch() {
+        use crate::metadata::DataTypes;
+        use arrow::array::{MapBuilder, StringBuilder};
+
+        let mut mb = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        mb.keys().append_value("k");
+        mb.values().append_value(1);
+        mb.append(true).unwrap();
+        let map_arr = mb.finish();
+        let map_arrow_type = map_arr.data_type().clone();
+
+        let schema = Arc::new(Schema::new(vec![Field::new("m", map_arrow_type, true)]));
+        let batch =
+            Arc::new(RecordBatch::try_new(schema, vec![Arc::new(map_arr)]).expect("record batch"));
+
+        // Caller mis-declares the value type as STRING.
+        let row_type = Arc::new(RowType::with_data_types(vec![DataTypes::map(
+            DataTypes::string(),
+            DataTypes::string(),
+        )]));
+        let row = ColumnarRow::new(batch, row_type, 0, None);
+
+        let err = row
+            .get_map(0, &DataTypes::string(), &DataTypes::string())
+            .expect_err("type mismatch must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("does not match expected Fluss type"),
+            "unexpected error: {msg}"
+        );
     }
 }

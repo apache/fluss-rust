@@ -93,6 +93,17 @@ impl Serialize for FlussMap {
     }
 }
 
+fn check_no_null_keys(key_array: &FlussArray) -> Result<()> {
+    for i in 0..key_array.size() {
+        if key_array.is_null_at(i) {
+            return Err(IllegalArgument {
+                message: "FlussMap keys cannot be null".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl FlussMap {
     /// Validates the raw bytes and extracts the sub-arrays.
     fn validate(
@@ -163,14 +174,7 @@ impl FlussMap {
             });
         }
 
-        // Centralized null-key check: FlussMap keys are never allowed to be null.
-        for i in 0..key_array.size() {
-            if key_array.is_null_at(i) {
-                return Err(IllegalArgument {
-                    message: "FlussMap keys cannot be null".to_string(),
-                });
-            }
-        }
+        check_no_null_keys(&key_array)?;
 
         Ok((key_array, value_array))
     }
@@ -216,6 +220,7 @@ impl FlussMap {
                 ),
             });
         }
+        check_no_null_keys(key_array)?;
 
         let key_bytes = key_array.as_bytes();
         let value_bytes = value_array.as_bytes();
@@ -533,15 +538,16 @@ mod tests {
     #[test]
     fn test_null_keys_fail_validation() {
         let mut key_writer = FlussArrayWriter::new(1, &DataTypes::int());
-        key_writer.set_null_at(0); // null key!
+        key_writer.set_null_at(0);
         let key_array = key_writer.complete().unwrap();
 
         let mut value_writer = FlussArrayWriter::new(1, &DataTypes::int());
         value_writer.write_int(0, 100);
         let value_array = value_writer.complete().unwrap();
 
-        // Constructing bytes manually since from_arrays no longer catches it,
-        // and we want to verify validate catches it.
+        let err = FlussMap::from_arrays(&key_array, &value_array).unwrap_err();
+        assert!(err.to_string().contains("keys cannot be null"));
+
         let key_bytes = key_array.as_bytes();
         let value_bytes = value_array.as_bytes();
         let mut data = vec![];

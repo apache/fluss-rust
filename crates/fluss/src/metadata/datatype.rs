@@ -920,11 +920,34 @@ impl Display for ArrayType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Hash)]
 pub struct MapType {
     nullable: bool,
     key_type: Box<DataType>,
     value_type: Box<DataType>,
+}
+
+// Route Deserialize through `with_nullable` so a Serde-built MapType
+// collapses to the same canonical form as the constructor (otherwise
+// equivalent maps disagree under `PartialEq`).
+impl<'de> Deserialize<'de> for MapType {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            nullable: bool,
+            key_type: Box<DataType>,
+            value_type: Box<DataType>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(MapType::with_nullable(
+            raw.nullable,
+            *raw.key_type,
+            *raw.value_type,
+        ))
+    }
 }
 
 impl MapType {
@@ -1468,6 +1491,44 @@ fn test_map_display() {
         nested_map.to_string(),
         "MAP<STRING NOT NULL, MAP<INT NOT NULL, BOOLEAN>>"
     );
+}
+
+#[test]
+fn test_map_deserialize_normalises_key_nullability() {
+    let json = r#"{
+        "nullable": true,
+        "key_type": {"Int": {"nullable": true}},
+        "value_type": {"String": {"nullable": true}}
+    }"#;
+    let from_json: MapType = serde_json::from_str(json).expect("deserialize");
+    let from_ctor = MapType::new(DataTypes::int(), DataTypes::string());
+    assert_eq!(from_json, from_ctor);
+    assert!(!from_json.key_type().is_nullable());
+}
+
+#[test]
+fn test_map_deserialize_normalises_nested_map_keys() {
+    let json = r#"{
+        "nullable": true,
+        "key_type": {"String": {"nullable": true}},
+        "value_type": {"Map": {
+            "nullable": true,
+            "key_type": {"Int": {"nullable": true}},
+            "value_type": {"Boolean": {"nullable": true}}
+        }}
+    }"#;
+    let from_json: MapType = serde_json::from_str(json).expect("deserialize");
+    let from_ctor = MapType::new(
+        DataTypes::string(),
+        DataTypes::map(DataTypes::int(), DataTypes::boolean()),
+    );
+    assert_eq!(from_json, from_ctor);
+    assert!(!from_json.key_type().is_nullable());
+    let inner = match from_json.value_type() {
+        DataType::Map(m) => m,
+        other => panic!("expected nested Map, got {other:?}"),
+    };
+    assert!(!inner.key_type().is_nullable());
 }
 
 #[test]
