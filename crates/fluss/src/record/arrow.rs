@@ -1261,6 +1261,16 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
     })
 }
 
+/// Like `from_arrow_type`, but also reads the Field's nullability —
+/// Arrow stores it on the Field wrapper, not the leaf data type.
+pub(crate) fn from_arrow_field(field: &arrow_schema::Field) -> Result<DataType> {
+    let mut dt = from_arrow_type(field.data_type())?;
+    if !field.is_nullable() {
+        dt = dt.as_non_nullable();
+    }
+    Ok(dt)
+}
+
 /// Converts an Arrow data type back to a Fluss `DataType`.
 /// Used for reading array elements from Arrow ListArray back into Fluss types.
 pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
@@ -1317,17 +1327,30 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
                 DataTypes::timestamp_with_precision(precision)
             }
         }
-        ArrowDataType::List(field) => DataTypes::array(from_arrow_type(field.data_type())?),
+        ArrowDataType::List(field) => DataTypes::array(from_arrow_field(field)?),
+        ArrowDataType::Map(entries_field, _sorted) => {
+            let fields = match entries_field.data_type() {
+                ArrowDataType::Struct(f) => f,
+                other => {
+                    return Err(Error::IllegalArgument {
+                        message: format!("Map entries must be Struct, got {other:?}"),
+                    });
+                }
+            };
+            if fields.len() != 2 {
+                return Err(Error::IllegalArgument {
+                    message: format!(
+                        "Map entries Struct must have 2 fields (key, value), got {}",
+                        fields.len()
+                    ),
+                });
+            }
+            DataTypes::map(from_arrow_field(&fields[0])?, from_arrow_field(&fields[1])?)
+        }
         ArrowDataType::Struct(fields) => {
             let row_fields: Result<Vec<DataField>> = fields
                 .iter()
-                .map(|f| {
-                    let mut dt = from_arrow_type(f.data_type())?;
-                    if !f.is_nullable() {
-                        dt = dt.as_non_nullable();
-                    }
-                    Ok(DataField::new(f.name(), dt, None))
-                })
+                .map(|f| Ok(DataField::new(f.name(), from_arrow_field(f)?, None)))
                 .collect();
             DataTypes::row(row_fields?)
         }
@@ -1848,6 +1871,33 @@ mod tests {
             );
         } else {
             panic!("Expected ArrowDataType::Map, got {:?}", arrow_type);
+        }
+    }
+
+    #[test]
+    fn test_from_arrow_type_preserves_container_field_nullability() {
+        let arrow_list = ArrowDataType::List(Arc::new(arrow_schema::Field::new(
+            "item",
+            ArrowDataType::Int32,
+            false,
+        )));
+        match from_arrow_type(&arrow_list).unwrap() {
+            DataType::Array(at) => assert!(!at.get_element_type().is_nullable()),
+            other => panic!("expected Array, got {other:?}"),
+        }
+
+        let entries_struct = ArrowDataType::Struct(arrow_schema::Fields::from(vec![
+            arrow_schema::Field::new("key", ArrowDataType::Utf8, false),
+            arrow_schema::Field::new("value", ArrowDataType::Int32, false),
+        ]));
+        let entries_field = arrow_schema::Field::new("entries", entries_struct, false);
+        let arrow_map = ArrowDataType::Map(Arc::new(entries_field), false);
+        match from_arrow_type(&arrow_map).unwrap() {
+            DataType::Map(m) => {
+                assert!(!m.key_type().is_nullable());
+                assert!(!m.value_type().is_nullable());
+            }
+            other => panic!("expected Map, got {other:?}"),
         }
     }
 
