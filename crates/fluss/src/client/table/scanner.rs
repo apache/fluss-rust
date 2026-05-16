@@ -286,10 +286,10 @@ struct LogScannerInner {
 
 /// Snapshot state used to derive the scanner poll-timing metrics.
 ///
-/// Java's single-consumer guard (`acquire()` / `release()`) prevents 
-/// concurrent polls, so the individually-volatile fields are race-free 
-/// in practice. Rust's `poll()` takes `&self`, so the equivalent guarantee 
-/// is provided by a single `Mutex<PollState>`: every transition between fields 
+/// Java's single-consumer guard (`acquire()` / `release()`) prevents
+/// concurrent polls, so the individually-volatile fields are race-free
+/// in practice. Rust's `poll()` takes `&self`, so the equivalent guarantee
+/// is provided by a single `Mutex<PollState>`: every transition between fields
 /// is atomic.
 #[derive(Default, Debug)]
 struct PollState {
