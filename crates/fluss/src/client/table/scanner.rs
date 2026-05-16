@@ -1078,7 +1078,7 @@ impl LogFetcher {
                     }
                 };
 
-                // Build the context after the RPC so `request_start_time` measures only RPC wall-clock 
+                // Build the context after the RPC so `request_start_time` measures only RPC wall-clock
                 // — not tablet-server lookup or connection acquisition, which is matching Java's bebaviour
                 // Building it here also skips the allocation on the early-return error paths above.
                 let response_context = FetchResponseContext {
