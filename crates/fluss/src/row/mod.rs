@@ -41,7 +41,7 @@ pub use column::*;
 pub use compacted::CompactedRow;
 pub use datum::*;
 pub use decimal::{Decimal, MAX_COMPACT_PRECISION};
-pub use encode::KeyEncoder;
+pub use encode::{IcebergKeyEncoder, KeyEncoder};
 pub(crate) use fixed_schema_decoder::FixedSchemaDecoder;
 pub use lookup_row::LookupRow;
 pub(crate) use projected_row::ProjectedRow;
