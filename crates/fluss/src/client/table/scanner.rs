@@ -27,6 +27,7 @@ use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{LogFormat, PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
+use crate::metrics::{SCANNER_POLL_IDLE_RATIO, SCANNER_TIME_BETWEEN_POLL_MS};
 use crate::proto::{
     ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
 };
@@ -277,6 +278,50 @@ struct LogScannerInner {
     /// Guards against subscription changes while a
     /// [`crate::client::RecordBatchLogReader`] is iterating.
     reader_active: std::sync::atomic::AtomicBool,
+    /// Single critical section for all poll-timing state — keeps
+    /// `last_poll_at`, `poll_start_at`, and `time_between_poll_ms`
+    /// consistent under concurrent `poll()` calls.
+    poll_state: Mutex<PollState>,
+}
+
+/// Snapshot state used to derive the scanner poll-timing metrics.
+///
+/// Java's single-consumer guard (`acquire()` / `release()`) prevents 
+/// concurrent polls, so the individually-volatile fields are race-free 
+/// in practice. Rust's `poll()` takes `&self`, so the equivalent guarantee 
+/// is provided by a single `Mutex<PollState>`: every transition between fields 
+/// is atomic.
+#[derive(Default, Debug)]
+struct PollState {
+    /// Instant captured at the most recent `record_poll_start()`. `None`
+    /// before the first poll.
+    last_poll_at: Option<Instant>,
+    /// Instant captured at the start of the in-flight poll. `None` after
+    /// the last `record_poll_end()`.
+    poll_start_at: Option<Instant>,
+    /// Cached ms between the two most recent poll starts, used to compute
+    /// `poll_idle_ratio` in `record_poll_end`.
+    time_between_poll_ms: f64,
+}
+
+/// Pairs `record_poll_start` with `record_poll_end`. Created
+/// at the top of `poll_records` / `poll_batches`; `record_poll_end` runs on
+/// drop, including the cancellation path (caller drops the future).
+struct PollGuard<'a> {
+    inner: &'a LogScannerInner,
+}
+
+impl<'a> PollGuard<'a> {
+    fn new(inner: &'a LogScannerInner) -> Self {
+        inner.record_poll_start();
+        Self { inner }
+    }
+}
+
+impl Drop for PollGuard<'_> {
+    fn drop(&mut self) {
+        self.inner.record_poll_end();
+    }
 }
 
 impl LogScannerInner {
@@ -318,6 +363,7 @@ impl LogScannerInner {
             )?,
             arrow_schema,
             reader_active: std::sync::atomic::AtomicBool::new(false),
+            poll_state: Mutex::new(PollState::default()),
         })
     }
 
@@ -336,6 +382,10 @@ impl LogScannerInner {
     }
 
     async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+        // Pairs record_poll_start (now) with record_poll_end
+        // (drop). Runs on every exit, including the cancellation path
+        // where the caller drops this future.
+        let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -371,6 +421,36 @@ impl LogScannerInner {
             }
 
             // Buffer became non-empty, try again
+        }
+    }
+
+    /// Single critical section keeps `last_poll_at`, `poll_start_at`, and
+    /// `time_between_poll_ms` consistent under concurrent polls.
+    fn record_poll_start(&self) {
+        let now = Instant::now();
+        let mut state = self.poll_state.lock();
+        if let Some(prev) = state.last_poll_at {
+            let between_ms = now.duration_since(prev).as_secs_f64() * 1000.0;
+            state.time_between_poll_ms = between_ms;
+            metrics::gauge!(SCANNER_TIME_BETWEEN_POLL_MS).set(between_ms);
+        }
+        state.last_poll_at = Some(now);
+        state.poll_start_at = Some(now);
+    }
+
+    /// Computes `poll_idle_ratio = poll_time / (poll_time + between_time)`.
+    /// On the first poll, `between_time` is 0 so the ratio is 1.0
+    /// (poll-bound).
+    fn record_poll_end(&self) {
+        let now = Instant::now();
+        let mut state = self.poll_state.lock();
+        let Some(start) = state.poll_start_at.take() else {
+            return;
+        };
+        let poll_time_ms = now.duration_since(start).as_secs_f64() * 1000.0;
+        let total = poll_time_ms + state.time_between_poll_ms;
+        if total > 0.0 {
+            metrics::gauge!(SCANNER_POLL_IDLE_RATIO).set(poll_time_ms / total);
         }
     }
 
@@ -516,6 +596,7 @@ impl LogScannerInner {
     }
 
     async fn poll_batches(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
+        let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -2203,5 +2284,83 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    /// Exercises the `PollGuard` lifecycle: two `record_poll_start` calls with
+    /// a short sleep between them, plus an end-of-poll drop via the guard.
+    /// Asserts both poll-timing gauges are emitted at the right moments and
+    /// `record_poll_end` runs on guard drop (the cancellation-safe path).
+    #[test]
+    fn poll_guard_emits_time_between_poll_and_idle_ratio() {
+        use crate::metrics::{SCANNER_POLL_IDLE_RATIO, SCANNER_TIME_BETWEEN_POLL_MS};
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current_thread runtime");
+
+            rt.block_on(async {
+                let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+                let table_info = build_table_info(table_path.clone(), 1, 1);
+                let cluster = build_cluster_arc(&table_path, 1, 1);
+                let metadata = Arc::new(Metadata::new_for_test(cluster));
+                let inner = LogScannerInner::new(
+                    &table_info,
+                    metadata,
+                    Arc::new(RpcClient::new()),
+                    &Config::default(),
+                    None,
+                )
+                .expect("build LogScannerInner");
+
+                // First poll: no previous poll → no between/idle samples yet.
+                {
+                    let _g = PollGuard::new(&inner);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    // _g dropped here: record_poll_end fires
+                }
+                // Idle ratio is emitted on first poll (poll_time / poll_time = 1.0).
+
+                // Brief gap so time_between_poll_ms is observably > 0.
+                std::thread::sleep(std::time::Duration::from_millis(5));
+
+                // Second poll: emits both time_between_poll_ms and a fresh idle ratio.
+                {
+                    let _g = PollGuard::new(&inner);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            });
+        });
+
+        let entries: Vec<_> = snapshotter.snapshot().into_vec();
+        let find_gauge = |name: &str| -> Option<f64> {
+            entries.iter().find_map(|(key, _, _, val)| {
+                if key.key().name() == name {
+                    if let DebugValue::Gauge(g) = val {
+                        return Some(g.into_inner());
+                    }
+                }
+                None
+            })
+        };
+
+        let between = find_gauge(SCANNER_TIME_BETWEEN_POLL_MS)
+            .expect("time_between_poll_ms must be emitted on second poll");
+        assert!(
+            between > 0.0,
+            "time_between_poll_ms must be positive, got {between}"
+        );
+
+        let ratio = find_gauge(SCANNER_POLL_IDLE_RATIO)
+            .expect("poll_idle_ratio must be emitted on poll end");
+        assert!(
+            (0.0..=1.0).contains(&ratio),
+            "poll_idle_ratio must be in [0, 1], got {ratio}"
+        );
     }
 }
