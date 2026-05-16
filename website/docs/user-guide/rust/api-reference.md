@@ -139,6 +139,8 @@ Complete API reference for the Fluss Rust client.
 
 ## `LogScanner`
 
+Single-consumer: do not call `poll` concurrently on the same scanner (e.g. from `tokio::join!` or two tasks sharing an `Arc`). Mirrors Java's `LogScannerImpl.acquire()` guard. Debug builds surface overlapping calls via a `debug_assert!`; release builds skip the check for performance and produce skewed poll-timing metrics (`fluss.client.scanner.time_between_poll_ms`, `fluss.client.scanner.poll_idle_ratio`) if the contract is violated.
+
 | Method                                                                                                    | Description                                              |
 |-----------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
 | `async fn subscribe(&self, bucket_id: i32, start_offset: i64) -> Result<()>`                              | Subscribe to a bucket                                    |
@@ -151,7 +153,7 @@ Complete API reference for the Fluss Rust client.
 
 ## `RecordBatchLogScanner`
 
-Overlapping `poll` calls on clones that share state, or `poll` concurrent with `RecordBatchLogReader::next_batch`, are not supported. Use one active polling/consumption call at a time per underlying scanner state.
+Single-consumer: overlapping `poll` calls on handles that share state, or `poll` concurrent with `RecordBatchLogReader::next_batch`, are not supported — use one active polling/consumption call at a time per underlying scanner state. Mirrors Java's `LogScannerImpl.acquire()` guard. Debug builds surface overlapping calls via a `debug_assert!`; release builds skip the check for performance and produce skewed poll-timing metrics (`fluss.client.scanner.time_between_poll_ms`, `fluss.client.scanner.poll_idle_ratio`) if the contract is violated.
 
 | Method                                                                                                    | Description                                              |
 |-----------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
