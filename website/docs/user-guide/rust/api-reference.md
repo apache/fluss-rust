@@ -466,6 +466,7 @@ Implements the `InternalRow` trait (see below).
 | `fn get_binary(&self, idx: usize, length: usize) -> Result<&[u8]>`                     | Get fixed-length binary value           |
 | `fn get_char(&self, idx: usize, length: usize) -> Result<&str>`                        | Get fixed-length char value             |
 | `fn get_array(&self, idx: usize) -> Result<FlussArray>`                                | Get array value                         |
+| `fn get_map(&self, idx: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap>` | Get map value                           |
 
 ## `FlussArray`
 
@@ -478,6 +479,19 @@ Implements the `InternalRow` trait (see below).
 | `fn as_bytes(&self) -> &[u8]` | Get encoded bytes of the array |
 
 Element getters mirror `InternalRow` typed getters and return `Result<T>`. For example, use `get_int()`, `get_long()`, and `get_double()` for primitive elements, and `get_string()`, `get_binary()`, `get_decimal()`, `get_timestamp_ntz()`, `get_timestamp_ltz()`, and `get_array()` for variable-length or nested elements.
+
+## `FlussMap`
+
+`FlussMap` is the Rust row representation for `MAP` values. You usually obtain it from `InternalRow::get_map()`.
+
+| Method | Description |
+|--------|-------------|
+| `fn size(&self) -> usize` | Number of entries in the map |
+| `fn as_bytes(&self) -> &[u8]` | Get encoded bytes of the map |
+| `fn key_array(&self) -> &FlussArray` | Get the key array |
+| `fn value_array(&self) -> &FlussArray` | Get the value array |
+
+Key and value arrays are returned as `&FlussArray`, allowing you to read entries by retrieving keys and values at the same index positions.
 
 ## `ChangeType`
 
