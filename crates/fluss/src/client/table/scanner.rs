@@ -27,6 +27,9 @@ use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{LogFormat, PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
+use crate::metrics::{
+    SCANNER_BYTES_PER_REQUEST, SCANNER_FETCH_LATENCY_MS, SCANNER_FETCH_REQUESTS_TOTAL,
+};
 use crate::proto::{
     ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
 };
@@ -39,6 +42,7 @@ use crate::{PartitionId, TableId};
 use arrow_schema::SchemaRef;
 use log::{debug, warn};
 use parking_lot::{Mutex, RwLock};
+use prost::Message;
 use std::{
     collections::{HashMap, HashSet},
     slice::from_ref,
@@ -779,6 +783,9 @@ struct FetchResponseContext {
     read_context: ReadContext,
     remote_read_context: ReadContext,
     remote_log_downloader: Arc<RemoteLogDownloader>,
+    /// `Instant` captured immediately before the FetchLog RPC; used to compute
+    /// `scanner.fetch_latency_ms` on a successful response.
+    request_start_time: Instant,
 }
 
 impl LogFetcher {
@@ -1021,14 +1028,6 @@ impl LogFetcher {
             let remote_log_downloader = Arc::clone(&self.remote_log_downloader);
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
             let metadata = self.metadata.clone();
-            let response_context = FetchResponseContext {
-                metadata: metadata.clone(),
-                log_fetch_buffer,
-                log_scanner_status,
-                read_context,
-                remote_read_context,
-                remote_log_downloader,
-            };
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
             // This is acceptable because:
@@ -1060,6 +1059,11 @@ impl LogFetcher {
                     }
                 };
 
+                // Java increment the fetch counter and capture `requestStartTime` immediately
+                // before the RPC. Failed connection acquisition above is not counted.
+                let request_start_time = Instant::now();
+                metrics::counter!(SCANNER_FETCH_REQUESTS_TOTAL).increment(1);
+
                 let fetch_response = match con
                     .request(message::FetchLogRequest::new(fetch_request.clone()))
                     .await
@@ -1074,6 +1078,18 @@ impl LogFetcher {
                     }
                 };
 
+                // Build the context after the RPC so `request_start_time` measures only RPC wall-clock
+                // — not tablet-server lookup or connection acquisition, which is matching Java's bebaviour
+                // Building it here also skips the allocation on the early-return error paths above.
+                let response_context = FetchResponseContext {
+                    metadata: metadata.clone(),
+                    log_fetch_buffer,
+                    log_scanner_status,
+                    read_context,
+                    remote_read_context,
+                    remote_log_downloader,
+                    request_start_time,
+                };
                 Self::handle_fetch_response(fetch_response, response_context).await;
             });
         }
@@ -1102,7 +1118,16 @@ impl LogFetcher {
             read_context,
             remote_read_context,
             remote_log_downloader,
+            request_start_time,
         } = context;
+
+        // `encoded_len()` mirrors Java's `fetchLogResponse.totalSize()`:
+        // both report the serialized API message body size, excluding protocol
+        // headers and framing. Recorded unconditionally (including zero-record
+        // responses) to match Java's histogram semantics.
+        metrics::histogram!(SCANNER_FETCH_LATENCY_MS)
+            .record(request_start_time.elapsed().as_secs_f64() * 1000.0);
+        metrics::histogram!(SCANNER_BYTES_PER_REQUEST).record(fetch_response.encoded_len() as f64);
 
         for pb_fetch_log_resp in fetch_response.tables_resp {
             let table_id = pb_fetch_log_resp.table_id;
@@ -2029,6 +2054,7 @@ mod tests {
             read_context: fetcher.read_context.clone(),
             remote_read_context: fetcher.remote_read_context.clone(),
             remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            request_start_time: Instant::now(),
         };
 
         LogFetcher::handle_fetch_response(response, response_context).await;
@@ -2082,6 +2108,7 @@ mod tests {
             read_context: fetcher.read_context.clone(),
             remote_read_context: fetcher.remote_read_context.clone(),
             remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            request_start_time: Instant::now(),
         };
 
         LogFetcher::handle_fetch_response(response, response_context).await;
@@ -2203,5 +2230,111 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    /// Drives `handle_fetch_response` against a local metrics recorder and
+    /// asserts that latency + bytes-per-request histograms are emitted with
+    /// values that mirror what Java would record. This complements the unit
+    /// tests in `metrics.rs` (which only verify the facade) by exercising
+    /// the actual instrumented call path.
+    ///
+    /// Note: uses a `current_thread` runtime inside `with_local_recorder`
+    /// (rather than `#[tokio::test]`) because the metrics facade installs a
+    /// thread-local recorder; running the async work on the same thread is
+    /// the only way to observe the emitted metrics in the snapshot. Both
+    /// the fetcher construction and the `handle_fetch_response` call run
+    /// inside the runtime (the security-token manager and remote-log
+    /// downloader require a Tokio reactor).
+    #[test]
+    fn handle_fetch_response_emits_latency_and_bytes_metrics() {
+        use crate::metrics::{SCANNER_BYTES_PER_REQUEST, SCANNER_FETCH_LATENCY_MS};
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        let expected_bytes = metrics::with_local_recorder(&recorder, || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current_thread runtime");
+
+            rt.block_on(async {
+                let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+                let table_info = build_table_info(table_path.clone(), 1, 1);
+                let cluster = build_cluster_arc(&table_path, 1, 1);
+                let metadata = Arc::new(Metadata::new_for_test(cluster));
+                let status = Arc::new(LogScannerStatus::new());
+                status.assign_scan_bucket(TableBucket::new(1, 0), 5);
+                let fetcher = LogFetcher::new(
+                    table_info,
+                    Arc::new(RpcClient::new()),
+                    metadata.clone(),
+                    status,
+                    &Config::default(),
+                    None,
+                )
+                .expect("build LogFetcher");
+
+                let response = FetchLogResponse {
+                    tables_resp: vec![PbFetchLogRespForTable {
+                        table_id: 1,
+                        buckets_resp: vec![PbFetchLogRespForBucket {
+                            partition_id: None,
+                            bucket_id: 0,
+                            error_code: Some(FlussError::None.code()),
+                            error_message: None,
+                            high_watermark: Some(7),
+                            log_start_offset: Some(0),
+                            remote_log_fetch_info: None,
+                            records: None,
+                        }],
+                    }],
+                };
+                let expected_bytes = response.encoded_len() as f64;
+                let response_context = FetchResponseContext {
+                    metadata: metadata.clone(),
+                    log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
+                    log_scanner_status: fetcher.log_scanner_status.clone(),
+                    read_context: fetcher.read_context.clone(),
+                    remote_read_context: fetcher.remote_read_context.clone(),
+                    remote_log_downloader: fetcher.remote_log_downloader.clone(),
+                    request_start_time: Instant::now(),
+                };
+
+                LogFetcher::handle_fetch_response(response, response_context).await;
+                expected_bytes
+            })
+        });
+
+        let entries: Vec<_> = snapshotter.snapshot().into_vec();
+        let find_histogram = |name: &str| -> Vec<f64> {
+            entries
+                .iter()
+                .find_map(|(key, _, _, val)| {
+                    if key.key().name() == name {
+                        if let DebugValue::Histogram(v) = val {
+                            return Some(v.iter().map(|f| f.into_inner()).collect());
+                        }
+                    }
+                    None
+                })
+                .unwrap_or_default()
+        };
+
+        let latency_samples = find_histogram(SCANNER_FETCH_LATENCY_MS);
+        assert_eq!(latency_samples.len(), 1, "expected one latency sample");
+        assert!(
+            latency_samples[0] >= 0.0,
+            "latency must be non-negative, got {}",
+            latency_samples[0]
+        );
+
+        let bytes_samples = find_histogram(SCANNER_BYTES_PER_REQUEST);
+        assert_eq!(
+            bytes_samples,
+            vec![expected_bytes],
+            "bytes histogram must record encoded_len() for parity with Java fetchLogResponse.totalSize()",
+        );
     }
 }

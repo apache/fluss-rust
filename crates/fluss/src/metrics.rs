@@ -49,6 +49,43 @@ pub const CLIENT_BYTES_RECEIVED_TOTAL: &str = "fluss.client.bytes_received.total
 pub const CLIENT_REQUEST_LATENCY_MS: &str = "fluss.client.request_latency_ms";
 pub const CLIENT_REQUESTS_IN_FLIGHT: &str = "fluss.client.requests_in_flight";
 
+// ---------------------------------------------------------------------------
+// Scanner fetch + remote download metrics
+//
+// Fetch metrics are recorded in the LogFetcher fetch loop on response
+// completion. Remote metrics are recorded inside RemoteLogDownloader's
+// download task.
+//
+// Java uses a volatile-long gauge for fetch latency and Counter+MeterView
+// for rates. Rust uses a histogram for latency (richer percentile data)
+// and counters for throughput; the recorder/exporter handles rate
+// computation (e.g. Prometheus `rate()`).
+//
+// Java emits one `ScannerMetricGroup` per (database, table). Rust currently
+// emits without per-table labels — adding `database`/`table` labels is
+// tracked separately and intentionally deferred to keep this PR minimal.
+// ---------------------------------------------------------------------------
+
+/// Histogram: elapsed ms for each successful FetchLog RPC.
+pub const SCANNER_FETCH_LATENCY_MS: &str = "fluss.client.scanner.fetch_latency_ms";
+
+/// Counter: total FetchLog RPC requests attempted after connection acquisition.
+pub const SCANNER_FETCH_REQUESTS_TOTAL: &str = "fluss.client.scanner.fetch_requests.total";
+
+/// Histogram: serialized bytes per successful FetchLog response.
+pub const SCANNER_BYTES_PER_REQUEST: &str = "fluss.client.scanner.bytes_per_request";
+
+/// Counter: total remote log download attempts (includes per-segment retries).
+pub const SCANNER_REMOTE_FETCH_REQUESTS_TOTAL: &str =
+    "fluss.client.scanner.remote_fetch_requests.total";
+
+/// Counter: total bytes downloaded from remote log storage.
+pub const SCANNER_REMOTE_FETCH_BYTES_TOTAL: &str = "fluss.client.scanner.remote_fetch_bytes.total";
+
+/// Counter: total remote log download failures (each retry attempt counts).
+pub const SCANNER_REMOTE_FETCH_ERRORS_TOTAL: &str =
+    "fluss.client.scanner.remote_fetch_errors.total";
+
 /// Returns a label value for reportable API keys, matching Java's
 /// `ConnectionMetrics.REPORT_API_KEYS` filter (`ProduceLog`, `FetchLog`,
 /// `PutKv`, `Lookup`). Returns `None` for admin/metadata/auth calls to
@@ -266,5 +303,61 @@ mod tests {
 
         assert_eq!(counter_by_api_key.get("produce_log"), Some(&5));
         assert_eq!(counter_by_api_key.get("fetch_log"), Some(&3));
+    }
+
+    #[test]
+    fn scanner_fetch_metrics_emit_correctly() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            metrics::counter!(SCANNER_FETCH_REQUESTS_TOTAL).increment(1);
+            metrics::histogram!(SCANNER_FETCH_LATENCY_MS).record(15.5);
+            metrics::histogram!(SCANNER_BYTES_PER_REQUEST).record(4096.0);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        assert_eq!(
+            find_counter!(entries, SCANNER_FETCH_REQUESTS_TOTAL),
+            Some(1)
+        );
+        assert_eq!(
+            find_histogram!(entries, SCANNER_FETCH_LATENCY_MS),
+            Some(vec![15.5])
+        );
+        assert_eq!(
+            find_histogram!(entries, SCANNER_BYTES_PER_REQUEST),
+            Some(vec![4096.0])
+        );
+    }
+
+    #[test]
+    fn scanner_remote_fetch_metrics_emit_correctly() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            metrics::counter!(SCANNER_REMOTE_FETCH_REQUESTS_TOTAL).increment(3);
+            metrics::counter!(SCANNER_REMOTE_FETCH_BYTES_TOTAL).increment(1024);
+            metrics::counter!(SCANNER_REMOTE_FETCH_ERRORS_TOTAL).increment(1);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        assert_eq!(
+            find_counter!(entries, SCANNER_REMOTE_FETCH_REQUESTS_TOTAL),
+            Some(3)
+        );
+        assert_eq!(
+            find_counter!(entries, SCANNER_REMOTE_FETCH_BYTES_TOTAL),
+            Some(1024)
+        );
+        assert_eq!(
+            find_counter!(entries, SCANNER_REMOTE_FETCH_ERRORS_TOTAL),
+            Some(1)
+        );
     }
 }
