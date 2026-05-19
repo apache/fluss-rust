@@ -22,6 +22,7 @@ sidebar_position: 3
 | `BYTES`         | `&[u8]`        | `get_bytes()`                        | `set_field(idx, &[u8])`        |
 | `BINARY(n)`     | `&[u8]`        | `get_binary(idx, length)`            | `set_field(idx, &[u8])`        |
 | `ARRAY<T>`      | `FlussArray`   | `get_array()`                        | `set_field(idx, FlussArray)`   |
+| `MAP<K, V>`     | `FlussMap`     | `get_map(idx, key_type, value_type)` | `set_field(idx, FlussMap)`     |
 
 ## Constructing Special Types
 
@@ -82,6 +83,28 @@ row.set_field(0, Datum::Array(arr));
 ```
 
 `ARRAY` is supported for row values and nested row fields. For key encoding, Rust follows Java parity: `ARRAY` can be encoded by the compacted key encoder, while table-level key constraints are validated by the server (which may reject unsupported key types).
+
+## Maps
+
+Use `DataTypes::map(key_type, value_type)` in schema definitions. At runtime, read maps with `row.get_map(idx, &key_type, &value_type)?`.
+
+To construct map values for writes, build a `FlussMap` using `FlussMapWriter` and wrap it with `Datum::Map`:
+
+```rust
+use fluss::metadata::DataTypes;
+use fluss::row::binary_map::FlussMapWriter;
+use fluss::row::{Datum, GenericRow};
+
+let mut writer = FlussMapWriter::new(2, &DataTypes::string(), &DataTypes::int());
+writer.write_entry("key1".into(), 100.into())?;
+writer.write_entry("key2".into(), Datum::Null)?;
+let map = writer.complete()?;
+
+let mut row = GenericRow::new(1);
+row.set_field(0, Datum::Map(map));
+```
+
+`MAP` keys cannot be null. `MAP` is supported for row values and nested row fields. Like arrays, `MAP` follows Java parity for key encoding and can be encoded by the compacted key encoder, while table-level key constraints are validated by the server.
 
 ## Reading Row Data
 
