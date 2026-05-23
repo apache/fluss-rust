@@ -196,11 +196,7 @@ impl InnerFieldGetter {
                 Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision)?)
             }
             InnerFieldGetter::Array { pos } => Datum::Array(row.get_array(*pos)?),
-            InnerFieldGetter::Map {
-                pos,
-                key_type,
-                value_type,
-            } => Datum::Map(row.get_map(*pos, key_type, value_type)?),
+            InnerFieldGetter::Map { pos, .. } => Datum::Map(row.get_map(*pos)?),
             InnerFieldGetter::Row { pos } => Datum::Row(Box::new(row.get_row(*pos)?.clone())),
         })
     }

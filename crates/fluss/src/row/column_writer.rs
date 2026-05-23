@@ -22,6 +22,7 @@
 use crate::error::Error::RowConvertError;
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
+use crate::row::FlussMap;
 use crate::row::InternalRow;
 use crate::row::datum::{
     MICROS_PER_MILLI, MILLIS_PER_SECOND, NANOS_PER_MILLI, append_decimal_to_builder,
@@ -833,30 +834,52 @@ impl ColumnWriter {
             } => {
                 let array = row.get_array(pos)?;
                 let size = array.size();
-                if let TypedWriter::Struct {
-                    field_writers,
-                    validity: child_validity,
-                    row_type,
-                    ..
-                } = &mut element_writer.inner
-                {
-                    for i in 0..size {
-                        if array.is_null_at(i) {
-                            for child in field_writers.iter_mut() {
-                                child.append_null();
+                match &mut element_writer.inner {
+                    TypedWriter::Struct {
+                        field_writers,
+                        validity: child_validity,
+                        row_type,
+                        ..
+                    } => {
+                        for i in 0..size {
+                            if array.is_null_at(i) {
+                                for child in field_writers.iter_mut() {
+                                    child.append_null();
+                                }
+                                child_validity.push(false);
+                            } else {
+                                let nested = array.get_row(i, row_type)?;
+                                for (j, child) in field_writers.iter_mut().enumerate() {
+                                    child.write_field_at(&nested, j)?;
+                                }
+                                child_validity.push(true);
                             }
-                            child_validity.push(false);
-                        } else {
-                            let nested = array.get_row(i, row_type)?;
-                            for (j, child) in field_writers.iter_mut().enumerate() {
-                                child.write_field_at(&nested, j)?;
-                            }
-                            child_validity.push(true);
                         }
                     }
-                } else {
-                    for i in 0..size {
-                        element_writer.write_field_at(&array, i)?;
+                    TypedWriter::Map {
+                        key_writer,
+                        value_writer,
+                        key_type,
+                        value_type,
+                        offsets: child_offsets,
+                        validity: child_validity,
+                    } => {
+                        for i in 0..size {
+                            if array.is_null_at(i) {
+                                child_validity.push(false);
+                                let last = *child_offsets.last().unwrap();
+                                child_offsets.push(last);
+                            } else {
+                                let map = array.get_map(i, key_type, value_type)?;
+                                write_map_into(map, key_writer, value_writer, child_offsets)?;
+                                child_validity.push(true);
+                            }
+                        }
+                    }
+                    _ => {
+                        for i in 0..size {
+                            element_writer.write_field_at(&array, i)?;
+                        }
                     }
                 }
                 let last = *offsets.last().unwrap();
@@ -871,24 +894,12 @@ impl ColumnWriter {
             TypedWriter::Map {
                 key_writer,
                 value_writer,
-                key_type,
-                value_type,
                 offsets,
                 validity,
+                ..
             } => {
-                let map = row.get_map(pos, key_type, value_type)?;
-                let key_array = map.key_array();
-                let value_array = map.value_array();
-                for i in 0..map.size() {
-                    key_writer.write_field_at(key_array, i)?;
-                    value_writer.write_field_at(value_array, i)?;
-                }
-                let last = *offsets.last().unwrap();
-                offsets.push(
-                    last + i32::try_from(map.size()).map_err(|_| RowConvertError {
-                        message: format!("Map size {} exceeds i32 range", map.size()),
-                    })?,
-                );
+                let map = row.get_map(pos)?;
+                write_map_into(map, key_writer, value_writer, offsets)?;
                 validity.push(true);
                 Ok(())
             }
@@ -906,6 +917,27 @@ impl ColumnWriter {
             }
         }
     }
+}
+
+fn write_map_into(
+    map: FlussMap,
+    key_writer: &mut ColumnWriter,
+    value_writer: &mut ColumnWriter,
+    offsets: &mut Vec<i32>,
+) -> Result<()> {
+    let key_array = map.key_array();
+    let value_array = map.value_array();
+    for i in 0..map.size() {
+        key_writer.write_field_at(key_array, i)?;
+        value_writer.write_field_at(value_array, i)?;
+    }
+    let last = *offsets.last().unwrap();
+    offsets.push(
+        last + i32::try_from(map.size()).map_err(|_| RowConvertError {
+            message: format!("Map size {} exceeds i32 range", map.size()),
+        })?,
+    );
+    Ok(())
 }
 
 fn finish_struct_array(
