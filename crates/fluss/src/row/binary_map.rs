@@ -432,6 +432,7 @@ impl FlussMapWriter {
             }
             (DataType::Array(_), Datum::Array(v)) => writer.write_array(pos, v),
             (DataType::Map(_), Datum::Map(v)) => writer.write_map(pos, v),
+            (DataType::Row(_), Datum::Row(v)) => writer.write_row(pos, v.as_ref())?,
             _ => {
                 return Err(IllegalArgument {
                     message: format!("Type mismatch: expected {:?}, got {:?}", dt, datum),

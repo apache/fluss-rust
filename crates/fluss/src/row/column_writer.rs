@@ -22,12 +22,11 @@
 use crate::error::Error::RowConvertError;
 use crate::error::{Error, Result};
 use crate::metadata::{DataType, RowType};
-use crate::row::FlussMap;
-use crate::row::InternalRow;
 use crate::row::datum::{
     MICROS_PER_MILLI, MILLIS_PER_SECOND, NANOS_PER_MILLI, append_decimal_to_builder,
     millis_nanos_to_micros, millis_nanos_to_nanos,
 };
+use crate::row::{FlussArray, FlussMap, InternalRow};
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
@@ -928,8 +927,8 @@ fn write_map_into(
     let key_array = map.key_array();
     let value_array = map.value_array();
     for i in 0..map.size() {
-        key_writer.write_field_at(key_array, i)?;
-        value_writer.write_field_at(value_array, i)?;
+        write_array_element_into_column(key_writer, key_array, i)?;
+        write_array_element_into_column(value_writer, value_array, i)?;
     }
     let last = *offsets.last().unwrap();
     offsets.push(
@@ -938,6 +937,57 @@ fn write_map_into(
         })?,
     );
     Ok(())
+}
+
+// FlussArray carries no schema; nested row/map elements need the typed
+// inherent accessors (get_row/get_map with explicit types).
+fn write_array_element_into_column(
+    writer: &mut ColumnWriter,
+    array: &FlussArray,
+    index: usize,
+) -> Result<()> {
+    match &mut writer.inner {
+        TypedWriter::Struct {
+            field_writers,
+            validity,
+            row_type,
+            ..
+        } => {
+            if array.is_null_at(index) {
+                for child in field_writers.iter_mut() {
+                    child.append_null();
+                }
+                validity.push(false);
+            } else {
+                let nested = array.get_row(index, row_type)?;
+                for (j, child) in field_writers.iter_mut().enumerate() {
+                    child.write_field_at(&nested, j)?;
+                }
+                validity.push(true);
+            }
+            Ok(())
+        }
+        TypedWriter::Map {
+            key_writer,
+            value_writer,
+            key_type,
+            value_type,
+            offsets,
+            validity,
+        } => {
+            if array.is_null_at(index) {
+                validity.push(false);
+                let last = *offsets.last().unwrap();
+                offsets.push(last);
+            } else {
+                let nested = array.get_map(index, key_type, value_type)?;
+                write_map_into(nested, key_writer, value_writer, offsets)?;
+                validity.push(true);
+            }
+            Ok(())
+        }
+        _ => writer.write_field_at(array, index),
+    }
 }
 
 fn finish_struct_array(
