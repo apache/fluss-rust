@@ -832,8 +832,15 @@ impl InternalRow for FlussArray {
         self.get_array(pos)
     }
 
-    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap> {
-        self.get_map(pos, key_type, value_type)
+    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+        // FlussArray carries no schema; nested map reads must go through the
+        // inherent FlussArray::get_map(pos, key_type, value_type).
+        Err(IllegalArgument {
+            message: format!(
+                "InternalRow::get_map is not supported on FlussArray (pos {pos}); \
+                 use FlussArray::get_map(pos, key_type, value_type) directly"
+            ),
+        })
     }
 }
 

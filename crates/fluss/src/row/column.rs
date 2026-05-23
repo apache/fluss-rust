@@ -690,7 +690,17 @@ impl InternalRow for ColumnarRow {
         writer.complete()
     }
 
-    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap> {
+    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+        let expected_type = self.row_type.fields()[pos].data_type();
+        let map_type = match expected_type {
+            DataType::Map(m) => m,
+            _ => {
+                return Err(IllegalArgument {
+                    message: format!("expected Map type at position {pos}, got {expected_type:?}"),
+                });
+            }
+        };
+
         let column = self.column(pos)?;
         let map_arr =
             column
@@ -703,7 +713,11 @@ impl InternalRow for ColumnarRow {
                     ),
                 })?;
 
-        arrow_map_entry_to_fluss_map(&map_arr.value(self.row_id), key_type, value_type)
+        arrow_map_entry_to_fluss_map(
+            &map_arr.value(self.row_id),
+            map_type.key_type(),
+            map_type.value_type(),
+        )
     }
 
     fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
@@ -799,7 +813,7 @@ fn arrow_map_entry_to_fluss_map(
     write_arrow_values_to_fluss_array(&**values_arrow, value_type, &mut value_writer)?;
     let value_array = value_writer.complete()?;
 
-    FlussMap::from_arrays(&key_array, &value_array)
+    FlussMap::from_arrays(&key_array, &value_array, key_type, value_type)
 }
 
 /// Downcast to a primitive Arrow array type, then loop with null checks calling a writer method.
@@ -1560,16 +1574,12 @@ mod tests {
             Arc::new(RecordBatch::try_new(schema, vec![Arc::new(map_arr)]).expect("record batch"));
 
         let map_type = DataTypes::map(DataTypes::int(), DataTypes::string());
-        let row_type = Arc::new(RowType::with_data_types(vec![map_type.clone()]));
+        let row_type = Arc::new(RowType::with_data_types(vec![map_type]));
         let row = ColumnarRow::new(batch, row_type, 0, None);
 
-        let (k, v) = match &map_type {
-            crate::metadata::DataType::Map(m) => (m.key_type(), m.value_type()),
-            _ => unreachable!(),
-        };
         let fluss_map = row
-            .get_map(0, k, v)
-            .expect("get_map should accept non-nullable key from MapType");
+            .get_map(0)
+            .expect("get_map should succeed on ColumnarRow");
         assert_eq!(fluss_map.size(), 1);
         assert_eq!(fluss_map.key_array().get_int(0).unwrap(), 1);
         assert_eq!(fluss_map.value_array().get_string(0).unwrap(), "a");
@@ -1628,9 +1638,7 @@ mod tests {
             .get_row(0)
             .expect("reading row with Map field must succeed");
         assert_eq!(nested.get_int(0).unwrap(), 10);
-        let inner_map = nested
-            .get_map(1, &DataTypes::string(), &DataTypes::int())
-            .expect("nested map should be accessible");
+        let inner_map = nested.get_map(1).expect("nested map should be accessible");
         assert_eq!(inner_map.size(), 1);
         assert_eq!(inner_map.key_array().get_string(0).unwrap(), "k1");
         assert_eq!(inner_map.value_array().get_int(0).unwrap(), 42);
@@ -1639,9 +1647,7 @@ mod tests {
         row.set_row_id(1);
         let nested = row.get_row(0).expect("row 1 must read");
         assert_eq!(nested.get_int(0).unwrap(), 20);
-        let inner_map = nested
-            .get_map(1, &DataTypes::string(), &DataTypes::int())
-            .unwrap();
+        let inner_map = nested.get_map(1).unwrap();
         assert_eq!(inner_map.key_array().get_string(0).unwrap(), "k2");
         assert_eq!(inner_map.value_array().get_int(0).unwrap(), 7);
     }
@@ -1726,9 +1732,7 @@ mod tests {
         )]));
         let row = ColumnarRow::new(batch, row_type, 0, None);
 
-        let err = row
-            .get_map(0, &DataTypes::string(), &DataTypes::string())
-            .expect_err("type mismatch must error");
+        let err = row.get_map(0).expect_err("type mismatch must error");
         let msg = err.to_string();
         assert!(
             msg.contains("does not match expected Fluss type"),

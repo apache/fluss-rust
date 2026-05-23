@@ -22,7 +22,7 @@ sidebar_position: 3
 | `BYTES`         | `&[u8]`        | `get_bytes()`                        | `set_field(idx, &[u8])`        |
 | `BINARY(n)`     | `&[u8]`        | `get_binary(idx, length)`            | `set_field(idx, &[u8])`        |
 | `ARRAY<T>`      | `FlussArray`   | `get_array()`                        | `set_field(idx, FlussArray)`   |
-| `MAP<K, V>`     | `FlussMap`     | `get_map(idx, key_type, value_type)` | `set_field(idx, FlussMap)`     |
+| `MAP<K, V>`     | `FlussMap`     | `get_map(idx)`                       | `set_field(idx, FlussMap)`     |
 
 ## Constructing Special Types
 
@@ -86,9 +86,11 @@ row.set_field(0, Datum::Array(arr));
 
 ## Maps
 
-Use `DataTypes::map(key_type, value_type)` in schema definitions. At runtime, read maps with `row.get_map(idx, &key_type, &value_type)?`.
+Use `DataTypes::map(key_type, value_type)` in schema definitions. At runtime, read maps with `row.get_map(idx)?` — the row knows its schema, so no extra type arguments are needed.
 
-To construct map values for writes, build a `FlussMap` using `FlussMapWriter` and wrap it with `Datum::Map`:
+### Writing
+
+Build a `FlussMap` entry-by-entry, then wrap it with `Datum::Map`:
 
 ```rust
 use fluss::metadata::DataTypes;
@@ -104,7 +106,57 @@ let mut row = GenericRow::new(1);
 row.set_field(0, Datum::Map(map));
 ```
 
-`MAP` keys cannot be null. `MAP` is supported for row values and nested row fields. Like arrays, `MAP` follows Java parity for key encoding and can be encoded by the compacted key encoder, while table-level key constraints are validated by the server.
+For bulk writes from any iterator of `(key, value)` pairs (including a `HashMap`), use `extend`:
+
+```rust
+use std::collections::HashMap;
+
+let entries: HashMap<&str, i32> = HashMap::from([("a", 1), ("b", 2)]);
+let mut writer = FlussMapWriter::new(entries.len(), &DataTypes::string(), &DataTypes::int());
+writer.extend(entries)?;
+let map = writer.complete()?;
+```
+
+### Reading
+
+The `entries()` iterator yields `(key, value)` pairs as schema-typed `Datum`s, folding the null check in:
+
+```rust
+use fluss::row::InternalRow;
+
+let m = row.get_map(0)?;
+for entry in m.entries() {
+    let (k, v) = entry?;
+    println!("{k:?} => {v:?}");          // Datum's Debug handles null
+}
+```
+
+For point lookups, `get(&key)` does a linear scan and returns `Option<Datum>`:
+
+```rust
+use fluss::row::Datum;
+
+if let Some(v) = m.get(&Datum::from("attr_size"))? {
+    println!("size = {v:?}");
+}
+```
+
+Lookup is `O(n)` — the binary MAP layout has no key index. If you need repeated lookups against the same map, collect the entries once:
+
+```rust
+use std::collections::HashMap;
+
+let snapshot: HashMap<String, Datum<'_>> = m
+    .entries()
+    .map(|e| e.map(|(k, v)| (format!("{k:?}"), v)))
+    .collect::<Result<_, _>>()?;
+```
+
+For raw access to the underlying parallel-array representation (zero-copy, used by serdes / Arrow adapters), `m.key_array()` and `m.value_array()` are still available.
+
+### Constraints
+
+`MAP` keys cannot be null. `MAP` is supported for row values and nested row fields. `MAP` cannot be used as a primary key or bucket key column — the Rust client rejects it at the compacted key encoder, and the Fluss server bans `MAP` (along with `ARRAY` and `ROW`) from key columns.
 
 ## Reading Row Data
 

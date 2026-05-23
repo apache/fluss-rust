@@ -26,7 +26,7 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::binary_array::{FlussArray, FlussArrayWriter};
-use crate::row::datum::Datum;
+use crate::row::datum::{Datum, read_datum_from_fluss_array};
 use bytes::Bytes;
 use serde::Serialize;
 use std::fmt;
@@ -41,6 +41,8 @@ pub struct FlussMap {
     data: Bytes,
     key_array: FlussArray,
     value_array: FlussArray,
+    key_type: DataType,
+    value_type: DataType,
 }
 
 impl fmt::Debug for FlussMap {
@@ -190,6 +192,8 @@ impl FlussMap {
             data: Bytes::copy_from_slice(data),
             key_array,
             value_array,
+            key_type: key_type.clone(),
+            value_type: value_type.clone(),
         })
     }
 
@@ -204,13 +208,20 @@ impl FlussMap {
             data,
             key_array,
             value_array,
+            key_type: key_type.clone(),
+            value_type: value_type.clone(),
         })
     }
 
     /// Creates a FlussMap by combining a key array and a value array.
     ///
     /// Copies both arrays into a new contiguous buffer.
-    pub fn from_arrays(key_array: &FlussArray, value_array: &FlussArray) -> Result<Self> {
+    pub fn from_arrays(
+        key_array: &FlussArray,
+        value_array: &FlussArray,
+        key_type: &DataType,
+        value_type: &DataType,
+    ) -> Result<Self> {
         if key_array.size() != value_array.size() {
             return Err(IllegalArgument {
                 message: format!(
@@ -239,6 +250,8 @@ impl FlussMap {
             data,
             key_array: key_array.clone(),
             value_array: value_array.clone(),
+            key_type: key_type.clone(),
+            value_type: value_type.clone(),
         })
     }
 
@@ -261,7 +274,60 @@ impl FlussMap {
     pub fn value_array(&self) -> &FlussArray {
         &self.value_array
     }
+
+    pub fn key_type(&self) -> &DataType {
+        &self.key_type
+    }
+
+    pub fn value_type(&self) -> &DataType {
+        &self.value_type
+    }
+
+    pub fn entries(&self) -> Entries<'_> {
+        Entries {
+            map: self,
+            index: 0,
+        }
+    }
+
+    /// O(n) linear scan; the binary format carries no key index.
+    pub fn get<'a>(&'a self, key: &Datum<'_>) -> Result<Option<Datum<'a>>> {
+        for entry in self.entries() {
+            let (k, v) = entry?;
+            if &k == key {
+                return Ok(Some(v));
+            }
+        }
+        Ok(None)
+    }
 }
+
+pub struct Entries<'a> {
+    map: &'a FlussMap,
+    index: usize,
+}
+
+impl<'a> Iterator for Entries<'a> {
+    type Item = Result<(Datum<'a>, Datum<'a>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.map.size() {
+            return None;
+        }
+        let i = self.index;
+        self.index += 1;
+        let key = read_datum_from_fluss_array(&self.map.key_array, i, &self.map.key_type);
+        let value = read_datum_from_fluss_array(&self.map.value_array, i, &self.map.value_type);
+        Some(key.and_then(|k| value.map(|v| (k, v))))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.map.size() - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for Entries<'_> {}
 
 /// Writer for building a `FlussMap` entry by entry.
 pub struct FlussMapWriter {
@@ -282,6 +348,18 @@ impl FlussMapWriter {
             value_type: value_type.clone(),
             current_index: 0,
         }
+    }
+
+    pub fn extend<'a, I, K, V>(&mut self, entries: I) -> Result<()>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<Datum<'a>>,
+        V: Into<Datum<'a>>,
+    {
+        for (k, v) in entries {
+            self.write_entry(k.into(), v.into())?;
+        }
+        Ok(())
     }
 
     /// Writes a key-value entry into the map.
@@ -315,7 +393,7 @@ impl FlussMapWriter {
     pub fn complete(self) -> Result<FlussMap> {
         let key_array = self.key_writer.complete()?;
         let value_array = self.value_writer.complete()?;
-        FlussMap::from_arrays(&key_array, &value_array)
+        FlussMap::from_arrays(&key_array, &value_array, &self.key_type, &self.value_type)
     }
 
     fn write_datum(
@@ -480,7 +558,13 @@ mod tests {
         let value_writer = FlussArrayWriter::new(2, &DataTypes::string());
         let value_array = value_writer.complete().unwrap();
 
-        let err = FlussMap::from_arrays(&key_array, &value_array).unwrap_err();
+        let err = FlussMap::from_arrays(
+            &key_array,
+            &value_array,
+            &DataTypes::int(),
+            &DataTypes::string(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("does not match value array size"));
     }
 
@@ -520,7 +604,13 @@ mod tests {
         value_writer.write_int(0, 100);
         let value_array = value_writer.complete().unwrap();
 
-        let map = FlussMap::from_arrays(&key_array, &value_array).unwrap();
+        let map = FlussMap::from_arrays(
+            &key_array,
+            &value_array,
+            &DataTypes::int(),
+            &DataTypes::int(),
+        )
+        .unwrap();
         let bytes = map.as_bytes();
 
         // Valid bytes should pass
@@ -545,7 +635,13 @@ mod tests {
         value_writer.write_int(0, 100);
         let value_array = value_writer.complete().unwrap();
 
-        let err = FlussMap::from_arrays(&key_array, &value_array).unwrap_err();
+        let err = FlussMap::from_arrays(
+            &key_array,
+            &value_array,
+            &DataTypes::int(),
+            &DataTypes::int(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("keys cannot be null"));
 
         let key_bytes = key_array.as_bytes();
@@ -557,5 +653,50 @@ mod tests {
 
         let err = FlussMap::from_bytes(&data, &DataTypes::int(), &DataTypes::int()).unwrap_err();
         assert!(err.to_string().contains("keys cannot be null"));
+    }
+
+    #[test]
+    fn entries_yields_typed_pairs_including_nulls() {
+        let mut writer = FlussMapWriter::new(3, &DataTypes::string(), &DataTypes::int());
+        writer.write_entry("a".into(), 1.into()).unwrap();
+        writer.write_entry("b".into(), Datum::Null).unwrap();
+        writer.write_entry("c".into(), 3.into()).unwrap();
+        let map = writer.complete().unwrap();
+
+        let collected: Vec<(Datum, Datum)> = map
+            .entries()
+            .collect::<Result<Vec<_>>>()
+            .expect("entries should decode cleanly");
+
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0], (Datum::from("a"), Datum::from(1i32)));
+        assert_eq!(collected[1].0, Datum::from("b"));
+        assert_eq!(collected[1].1, Datum::Null);
+        assert_eq!(collected[2], (Datum::from("c"), Datum::from(3i32)));
+    }
+
+    #[test]
+    fn get_finds_present_key_and_returns_none_for_absent() {
+        let mut writer = FlussMapWriter::new(2, &DataTypes::string(), &DataTypes::int());
+        writer.write_entry("a".into(), 10.into()).unwrap();
+        writer.write_entry("b".into(), 20.into()).unwrap();
+        let map = writer.complete().unwrap();
+
+        let v = map.get(&Datum::from("b")).unwrap();
+        assert_eq!(v, Some(Datum::from(20i32)));
+
+        let missing = map.get(&Datum::from("z")).unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn writer_extend_from_iterator_round_trips() {
+        let src: Vec<(&str, i32)> = vec![("a", 1), ("b", 2), ("c", 3)];
+        let mut writer = FlussMapWriter::new(src.len(), &DataTypes::string(), &DataTypes::int());
+        writer.extend(src).unwrap();
+        let map = writer.complete().unwrap();
+
+        assert_eq!(map.size(), 3);
+        assert_eq!(map.get(&Datum::from("b")).unwrap(), Some(Datum::from(2i32)));
     }
 }
