@@ -19,11 +19,13 @@
 #[cfg(test)]
 mod table_test {
     use crate::integration::utils::{
-        create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
+        ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
+        dt_array_int, dt_map_string_int, dt_row_seq_label, get_shared_cluster, make_int_array,
+        make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
     };
     use arrow::array::{Int32Array, record_batch};
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
-    use fluss::metadata::{DataField, DataType, DataTypes, Schema, TableDescriptor, TablePath};
+    use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::record::{ScanBatch, ScanRecord};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
@@ -1001,181 +1003,101 @@ mod table_test {
 
         let table_path = TablePath::new("fluss", "test_log_complex_types");
 
-        // Shared compound type definitions
-        let row_seq_label_owned = DataTypes::row(vec![
-            DataField::new("seq", DataTypes::int(), None),
-            DataField::new("label", DataTypes::string(), None),
-        ]);
-        let row_seq_label = match &row_seq_label_owned {
-            DataType::Row(rt) => rt.clone(),
-            _ => unreachable!(),
-        };
-        let row_deep_inner = DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
-        let row_deep_owned = DataTypes::row(vec![DataField::new("inner", row_deep_inner, None)]);
-        let row_rich_owned = DataTypes::row(vec![
-            DataField::new("f_bool", DataTypes::boolean(), None),
-            DataField::new("f_int", DataTypes::int(), None),
-            DataField::new("f_long", DataTypes::bigint(), None),
-            DataField::new("f_float", DataTypes::float(), None),
-            DataField::new("f_double", DataTypes::double(), None),
-            DataField::new("f_str", DataTypes::string(), None),
-            DataField::new("f_bytes", DataTypes::bytes(), None),
-            DataField::new("f_decimal", DataTypes::decimal(10, 2), None),
-            DataField::new("f_date", DataTypes::date(), None),
-            DataField::new("f_time", DataTypes::time_with_precision(3), None),
-            DataField::new("f_ts_ntz", DataTypes::timestamp_with_precision(6), None),
-            DataField::new("f_ts_ltz", DataTypes::timestamp_ltz_with_precision(6), None),
-            DataField::new("f_binary_fixed", DataTypes::binary(4), None),
-            DataField::new("f_array_int", DataTypes::array(DataTypes::int()), None),
-        ]);
-        let inner_array_int = DataTypes::array(DataTypes::int());
-        let inner_map_string_int = DataTypes::map(DataTypes::string(), DataTypes::int());
+        let row_seq_label_owned = dt_row_seq_label();
+        let row_seq_label = as_row_type(&row_seq_label_owned);
+        let inner_array_int = dt_array_int();
+        let inner_map_string_int = dt_map_string_int();
 
-        let schema = Schema::builder()
-            .column("id", DataTypes::int())
-            // ARRAY basics
-            .column("arr_int", DataTypes::array(DataTypes::int()))
-            .column("arr_string", DataTypes::array(DataTypes::string()))
-            .column("arr_of_arr", DataTypes::array(inner_array_int.clone()))
-            .column("arr_of_row", DataTypes::array(row_seq_label_owned.clone()))
-            // ROW basics
-            .column("row_basic", row_seq_label_owned.clone())
-            .column("row_deep", row_deep_owned)
-            .column("row_rich", row_rich_owned)
-            // MAP basics
-            .column("map_string_int", inner_map_string_int.clone())
-            .column(
-                "map_of_row",
-                DataTypes::map(DataTypes::string(), row_seq_label_owned.clone()),
-            )
-            .column(
-                "map_of_map",
-                DataTypes::map(DataTypes::string(), inner_map_string_int.clone()),
-            )
-            .column(
-                "map_of_array",
-                DataTypes::map(DataTypes::string(), inner_array_int.clone()),
-            )
-            .column(
-                "array_of_map",
-                DataTypes::array(inner_map_string_int.clone()),
-            )
+        let plan = ColumnPlan::new()
+            .add("id", DataTypes::int())
+            .start_section("array_basics")
+            .extend(array_dt_basics_columns())
+            .start_section("row_basics")
+            .extend(row_dt_basics_columns())
+            .start_section("map_basics")
+            .extend(map_dt_basics_columns())
             // ARRAY rich types
-            .column("arr_bytes", DataTypes::array(DataTypes::bytes()))
-            .column("arr_date", DataTypes::array(DataTypes::date()))
-            .column(
+            .start_section("array_rich")
+            .add("arr_bytes", DataTypes::array(DataTypes::bytes()))
+            .add("arr_date", DataTypes::array(DataTypes::date()))
+            .add(
                 "arr_time",
                 DataTypes::array(DataTypes::time_with_precision(3)),
             )
-            .column(
+            .add(
                 "arr_ts",
                 DataTypes::array(DataTypes::timestamp_with_precision(6)),
             )
-            .column(
+            .add(
                 "arr_ts_ltz",
                 DataTypes::array(DataTypes::timestamp_ltz_with_precision(3)),
             )
-            .column("arr_decimal", DataTypes::array(DataTypes::decimal(10, 2)))
-            .column(
+            .add("arr_decimal", DataTypes::array(DataTypes::decimal(10, 2)))
+            .add(
                 "arr_decimal_big",
                 DataTypes::array(DataTypes::decimal(22, 5)),
             )
-            .column("arr_float", DataTypes::array(DataTypes::float()))
-            .column("arr_double", DataTypes::array(DataTypes::double()))
-            .column("arr_binary", DataTypes::array(DataTypes::binary(4)))
+            .add("arr_float", DataTypes::array(DataTypes::float()))
+            .add("arr_double", DataTypes::array(DataTypes::double()))
+            .add("arr_binary", DataTypes::array(DataTypes::binary(4)))
             // MAP rich types
-            .column(
+            .start_section("map_rich")
+            .add(
                 "map_bytes",
                 DataTypes::map(DataTypes::string(), DataTypes::bytes()),
             )
-            .column(
+            .add(
                 "map_decimal",
                 DataTypes::map(DataTypes::string(), DataTypes::decimal(10, 2)),
             )
-            .column(
+            .add(
                 "map_date",
                 DataTypes::map(DataTypes::string(), DataTypes::date()),
             )
-            .column(
+            .add(
                 "map_time",
                 DataTypes::map(DataTypes::string(), DataTypes::time_with_precision(3)),
             )
-            .column(
+            .add(
                 "map_ts",
                 DataTypes::map(DataTypes::string(), DataTypes::timestamp_with_precision(6)),
             )
-            .column(
+            .add(
                 "map_ts_ltz",
                 DataTypes::map(
                     DataTypes::string(),
                     DataTypes::timestamp_ltz_with_precision(3),
                 ),
             )
-            .column(
+            .add(
                 "map_float",
                 DataTypes::map(DataTypes::string(), DataTypes::float()),
             )
-            .column(
+            .add(
                 "map_double",
                 DataTypes::map(DataTypes::string(), DataTypes::double()),
             )
-            .column(
+            .add(
                 "map_bool",
                 DataTypes::map(DataTypes::string(), DataTypes::boolean()),
             )
-            .column(
+            .add(
                 "map_binary",
                 DataTypes::map(DataTypes::string(), DataTypes::binary(4)),
             )
-            .column(
+            .add(
                 "map_int_key",
                 DataTypes::map(DataTypes::int(), DataTypes::string()),
             )
-            // Top-level scalar coverage (every type + every time/ts precision +
-            // negative-epoch timestamps). Lives at indices 34..=61.
-            .column("col_tinyint", DataTypes::tinyint())
-            .column("col_smallint", DataTypes::smallint())
-            .column("col_bigint", DataTypes::bigint())
-            .column("col_float", DataTypes::float())
-            .column("col_double", DataTypes::double())
-            .column("col_boolean", DataTypes::boolean())
-            .column("col_char", DataTypes::char(10))
-            .column("col_string", DataTypes::string())
-            .column("col_decimal", DataTypes::decimal(10, 2))
-            .column("col_date", DataTypes::date())
-            .column("col_time_s", DataTypes::time_with_precision(0))
-            .column("col_time_ms", DataTypes::time_with_precision(3))
-            .column("col_time_us", DataTypes::time_with_precision(6))
-            .column("col_time_ns", DataTypes::time_with_precision(9))
-            .column("col_ts_s", DataTypes::timestamp_with_precision(0))
-            .column("col_ts_ms", DataTypes::timestamp_with_precision(3))
-            .column("col_ts_us", DataTypes::timestamp_with_precision(6))
-            .column("col_ts_ns", DataTypes::timestamp_with_precision(9))
-            .column("col_ts_ltz_s", DataTypes::timestamp_ltz_with_precision(0))
-            .column("col_ts_ltz_ms", DataTypes::timestamp_ltz_with_precision(3))
-            .column("col_ts_ltz_us", DataTypes::timestamp_ltz_with_precision(6))
-            .column("col_ts_ltz_ns", DataTypes::timestamp_ltz_with_precision(9))
-            .column("col_bytes_top", DataTypes::bytes())
-            .column("col_binary_top", DataTypes::binary(4))
-            .column("col_ts_us_neg", DataTypes::timestamp_with_precision(6))
-            .column("col_ts_ns_neg", DataTypes::timestamp_with_precision(9))
-            .column(
-                "col_ts_ltz_us_neg",
-                DataTypes::timestamp_ltz_with_precision(6),
-            )
-            .column(
-                "col_ts_ltz_ns_neg",
-                DataTypes::timestamp_ltz_with_precision(9),
-            )
-            .build()
-            .expect("schema");
-        let column_count = 62; // id + 33 compound + 28 scalar
+            .start_section("scalars")
+            .extend(scalar_dt_columns());
+        let column_count = plan.len();
 
         create_table(
             &admin,
             &table_path,
             &TableDescriptor::builder()
-                .schema(schema)
+                .schema(plan.build_schema(None))
                 .build()
                 .expect("table descriptor"),
         )
@@ -1583,7 +1505,7 @@ mod table_test {
             w.complete().expect("arr_of_row_1")
         };
         row1.set_field(4, arr_of_row_1);
-        for i in 5..8 {
+        for i in plan.section_range("row_basics") {
             row1.set_field(i, Datum::Null);
         }
         // Empty MAP
@@ -1591,7 +1513,7 @@ mod table_test {
             .complete()
             .expect("empty_map");
         row1.set_field(8, Datum::Map(empty_map));
-        for i in 9..column_count {
+        for i in (plan.idx("map_string_int") + 1)..plan.len() {
             row1.set_field(i, Datum::Null);
         }
 
@@ -2011,7 +1933,7 @@ mod table_test {
         );
 
         // === Scalars: every column NULL on row 2 ===
-        for i in 34..column_count {
+        for i in plan.section_range("scalars") {
             assert!(
                 r2.is_null_at(i).unwrap(),
                 "scalar column {i} should be null"

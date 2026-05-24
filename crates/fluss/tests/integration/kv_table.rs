@@ -19,10 +19,12 @@
 #[cfg(test)]
 mod kv_table_test {
     use crate::integration::utils::{
-        create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
+        ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
+        dt_array_int, dt_map_string_int, dt_row_seq_label, get_shared_cluster, make_int_array,
+        make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
     };
     use fluss::client::TableUpsert;
-    use fluss::metadata::{DataField, DataType, DataTypes, Schema, TableDescriptor, TablePath};
+    use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
@@ -1259,79 +1261,23 @@ mod kv_table_test {
 
         let table_path = TablePath::new("fluss", "test_kv_complex_types");
 
-        let row_seq_label_owned = DataTypes::row(vec![
-            DataField::new("seq", DataTypes::int(), None),
-            DataField::new("label", DataTypes::string(), None),
-        ]);
-        let row_seq_label = match &row_seq_label_owned {
-            DataType::Row(rt) => rt.clone(),
-            _ => unreachable!(),
-        };
-        let row_deep_inner = DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
-        let row_deep_owned = DataTypes::row(vec![DataField::new("inner", row_deep_inner, None)]);
-        let row_rich_owned = DataTypes::row(vec![
-            DataField::new("f_bool", DataTypes::boolean(), None),
-            DataField::new("f_int", DataTypes::int(), None),
-            DataField::new("f_long", DataTypes::bigint(), None),
-            DataField::new("f_double", DataTypes::double(), None),
-            DataField::new("f_str", DataTypes::string(), None),
-            DataField::new("f_decimal", DataTypes::decimal(10, 2), None),
-            DataField::new("f_date", DataTypes::date(), None),
-            DataField::new("f_ts_ntz", DataTypes::timestamp_with_precision(6), None),
-            DataField::new("f_ts_ltz", DataTypes::timestamp_ltz_with_precision(6), None),
-            DataField::new("f_array_int", DataTypes::array(DataTypes::int()), None),
-        ]);
-        let inner_array_int = DataTypes::array(DataTypes::int());
-        let inner_map_string_int = DataTypes::map(DataTypes::string(), DataTypes::int());
+        let row_seq_label_owned = dt_row_seq_label();
+        let row_seq_label = as_row_type(&row_seq_label_owned);
+        let inner_array_int = dt_array_int();
+        let inner_map_string_int = dt_map_string_int();
 
+        let plan = ColumnPlan::new()
+            .add("id", DataTypes::int())
+            .start_section("array_basics")
+            .extend(array_dt_basics_columns())
+            .start_section("row_basics")
+            .extend(row_dt_basics_columns())
+            .start_section("map_basics")
+            .extend(map_dt_basics_columns())
+            .start_section("scalars")
+            .extend(scalar_dt_columns());
         let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("arr_int", DataTypes::array(DataTypes::int()))
-                    .column("arr_string", DataTypes::array(DataTypes::string()))
-                    .column("arr_of_arr", DataTypes::array(inner_array_int.clone()))
-                    .column("arr_of_row", DataTypes::array(row_seq_label_owned.clone()))
-                    .column("row_basic", row_seq_label_owned.clone())
-                    .column("row_deep", row_deep_owned)
-                    .column("row_rich", row_rich_owned)
-                    .column("map_string_int", inner_map_string_int.clone())
-                    .column(
-                        "map_of_row",
-                        DataTypes::map(DataTypes::string(), row_seq_label_owned.clone()),
-                    )
-                    .column(
-                        "map_of_map",
-                        DataTypes::map(DataTypes::string(), inner_map_string_int.clone()),
-                    )
-                    .column(
-                        "map_of_array",
-                        DataTypes::map(DataTypes::string(), inner_array_int.clone()),
-                    )
-                    .column(
-                        "array_of_map",
-                        DataTypes::array(inner_map_string_int.clone()),
-                    )
-                    // Top-level scalar coverage (indices 13..=27).
-                    .column("col_tinyint", DataTypes::tinyint())
-                    .column("col_smallint", DataTypes::smallint())
-                    .column("col_bigint", DataTypes::bigint())
-                    .column("col_float", DataTypes::float())
-                    .column("col_double", DataTypes::double())
-                    .column("col_boolean", DataTypes::boolean())
-                    .column("col_char", DataTypes::char(10))
-                    .column("col_string", DataTypes::string())
-                    .column("col_decimal", DataTypes::decimal(10, 2))
-                    .column("col_date", DataTypes::date())
-                    .column("col_time", DataTypes::time())
-                    .column("col_timestamp", DataTypes::timestamp())
-                    .column("col_timestamp_ltz", DataTypes::timestamp_ltz())
-                    .column("col_bytes", DataTypes::bytes())
-                    .column("col_binary", DataTypes::binary(20))
-                    .primary_key(vec!["id"])
-                    .build()
-                    .expect("schema"),
-            )
+            .schema(plan.build_schema(Some(&["id"])))
             .build()
             .expect("table descriptor");
 
@@ -1345,7 +1291,7 @@ mod kv_table_test {
             .expect("writer");
 
         // Row 1 (id=1) — comprehensive: every column populated.
-        let column_count = 28; // id + 12 compound + 15 scalar
+        let column_count = plan.len();
         let mut row1 = GenericRow::new(column_count);
         row1.set_field(0, 1_i32);
         row1.set_field(1, make_int_array(&[Some(10), Some(20), Some(30)]));
@@ -1379,17 +1325,27 @@ mod kv_table_test {
         let mut row_deep_1 = GenericRow::new(1);
         row_deep_1.set_field(0, Datum::Row(Box::new(deep_inner_1)));
         row1.set_field(6, Datum::Row(Box::new(row_deep_1)));
-        let mut row_rich_1 = GenericRow::new(10);
+        let mut row_rich_1 = GenericRow::new(14);
         row_rich_1.set_field(0, true);
         row_rich_1.set_field(1, 100_000_i32);
         row_rich_1.set_field(2, 9_876_543_210_i64);
-        row_rich_1.set_field(3, std::f64::consts::PI);
-        row_rich_1.set_field(4, "hello world");
-        row_rich_1.set_field(5, Decimal::from_unscaled_long(12345, 10, 2).unwrap());
-        row_rich_1.set_field(6, Datum::Date(Date::new(20476)));
-        row_rich_1.set_field(7, Datum::TimestampNtz(TimestampNtz::new(1_769_163_227_123)));
-        row_rich_1.set_field(8, Datum::TimestampLtz(TimestampLtz::new(1_769_163_227_456)));
-        row_rich_1.set_field(9, make_int_array(&[Some(7), None, Some(11)]));
+        row_rich_1.set_field(3, f32::INFINITY);
+        row_rich_1.set_field(4, std::f64::consts::PI);
+        row_rich_1.set_field(5, "hello world");
+        row_rich_1.set_field(6, b"binary".as_slice());
+        row_rich_1.set_field(7, Decimal::from_unscaled_long(12345, 10, 2).unwrap());
+        row_rich_1.set_field(8, Datum::Date(Date::new(20476)));
+        row_rich_1.set_field(9, Datum::Time(Time::new(36_827_123)));
+        row_rich_1.set_field(
+            10,
+            Datum::TimestampNtz(TimestampNtz::new(1_769_163_227_123)),
+        );
+        row_rich_1.set_field(
+            11,
+            Datum::TimestampLtz(TimestampLtz::new(1_769_163_227_456)),
+        );
+        row_rich_1.set_field(12, b"\x01\x02\x03\x04".as_slice());
+        row_rich_1.set_field(13, make_int_array(&[Some(7), None, Some(11)]));
         row1.set_field(7, Datum::Row(Box::new(row_rich_1)));
         let map_string_int_1 = {
             let mut w = FlussMapWriter::new(3, &DataTypes::string(), &DataTypes::int());
@@ -1472,26 +1428,53 @@ mod kv_table_test {
         let s_string = "world of fluss rust client";
         let s_decimal = Decimal::from_unscaled_long(12345, 10, 2).unwrap();
         let s_date = Date::new(20476);
-        let s_time = Time::new(36_827_123);
-        let s_ts = TimestampNtz::new(1_769_163_227_123);
-        let s_ts_ltz = TimestampLtz::new(1_769_163_227_123);
-        let s_bytes: Vec<u8> = b"binary data".to_vec();
-        let s_binary: Vec<u8> = b"fixed binary data!!!".to_vec();
-        row1.set_field(13, s_tinyint);
-        row1.set_field(14, s_smallint);
-        row1.set_field(15, s_bigint);
-        row1.set_field(16, s_float);
-        row1.set_field(17, s_double);
-        row1.set_field(18, true);
-        row1.set_field(19, s_char);
-        row1.set_field(20, s_string);
-        row1.set_field(21, s_decimal.clone());
-        row1.set_field(22, s_date);
-        row1.set_field(23, s_time);
-        row1.set_field(24, s_ts);
-        row1.set_field(25, s_ts_ltz);
-        row1.set_field(26, s_bytes.as_slice());
-        row1.set_field(27, s_binary.as_slice());
+        let s_time_s = Time::new(36_827_000);
+        let s_time_ms = Time::new(36_827_123);
+        let s_time_us = Time::new(86_399_999);
+        let s_time_ns = Time::new(1);
+        let s_ts_s = TimestampNtz::new(1_769_163_227_000);
+        let s_ts_ms = TimestampNtz::new(1_769_163_227_123);
+        let s_ts_us = TimestampNtz::from_millis_nanos(1_769_163_227_123, 456_000).unwrap();
+        let s_ts_ns = TimestampNtz::from_millis_nanos(1_769_163_227_123, 999_999).unwrap();
+        let s_ts_ltz_s = TimestampLtz::new(1_769_163_227_000);
+        let s_ts_ltz_ms = TimestampLtz::new(1_769_163_227_123);
+        let s_ts_ltz_us = TimestampLtz::from_millis_nanos(1_769_163_227_123, 456_000).unwrap();
+        let s_ts_ltz_ns = TimestampLtz::from_millis_nanos(1_769_163_227_123, 999_999).unwrap();
+        let s_bytes_top: Vec<u8> = b"binary data".to_vec();
+        let s_binary_top: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let s_ts_us_neg = TimestampNtz::from_millis_nanos(-301_234_154_877, 456_000).unwrap();
+        let s_ts_ns_neg = TimestampNtz::from_millis_nanos(-301_234_154_877, 999_999).unwrap();
+        let s_ts_ltz_us_neg = TimestampLtz::from_millis_nanos(-301_234_154_877, 456_000).unwrap();
+        let s_ts_ltz_ns_neg = TimestampLtz::from_millis_nanos(-301_234_154_877, 999_999).unwrap();
+
+        row1.set_field(plan.idx("col_tinyint"), s_tinyint);
+        row1.set_field(plan.idx("col_smallint"), s_smallint);
+        row1.set_field(plan.idx("col_bigint"), s_bigint);
+        row1.set_field(plan.idx("col_float"), s_float);
+        row1.set_field(plan.idx("col_double"), s_double);
+        row1.set_field(plan.idx("col_boolean"), true);
+        row1.set_field(plan.idx("col_char"), s_char);
+        row1.set_field(plan.idx("col_string"), s_string);
+        row1.set_field(plan.idx("col_decimal"), s_decimal.clone());
+        row1.set_field(plan.idx("col_date"), Datum::Date(s_date));
+        row1.set_field(plan.idx("col_time_s"), s_time_s);
+        row1.set_field(plan.idx("col_time_ms"), s_time_ms);
+        row1.set_field(plan.idx("col_time_us"), s_time_us);
+        row1.set_field(plan.idx("col_time_ns"), s_time_ns);
+        row1.set_field(plan.idx("col_ts_s"), s_ts_s);
+        row1.set_field(plan.idx("col_ts_ms"), s_ts_ms);
+        row1.set_field(plan.idx("col_ts_us"), s_ts_us);
+        row1.set_field(plan.idx("col_ts_ns"), s_ts_ns);
+        row1.set_field(plan.idx("col_ts_ltz_s"), s_ts_ltz_s);
+        row1.set_field(plan.idx("col_ts_ltz_ms"), s_ts_ltz_ms);
+        row1.set_field(plan.idx("col_ts_ltz_us"), s_ts_ltz_us);
+        row1.set_field(plan.idx("col_ts_ltz_ns"), s_ts_ltz_ns);
+        row1.set_field(plan.idx("col_bytes_top"), s_bytes_top.as_slice());
+        row1.set_field(plan.idx("col_binary_top"), s_binary_top.as_slice());
+        row1.set_field(plan.idx("col_ts_us_neg"), s_ts_us_neg);
+        row1.set_field(plan.idx("col_ts_ns_neg"), s_ts_ns_neg);
+        row1.set_field(plan.idx("col_ts_ltz_us_neg"), s_ts_ltz_us_neg);
+        row1.set_field(plan.idx("col_ts_ltz_ns_neg"), s_ts_ltz_ns_neg);
 
         upsert_writer
             .upsert(&row1)
@@ -1508,7 +1491,7 @@ mod kv_table_test {
         let empty_map = FlussMapWriter::new(0, &DataTypes::string(), &DataTypes::int())
             .complete()
             .expect("empty_map");
-        row2.set_field(8, Datum::Map(empty_map));
+        row2.set_field(plan.idx("map_string_int"), Datum::Map(empty_map));
         upsert_writer
             .upsert(&row2)
             .expect("upsert row2")
@@ -1569,22 +1552,26 @@ mod kv_table_test {
         assert!(rr.get_boolean(0).unwrap());
         assert_eq!(rr.get_int(1).unwrap(), 100_000);
         assert_eq!(rr.get_long(2).unwrap(), 9_876_543_210);
-        assert!((rr.get_double(3).unwrap() - std::f64::consts::PI).abs() < f64::EPSILON);
-        assert_eq!(rr.get_string(4).unwrap(), "hello world");
+        assert!(rr.get_float(3).unwrap().is_infinite());
+        assert!((rr.get_double(4).unwrap() - std::f64::consts::PI).abs() < f64::EPSILON);
+        assert_eq!(rr.get_string(5).unwrap(), "hello world");
+        assert_eq!(rr.get_bytes(6).unwrap(), b"binary");
         assert_eq!(
-            rr.get_decimal(5, 10, 2).unwrap(),
+            rr.get_decimal(7, 10, 2).unwrap(),
             Decimal::from_unscaled_long(12345, 10, 2).unwrap()
         );
-        assert_eq!(rr.get_date(6).unwrap().get_inner(), 20476);
+        assert_eq!(rr.get_date(8).unwrap().get_inner(), 20476);
+        assert_eq!(rr.get_time(9).unwrap().get_inner(), 36_827_123);
         assert_eq!(
-            rr.get_timestamp_ntz(7, 6).unwrap().get_millisecond(),
+            rr.get_timestamp_ntz(10, 6).unwrap().get_millisecond(),
             1_769_163_227_123
         );
         assert_eq!(
-            rr.get_timestamp_ltz(8, 6).unwrap().get_epoch_millisecond(),
+            rr.get_timestamp_ltz(11, 6).unwrap().get_epoch_millisecond(),
             1_769_163_227_456
         );
-        let f_arr = rr.get_array(9).unwrap();
+        assert_eq!(rr.get_binary(12, 4).unwrap(), b"\x01\x02\x03\x04");
+        let f_arr = rr.get_array(13).unwrap();
         assert_eq!(f_arr.size(), 3);
         assert!(f_arr.is_null_at(1));
 
@@ -1620,31 +1607,138 @@ mod kv_table_test {
         assert_eq!(am0.size(), 2);
 
         // === Scalars: integers + floating point ===
-        assert_eq!(r1.get_byte(13).unwrap(), s_tinyint);
-        assert_eq!(r1.get_short(14).unwrap(), s_smallint);
-        assert_eq!(r1.get_long(15).unwrap(), s_bigint);
-        assert!((r1.get_float(16).unwrap() - s_float).abs() < f32::EPSILON);
-        assert!((r1.get_double(17).unwrap() - s_double).abs() < f64::EPSILON);
+        assert_eq!(r1.get_byte(plan.idx("col_tinyint")).unwrap(), s_tinyint);
+        assert_eq!(r1.get_short(plan.idx("col_smallint")).unwrap(), s_smallint);
+        assert_eq!(r1.get_long(plan.idx("col_bigint")).unwrap(), s_bigint);
+        assert!((r1.get_float(plan.idx("col_float")).unwrap() - s_float).abs() < f32::EPSILON);
+        assert!((r1.get_double(plan.idx("col_double")).unwrap() - s_double).abs() < f64::EPSILON);
 
         // === Scalars: boolean / char / string / decimal / date ===
-        assert!(r1.get_boolean(18).unwrap());
-        assert_eq!(r1.get_char(19, 10).unwrap(), s_char);
-        assert_eq!(r1.get_string(20).unwrap(), s_string);
-        assert_eq!(r1.get_decimal(21, 10, 2).unwrap(), s_decimal);
-        assert_eq!(r1.get_date(22).unwrap().get_inner(), s_date.get_inner());
+        assert!(r1.get_boolean(plan.idx("col_boolean")).unwrap());
+        assert_eq!(r1.get_char(plan.idx("col_char"), 10).unwrap(), s_char);
+        assert_eq!(r1.get_string(plan.idx("col_string")).unwrap(), s_string);
+        assert_eq!(
+            r1.get_decimal(plan.idx("col_decimal"), 10, 2).unwrap(),
+            s_decimal
+        );
+        assert_eq!(
+            r1.get_date(plan.idx("col_date")).unwrap().get_inner(),
+            s_date.get_inner()
+        );
 
-        // === Scalars: time / timestamp / timestamp_ltz / bytes / binary ===
-        assert_eq!(r1.get_time(23).unwrap().get_inner(), s_time.get_inner());
+        // === Scalars: time across all four precisions ===
         assert_eq!(
-            r1.get_timestamp_ntz(24, 6).unwrap().get_millisecond(),
-            s_ts.get_millisecond()
+            r1.get_time(plan.idx("col_time_s")).unwrap().get_inner(),
+            s_time_s.get_inner()
         );
         assert_eq!(
-            r1.get_timestamp_ltz(25, 6).unwrap().get_epoch_millisecond(),
-            s_ts_ltz.get_epoch_millisecond()
+            r1.get_time(plan.idx("col_time_ms")).unwrap().get_inner(),
+            s_time_ms.get_inner()
         );
-        assert_eq!(r1.get_bytes(26).unwrap(), s_bytes.as_slice());
-        assert_eq!(r1.get_binary(27, 20).unwrap(), s_binary.as_slice());
+        assert_eq!(
+            r1.get_time(plan.idx("col_time_us")).unwrap().get_inner(),
+            s_time_us.get_inner()
+        );
+        assert_eq!(
+            r1.get_time(plan.idx("col_time_ns")).unwrap().get_inner(),
+            s_time_ns.get_inner()
+        );
+
+        // === Scalars: timestamp across all four precisions ===
+        assert_eq!(
+            r1.get_timestamp_ntz(plan.idx("col_ts_s"), 0)
+                .unwrap()
+                .get_millisecond(),
+            s_ts_s.get_millisecond()
+        );
+        assert_eq!(
+            r1.get_timestamp_ntz(plan.idx("col_ts_ms"), 3)
+                .unwrap()
+                .get_millisecond(),
+            s_ts_ms.get_millisecond()
+        );
+        let read_ts_us = r1.get_timestamp_ntz(plan.idx("col_ts_us"), 6).unwrap();
+        assert_eq!(read_ts_us.get_millisecond(), s_ts_us.get_millisecond());
+        assert_eq!(
+            read_ts_us.get_nano_of_millisecond(),
+            s_ts_us.get_nano_of_millisecond()
+        );
+        let read_ts_ns = r1.get_timestamp_ntz(plan.idx("col_ts_ns"), 9).unwrap();
+        assert_eq!(read_ts_ns.get_millisecond(), s_ts_ns.get_millisecond());
+        assert_eq!(
+            read_ts_ns.get_nano_of_millisecond(),
+            s_ts_ns.get_nano_of_millisecond()
+        );
+
+        // === Scalars: timestamp_ltz across all four precisions ===
+        assert_eq!(
+            r1.get_timestamp_ltz(plan.idx("col_ts_ltz_s"), 0)
+                .unwrap()
+                .get_epoch_millisecond(),
+            s_ts_ltz_s.get_epoch_millisecond()
+        );
+        assert_eq!(
+            r1.get_timestamp_ltz(plan.idx("col_ts_ltz_ms"), 3)
+                .unwrap()
+                .get_epoch_millisecond(),
+            s_ts_ltz_ms.get_epoch_millisecond()
+        );
+        let read_ltz_us = r1.get_timestamp_ltz(plan.idx("col_ts_ltz_us"), 6).unwrap();
+        assert_eq!(
+            read_ltz_us.get_epoch_millisecond(),
+            s_ts_ltz_us.get_epoch_millisecond()
+        );
+        assert_eq!(
+            read_ltz_us.get_nano_of_millisecond(),
+            s_ts_ltz_us.get_nano_of_millisecond()
+        );
+        let read_ltz_ns = r1.get_timestamp_ltz(plan.idx("col_ts_ltz_ns"), 9).unwrap();
+        assert_eq!(
+            read_ltz_ns.get_epoch_millisecond(),
+            s_ts_ltz_ns.get_epoch_millisecond()
+        );
+        assert_eq!(
+            read_ltz_ns.get_nano_of_millisecond(),
+            s_ts_ltz_ns.get_nano_of_millisecond()
+        );
+
+        // === Scalars: bytes + fixed binary ===
+        assert_eq!(
+            r1.get_bytes(plan.idx("col_bytes_top")).unwrap(),
+            s_bytes_top.as_slice()
+        );
+        assert_eq!(
+            r1.get_binary(plan.idx("col_binary_top"), 4).unwrap(),
+            s_binary_top.as_slice()
+        );
+
+        // === Scalars: negative-epoch timestamps (pre-1970) ===
+        let read_neg_us = r1.get_timestamp_ntz(plan.idx("col_ts_us_neg"), 6).unwrap();
+        assert_eq!(read_neg_us.get_millisecond(), s_ts_us_neg.get_millisecond());
+        assert_eq!(
+            read_neg_us.get_nano_of_millisecond(),
+            s_ts_us_neg.get_nano_of_millisecond()
+        );
+        let read_neg_ns = r1.get_timestamp_ntz(plan.idx("col_ts_ns_neg"), 9).unwrap();
+        assert_eq!(read_neg_ns.get_millisecond(), s_ts_ns_neg.get_millisecond());
+        assert_eq!(
+            read_neg_ns.get_nano_of_millisecond(),
+            s_ts_ns_neg.get_nano_of_millisecond()
+        );
+        let read_neg_ltz_us = r1
+            .get_timestamp_ltz(plan.idx("col_ts_ltz_us_neg"), 6)
+            .unwrap();
+        assert_eq!(
+            read_neg_ltz_us.get_epoch_millisecond(),
+            s_ts_ltz_us_neg.get_epoch_millisecond()
+        );
+        let read_neg_ltz_ns = r1
+            .get_timestamp_ltz(plan.idx("col_ts_ltz_ns_neg"), 9)
+            .unwrap();
+        assert_eq!(
+            read_neg_ltz_ns.get_epoch_millisecond(),
+            s_ts_ltz_ns_neg.get_epoch_millisecond()
+        );
 
         // === Row 2 lookup — empty map, all other columns NULL ===
         let result2 = lookuper.lookup(&make_key(2)).await.expect("lookup row2");
@@ -1653,9 +1747,10 @@ mod kv_table_test {
             .expect("row2")
             .expect("row2 exists");
         assert_eq!(r2.get_int(0).unwrap(), 2);
+        let map_idx = plan.idx("map_string_int");
         for i in 1..column_count {
-            if i == 8 {
-                assert_eq!(r2.get_map(8).unwrap().size(), 0);
+            if i == map_idx {
+                assert_eq!(r2.get_map(map_idx).unwrap().size(), 0);
             } else {
                 assert!(r2.is_null_at(i).unwrap(), "field {i} should be null");
             }

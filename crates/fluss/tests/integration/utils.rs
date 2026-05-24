@@ -17,7 +17,9 @@
  */
 use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
 use fluss::client::FlussAdmin;
-use fluss::metadata::{DataTypes, PartitionSpec, TableDescriptor, TablePath};
+use fluss::metadata::{
+    DataField, DataType, DataTypes, PartitionSpec, RowType, Schema, TableDescriptor, TablePath,
+};
 use fluss::row::FlussArray;
 use fluss::row::binary_array::FlussArrayWriter;
 use std::collections::HashMap;
@@ -174,5 +176,202 @@ pub async fn create_partitions(
             .create_partition(table_path, &PartitionSpec::new(partition_map), true)
             .await
             .expect("Failed to create partition");
+    }
+}
+
+pub fn dt_array_int() -> DataType {
+    DataTypes::array(DataTypes::int())
+}
+
+pub fn dt_map_string_int() -> DataType {
+    DataTypes::map(DataTypes::string(), DataTypes::int())
+}
+
+pub fn dt_row_seq_label() -> DataType {
+    DataTypes::row(vec![
+        DataField::new("seq", DataTypes::int(), None),
+        DataField::new("label", DataTypes::string(), None),
+    ])
+}
+
+pub fn as_row_type(dt: &DataType) -> RowType {
+    match dt {
+        DataType::Row(rt) => rt.clone(),
+        other => panic!("expected DataType::Row, got {other:?}"),
+    }
+}
+
+pub fn dt_row_deep() -> DataType {
+    let inner = DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
+    DataTypes::row(vec![DataField::new("inner", inner, None)])
+}
+
+pub fn dt_row_rich() -> DataType {
+    DataTypes::row(vec![
+        DataField::new("f_bool", DataTypes::boolean(), None),
+        DataField::new("f_int", DataTypes::int(), None),
+        DataField::new("f_long", DataTypes::bigint(), None),
+        DataField::new("f_float", DataTypes::float(), None),
+        DataField::new("f_double", DataTypes::double(), None),
+        DataField::new("f_str", DataTypes::string(), None),
+        DataField::new("f_bytes", DataTypes::bytes(), None),
+        DataField::new("f_decimal", DataTypes::decimal(10, 2), None),
+        DataField::new("f_date", DataTypes::date(), None),
+        DataField::new("f_time", DataTypes::time_with_precision(3), None),
+        DataField::new("f_ts_ntz", DataTypes::timestamp_with_precision(6), None),
+        DataField::new("f_ts_ltz", DataTypes::timestamp_ltz_with_precision(6), None),
+        DataField::new("f_binary_fixed", DataTypes::binary(4), None),
+        DataField::new("f_array_int", DataTypes::array(DataTypes::int()), None),
+    ])
+}
+
+pub fn array_dt_basics_columns() -> Vec<(&'static str, DataType)> {
+    vec![
+        ("arr_int", DataTypes::array(DataTypes::int())),
+        ("arr_string", DataTypes::array(DataTypes::string())),
+        ("arr_of_arr", DataTypes::array(dt_array_int())),
+        ("arr_of_row", DataTypes::array(dt_row_seq_label())),
+    ]
+}
+
+pub fn row_dt_basics_columns() -> Vec<(&'static str, DataType)> {
+    vec![
+        ("row_basic", dt_row_seq_label()),
+        ("row_deep", dt_row_deep()),
+        ("row_rich", dt_row_rich()),
+    ]
+}
+
+pub fn map_dt_basics_columns() -> Vec<(&'static str, DataType)> {
+    vec![
+        ("map_string_int", dt_map_string_int()),
+        (
+            "map_of_row",
+            DataTypes::map(DataTypes::string(), dt_row_seq_label()),
+        ),
+        (
+            "map_of_map",
+            DataTypes::map(DataTypes::string(), dt_map_string_int()),
+        ),
+        (
+            "map_of_array",
+            DataTypes::map(DataTypes::string(), dt_array_int()),
+        ),
+        ("array_of_map", DataTypes::array(dt_map_string_int())),
+    ]
+}
+
+pub fn scalar_dt_columns() -> Vec<(&'static str, DataType)> {
+    vec![
+        ("col_tinyint", DataTypes::tinyint()),
+        ("col_smallint", DataTypes::smallint()),
+        ("col_bigint", DataTypes::bigint()),
+        ("col_float", DataTypes::float()),
+        ("col_double", DataTypes::double()),
+        ("col_boolean", DataTypes::boolean()),
+        ("col_char", DataTypes::char(10)),
+        ("col_string", DataTypes::string()),
+        ("col_decimal", DataTypes::decimal(10, 2)),
+        ("col_date", DataTypes::date()),
+        ("col_time_s", DataTypes::time_with_precision(0)),
+        ("col_time_ms", DataTypes::time_with_precision(3)),
+        ("col_time_us", DataTypes::time_with_precision(6)),
+        ("col_time_ns", DataTypes::time_with_precision(9)),
+        ("col_ts_s", DataTypes::timestamp_with_precision(0)),
+        ("col_ts_ms", DataTypes::timestamp_with_precision(3)),
+        ("col_ts_us", DataTypes::timestamp_with_precision(6)),
+        ("col_ts_ns", DataTypes::timestamp_with_precision(9)),
+        ("col_ts_ltz_s", DataTypes::timestamp_ltz_with_precision(0)),
+        ("col_ts_ltz_ms", DataTypes::timestamp_ltz_with_precision(3)),
+        ("col_ts_ltz_us", DataTypes::timestamp_ltz_with_precision(6)),
+        ("col_ts_ltz_ns", DataTypes::timestamp_ltz_with_precision(9)),
+        ("col_bytes_top", DataTypes::bytes()),
+        ("col_binary_top", DataTypes::binary(4)),
+        ("col_ts_us_neg", DataTypes::timestamp_with_precision(6)),
+        ("col_ts_ns_neg", DataTypes::timestamp_with_precision(9)),
+        (
+            "col_ts_ltz_us_neg",
+            DataTypes::timestamp_ltz_with_precision(6),
+        ),
+        (
+            "col_ts_ltz_ns_neg",
+            DataTypes::timestamp_ltz_with_precision(9),
+        ),
+    ]
+}
+
+#[derive(Default)]
+pub struct ColumnPlan {
+    cols: Vec<(&'static str, DataType)>,
+    index: HashMap<&'static str, usize>,
+    sections: Vec<(&'static str, usize)>,
+}
+
+impl ColumnPlan {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add(mut self, name: &'static str, dt: DataType) -> Self {
+        let prev = self.index.insert(name, self.cols.len());
+        assert!(prev.is_none(), "duplicate column in plan: {name}");
+        self.cols.push((name, dt));
+        self
+    }
+
+    pub fn extend<I: IntoIterator<Item = (&'static str, DataType)>>(mut self, it: I) -> Self {
+        for (n, dt) in it {
+            self = self.add(n, dt);
+        }
+        self
+    }
+
+    /// Marks the next column added as the start of a named section. Each call
+    /// closes the previous section; the last section runs to the end of the plan.
+    pub fn start_section(mut self, name: &'static str) -> Self {
+        assert!(
+            !self.sections.iter().any(|(n, _)| *n == name),
+            "duplicate section: {name}"
+        );
+        self.sections.push((name, self.cols.len()));
+        self
+    }
+
+    pub fn build_schema(&self, pk: Option<&[&str]>) -> Schema {
+        let mut sb = Schema::builder();
+        for (n, dt) in &self.cols {
+            sb = sb.column(*n, dt.clone());
+        }
+        if let Some(keys) = pk {
+            sb = sb.primary_key(keys.iter().copied());
+        }
+        sb.build().expect("schema build")
+    }
+
+    pub fn idx(&self, name: &str) -> usize {
+        *self
+            .index
+            .get(name)
+            .unwrap_or_else(|| panic!("unknown column in plan: {name}"))
+    }
+
+    pub fn len(&self) -> usize {
+        self.cols.len()
+    }
+
+    /// Half-open range of the named section: `[its start, next section's start or plan end)`.
+    pub fn section_range(&self, name: &str) -> std::ops::Range<usize> {
+        let pos = self
+            .sections
+            .iter()
+            .position(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("unknown section: {name}"));
+        let start = self.sections[pos].1;
+        let end = self
+            .sections
+            .get(pos + 1)
+            .map(|(_, s)| *s)
+            .unwrap_or(self.cols.len());
+        start..end
     }
 }
