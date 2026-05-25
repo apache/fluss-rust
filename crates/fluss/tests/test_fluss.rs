@@ -24,6 +24,7 @@ mod integration {
     mod fluss_cluster;
     mod kv_table;
     mod log_table;
+    mod record_batch_log_reader;
     mod sasl_auth;
 
     mod utils;
