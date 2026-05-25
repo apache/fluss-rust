@@ -661,24 +661,18 @@ impl InternalRow for ColumnarRow {
         };
 
         let column = self.column(pos)?;
-        let element_field = match column.data_type() {
-            ArrowDataType::List(field) => field,
+        match column.data_type() {
+            ArrowDataType::List(_) => {}
             other => {
                 return Err(IllegalArgument {
                     message: format!("expected List array at position {pos}, got {other:?}"),
                 });
             }
-        };
-
-        let actual_element_type = from_arrow_field(element_field)?;
-        if actual_element_type != *element_fluss_type {
-            return Err(IllegalArgument {
-                message: format!(
-                    "Arrow list element type {:?} does not match expected Fluss type {:?}",
-                    actual_element_type, element_fluss_type
-                ),
-            });
         }
+
+        // `to_arrow_type` is lossy (e.g. TIMESTAMP_LTZ → plain Arrow Timestamp);
+        // trust the Fluss schema and let the per-element conversion below catch
+        // real shape mismatches.
 
         let list_arr = column
             .as_any()
@@ -778,25 +772,9 @@ fn arrow_map_entry_to_fluss_map(
         });
     }
 
-    let actual_key_type = from_arrow_field(&fields[0])?;
-    if actual_key_type != *key_type {
-        return Err(IllegalArgument {
-            message: format!(
-                "Arrow map key type {:?} does not match expected Fluss type {:?}",
-                actual_key_type, key_type
-            ),
-        });
-    }
-
-    let actual_value_type = from_arrow_field(&fields[1])?;
-    if actual_value_type != *value_type {
-        return Err(IllegalArgument {
-            message: format!(
-                "Arrow map value type {:?} does not match expected Fluss type {:?}",
-                actual_value_type, value_type
-            ),
-        });
-    }
+    // `to_arrow_type` is lossy (e.g. TIMESTAMP_LTZ → plain Arrow Timestamp);
+    // trust the Fluss schema and let the per-element conversion below catch
+    // real shape mismatches.
 
     let keys_arrow = struct_arr.column(0);
     let values_arrow = struct_arr.column(1);
@@ -1443,8 +1421,7 @@ mod tests {
 
         let err = row.get_array(0).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("Cannot convert Arrow type to Fluss type"),
+            err.to_string().contains("expected Int32Type"),
             "unexpected error: {err}"
         );
     }
@@ -1735,7 +1712,7 @@ mod tests {
         let err = row.get_map(0).expect_err("type mismatch must error");
         let msg = err.to_string();
         assert!(
-            msg.contains("does not match expected Fluss type"),
+            msg.contains("expected StringArray"),
             "unexpected error: {msg}"
         );
     }
