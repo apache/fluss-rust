@@ -16,10 +16,12 @@
  * limitations under the License.
  */
 use crate::integration::fluss_cluster::{FlussTestingCluster, FlussTestingClusterBuilder};
+use arrow::array::Int32Array;
 use fluss::client::FlussAdmin;
 use fluss::metadata::{
     DataField, DataType, DataTypes, PartitionSpec, RowType, Schema, TableDescriptor, TablePath,
 };
+use fluss::record::ScanBatch;
 use fluss::row::FlussArray;
 use fluss::row::binary_array::FlussArrayWriter;
 use std::collections::HashMap;
@@ -118,6 +120,23 @@ pub fn make_int_array(values: &[Option<i32>]) -> FlussArray {
         }
     }
     writer.complete().expect("Failed to build int array")
+}
+
+pub fn extract_ids_from_batches(batches: &[ScanBatch]) -> Vec<i32> {
+    batches
+        .iter()
+        .flat_map(|scan_batch| {
+            let batch = scan_batch.batch();
+            (0..batch.num_rows()).map(move |row| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("id column should be Int32")
+                    .value(row)
+            })
+        })
+        .collect()
 }
 
 /// Similar to wait_for_cluster_ready but connects with SASL credentials.

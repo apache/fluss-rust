@@ -20,13 +20,14 @@
 mod table_test {
     use crate::integration::utils::{
         ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
-        dt_array_int, dt_map_string_int, dt_row_seq_label, get_shared_cluster, make_int_array,
-        make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
+        dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
+        get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
+        row_dt_basics_columns, scalar_dt_columns,
     };
-    use arrow::array::{Int32Array, record_batch};
+    use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
     use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
-    use fluss::record::{ScanBatch, ScanRecord};
+    use fluss::record::ScanRecord;
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
@@ -507,30 +508,13 @@ mod table_test {
             .unwrap();
         writer.flush().await.unwrap();
 
-        fn extract_ids(batches: &[ScanBatch]) -> Vec<i32> {
-            batches
-                .iter()
-                .flat_map(|b| {
-                    let batch = b.batch();
-                    (0..batch.num_rows()).map(move |i| {
-                        batch
-                            .column(0)
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap()
-                            .value(i)
-                    })
-                })
-                .collect()
-        }
-
         // poll may return partial results if not all batches are available yet,
         // so we accumulate across multiple polls until we have the expected count.
         let mut all_ids = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while all_ids.len() < 6 && tokio::time::Instant::now() < deadline {
             let batches = scanner.poll(Duration::from_secs(5)).await.unwrap();
-            all_ids.extend(extract_ids(&batches));
+            all_ids.extend(extract_ids_from_batches(&batches));
         }
 
         // Test 2: Order should be preserved across multiple batches
@@ -547,7 +531,7 @@ mod table_test {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while new_ids.len() < 2 && tokio::time::Instant::now() < deadline {
             let more = scanner.poll(Duration::from_secs(5)).await.unwrap();
-            new_ids.extend(extract_ids(&more));
+            new_ids.extend(extract_ids_from_batches(&more));
         }
 
         // Test 3: Subsequent polls should not return duplicate data (offset continuation)
@@ -561,7 +545,7 @@ mod table_test {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while trunc_ids.len() < 5 && tokio::time::Instant::now() < deadline {
             let trunc_batches = trunc_scanner.poll(Duration::from_secs(5)).await.unwrap();
-            trunc_ids.extend(extract_ids(&trunc_batches));
+            trunc_ids.extend(extract_ids_from_batches(&trunc_batches));
         }
 
         // Subscribing from offset 3 should return [4,5,6,7,8], not [1,2,3,4,5,6,7,8]
