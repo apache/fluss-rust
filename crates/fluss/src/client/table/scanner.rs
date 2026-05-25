@@ -283,26 +283,32 @@ struct LogScannerInner {
     /// [`crate::client::RecordBatchLogReader`] is iterating.
     reader_active: std::sync::atomic::AtomicBool,
     /// Holds the snapshot fields used by [`PollGuard`] to derive the
-    /// scanner poll-timing metrics. The mutex makes each individual
-    /// `record_poll_start` / `record_poll_end` call atomic, but the
-    /// start↔end pairing depends on the single-consumer contract
-    /// documented on [`LogScanner::poll`] and
+    /// scanner poll-timing metrics. The mutex makes the state updates
+    /// in `record_poll_start` / `record_poll_end` atomic; metric
+    /// emission and `log::warn!` calls happen after the lock is
+    /// released. The start↔end pairing depends on the single-consumer
+    /// contract documented on [`LogScanner::poll`] and
     /// [`RecordBatchLogScanner::poll`] (mirrors Java's
     /// `LogScannerImpl.acquire()`). Overlapping polls on the same
-    /// scanner trip a `debug_assert!` in `record_poll_start`.
+    /// scanner trip a `debug_assert!` in `record_poll_start` (debug
+    /// builds) or emit a `log::warn!` (release builds).
     poll_state: Mutex<PollState>,
 }
 
 /// Snapshot state used to derive the scanner poll-timing metrics.
 ///
-/// The mutex makes each `record_poll_start` / `record_poll_end` call
-/// atomic with respect to itself. It does **not** by itself preserve
-/// start↔end pairing across overlapping `poll()` calls — that invariant
-/// relies on the single-consumer contract that mirrors Java's
-/// `LogScannerImpl.acquire()`. Concurrent polls on the same scanner are
-/// detected by a `debug_assert!` in `record_poll_start` to surface
-/// contract violations in tests; release builds favor low overhead and
-/// assume callers honor the contract.
+/// The mutex makes the state updates in `record_poll_start` /
+/// `record_poll_end` atomic with respect to themselves; metric
+/// emission (`metrics::gauge!(...).set(...)`) and `log::warn!` calls
+/// happen after the lock is released so a user-installed recorder or
+/// logger cannot stall the critical section. The mutex does **not** by
+/// itself preserve start↔end pairing across overlapping `poll()` calls
+/// — that invariant relies on the single-consumer contract that
+/// mirrors Java's `LogScannerImpl.acquire()`. Concurrent polls on the
+/// same scanner are detected by a `debug_assert!` in
+/// `record_poll_start` (panics in debug / tests) and a `log::warn!` on
+/// both anomalous paths (`record_poll_start` sees a stale `Some`;
+/// `record_poll_end` sees `None`) for release-build observability.
 #[derive(Default, Debug)]
 struct PollState {
     /// Instant captured at the most recent `record_poll_start()`. `None`
@@ -441,43 +447,82 @@ impl LogScannerInner {
     /// matching Java's `ScannerMetricGroup.recordPollStart`
     /// (`timeMsBetweenPoll = lastPollMs != 0L ? pollStartMs - lastPollMs : 0L`).
     ///
-    /// In debug builds, panics if a previous poll has not yet recorded
-    /// its end — that indicates a concurrent `poll()` on the same scanner,
-    /// which violates the single-consumer contract (Java enforces this
-    /// with `LogScannerImpl.acquire()` and throws
-    /// `ConcurrentModificationException`).
+    /// Single-consumer contract: a previous poll must have recorded its
+    /// end before the next start. Java enforces this with
+    /// `LogScannerImpl.acquire()` (throws `ConcurrentModificationException`).
+    /// Rust surfaces violations as:
+    /// - debug builds: `debug_assert!` panics (caught by tests),
+    /// - release builds: `log::warn!` + the in-flight `poll_start_at` is
+    ///   overwritten so the metric series keeps moving; the resulting
+    ///   `time_between_poll_ms` / `poll_idle_ratio` values for the
+    ///   overlapping polls are not meaningful until the overlap clears.
     fn record_poll_start(&self) {
         let now = Instant::now();
-        let mut state = self.poll_state.lock();
-        debug_assert!(
-            state.poll_start_at.is_none(),
-            "concurrent poll() detected on the same scanner; \
-             LogScanner / RecordBatchLogScanner are single-consumer \
-             (see LogScannerImpl.acquire() for Java parity)"
-        );
-        let between_ms = match state.last_poll_at {
-            Some(prev) => now.duration_since(prev).as_secs_f64() * 1000.0,
-            None => 0.0,
+        // Compute under the lock; emit the metric outside the critical
+        // section so a user-installed recorder cannot stall the next poll.
+        let (between_ms, overlap) = {
+            let mut state = self.poll_state.lock();
+            let overlap = state.poll_start_at.is_some();
+            debug_assert!(
+                !overlap,
+                "concurrent poll() detected on the same scanner; \
+                 LogScanner / RecordBatchLogScanner are single-consumer \
+                 (see LogScannerImpl.acquire() for Java parity)"
+            );
+            let between_ms = match state.last_poll_at {
+                Some(prev) => now.duration_since(prev).as_secs_f64() * 1000.0,
+                None => 0.0,
+            };
+            state.time_between_poll_ms = between_ms;
+            state.last_poll_at = Some(now);
+            state.poll_start_at = Some(now);
+            (between_ms, overlap)
         };
-        state.time_between_poll_ms = between_ms;
+        if overlap {
+            warn!(
+                "concurrent poll() detected on scanner; single-consumer \
+                 contract violated, poll-timing metrics will be inaccurate \
+                 until the overlap clears"
+            );
+        }
         metrics::gauge!(SCANNER_TIME_BETWEEN_POLL_MS).set(between_ms);
-        state.last_poll_at = Some(now);
-        state.poll_start_at = Some(now);
     }
 
     /// Computes `poll_idle_ratio = poll_time / (poll_time + between_time)`.
     /// On the first poll, `between_time` is 0 so the ratio is 1.0
     /// (poll-bound).
+    ///
+    /// Orphan call: if no matching `record_poll_start` is in flight,
+    /// emits a `log::warn!` (single-consumer contract may have been
+    /// violated, e.g. in release builds where the start-side
+    /// `debug_assert!` is compiled out) and skips the metric update.
     fn record_poll_end(&self) {
         let now = Instant::now();
-        let mut state = self.poll_state.lock();
-        let Some(start) = state.poll_start_at.take() else {
-            return;
+        // Compute under the lock; emit metric / warn outside the critical
+        // section so neither the user-installed recorder nor the logger
+        // can stall the next poll.
+        let (orphan, ratio) = {
+            let mut state = self.poll_state.lock();
+            match state.poll_start_at.take() {
+                None => (true, None),
+                Some(start) => {
+                    let poll_time_ms = now.duration_since(start).as_secs_f64() * 1000.0;
+                    let total = poll_time_ms + state.time_between_poll_ms;
+                    let r = (total > 0.0).then_some(poll_time_ms / total);
+                    (false, r)
+                }
+            }
         };
-        let poll_time_ms = now.duration_since(start).as_secs_f64() * 1000.0;
-        let total = poll_time_ms + state.time_between_poll_ms;
-        if total > 0.0 {
-            metrics::gauge!(SCANNER_POLL_IDLE_RATIO).set(poll_time_ms / total);
+        if orphan {
+            warn!(
+                "record_poll_end called without a matching record_poll_start; \
+                 single-consumer contract may have been violated, idle ratio \
+                 for this poll is not emitted"
+            );
+            return;
+        }
+        if let Some(r) = ratio {
+            metrics::gauge!(SCANNER_POLL_IDLE_RATIO).set(r);
         }
     }
 
