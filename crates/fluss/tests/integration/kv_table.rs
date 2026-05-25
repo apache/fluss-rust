@@ -19,13 +19,18 @@
 #[cfg(test)]
 mod kv_table_test {
     use crate::integration::utils::{
-        create_partitions, create_table, get_shared_cluster, make_int_array, make_string_array,
+        ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
+        dt_array_int, dt_map_string_int, dt_row_seq_label, get_shared_cluster, make_int_array,
+        make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
     };
+    use fluss::client::TableUpsert;
     use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
+    use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
-        Date, Datum, Decimal, FlussArray, GenericRow, InternalRow, Time, TimestampLtz, TimestampNtz,
+        Date, Datum, Decimal, GenericRow, InternalRow, Time, TimestampLtz, TimestampNtz,
     };
+    use futures::stream::{FuturesUnordered, StreamExt};
 
     fn make_key(id: i32) -> GenericRow<'static> {
         make_key_with_field_count(id, 3)
@@ -284,11 +289,11 @@ mod kv_table_test {
             .expect("Failed to drop table");
     }
 
+    /// Partial-update preserves columns absent from the partial-write set.
     #[tokio::test]
     async fn partial_update() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-
         let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_partial_update");
@@ -303,172 +308,176 @@ mod kv_table_test {
                 Schema::builder()
                     .column("id", DataTypes::int())
                     .column("name", DataTypes::string())
-                    .column("age", DataTypes::bigint())
                     .column("score", DataTypes::bigint())
                     .column("nested", nested_type)
+                    .column(
+                        "attrs",
+                        DataTypes::map(DataTypes::string(), DataTypes::int()),
+                    )
+                    .column("tags", DataTypes::array(DataTypes::string()))
                     .primary_key(vec!["id"])
                     .build()
-                    .expect("Failed to build schema"),
+                    .expect("schema"),
             )
             .build()
-            .expect("Failed to build table");
+            .expect("table descriptor");
 
         create_table(&admin, &table_path, &table_descriptor).await;
 
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let upsert_writer = table_upsert
-            .create_writer()
-            .expect("Failed to create writer");
+        let table = connection.get_table(&table_path).await.expect("table");
+        let table_upsert = table.new_upsert().expect("upsert");
+        let upsert_writer = table_upsert.create_writer().expect("writer");
 
         let mut nested0 = GenericRow::new(2);
         nested0.set_field(0, 10_i32);
         nested0.set_field(1, "alpha");
-        let mut row = GenericRow::new(5);
+        let attrs0 = {
+            let mut w = FlussMapWriter::new(2, &DataTypes::string(), &DataTypes::int());
+            w.write_entry("a".into(), 1.into()).unwrap();
+            w.write_entry("b".into(), 2.into()).unwrap();
+            w.complete().expect("attrs0")
+        };
+        let tags0 = make_string_array(&[Some("alpha-tag"), Some("beta-tag")]);
+
+        let mut row = GenericRow::new(6);
         row.set_field(0, 1);
         row.set_field(1, "Verso");
-        row.set_field(2, 32i64);
-        row.set_field(3, 6942i64);
-        row.set_field(4, Datum::Row(Box::new(nested0)));
+        row.set_field(2, 100i64);
+        row.set_field(3, Datum::Row(Box::new(nested0)));
+        row.set_field(4, Datum::Map(attrs0));
+        row.set_field(5, tags0);
         upsert_writer
             .upsert(&row)
-            .expect("Failed to upsert initial row")
+            .expect("upsert initial")
             .await
-            .expect("Failed to wait for upsert acknowledgment");
+            .expect("ack initial");
 
         let mut lookuper = table
             .new_lookup()
-            .expect("Failed to create lookup")
+            .expect("lookup")
             .create_lookuper()
-            .expect("Failed to create lookuper");
+            .expect("lookuper");
 
-        let result = lookuper
-            .lookup(&make_key(1))
-            .await
-            .expect("Failed to lookup");
-        let found_row = result
+        // Helper to issue a partial upsert against a specific column set.
+        async fn partial_upsert(table_upsert: &TableUpsert, cols: &[&str], row: GenericRow<'_>) {
+            let pu = table_upsert
+                .partial_update_with_column_names(cols)
+                .expect("partial upsert");
+            let pw = pu.create_writer().expect("partial writer");
+            pw.upsert(&row)
+                .expect("partial upsert")
+                .await
+                .expect("partial ack");
+        }
+
+        // === Partial update on a scalar column — compound columns preserved ===
+        let mut p1 = GenericRow::new(6);
+        p1.set_field(0, 1);
+        p1.set_field(1, Datum::Null);
+        p1.set_field(2, 420i64);
+        p1.set_field(3, Datum::Null);
+        p1.set_field(4, Datum::Null);
+        p1.set_field(5, Datum::Null);
+        partial_upsert(&table_upsert, &["id", "score"], p1).await;
+
+        let result = lookuper.lookup(&make_key(1)).await.expect("lookup");
+        let r = result
             .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
+            .expect("get row")
+            .expect("row exists");
+        assert_eq!(r.get_string(1).unwrap(), "Verso", "name preserved");
+        assert_eq!(r.get_long(2).unwrap(), 420, "score updated");
+        let n = r.get_row(3).unwrap();
+        assert_eq!(n.get_int(0).unwrap(), 10, "ROW preserved");
+        assert_eq!(r.get_map(4).unwrap().size(), 2, "MAP preserved");
+        assert_eq!(r.get_array(5).unwrap().size(), 2, "ARRAY preserved");
 
-        assert_eq!(found_row.get_int(0).unwrap(), 1);
-        assert_eq!(found_row.get_string(1).unwrap(), "Verso");
-        assert_eq!(found_row.get_long(2).unwrap(), 32i64);
-        assert_eq!(found_row.get_long(3).unwrap(), 6942i64);
-        let nested = found_row.get_row(4).unwrap();
-        assert_eq!(nested.get_int(0).unwrap(), 10);
-        assert_eq!(nested.get_string(1).unwrap(), "alpha");
-
-        let partial_upsert = table_upsert
-            .partial_update_with_column_names(&["id", "score"])
-            .expect("Failed to create TableUpsert with partial update");
-        let partial_writer = partial_upsert
-            .create_writer()
-            .expect("Failed to create UpsertWriter with partial write");
-
-        let mut partial_row = GenericRow::new(5);
-        partial_row.set_field(0, 1);
-        partial_row.set_field(1, Datum::Null);
-        partial_row.set_field(2, Datum::Null);
-        partial_row.set_field(3, 420i64);
-        partial_row.set_field(4, Datum::Null);
-        partial_writer
-            .upsert(&partial_row)
-            .expect("Failed to upsert")
-            .await
-            .expect("Failed to wait for upsert acknowledgment");
-
-        let result = lookuper
-            .lookup(&make_key(1))
-            .await
-            .expect("Failed to lookup after partial update");
-        let found_row = result
-            .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
-
-        assert_eq!(found_row.get_int(0).unwrap(), 1, "id should remain 1");
-        assert_eq!(
-            found_row.get_string(1).unwrap(),
-            "Verso",
-            "name should remain unchanged"
-        );
-        assert_eq!(
-            found_row.get_long(2).unwrap(),
-            32,
-            "age should remain unchanged"
-        );
-        assert_eq!(
-            found_row.get_long(3).unwrap(),
-            420,
-            "score should be updated to 420"
-        );
-        let nested = found_row.get_row(4).unwrap();
-        assert_eq!(
-            nested.get_int(0).unwrap(),
-            10,
-            "ROW preserved across non-ROW partial update"
-        );
-        assert_eq!(nested.get_string(1).unwrap(), "alpha");
-
-        let partial_nested_upsert = table_upsert
-            .partial_update_with_column_names(&["id", "nested"])
-            .expect("partial_update_with_column_names");
-        let partial_nested_writer = partial_nested_upsert
-            .create_writer()
-            .expect("partial writer");
+        // === Partial update on the ROW column ===
         let mut new_nested = GenericRow::new(2);
         new_nested.set_field(0, 99_i32);
         new_nested.set_field(1, "omega");
-        let mut partial_nested = GenericRow::new(5);
-        partial_nested.set_field(0, 1);
-        partial_nested.set_field(1, Datum::Null);
-        partial_nested.set_field(2, Datum::Null);
-        partial_nested.set_field(3, Datum::Null);
-        partial_nested.set_field(4, Datum::Row(Box::new(new_nested)));
-        partial_nested_writer
-            .upsert(&partial_nested)
-            .expect("partial upsert")
-            .await
-            .expect("partial ack");
+        let mut p2 = GenericRow::new(6);
+        p2.set_field(0, 1);
+        p2.set_field(1, Datum::Null);
+        p2.set_field(2, Datum::Null);
+        p2.set_field(3, Datum::Row(Box::new(new_nested)));
+        p2.set_field(4, Datum::Null);
+        p2.set_field(5, Datum::Null);
+        partial_upsert(&table_upsert, &["id", "nested"], p2).await;
 
-        let result = lookuper
-            .lookup(&make_key(1))
-            .await
-            .expect("Failed to lookup after nested partial");
-        let found_row = result
+        let result = lookuper.lookup(&make_key(1)).await.expect("lookup");
+        let r = result
             .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
-        assert_eq!(
-            found_row.get_string(1).unwrap(),
-            "Verso",
-            "name preserved when ROW updated"
-        );
-        assert_eq!(
-            found_row.get_long(3).unwrap(),
-            420,
-            "score preserved when ROW updated"
-        );
-        let nested = found_row.get_row(4).unwrap();
-        assert_eq!(nested.get_int(0).unwrap(), 99);
-        assert_eq!(nested.get_string(1).unwrap(), "omega");
+            .expect("get row")
+            .expect("row exists");
+        assert_eq!(r.get_string(1).unwrap(), "Verso", "name preserved");
+        assert_eq!(r.get_long(2).unwrap(), 420, "score preserved");
+        let n = r.get_row(3).unwrap();
+        assert_eq!(n.get_int(0).unwrap(), 99);
+        assert_eq!(n.get_string(1).unwrap(), "omega");
+        assert_eq!(r.get_map(4).unwrap().size(), 2, "MAP preserved");
+        assert_eq!(r.get_array(5).unwrap().size(), 2, "ARRAY preserved");
 
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
+        // === Partial update on the MAP column ===
+        let new_attrs = {
+            let mut w = FlussMapWriter::new(1, &DataTypes::string(), &DataTypes::int());
+            w.write_entry("z".into(), 99.into()).unwrap();
+            w.complete().expect("new_attrs")
+        };
+        let mut p3 = GenericRow::new(6);
+        p3.set_field(0, 1);
+        p3.set_field(1, Datum::Null);
+        p3.set_field(2, Datum::Null);
+        p3.set_field(3, Datum::Null);
+        p3.set_field(4, Datum::Map(new_attrs));
+        p3.set_field(5, Datum::Null);
+        partial_upsert(&table_upsert, &["id", "attrs"], p3).await;
+
+        let result = lookuper.lookup(&make_key(1)).await.expect("lookup");
+        let r = result
+            .get_single_row()
+            .expect("get row")
+            .expect("row exists");
+        assert_eq!(r.get_string(1).unwrap(), "Verso", "name preserved");
+        let n = r.get_row(3).unwrap();
+        assert_eq!(n.get_int(0).unwrap(), 99, "ROW preserved");
+        let m = r.get_map(4).unwrap();
+        assert_eq!(m.size(), 1);
+        assert_eq!(m.get(&Datum::from("z")).unwrap(), Some(Datum::from(99_i32)));
+        assert_eq!(r.get_array(5).unwrap().size(), 2, "ARRAY preserved");
+
+        // === Partial update on the ARRAY column ===
+        let new_tags = make_string_array(&[Some("gamma-tag")]);
+        let mut p4 = GenericRow::new(6);
+        p4.set_field(0, 1);
+        p4.set_field(1, Datum::Null);
+        p4.set_field(2, Datum::Null);
+        p4.set_field(3, Datum::Null);
+        p4.set_field(4, Datum::Null);
+        p4.set_field(5, new_tags);
+        partial_upsert(&table_upsert, &["id", "tags"], p4).await;
+
+        let result = lookuper.lookup(&make_key(1)).await.expect("lookup");
+        let r = result
+            .get_single_row()
+            .expect("get row")
+            .expect("row exists");
+        assert_eq!(r.get_string(1).unwrap(), "Verso", "name preserved");
+        let n = r.get_row(3).unwrap();
+        assert_eq!(n.get_int(0).unwrap(), 99, "ROW preserved");
+        assert_eq!(r.get_map(4).unwrap().size(), 1, "MAP preserved");
+        let a = r.get_array(5).unwrap();
+        assert_eq!(a.size(), 1);
+        assert_eq!(a.get_string(0).unwrap(), "gamma-tag");
+
+        admin.drop_table(&table_path, false).await.expect("drop");
     }
 
+    /// Partitioned KV upsert + lookup against every compound type.
     #[tokio::test]
     async fn partitioned_table_upsert_and_lookup() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-
         let admin = connection.get_admin().expect("Failed to get admin");
 
         let table_path = TablePath::new("fluss", "test_partitioned_kv_table");
@@ -486,1112 +495,181 @@ mod kv_table_test {
                     .column("name", DataTypes::string())
                     .column("score", DataTypes::bigint())
                     .column("nested", nested_type)
+                    .column(
+                        "attrs",
+                        DataTypes::map(DataTypes::string(), DataTypes::int()),
+                    )
+                    .column("tags", DataTypes::array(DataTypes::string()))
                     .primary_key(vec!["region", "user_id"])
                     .build()
-                    .expect("Failed to build schema"),
+                    .expect("schema"),
             )
             .partitioned_by(vec!["region"])
             .build()
-            .expect("Failed to build table");
+            .expect("table descriptor");
 
         create_table(&admin, &table_path, &table_descriptor).await;
-
         create_partitions(&admin, &table_path, "region", &["US", "EU", "APAC"]).await;
 
-        let connection = cluster.get_fluss_connection().await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let table_upsert = table.new_upsert().expect("Failed to create upsert");
-
-        let upsert_writer = table_upsert
-            .create_writer()
-            .expect("Failed to create writer");
+        let table = connection.get_table(&table_path).await.expect("table");
+        let table_upsert = table.new_upsert().expect("upsert");
+        let upsert_writer = table_upsert.create_writer().expect("writer");
 
         let test_data = [
-            ("US", 1, "Gustave", 100i64, 11_i32, "a"),
-            ("US", 2, "Lune", 200i64, 22, "b"),
-            ("EU", 1, "Sciel", 150i64, 33, "c"),
-            ("EU", 2, "Maelle", 250i64, 44, "d"),
-            ("APAC", 1, "Noco", 300i64, 55, "e"),
+            ("US", 1_i32, "Gustave", 100_i64, 11_i32, "a", 1_i32, "alpha"),
+            ("US", 2, "Lune", 200, 22, "b", 2, "beta"),
+            ("EU", 1, "Sciel", 150, 33, "c", 3, "gamma"),
+            ("EU", 2, "Maelle", 250, 44, "d", 4, "delta"),
+            ("APAC", 1, "Noco", 300, 55, "e", 5, "epsilon"),
         ];
 
-        for (region, user_id, name, score, seq, label) in &test_data {
+        for (region, user_id, name, score, seq, label, attr_v, tag) in &test_data {
             let mut nested = GenericRow::new(2);
             nested.set_field(0, *seq);
             nested.set_field(1, *label);
-            let mut row = GenericRow::new(5);
+            let attrs = {
+                let mut w = FlussMapWriter::new(1, &DataTypes::string(), &DataTypes::int());
+                w.write_entry((*label).into(), (*attr_v).into()).unwrap();
+                w.complete().expect("attrs")
+            };
+            let tags = make_string_array(&[Some(*tag)]);
+
+            let mut row = GenericRow::new(7);
             row.set_field(0, *region);
             row.set_field(1, *user_id);
             row.set_field(2, *name);
             row.set_field(3, *score);
             row.set_field(4, Datum::Row(Box::new(nested)));
-            upsert_writer.upsert(&row).expect("Failed to upsert");
+            row.set_field(5, Datum::Map(attrs));
+            row.set_field(6, tags);
+            upsert_writer.upsert(&row).expect("upsert");
         }
-        upsert_writer.flush().await.expect("Failed to flush");
+        upsert_writer.flush().await.expect("flush");
 
         let mut lookuper = table
             .new_lookup()
-            .expect("Failed to create lookup")
+            .expect("lookup")
             .create_lookuper()
-            .expect("Failed to create lookuper");
+            .expect("lookuper");
 
-        for (region, user_id, expected_name, expected_score, expected_seq, expected_label) in
-            &test_data
-        {
-            let mut key = GenericRow::new(5);
+        // === Per-partition lookup verifies all compound columns ===
+        for (region, user_id, name, score, seq, label, attr_v, tag) in &test_data {
+            let mut key = GenericRow::new(7);
             key.set_field(0, *region);
             key.set_field(1, *user_id);
 
-            let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+            let result = lookuper.lookup(&key).await.expect("lookup");
             let row = result
                 .get_single_row()
-                .expect("Failed to get row")
-                .expect("Row should exist");
+                .expect("get row")
+                .expect("row exists");
 
-            assert_eq!(row.get_string(0).unwrap(), *region, "region mismatch");
-            assert_eq!(row.get_int(1).unwrap(), *user_id, "user_id mismatch");
-            assert_eq!(row.get_string(2).unwrap(), *expected_name, "name mismatch");
-            assert_eq!(row.get_long(3).unwrap(), *expected_score, "score mismatch");
+            assert_eq!(row.get_string(0).unwrap(), *region);
+            assert_eq!(row.get_int(1).unwrap(), *user_id);
+            assert_eq!(row.get_string(2).unwrap(), *name);
+            assert_eq!(row.get_long(3).unwrap(), *score);
             let nested = row.get_row(4).unwrap();
+            assert_eq!(nested.get_int(0).unwrap(), *seq);
+            assert_eq!(nested.get_string(1).unwrap(), *label);
+            let attrs = row.get_map(5).unwrap();
+            assert_eq!(attrs.size(), 1);
             assert_eq!(
-                nested.get_int(0).unwrap(),
-                *expected_seq,
-                "ROW seq mismatch"
+                attrs.get(&Datum::from(*label)).unwrap(),
+                Some(Datum::from(*attr_v))
             );
-            assert_eq!(
-                nested.get_string(1).unwrap(),
-                *expected_label,
-                "ROW label mismatch"
-            );
+            let tags = row.get_array(6).unwrap();
+            assert_eq!(tags.size(), 1);
+            assert_eq!(tags.get_string(0).unwrap(), *tag);
         }
 
+        // === Update a row in US partition ===
         let mut updated_nested = GenericRow::new(2);
         updated_nested.set_field(0, 999_i32);
         updated_nested.set_field(1, "updated");
-        let mut updated_row = GenericRow::new(5);
+        let updated_attrs = {
+            let mut w = FlussMapWriter::new(1, &DataTypes::string(), &DataTypes::int());
+            w.write_entry("u".into(), 999.into()).unwrap();
+            w.complete().expect("updated_attrs")
+        };
+        let updated_tags = make_string_array(&[Some("renamed")]);
+        let mut updated_row = GenericRow::new(7);
         updated_row.set_field(0, "US");
         updated_row.set_field(1, 1);
         updated_row.set_field(2, "Gustave Updated");
-        updated_row.set_field(3, 999i64);
+        updated_row.set_field(3, 999_i64);
         updated_row.set_field(4, Datum::Row(Box::new(updated_nested)));
+        updated_row.set_field(5, Datum::Map(updated_attrs));
+        updated_row.set_field(6, updated_tags);
         upsert_writer
             .upsert(&updated_row)
-            .expect("Failed to upsert updated row")
+            .expect("upsert updated")
             .await
-            .expect("Failed to wait for upsert acknowledgment");
+            .expect("ack updated");
 
-        // Verify the update
-        let mut key = GenericRow::new(5);
+        let mut key = GenericRow::new(7);
         key.set_field(0, "US");
         key.set_field(1, 1);
-        let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+        let result = lookuper.lookup(&key).await.expect("lookup");
         let row = result
             .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
+            .expect("get row")
+            .expect("row exists");
         assert_eq!(row.get_string(2).unwrap(), "Gustave Updated");
         assert_eq!(row.get_long(3).unwrap(), 999);
         let nested = row.get_row(4).unwrap();
         assert_eq!(nested.get_int(0).unwrap(), 999);
-        assert_eq!(nested.get_string(1).unwrap(), "updated");
-
-        // Lookup in non-existent partition should return empty result
-        let mut non_existent_key = GenericRow::new(5);
-        non_existent_key.set_field(0, "UNKNOWN_REGION");
-        non_existent_key.set_field(1, 1);
-        let result = lookuper
-            .lookup(&non_existent_key)
-            .await
-            .expect("Failed to lookup non-existent partition");
-        assert!(
-            result
-                .get_single_row()
-                .expect("Failed to get row")
-                .is_none(),
-            "Lookup in non-existent partition should return None"
+        let attrs = row.get_map(5).unwrap();
+        assert_eq!(
+            attrs.get(&Datum::from("u")).unwrap(),
+            Some(Datum::from(999_i32))
         );
+        let tags = row.get_array(6).unwrap();
+        assert_eq!(tags.get_string(0).unwrap(), "renamed");
 
-        // Delete a record within a partition (await acknowledgment)
-        let mut delete_key = GenericRow::new(5);
+        // === Lookup in non-existent partition returns None ===
+        let mut missing = GenericRow::new(7);
+        missing.set_field(0, "UNKNOWN_REGION");
+        missing.set_field(1, 1);
+        let result = lookuper
+            .lookup(&missing)
+            .await
+            .expect("lookup unknown partition");
+        assert!(result.get_single_row().expect("get").is_none());
+
+        // === Delete a row within a partition ===
+        let mut delete_key = GenericRow::new(7);
         delete_key.set_field(0, "EU");
         delete_key.set_field(1, 1);
         upsert_writer
             .delete(&delete_key)
-            .expect("Failed to delete")
+            .expect("delete")
             .await
-            .expect("Failed to wait for delete acknowledgment");
-
-        // Verify deletion
-        let mut key = GenericRow::new(5);
+            .expect("ack delete");
+        let mut key = GenericRow::new(7);
         key.set_field(0, "EU");
         key.set_field(1, 1);
-        let result = lookuper.lookup(&key).await.expect("Failed to lookup");
-        assert!(
-            result
-                .get_single_row()
-                .expect("Failed to get row")
-                .is_none(),
-            "Deleted record should not exist"
-        );
+        let result = lookuper.lookup(&key).await.expect("lookup");
+        assert!(result.get_single_row().expect("get").is_none());
 
-        // Verify other records in the same partition still exist
-        let mut key = GenericRow::new(5);
+        // === Sibling row in same partition still exists ===
+        let mut key = GenericRow::new(7);
         key.set_field(0, "EU");
         key.set_field(1, 2);
-        let result = lookuper.lookup(&key).await.expect("Failed to lookup");
+        let result = lookuper.lookup(&key).await.expect("lookup");
         let row = result
             .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
-        assert_eq!(row.get_string(2).unwrap(), "Maelle");
-
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
-    #[tokio::test]
-    async fn upsert_and_lookup_with_row_rich_types() {
-        let cluster = get_shared_cluster();
-        let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss", "test_kv_row_rich_types");
-
-        let row_type_owned = DataTypes::row(vec![
-            DataField::new("f_bool", DataTypes::boolean(), None),
-            DataField::new("f_long", DataTypes::bigint(), None),
-            DataField::new("f_float", DataTypes::float(), None),
-            DataField::new("f_double", DataTypes::double(), None),
-            DataField::new("f_str", DataTypes::string(), None),
-            DataField::new("f_bytes", DataTypes::bytes(), None),
-            DataField::new("f_decimal", DataTypes::decimal(10, 2), None),
-            DataField::new("f_date", DataTypes::date(), None),
-            DataField::new("f_time", DataTypes::time_with_precision(3), None),
-            DataField::new("f_ts_ntz", DataTypes::timestamp_with_precision(6), None),
-            DataField::new("f_ts_ltz", DataTypes::timestamp_ltz_with_precision(6), None),
-        ]);
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("nested", row_type_owned)
-                    .primary_key(vec!["id"])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table descriptor");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-        let upsert = table.new_upsert().expect("Failed to create upsert");
-        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
-
-        let mut nested = GenericRow::new(11);
-        nested.set_field(0, true);
-        nested.set_field(1, 9_876_543_210_i64);
-        nested.set_field(2, f32::NEG_INFINITY);
-        nested.set_field(3, f64::NAN);
-        nested.set_field(4, "rich types here");
-        nested.set_field(5, b"opaque".as_slice());
-        nested.set_field(6, Decimal::from_unscaled_long(54321, 10, 2).unwrap());
-        nested.set_field(7, Datum::Date(Date::new(20476)));
-        nested.set_field(8, Datum::Time(Time::new(36_827_123)));
-        nested.set_field(9, Datum::TimestampNtz(TimestampNtz::new(1_769_163_227_123)));
-        nested.set_field(
-            10,
-            Datum::TimestampLtz(TimestampLtz::new(1_769_163_227_123)),
-        );
-
-        let mut row = GenericRow::new(2);
-        row.set_field(0, 1_i32);
-        row.set_field(1, Datum::Row(Box::new(nested)));
-
-        upsert_writer
-            .upsert(&row)
-            .expect("upsert")
-            .await
-            .expect("ack");
-
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
-        let result = lookuper
-            .lookup(&make_key_with_field_count(1, 2))
-            .await
-            .expect("lookup");
-        let r = result
-            .get_single_row()
             .expect("get row")
-            .expect("row should exist");
+            .expect("row exists");
+        assert_eq!(row.get_string(2).unwrap(), "Maelle");
+        assert_eq!(row.get_array(6).unwrap().get_string(0).unwrap(), "delta");
 
-        let n = r.get_row(1).unwrap();
-        assert!(n.get_boolean(0).unwrap());
-        assert_eq!(n.get_long(1).unwrap(), 9_876_543_210);
-        assert!(n.get_float(2).unwrap().is_infinite());
-        assert!(n.get_float(2).unwrap().is_sign_negative());
-        assert!(n.get_double(3).unwrap().is_nan());
-        assert_eq!(n.get_string(4).unwrap(), "rich types here");
-        assert_eq!(n.get_bytes(5).unwrap(), b"opaque");
-        assert_eq!(
-            n.get_decimal(6, 10, 2).unwrap(),
-            Decimal::from_unscaled_long(54321, 10, 2).unwrap(),
-        );
-        assert_eq!(n.get_date(7).unwrap().get_inner(), 20476);
-        assert_eq!(n.get_time(8).unwrap().get_inner(), 36_827_123);
-        assert_eq!(
-            n.get_timestamp_ntz(9, 6).unwrap().get_millisecond(),
-            1_769_163_227_123,
-        );
-        assert_eq!(
-            n.get_timestamp_ltz(10, 6).unwrap().get_epoch_millisecond(),
-            1_769_163_227_123,
-        );
-
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
+        admin.drop_table(&table_path, false).await.expect("drop");
     }
 
     /// Integration test covering put and get operations for all supported datatypes.
-    #[tokio::test]
-    async fn all_supported_datatypes() {
-        let cluster = get_shared_cluster();
-        let connection = cluster.get_fluss_connection().await;
-
-        let admin = connection.get_admin().expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss", "test_all_datatypes");
-
-        // Create a table with all supported primitive datatypes
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    // Primary key column
-                    .column("pk_int", DataTypes::int())
-                    // Boolean type
-                    .column("col_boolean", DataTypes::boolean())
-                    // Integer types
-                    .column("col_tinyint", DataTypes::tinyint())
-                    .column("col_smallint", DataTypes::smallint())
-                    .column("col_int", DataTypes::int())
-                    .column("col_bigint", DataTypes::bigint())
-                    // Floating point types
-                    .column("col_float", DataTypes::float())
-                    .column("col_double", DataTypes::double())
-                    // String types
-                    .column("col_char", DataTypes::char(10))
-                    .column("col_string", DataTypes::string())
-                    // Decimal type
-                    .column("col_decimal", DataTypes::decimal(10, 2))
-                    // Date and time types
-                    .column("col_date", DataTypes::date())
-                    .column("col_time", DataTypes::time())
-                    .column("col_timestamp", DataTypes::timestamp())
-                    .column("col_timestamp_ltz", DataTypes::timestamp_ltz())
-                    // Binary types
-                    .column("col_bytes", DataTypes::bytes())
-                    .column("col_binary", DataTypes::binary(20))
-                    .column("col_array", DataTypes::array(DataTypes::string()))
-                    .column(
-                        "col_row",
-                        DataTypes::row(vec![
-                            DataField::new("seq", DataTypes::int(), None),
-                            DataField::new("label", DataTypes::string(), None),
-                        ]),
-                    )
-                    .primary_key(vec!["pk_int"])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let table_upsert = table.new_upsert().expect("Failed to create upsert");
-        let upsert_writer = table_upsert
-            .create_writer()
-            .expect("Failed to create writer");
-
-        // Test data for all datatypes
-        let pk_int = 1i32;
-        let col_boolean = true;
-        let col_tinyint = 127i8;
-        let col_smallint = 32767i16;
-        let col_int = 2147483647i32;
-        let col_bigint = 9223372036854775807i64;
-        let col_float = std::f32::consts::PI;
-        let col_double = std::f64::consts::E;
-        let col_char = "hello";
-        let col_string = "world of fluss rust client";
-        let col_decimal = Decimal::from_unscaled_long(12345, 10, 2).unwrap(); // 123.45
-        let col_date = Date::new(20476); // 2026-01-23
-        let col_time = Time::new(36827123); // 10:13:47.123
-        let col_timestamp = TimestampNtz::new(1769163227123); // 2026-01-23 10:13:47.123 UTC
-        let col_timestamp_ltz = TimestampLtz::new(1769163227123); // 2026-01-23 10:13:47.123 UTC
-        let col_bytes: &[u8] = b"binary data";
-        let col_binary: &[u8] = b"fixed binary data!!!";
-
-        let col_array = make_string_array(&[Some("fluss"), Some("rust")]);
-
-        let mut col_row_inner = GenericRow::new(2);
-        col_row_inner.set_field(0, 7_i32);
-        col_row_inner.set_field(1, "lumiere");
-
-        // Upsert a row with all datatypes
-        let mut row = GenericRow::new(19);
-        row.set_field(0, pk_int);
-        row.set_field(1, col_boolean);
-        row.set_field(2, col_tinyint);
-        row.set_field(3, col_smallint);
-        row.set_field(4, col_int);
-        row.set_field(5, col_bigint);
-        row.set_field(6, col_float);
-        row.set_field(7, col_double);
-        row.set_field(8, col_char);
-        row.set_field(9, col_string);
-        row.set_field(10, col_decimal.clone());
-        row.set_field(11, col_date);
-        row.set_field(12, col_time);
-        row.set_field(13, col_timestamp);
-        row.set_field(14, col_timestamp_ltz);
-        row.set_field(15, col_bytes);
-        row.set_field(16, col_binary);
-        row.set_field(17, col_array);
-        row.set_field(18, Datum::Row(Box::new(col_row_inner)));
-
-        upsert_writer
-            .upsert(&row)
-            .expect("Failed to upsert row with all datatypes")
-            .await
-            .expect("Failed to wait for upsert acknowledgment");
-
-        // Lookup the record
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
-        let mut key = GenericRow::new(19);
-        key.set_field(0, pk_int);
-
-        let result = lookuper.lookup(&key).await.expect("Failed to lookup");
-        let found_row = result
-            .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
-
-        // Verify all datatypes
-        assert_eq!(found_row.get_int(0).unwrap(), pk_int, "pk_int mismatch");
-        assert_eq!(
-            found_row.get_boolean(1).unwrap(),
-            col_boolean,
-            "col_boolean mismatch"
-        );
-        assert_eq!(
-            found_row.get_byte(2).unwrap(),
-            col_tinyint,
-            "col_tinyint mismatch"
-        );
-        assert_eq!(
-            found_row.get_short(3).unwrap(),
-            col_smallint,
-            "col_smallint mismatch"
-        );
-        assert_eq!(found_row.get_int(4).unwrap(), col_int, "col_int mismatch");
-        assert_eq!(
-            found_row.get_long(5).unwrap(),
-            col_bigint,
-            "col_bigint mismatch"
-        );
-        assert!(
-            (found_row.get_float(6).unwrap() - col_float).abs() < f32::EPSILON,
-            "col_float mismatch: expected {}, got {}",
-            col_float,
-            found_row.get_float(6).unwrap()
-        );
-        assert!(
-            (found_row.get_double(7).unwrap() - col_double).abs() < f64::EPSILON,
-            "col_double mismatch: expected {}, got {}",
-            col_double,
-            found_row.get_double(7).unwrap()
-        );
-        assert_eq!(
-            found_row.get_char(8, 10).unwrap(),
-            col_char,
-            "col_char mismatch"
-        );
-        assert_eq!(
-            found_row.get_string(9).unwrap(),
-            col_string,
-            "col_string mismatch"
-        );
-        assert_eq!(
-            found_row.get_decimal(10, 10, 2).unwrap(),
-            col_decimal,
-            "col_decimal mismatch"
-        );
-        assert_eq!(
-            found_row.get_date(11).unwrap().get_inner(),
-            col_date.get_inner(),
-            "col_date mismatch"
-        );
-        assert_eq!(
-            found_row.get_time(12).unwrap().get_inner(),
-            col_time.get_inner(),
-            "col_time mismatch"
-        );
-        assert_eq!(
-            found_row
-                .get_timestamp_ntz(13, 6)
-                .unwrap()
-                .get_millisecond(),
-            col_timestamp.get_millisecond(),
-            "col_timestamp mismatch"
-        );
-        assert_eq!(
-            found_row
-                .get_timestamp_ltz(14, 6)
-                .unwrap()
-                .get_epoch_millisecond(),
-            col_timestamp_ltz.get_epoch_millisecond(),
-            "col_timestamp_ltz mismatch"
-        );
-        assert_eq!(
-            found_row.get_bytes(15).unwrap(),
-            col_bytes,
-            "col_bytes mismatch"
-        );
-        assert_eq!(
-            found_row.get_binary(16, 20).unwrap(),
-            col_binary,
-            "col_binary mismatch"
-        );
-        let arr = found_row.get_array(17).unwrap();
-        assert_eq!(arr.size(), 2, "col_array size mismatch");
-        assert_eq!(arr.get_string(0).unwrap(), "fluss", "col_array[0] mismatch");
-        assert_eq!(arr.get_string(1).unwrap(), "rust", "col_array[1] mismatch");
-        let nested = found_row.get_row(18).unwrap();
-        assert_eq!(nested.get_int(0).unwrap(), 7, "col_row.seq mismatch");
-        assert_eq!(
-            nested.get_string(1).unwrap(),
-            "lumiere",
-            "col_row.label mismatch"
-        );
-
-        // Test with null values for nullable columns
-        let pk_int_2 = 2i32;
-        let mut row_with_nulls = GenericRow::new(19);
-        row_with_nulls.set_field(0, pk_int_2);
-        row_with_nulls.set_field(1, Datum::Null); // col_boolean
-        row_with_nulls.set_field(2, Datum::Null); // col_tinyint
-        row_with_nulls.set_field(3, Datum::Null); // col_smallint
-        row_with_nulls.set_field(4, Datum::Null); // col_int
-        row_with_nulls.set_field(5, Datum::Null); // col_bigint
-        row_with_nulls.set_field(6, Datum::Null); // col_float
-        row_with_nulls.set_field(7, Datum::Null); // col_double
-        row_with_nulls.set_field(8, Datum::Null); // col_char
-        row_with_nulls.set_field(9, Datum::Null); // col_string
-        row_with_nulls.set_field(10, Datum::Null); // col_decimal
-        row_with_nulls.set_field(11, Datum::Null); // col_date
-        row_with_nulls.set_field(12, Datum::Null); // col_time
-        row_with_nulls.set_field(13, Datum::Null); // col_timestamp
-        row_with_nulls.set_field(14, Datum::Null); // col_timestamp_ltz
-        row_with_nulls.set_field(15, Datum::Null); // col_bytes
-        row_with_nulls.set_field(16, Datum::Null); // col_binary
-        row_with_nulls.set_field(17, Datum::Null); // col_array
-        row_with_nulls.set_field(18, Datum::Null); // col_row
-
-        upsert_writer
-            .upsert(&row_with_nulls)
-            .expect("Failed to upsert row with nulls")
-            .await
-            .expect("Failed to wait for upsert acknowledgment");
-
-        // Lookup row with nulls
-        let mut key2 = GenericRow::new(19);
-        key2.set_field(0, pk_int_2);
-
-        let result = lookuper.lookup(&key2).await.expect("Failed to lookup");
-        let found_row_nulls = result
-            .get_single_row()
-            .expect("Failed to get row")
-            .expect("Row should exist");
-
-        // Verify all nullable columns are null
-        assert_eq!(
-            found_row_nulls.get_int(0).unwrap(),
-            pk_int_2,
-            "pk_int mismatch"
-        );
-        assert!(
-            found_row_nulls.is_null_at(1).unwrap(),
-            "col_boolean should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(2).unwrap(),
-            "col_tinyint should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(3).unwrap(),
-            "col_smallint should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(4).unwrap(),
-            "col_int should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(5).unwrap(),
-            "col_bigint should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(6).unwrap(),
-            "col_float should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(7).unwrap(),
-            "col_double should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(8).unwrap(),
-            "col_char should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(9).unwrap(),
-            "col_string should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(10).unwrap(),
-            "col_decimal should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(11).unwrap(),
-            "col_date should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(12).unwrap(),
-            "col_time should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(13).unwrap(),
-            "col_timestamp should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(14).unwrap(),
-            "col_timestamp_ltz should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(15).unwrap(),
-            "col_bytes should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(16).unwrap(),
-            "col_binary should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(17).unwrap(),
-            "col_array should be null"
-        );
-        assert!(
-            found_row_nulls.is_null_at(18).unwrap(),
-            "col_row should be null"
-        );
-
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
-    #[tokio::test]
-    async fn upsert_and_lookup_with_row() {
-        let cluster = get_shared_cluster();
-        let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss", "test_kv_rows");
-        let nested_row_type = DataTypes::row(vec![
-            DataField::new("x", DataTypes::int(), None),
-            DataField::new("label", DataTypes::string(), None),
-        ]);
-        let deep_inner_row_type = DataTypes::row(vec![DataField::new("n", DataTypes::int(), None)]);
-        let deep_row_type =
-            DataTypes::row(vec![DataField::new("inner", deep_inner_row_type, None)]);
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("nested", nested_row_type)
-                    .column("deep", deep_row_type)
-                    .primary_key(vec!["id"])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table descriptor");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let upsert = table.new_upsert().expect("Failed to create upsert");
-        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
-
-        let mut nested1 = GenericRow::new(2);
-        nested1.set_field(0, 42_i32);
-        nested1.set_field(1, "hello");
-
-        let mut deep_inner1 = GenericRow::new(1);
-        deep_inner1.set_field(0, 99_i32);
-        let mut deep1 = GenericRow::new(1);
-        deep1.set_field(0, Datum::Row(Box::new(deep_inner1)));
-
-        let mut row1 = GenericRow::new(3);
-        row1.set_field(0, 1_i32);
-        row1.set_field(1, Datum::Row(Box::new(nested1)));
-        row1.set_field(2, Datum::Row(Box::new(deep1)));
-
-        upsert_writer
-            .upsert(&row1)
-            .expect("upsert row1")
-            .await
-            .expect("ack row1");
-
-        let mut nested2 = GenericRow::new(2);
-        nested2.set_field(0, 7_i32);
-        nested2.set_field(1, Datum::Null);
-
-        let mut row2 = GenericRow::new(3);
-        row2.set_field(0, 2_i32);
-        row2.set_field(1, Datum::Row(Box::new(nested2)));
-        row2.set_field(2, Datum::Null);
-
-        upsert_writer
-            .upsert(&row2)
-            .expect("upsert row2")
-            .await
-            .expect("ack row2");
-
-        let mut deep_inner3 = GenericRow::new(1);
-        deep_inner3.set_field(0, -1_i32);
-        let mut deep3 = GenericRow::new(1);
-        deep3.set_field(0, Datum::Row(Box::new(deep_inner3)));
-
-        let mut row3 = GenericRow::new(3);
-        row3.set_field(0, 3_i32);
-        row3.set_field(1, Datum::Null);
-        row3.set_field(2, Datum::Row(Box::new(deep3)));
-
-        upsert_writer
-            .upsert(&row3)
-            .expect("upsert row3")
-            .await
-            .expect("ack row3");
-
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
-        let result1 = lookuper
-            .lookup(&make_key_with_field_count(1, 3))
-            .await
-            .expect("lookup row1");
-        let r1 = result1
-            .get_single_row()
-            .expect("get row1")
-            .expect("row1 should exist");
-        assert_eq!(r1.get_int(0).unwrap(), 1);
-        let nested_r1 = r1.get_row(1).unwrap();
-        assert_eq!(nested_r1.get_int(0).unwrap(), 42);
-        assert_eq!(nested_r1.get_string(1).unwrap(), "hello");
-        let deep_r1 = r1.get_row(2).unwrap();
-        let deep_inner_r1 = deep_r1.get_row(0).unwrap();
-        assert_eq!(deep_inner_r1.get_int(0).unwrap(), 99);
-
-        let result2 = lookuper
-            .lookup(&make_key_with_field_count(2, 3))
-            .await
-            .expect("lookup row2");
-        let r2 = result2
-            .get_single_row()
-            .expect("get row2")
-            .expect("row2 should exist");
-        assert_eq!(r2.get_int(0).unwrap(), 2);
-        let nested_r2 = r2.get_row(1).unwrap();
-        assert_eq!(nested_r2.get_int(0).unwrap(), 7);
-        assert!(nested_r2.is_null_at(1).unwrap());
-        assert!(r2.is_null_at(2).unwrap());
-
-        let result3 = lookuper
-            .lookup(&make_key_with_field_count(3, 3))
-            .await
-            .expect("lookup row3");
-        let r3 = result3
-            .get_single_row()
-            .expect("get row3")
-            .expect("row3 should exist");
-        assert_eq!(r3.get_int(0).unwrap(), 3);
-        assert!(r3.is_null_at(1).unwrap());
-        let deep_r3 = r3.get_row(2).unwrap();
-        let deep_inner_r3 = deep_r3.get_row(0).unwrap();
-        assert_eq!(deep_inner_r3.get_int(0).unwrap(), -1);
-
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
-    #[tokio::test]
-    async fn upsert_and_lookup_with_array_of_row() {
-        use fluss::metadata::{DataField, DataType};
-
-        let cluster = get_shared_cluster();
-        let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss", "test_kv_array_of_row");
-
-        let event_row_type_owned = DataTypes::row(vec![
-            DataField::new("seq", DataTypes::int(), None),
-            DataField::new("label", DataTypes::string(), None),
-        ]);
-        let array_of_row_type = DataTypes::array(event_row_type_owned.clone());
-
-        let event_row_type = match &event_row_type_owned {
-            DataType::Row(rt) => rt.clone(),
-            _ => unreachable!(),
-        };
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("events", array_of_row_type.clone())
-                    .primary_key(vec!["id"])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table descriptor");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let upsert = table.new_upsert().expect("Failed to create upsert");
-        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
-
-        let mut events1 = FlussArrayWriter::new(2, &event_row_type_owned);
-        let mut e0 = GenericRow::new(2);
-        e0.set_field(0, 1_i32);
-        e0.set_field(1, "open");
-        events1.write_row(0, &e0).expect("write e0");
-        let mut e1 = GenericRow::new(2);
-        e1.set_field(0, 2_i32);
-        e1.set_field(1, "close");
-        events1.write_row(1, &e1).expect("write e1");
-        let events1 = events1.complete().expect("events1");
-
-        let mut row1 = GenericRow::new(2);
-        row1.set_field(0, 1_i32);
-        row1.set_field(1, events1);
-
-        upsert_writer
-            .upsert(&row1)
-            .expect("upsert row1")
-            .await
-            .expect("ack row1");
-
-        let mut events2 = FlussArrayWriter::new(3, &event_row_type_owned);
-        let mut e2 = GenericRow::new(2);
-        e2.set_field(0, 7_i32);
-        e2.set_field(1, "x");
-        events2.write_row(0, &e2).expect("write e2");
-        events2.set_null_at(1);
-        let mut e3 = GenericRow::new(2);
-        e3.set_field(0, 8_i32);
-        e3.set_field(1, "y");
-        events2.write_row(2, &e3).expect("write e3");
-        let events2 = events2.complete().expect("events2");
-
-        let mut row2 = GenericRow::new(2);
-        row2.set_field(0, 2_i32);
-        row2.set_field(1, events2);
-
-        upsert_writer
-            .upsert(&row2)
-            .expect("upsert row2")
-            .await
-            .expect("ack row2");
-
-        let mut row3 = GenericRow::new(2);
-        row3.set_field(0, 3_i32);
-        row3.set_field(1, Datum::Null);
-
-        upsert_writer
-            .upsert(&row3)
-            .expect("upsert row3")
-            .await
-            .expect("ack row3");
-
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
-        let result1 = lookuper
-            .lookup(&make_key_with_field_count(1, 2))
-            .await
-            .expect("lookup row1");
-        let r1 = result1
-            .get_single_row()
-            .expect("get row1")
-            .expect("row1 should exist");
-        assert_eq!(r1.get_int(0).unwrap(), 1);
-        let events_r1 = r1.get_array(1).unwrap();
-        assert_eq!(events_r1.size(), 2);
-        let e0_r1 = events_r1.get_row(0, &event_row_type).unwrap();
-        assert_eq!(e0_r1.get_int(0).unwrap(), 1);
-        assert_eq!(e0_r1.get_string(1).unwrap(), "open");
-        let e1_r1 = events_r1.get_row(1, &event_row_type).unwrap();
-        assert_eq!(e1_r1.get_int(0).unwrap(), 2);
-        assert_eq!(e1_r1.get_string(1).unwrap(), "close");
-
-        let result2 = lookuper
-            .lookup(&make_key_with_field_count(2, 2))
-            .await
-            .expect("lookup row2");
-        let r2 = result2
-            .get_single_row()
-            .expect("get row2")
-            .expect("row2 should exist");
-        let events_r2 = r2.get_array(1).unwrap();
-        assert_eq!(events_r2.size(), 3);
-        let e0_r2 = events_r2.get_row(0, &event_row_type).unwrap();
-        assert_eq!(e0_r2.get_int(0).unwrap(), 7);
-        assert_eq!(e0_r2.get_string(1).unwrap(), "x");
-        assert!(events_r2.is_null_at(1));
-        let e2_r2 = events_r2.get_row(2, &event_row_type).unwrap();
-        assert_eq!(e2_r2.get_int(0).unwrap(), 8);
-        assert_eq!(e2_r2.get_string(1).unwrap(), "y");
-
-        let result3 = lookuper
-            .lookup(&make_key_with_field_count(3, 2))
-            .await
-            .expect("lookup row3");
-        let r3 = result3
-            .get_single_row()
-            .expect("get row3")
-            .expect("row3 should exist");
-        assert_eq!(r3.get_int(0).unwrap(), 3);
-        assert!(r3.is_null_at(1).unwrap());
-
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
-    #[tokio::test]
-    async fn upsert_and_lookup_with_array() {
-        let cluster = get_shared_cluster();
-        let connection = cluster.get_fluss_connection().await;
-        let admin = connection.get_admin().expect("Failed to get admin");
-
-        let table_path = TablePath::new("fluss", "test_kv_arrays");
-        let inner_array_type = DataTypes::array(DataTypes::int());
-
-        let table_descriptor = TableDescriptor::builder()
-            .schema(
-                Schema::builder()
-                    .column("id", DataTypes::int())
-                    .column("tags", DataTypes::array(DataTypes::string()))
-                    .column("scores", DataTypes::array(DataTypes::int()))
-                    .column("matrix", DataTypes::array(inner_array_type.clone()))
-                    .primary_key(vec!["id"])
-                    .build()
-                    .expect("Failed to build schema"),
-            )
-            .build()
-            .expect("Failed to build table descriptor");
-
-        create_table(&admin, &table_path, &table_descriptor).await;
-
-        let table = connection
-            .get_table(&table_path)
-            .await
-            .expect("Failed to get table");
-
-        let upsert = table.new_upsert().expect("Failed to create upsert");
-        let upsert_writer = upsert.create_writer().expect("Failed to create writer");
-
-        let mut row1 = GenericRow::new(4);
-        row1.set_field(0, 1_i32);
-        row1.set_field(1, make_string_array(&[Some("hello"), Some("world")]));
-        row1.set_field(2, make_int_array(&[Some(10), Some(20), Some(30)]));
-        let m1 = {
-            let mut w = FlussArrayWriter::new(2, &inner_array_type);
-            w.write_array(0, &make_int_array(&[Some(1), Some(2)]));
-            w.write_array(1, &make_int_array(&[Some(3), Some(4)]));
-            w.complete().expect("matrix1")
-        };
-        row1.set_field(3, m1);
-
-        upsert_writer
-            .upsert(&row1)
-            .expect("upsert row1")
-            .await
-            .expect("ack row1");
-
-        let mut row2 = GenericRow::new(4);
-        row2.set_field(0, 2_i32);
-        row2.set_field(1, make_string_array(&[None]));
-        row2.set_field(2, make_int_array(&[]));
-        row2.set_field(3, Datum::Null);
-
-        upsert_writer
-            .upsert(&row2)
-            .expect("upsert row2")
-            .await
-            .expect("ack row2");
-
-        let mut row3 = GenericRow::new(4);
-        row3.set_field(0, 3_i32);
-        row3.set_field(1, Datum::Null);
-        row3.set_field(2, make_int_array(&[Some(42)]));
-        let m3 = {
-            let mut w = FlussArrayWriter::new(3, &inner_array_type);
-            w.write_array(0, &make_int_array(&[Some(5)]));
-            w.set_null_at(1);
-            w.write_array(2, &make_int_array(&[]));
-            w.complete().expect("matrix3")
-        };
-        row3.set_field(3, m3);
-
-        upsert_writer
-            .upsert(&row3)
-            .expect("upsert row3")
-            .await
-            .expect("ack row3");
-
-        // Lookup and verify
-        let mut lookuper = table
-            .new_lookup()
-            .expect("Failed to create lookup")
-            .create_lookuper()
-            .expect("Failed to create lookuper");
-
-        let result1 = lookuper
-            .lookup(&make_key_with_field_count(1, 4))
-            .await
-            .expect("lookup row1");
-        let r1 = result1
-            .get_single_row()
-            .expect("get row1")
-            .expect("row1 should exist");
-        assert_eq!(r1.get_int(0).unwrap(), 1);
-        let tags_r1 = r1.get_array(1).unwrap();
-        assert_eq!(tags_r1.size(), 2);
-        assert_eq!(tags_r1.get_string(0).unwrap(), "hello");
-        assert_eq!(tags_r1.get_string(1).unwrap(), "world");
-        let scores_r1 = r1.get_array(2).unwrap();
-        assert_eq!(scores_r1.size(), 3);
-        assert_eq!(scores_r1.get_int(0).unwrap(), 10);
-        assert_eq!(scores_r1.get_int(1).unwrap(), 20);
-        assert_eq!(scores_r1.get_int(2).unwrap(), 30);
-        let matrix_r1: FlussArray = r1.get_array(3).unwrap();
-        assert_eq!(matrix_r1.size(), 2);
-        let mr1_0 = matrix_r1.get_array(0).unwrap();
-        assert_eq!(mr1_0.size(), 2);
-        assert_eq!(mr1_0.get_int(0).unwrap(), 1);
-        assert_eq!(mr1_0.get_int(1).unwrap(), 2);
-        let mr1_1 = matrix_r1.get_array(1).unwrap();
-        assert_eq!(mr1_1.size(), 2);
-        assert_eq!(mr1_1.get_int(0).unwrap(), 3);
-        assert_eq!(mr1_1.get_int(1).unwrap(), 4);
-
-        let result2 = lookuper
-            .lookup(&make_key_with_field_count(2, 4))
-            .await
-            .expect("lookup row2");
-        let r2 = result2
-            .get_single_row()
-            .expect("get row2")
-            .expect("row2 should exist");
-        assert_eq!(r2.get_int(0).unwrap(), 2);
-        let tags_r2 = r2.get_array(1).unwrap();
-        assert_eq!(tags_r2.size(), 1);
-        assert!(tags_r2.is_null_at(0));
-        let scores_r2 = r2.get_array(2).unwrap();
-        assert_eq!(scores_r2.size(), 0);
-        assert!(r2.is_null_at(3).unwrap());
-
-        let result3 = lookuper
-            .lookup(&make_key_with_field_count(3, 4))
-            .await
-            .expect("lookup row3");
-        let r3 = result3
-            .get_single_row()
-            .expect("get row3")
-            .expect("row3 should exist");
-        assert_eq!(r3.get_int(0).unwrap(), 3);
-        assert!(r3.is_null_at(1).unwrap());
-        let scores_r3 = r3.get_array(2).unwrap();
-        assert_eq!(scores_r3.size(), 1);
-        assert_eq!(scores_r3.get_int(0).unwrap(), 42);
-        let matrix_r3 = r3.get_array(3).unwrap();
-        assert_eq!(matrix_r3.size(), 3);
-        let mr3_0 = matrix_r3.get_array(0).unwrap();
-        assert_eq!(mr3_0.size(), 1);
-        assert_eq!(mr3_0.get_int(0).unwrap(), 5);
-        assert!(matrix_r3.is_null_at(1));
-        let mr3_2 = matrix_r3.get_array(2).unwrap();
-        assert_eq!(mr3_2.size(), 0);
-
-        admin
-            .drop_table(&table_path, false)
-            .await
-            .expect("Failed to drop table");
-    }
-
     /// Integration test for concurrent batched lookups across partitions.
     #[tokio::test]
     async fn batched_concurrent_lookups_partitioned() {
-        use futures::stream::{FuturesUnordered, StreamExt};
-
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
@@ -1977,8 +1055,6 @@ mod kv_table_test {
     /// Integration test for concurrent batched lookups.
     #[tokio::test]
     async fn batched_concurrent_lookups() {
-        use futures::stream::{FuturesUnordered, StreamExt};
-
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
@@ -2174,5 +1250,523 @@ mod kv_table_test {
             .drop_table(&table_path, false)
             .await
             .expect("Failed to drop table");
+    }
+
+    /// KV upsert + lookup against a schema covering every supported data type.
+    #[tokio::test]
+    async fn all_supported_datatypes() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_complex_types");
+
+        let row_seq_label_owned = dt_row_seq_label();
+        let row_seq_label = as_row_type(&row_seq_label_owned);
+        let inner_array_int = dt_array_int();
+        let inner_map_string_int = dt_map_string_int();
+
+        let plan = ColumnPlan::new()
+            .add("id", DataTypes::int())
+            .start_section("array_basics")
+            .extend(array_dt_basics_columns())
+            .start_section("row_basics")
+            .extend(row_dt_basics_columns())
+            .start_section("map_basics")
+            .extend(map_dt_basics_columns())
+            .start_section("scalars")
+            .extend(scalar_dt_columns());
+        let table_descriptor = TableDescriptor::builder()
+            .schema(plan.build_schema(Some(&["id"])))
+            .build()
+            .expect("table descriptor");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let upsert_writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+
+        // Row 1 (id=1) — comprehensive: every column populated.
+        let column_count = plan.len();
+        let mut row1 = GenericRow::new(column_count);
+        row1.set_field(0, 1_i32);
+        row1.set_field(1, make_int_array(&[Some(10), Some(20), Some(30)]));
+        row1.set_field(2, make_string_array(&[Some("hello"), Some("world")]));
+        let arr_of_arr_1 = {
+            let mut w = FlussArrayWriter::new(2, &inner_array_int);
+            w.write_array(0, &make_int_array(&[Some(1), Some(2)]));
+            w.write_array(1, &make_int_array(&[Some(3), Some(4)]));
+            w.complete().expect("arr_of_arr_1")
+        };
+        row1.set_field(3, arr_of_arr_1);
+        let arr_of_row_1 = {
+            let mut w = FlussArrayWriter::new(2, &row_seq_label_owned);
+            let mut e0 = GenericRow::new(2);
+            e0.set_field(0, 1_i32);
+            e0.set_field(1, "open");
+            w.write_row(0, &e0).expect("e0");
+            let mut e1 = GenericRow::new(2);
+            e1.set_field(0, 2_i32);
+            e1.set_field(1, "close");
+            w.write_row(1, &e1).expect("e1");
+            w.complete().expect("arr_of_row_1")
+        };
+        row1.set_field(4, arr_of_row_1);
+        let mut row_basic_1 = GenericRow::new(2);
+        row_basic_1.set_field(0, 42_i32);
+        row_basic_1.set_field(1, "hello");
+        row1.set_field(5, Datum::Row(Box::new(row_basic_1)));
+        let mut deep_inner_1 = GenericRow::new(1);
+        deep_inner_1.set_field(0, 99_i32);
+        let mut row_deep_1 = GenericRow::new(1);
+        row_deep_1.set_field(0, Datum::Row(Box::new(deep_inner_1)));
+        row1.set_field(6, Datum::Row(Box::new(row_deep_1)));
+        let mut row_rich_1 = GenericRow::new(14);
+        row_rich_1.set_field(0, true);
+        row_rich_1.set_field(1, 100_000_i32);
+        row_rich_1.set_field(2, 9_876_543_210_i64);
+        row_rich_1.set_field(3, f32::INFINITY);
+        row_rich_1.set_field(4, std::f64::consts::PI);
+        row_rich_1.set_field(5, "hello world");
+        row_rich_1.set_field(6, b"binary".as_slice());
+        row_rich_1.set_field(7, Decimal::from_unscaled_long(12345, 10, 2).unwrap());
+        row_rich_1.set_field(8, Datum::Date(Date::new(20476)));
+        row_rich_1.set_field(9, Datum::Time(Time::new(36_827_123)));
+        row_rich_1.set_field(
+            10,
+            Datum::TimestampNtz(TimestampNtz::new(1_769_163_227_123)),
+        );
+        row_rich_1.set_field(
+            11,
+            Datum::TimestampLtz(TimestampLtz::new(1_769_163_227_456)),
+        );
+        row_rich_1.set_field(12, b"\x01\x02\x03\x04".as_slice());
+        row_rich_1.set_field(13, make_int_array(&[Some(7), None, Some(11)]));
+        row1.set_field(7, Datum::Row(Box::new(row_rich_1)));
+        let map_string_int_1 = {
+            let mut w = FlussMapWriter::new(3, &DataTypes::string(), &DataTypes::int());
+            w.write_entry("a".into(), 1.into()).unwrap();
+            w.write_entry("b".into(), Datum::Null).unwrap();
+            w.write_entry("c".into(), 3.into()).unwrap();
+            w.complete().expect("map_string_int_1")
+        };
+        row1.set_field(8, Datum::Map(map_string_int_1));
+        let map_of_row_1 = {
+            let mut e0 = GenericRow::new(2);
+            e0.set_field(0, 1_i32);
+            e0.set_field(1, "open");
+            let mut e1 = GenericRow::new(2);
+            e1.set_field(0, 2_i32);
+            e1.set_field(1, "close");
+            let mut w = FlussMapWriter::new(2, &DataTypes::string(), &row_seq_label_owned);
+            w.write_entry("e0".into(), Datum::Row(Box::new(e0)))
+                .unwrap();
+            w.write_entry("e1".into(), Datum::Row(Box::new(e1)))
+                .unwrap();
+            w.complete().expect("map_of_row_1")
+        };
+        row1.set_field(9, Datum::Map(map_of_row_1));
+        let map_of_map_1 = {
+            let g1 = {
+                let mut w = FlussMapWriter::new(2, &DataTypes::string(), &DataTypes::int());
+                w.write_entry("a".into(), 1.into()).unwrap();
+                w.write_entry("b".into(), 2.into()).unwrap();
+                w.complete().expect("g1")
+            };
+            let g2 = {
+                let mut w = FlussMapWriter::new(1, &DataTypes::string(), &DataTypes::int());
+                w.write_entry("c".into(), 3.into()).unwrap();
+                w.complete().expect("g2")
+            };
+            let mut w = FlussMapWriter::new(2, &DataTypes::string(), &inner_map_string_int);
+            w.write_entry("g1".into(), Datum::Map(g1)).unwrap();
+            w.write_entry("g2".into(), Datum::Map(g2)).unwrap();
+            w.complete().expect("map_of_map_1")
+        };
+        row1.set_field(10, Datum::Map(map_of_map_1));
+        let map_of_array_1 = {
+            let primes = make_int_array(&[Some(2), Some(3), Some(5)]);
+            let squares = make_int_array(&[Some(1), Some(4)]);
+            let mut w = FlussMapWriter::new(2, &DataTypes::string(), &inner_array_int);
+            w.write_entry("primes".into(), Datum::Array(primes))
+                .unwrap();
+            w.write_entry("squares".into(), Datum::Array(squares))
+                .unwrap();
+            w.complete().expect("map_of_array_1")
+        };
+        row1.set_field(11, Datum::Map(map_of_array_1));
+        let array_of_map_1 = {
+            let m0 = {
+                let mut w = FlussMapWriter::new(2, &DataTypes::string(), &DataTypes::int());
+                w.write_entry("x".into(), 1.into()).unwrap();
+                w.write_entry("y".into(), 2.into()).unwrap();
+                w.complete().expect("m0")
+            };
+            let m1 = {
+                let mut w = FlussMapWriter::new(1, &DataTypes::string(), &DataTypes::int());
+                w.write_entry("z".into(), 9.into()).unwrap();
+                w.complete().expect("m1")
+            };
+            let mut w = FlussArrayWriter::new(2, &inner_map_string_int);
+            w.write_map(0, &m0);
+            w.write_map(1, &m1);
+            w.complete().expect("array_of_map_1")
+        };
+        row1.set_field(12, array_of_map_1);
+
+        // Scalar values for row 1.
+        let s_tinyint = 127_i8;
+        let s_smallint = 32_767_i16;
+        let s_bigint = 9_223_372_036_854_775_807_i64;
+        let s_float = std::f32::consts::PI;
+        let s_double = std::f64::consts::E;
+        let s_char = "hello";
+        let s_string = "world of fluss rust client";
+        let s_decimal = Decimal::from_unscaled_long(12345, 10, 2).unwrap();
+        let s_date = Date::new(20476);
+        let s_time_s = Time::new(36_827_000);
+        let s_time_ms = Time::new(36_827_123);
+        let s_time_us = Time::new(86_399_999);
+        let s_time_ns = Time::new(1);
+        let s_ts_s = TimestampNtz::new(1_769_163_227_000);
+        let s_ts_ms = TimestampNtz::new(1_769_163_227_123);
+        let s_ts_us = TimestampNtz::from_millis_nanos(1_769_163_227_123, 456_000).unwrap();
+        let s_ts_ns = TimestampNtz::from_millis_nanos(1_769_163_227_123, 999_999).unwrap();
+        let s_ts_ltz_s = TimestampLtz::new(1_769_163_227_000);
+        let s_ts_ltz_ms = TimestampLtz::new(1_769_163_227_123);
+        let s_ts_ltz_us = TimestampLtz::from_millis_nanos(1_769_163_227_123, 456_000).unwrap();
+        let s_ts_ltz_ns = TimestampLtz::from_millis_nanos(1_769_163_227_123, 999_999).unwrap();
+        let s_bytes_top: Vec<u8> = b"binary data".to_vec();
+        let s_binary_top: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let s_ts_us_neg = TimestampNtz::from_millis_nanos(-301_234_154_877, 456_000).unwrap();
+        let s_ts_ns_neg = TimestampNtz::from_millis_nanos(-301_234_154_877, 999_999).unwrap();
+        let s_ts_ltz_us_neg = TimestampLtz::from_millis_nanos(-301_234_154_877, 456_000).unwrap();
+        let s_ts_ltz_ns_neg = TimestampLtz::from_millis_nanos(-301_234_154_877, 999_999).unwrap();
+
+        row1.set_field(plan.idx("col_tinyint"), s_tinyint);
+        row1.set_field(plan.idx("col_smallint"), s_smallint);
+        row1.set_field(plan.idx("col_bigint"), s_bigint);
+        row1.set_field(plan.idx("col_float"), s_float);
+        row1.set_field(plan.idx("col_double"), s_double);
+        row1.set_field(plan.idx("col_boolean"), true);
+        row1.set_field(plan.idx("col_char"), s_char);
+        row1.set_field(plan.idx("col_string"), s_string);
+        row1.set_field(plan.idx("col_decimal"), s_decimal.clone());
+        row1.set_field(plan.idx("col_date"), Datum::Date(s_date));
+        row1.set_field(plan.idx("col_time_s"), s_time_s);
+        row1.set_field(plan.idx("col_time_ms"), s_time_ms);
+        row1.set_field(plan.idx("col_time_us"), s_time_us);
+        row1.set_field(plan.idx("col_time_ns"), s_time_ns);
+        row1.set_field(plan.idx("col_ts_s"), s_ts_s);
+        row1.set_field(plan.idx("col_ts_ms"), s_ts_ms);
+        row1.set_field(plan.idx("col_ts_us"), s_ts_us);
+        row1.set_field(plan.idx("col_ts_ns"), s_ts_ns);
+        row1.set_field(plan.idx("col_ts_ltz_s"), s_ts_ltz_s);
+        row1.set_field(plan.idx("col_ts_ltz_ms"), s_ts_ltz_ms);
+        row1.set_field(plan.idx("col_ts_ltz_us"), s_ts_ltz_us);
+        row1.set_field(plan.idx("col_ts_ltz_ns"), s_ts_ltz_ns);
+        row1.set_field(plan.idx("col_bytes_top"), s_bytes_top.as_slice());
+        row1.set_field(plan.idx("col_binary_top"), s_binary_top.as_slice());
+        row1.set_field(plan.idx("col_ts_us_neg"), s_ts_us_neg);
+        row1.set_field(plan.idx("col_ts_ns_neg"), s_ts_ns_neg);
+        row1.set_field(plan.idx("col_ts_ltz_us_neg"), s_ts_ltz_us_neg);
+        row1.set_field(plan.idx("col_ts_ltz_ns_neg"), s_ts_ltz_ns_neg);
+
+        upsert_writer
+            .upsert(&row1)
+            .expect("upsert row1")
+            .await
+            .expect("ack row1");
+
+        // Row 2 (id=2) — empty MAP, all other compound + scalar columns NULL.
+        let mut row2 = GenericRow::new(column_count);
+        row2.set_field(0, 2_i32);
+        for i in 1..column_count {
+            row2.set_field(i, Datum::Null);
+        }
+        let empty_map = FlussMapWriter::new(0, &DataTypes::string(), &DataTypes::int())
+            .complete()
+            .expect("empty_map");
+        row2.set_field(plan.idx("map_string_int"), Datum::Map(empty_map));
+        upsert_writer
+            .upsert(&row2)
+            .expect("upsert row2")
+            .await
+            .expect("ack row2");
+
+        // Row 3 (id=3) — every compound + scalar column NULL.
+        let mut row3 = GenericRow::new(column_count);
+        row3.set_field(0, 3_i32);
+        for i in 1..column_count {
+            row3.set_field(i, Datum::Null);
+        }
+        upsert_writer
+            .upsert(&row3)
+            .expect("upsert row3")
+            .await
+            .expect("ack row3");
+
+        let mut lookuper = table
+            .new_lookup()
+            .expect("lookup")
+            .create_lookuper()
+            .expect("lookuper");
+
+        let result1 = lookuper.lookup(&make_key(1)).await.expect("lookup row1");
+        let r1 = result1
+            .get_single_row()
+            .expect("row1")
+            .expect("row1 exists");
+        assert_eq!(r1.get_int(0).unwrap(), 1);
+
+        // === ARRAY: basic shapes ===
+        let arr_int = r1.get_array(1).unwrap();
+        assert_eq!(arr_int.size(), 3);
+        assert_eq!(arr_int.get_int(2).unwrap(), 30);
+        let arr_string = r1.get_array(2).unwrap();
+        assert_eq!(arr_string.size(), 2);
+        assert_eq!(arr_string.get_string(0).unwrap(), "hello");
+        let arr_of_arr = r1.get_array(3).unwrap();
+        assert_eq!(arr_of_arr.size(), 2);
+        assert_eq!(arr_of_arr.get_array(1).unwrap().get_int(1).unwrap(), 4);
+
+        // === ARRAY<ROW> ===
+        let aor = r1.get_array(4).unwrap();
+        assert_eq!(aor.size(), 2);
+        let e0 = aor.get_row(0, &row_seq_label).unwrap();
+        assert_eq!(e0.get_int(0).unwrap(), 1);
+        assert_eq!(e0.get_string(1).unwrap(), "open");
+
+        // === ROW: basic + deep + rich ===
+        let rb = r1.get_row(5).unwrap();
+        assert_eq!(rb.get_int(0).unwrap(), 42);
+        assert_eq!(rb.get_string(1).unwrap(), "hello");
+        let rd = r1.get_row(6).unwrap();
+        let rd_inner = rd.get_row(0).unwrap();
+        assert_eq!(rd_inner.get_int(0).unwrap(), 99);
+        let rr = r1.get_row(7).unwrap();
+        assert!(rr.get_boolean(0).unwrap());
+        assert_eq!(rr.get_int(1).unwrap(), 100_000);
+        assert_eq!(rr.get_long(2).unwrap(), 9_876_543_210);
+        assert!(rr.get_float(3).unwrap().is_infinite());
+        assert!((rr.get_double(4).unwrap() - std::f64::consts::PI).abs() < f64::EPSILON);
+        assert_eq!(rr.get_string(5).unwrap(), "hello world");
+        assert_eq!(rr.get_bytes(6).unwrap(), b"binary");
+        assert_eq!(
+            rr.get_decimal(7, 10, 2).unwrap(),
+            Decimal::from_unscaled_long(12345, 10, 2).unwrap()
+        );
+        assert_eq!(rr.get_date(8).unwrap().get_inner(), 20476);
+        assert_eq!(rr.get_time(9).unwrap().get_inner(), 36_827_123);
+        assert_eq!(
+            rr.get_timestamp_ntz(10, 6).unwrap().get_millisecond(),
+            1_769_163_227_123
+        );
+        assert_eq!(
+            rr.get_timestamp_ltz(11, 6).unwrap().get_epoch_millisecond(),
+            1_769_163_227_456
+        );
+        assert_eq!(rr.get_binary(12, 4).unwrap(), b"\x01\x02\x03\x04");
+        let f_arr = rr.get_array(13).unwrap();
+        assert_eq!(f_arr.size(), 3);
+        assert!(f_arr.is_null_at(1));
+
+        // === MAP: basic ===
+        let m = r1.get_map(8).unwrap();
+        assert_eq!(m.size(), 3);
+        assert_eq!(m.get(&Datum::from("a")).unwrap(), Some(Datum::from(1_i32)));
+        assert_eq!(m.get(&Datum::from("b")).unwrap(), Some(Datum::Null));
+        assert_eq!(m.get(&Datum::from("c")).unwrap(), Some(Datum::from(3_i32)));
+
+        // === MAP<K, ROW> ===
+        let m = r1.get_map(9).unwrap();
+        let v0 = m.value_array().get_row(0, &row_seq_label).unwrap();
+        assert_eq!(v0.get_int(0).unwrap(), 1);
+        assert_eq!(v0.get_string(1).unwrap(), "open");
+
+        // === MAP<K, MAP> ===
+        let m = r1.get_map(10).unwrap();
+        let g1 = m
+            .value_array()
+            .get_map(0, &DataTypes::string(), &DataTypes::int())
+            .unwrap();
+        assert_eq!(g1.size(), 2);
+
+        // === MAP<K, ARRAY> + ARRAY<MAP> ===
+        let m = r1.get_map(11).unwrap();
+        assert_eq!(m.value_array().get_array(0).unwrap().size(), 3);
+        let am = r1.get_array(12).unwrap();
+        assert_eq!(am.size(), 2);
+        let am0 = am
+            .get_map(0, &DataTypes::string(), &DataTypes::int())
+            .unwrap();
+        assert_eq!(am0.size(), 2);
+
+        // === Scalars: integers + floating point ===
+        assert_eq!(r1.get_byte(plan.idx("col_tinyint")).unwrap(), s_tinyint);
+        assert_eq!(r1.get_short(plan.idx("col_smallint")).unwrap(), s_smallint);
+        assert_eq!(r1.get_long(plan.idx("col_bigint")).unwrap(), s_bigint);
+        assert!((r1.get_float(plan.idx("col_float")).unwrap() - s_float).abs() < f32::EPSILON);
+        assert!((r1.get_double(plan.idx("col_double")).unwrap() - s_double).abs() < f64::EPSILON);
+
+        // === Scalars: boolean / char / string / decimal / date ===
+        assert!(r1.get_boolean(plan.idx("col_boolean")).unwrap());
+        assert_eq!(r1.get_char(plan.idx("col_char"), 10).unwrap(), s_char);
+        assert_eq!(r1.get_string(plan.idx("col_string")).unwrap(), s_string);
+        assert_eq!(
+            r1.get_decimal(plan.idx("col_decimal"), 10, 2).unwrap(),
+            s_decimal
+        );
+        assert_eq!(
+            r1.get_date(plan.idx("col_date")).unwrap().get_inner(),
+            s_date.get_inner()
+        );
+
+        // === Scalars: time across all four precisions ===
+        assert_eq!(
+            r1.get_time(plan.idx("col_time_s")).unwrap().get_inner(),
+            s_time_s.get_inner()
+        );
+        assert_eq!(
+            r1.get_time(plan.idx("col_time_ms")).unwrap().get_inner(),
+            s_time_ms.get_inner()
+        );
+        assert_eq!(
+            r1.get_time(plan.idx("col_time_us")).unwrap().get_inner(),
+            s_time_us.get_inner()
+        );
+        assert_eq!(
+            r1.get_time(plan.idx("col_time_ns")).unwrap().get_inner(),
+            s_time_ns.get_inner()
+        );
+
+        // === Scalars: timestamp across all four precisions ===
+        assert_eq!(
+            r1.get_timestamp_ntz(plan.idx("col_ts_s"), 0)
+                .unwrap()
+                .get_millisecond(),
+            s_ts_s.get_millisecond()
+        );
+        assert_eq!(
+            r1.get_timestamp_ntz(plan.idx("col_ts_ms"), 3)
+                .unwrap()
+                .get_millisecond(),
+            s_ts_ms.get_millisecond()
+        );
+        let read_ts_us = r1.get_timestamp_ntz(plan.idx("col_ts_us"), 6).unwrap();
+        assert_eq!(read_ts_us.get_millisecond(), s_ts_us.get_millisecond());
+        assert_eq!(
+            read_ts_us.get_nano_of_millisecond(),
+            s_ts_us.get_nano_of_millisecond()
+        );
+        let read_ts_ns = r1.get_timestamp_ntz(plan.idx("col_ts_ns"), 9).unwrap();
+        assert_eq!(read_ts_ns.get_millisecond(), s_ts_ns.get_millisecond());
+        assert_eq!(
+            read_ts_ns.get_nano_of_millisecond(),
+            s_ts_ns.get_nano_of_millisecond()
+        );
+
+        // === Scalars: timestamp_ltz across all four precisions ===
+        assert_eq!(
+            r1.get_timestamp_ltz(plan.idx("col_ts_ltz_s"), 0)
+                .unwrap()
+                .get_epoch_millisecond(),
+            s_ts_ltz_s.get_epoch_millisecond()
+        );
+        assert_eq!(
+            r1.get_timestamp_ltz(plan.idx("col_ts_ltz_ms"), 3)
+                .unwrap()
+                .get_epoch_millisecond(),
+            s_ts_ltz_ms.get_epoch_millisecond()
+        );
+        let read_ltz_us = r1.get_timestamp_ltz(plan.idx("col_ts_ltz_us"), 6).unwrap();
+        assert_eq!(
+            read_ltz_us.get_epoch_millisecond(),
+            s_ts_ltz_us.get_epoch_millisecond()
+        );
+        assert_eq!(
+            read_ltz_us.get_nano_of_millisecond(),
+            s_ts_ltz_us.get_nano_of_millisecond()
+        );
+        let read_ltz_ns = r1.get_timestamp_ltz(plan.idx("col_ts_ltz_ns"), 9).unwrap();
+        assert_eq!(
+            read_ltz_ns.get_epoch_millisecond(),
+            s_ts_ltz_ns.get_epoch_millisecond()
+        );
+        assert_eq!(
+            read_ltz_ns.get_nano_of_millisecond(),
+            s_ts_ltz_ns.get_nano_of_millisecond()
+        );
+
+        // === Scalars: bytes + fixed binary ===
+        assert_eq!(
+            r1.get_bytes(plan.idx("col_bytes_top")).unwrap(),
+            s_bytes_top.as_slice()
+        );
+        assert_eq!(
+            r1.get_binary(plan.idx("col_binary_top"), 4).unwrap(),
+            s_binary_top.as_slice()
+        );
+
+        // === Scalars: negative-epoch timestamps (pre-1970) ===
+        let read_neg_us = r1.get_timestamp_ntz(plan.idx("col_ts_us_neg"), 6).unwrap();
+        assert_eq!(read_neg_us.get_millisecond(), s_ts_us_neg.get_millisecond());
+        assert_eq!(
+            read_neg_us.get_nano_of_millisecond(),
+            s_ts_us_neg.get_nano_of_millisecond()
+        );
+        let read_neg_ns = r1.get_timestamp_ntz(plan.idx("col_ts_ns_neg"), 9).unwrap();
+        assert_eq!(read_neg_ns.get_millisecond(), s_ts_ns_neg.get_millisecond());
+        assert_eq!(
+            read_neg_ns.get_nano_of_millisecond(),
+            s_ts_ns_neg.get_nano_of_millisecond()
+        );
+        let read_neg_ltz_us = r1
+            .get_timestamp_ltz(plan.idx("col_ts_ltz_us_neg"), 6)
+            .unwrap();
+        assert_eq!(
+            read_neg_ltz_us.get_epoch_millisecond(),
+            s_ts_ltz_us_neg.get_epoch_millisecond()
+        );
+        let read_neg_ltz_ns = r1
+            .get_timestamp_ltz(plan.idx("col_ts_ltz_ns_neg"), 9)
+            .unwrap();
+        assert_eq!(
+            read_neg_ltz_ns.get_epoch_millisecond(),
+            s_ts_ltz_ns_neg.get_epoch_millisecond()
+        );
+
+        // === Row 2 lookup — empty map, all other columns NULL ===
+        let result2 = lookuper.lookup(&make_key(2)).await.expect("lookup row2");
+        let r2 = result2
+            .get_single_row()
+            .expect("row2")
+            .expect("row2 exists");
+        assert_eq!(r2.get_int(0).unwrap(), 2);
+        let map_idx = plan.idx("map_string_int");
+        for i in 1..column_count {
+            if i == map_idx {
+                assert_eq!(r2.get_map(map_idx).unwrap().size(), 0);
+            } else {
+                assert!(r2.is_null_at(i).unwrap(), "field {i} should be null");
+            }
+        }
+
+        // === Row 3 lookup — every compound + scalar field NULL ===
+        let result3 = lookuper.lookup(&make_key(3)).await.expect("lookup row3");
+        let r3 = result3
+            .get_single_row()
+            .expect("row3")
+            .expect("row3 exists");
+        assert_eq!(r3.get_int(0).unwrap(), 3);
+        for i in 1..column_count {
+            assert!(r3.is_null_at(i).unwrap(), "field {i} should be null");
+        }
+
+        admin.drop_table(&table_path, false).await.expect("drop");
     }
 }

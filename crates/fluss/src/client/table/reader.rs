@@ -488,10 +488,10 @@ fn filter_batches(
     completed
 }
 
-// TODO: Add Rust-level end-to-end tests with `FlussTestingCluster` (feature
-// `integration_tests`) covering `new_until_latest`, partitioned tables,
-// and `new_until_offsets` stopping semantics. Drop cleanup and the
-// reader-active guard are covered by the Python integration test
+// Rust-level end-to-end coverage for `new_until_latest`, partitioned tables,
+// and `new_until_offsets` stopping semantics lives in
+// `crates/fluss/tests/integration/record_batch_log_reader.rs`. Drop cleanup and the
+// reader-active guard remain covered by the Python integration test
 // `test_to_arrow_batch_reader_drop_and_guard`.
 #[cfg(test)]
 mod tests {
