@@ -33,6 +33,14 @@ defmodule Fluss.Config do
 
   @enforce_keys [:bootstrap_servers]
   defstruct bootstrap_servers: nil,
+            remote_file_download_thread_num: nil,
+            scanner_log_fetch_max_bytes: nil,
+            scanner_log_fetch_max_bytes_for_bucket: nil,
+            scanner_log_fetch_min_bytes: nil,
+            scanner_log_fetch_wait_max_time_ms: nil,
+            scanner_log_max_poll_records: nil,
+            scanner_remote_log_prefetch_num: nil,
+            scanner_remote_log_read_concurrency: nil,
             writer_acks: nil,
             writer_batch_size: nil,
             writer_batch_timeout_ms: nil,
@@ -48,6 +56,14 @@ defmodule Fluss.Config do
 
   @type t :: %__MODULE__{
           bootstrap_servers: String.t(),
+          remote_file_download_thread_num: non_neg_integer() | nil,
+          scanner_log_fetch_max_bytes: non_neg_integer() | nil,
+          scanner_log_fetch_max_bytes_for_bucket: non_neg_integer() | nil,
+          scanner_log_fetch_min_bytes: non_neg_integer() | nil,
+          scanner_log_fetch_wait_max_time_ms: non_neg_integer() | nil,
+          scanner_log_max_poll_records: non_neg_integer() | nil,
+          scanner_remote_log_prefetch_num: non_neg_integer() | nil,
+          scanner_remote_log_read_concurrency: non_neg_integer() | nil,
           writer_acks: String.t() | nil,
           writer_batch_size: non_neg_integer() | nil,
           writer_batch_timeout_ms: non_neg_integer() | nil,
@@ -73,6 +89,44 @@ defmodule Fluss.Config do
   @spec set_bootstrap_servers(t(), String.t()) :: t()
   def set_bootstrap_servers(%__MODULE__{} = config, servers) when is_binary(servers),
     do: %{config | bootstrap_servers: servers}
+
+  @spec set_remote_file_download_thread_num(t(), non_neg_integer()) :: t()
+  def set_remote_file_download_thread_num(%__MODULE__{} = config, threads)
+      when is_integer(threads),
+      do: %{config | remote_file_download_thread_num: threads}
+
+  @spec set_scanner_log_fetch_max_bytes(t(), non_neg_integer()) :: t()
+  def set_scanner_log_fetch_max_bytes(%__MODULE__{} = config, max_bytes)
+      when is_integer(max_bytes),
+      do: %{config | scanner_log_fetch_max_bytes: max_bytes}
+
+  @spec set_scanner_log_fetch_max_bytes_for_bucket(t(), non_neg_integer()) :: t()
+  def set_scanner_log_fetch_max_bytes_for_bucket(%__MODULE__{} = config, max_bytes)
+      when is_integer(max_bytes),
+      do: %{config | scanner_log_fetch_max_bytes_for_bucket: max_bytes}
+
+  @spec set_scanner_log_fetch_min_bytes(t(), non_neg_integer()) :: t()
+  def set_scanner_log_fetch_min_bytes(%__MODULE__{} = config, min_bytes)
+      when is_integer(min_bytes),
+      do: %{config | scanner_log_fetch_min_bytes: min_bytes}
+
+  @spec set_scanner_log_fetch_wait_max_time_ms(t(), non_neg_integer()) :: t()
+  def set_scanner_log_fetch_wait_max_time_ms(%__MODULE__{} = config, wait_ms)
+      when is_integer(wait_ms),
+      do: %{config | scanner_log_fetch_wait_max_time_ms: wait_ms}
+
+  @spec set_scanner_log_max_poll_records(t(), non_neg_integer()) :: t()
+  def set_scanner_log_max_poll_records(%__MODULE__{} = config, num) when is_integer(num),
+    do: %{config | scanner_log_max_poll_records: num}
+
+  @spec set_scanner_remote_log_prefetch_num(t(), non_neg_integer()) :: t()
+  def set_scanner_remote_log_prefetch_num(%__MODULE__{} = config, num) when is_integer(num),
+    do: %{config | scanner_remote_log_prefetch_num: num}
+
+  @spec set_scanner_remote_log_read_concurrency(t(), non_neg_integer()) :: t()
+  def set_scanner_remote_log_read_concurrency(%__MODULE__{} = config, concurrency)
+      when is_integer(concurrency),
+      do: %{config | scanner_remote_log_read_concurrency: concurrency}
 
   @spec set_writer_acks(t(), String.t()) :: t()
   def set_writer_acks(%__MODULE__{} = config, acks) when is_binary(acks),
