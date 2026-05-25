@@ -31,6 +31,7 @@ pub enum NifNoKeyAssigner {
 #[module = "Fluss.Config"]
 pub struct NifConfig {
     pub bootstrap_servers: String,
+    pub connect_timeout_ms: Option<u64>,
     pub remote_file_download_thread_num: Option<u64>,
     pub scanner_log_fetch_max_bytes: Option<i32>,
     pub scanner_log_fetch_max_bytes_for_bucket: Option<i32>,
@@ -39,6 +40,10 @@ pub struct NifConfig {
     pub scanner_log_max_poll_records: Option<u64>,
     pub scanner_remote_log_prefetch_num: Option<u64>,
     pub scanner_remote_log_read_concurrency: Option<u64>,
+    pub security_protocol: Option<String>,
+    pub security_sasl_mechanism: Option<String>,
+    pub security_sasl_password: Option<String>,
+    pub security_sasl_username: Option<String>,
     pub writer_acks: Option<String>,
     pub writer_batch_size: Option<i32>,
     pub writer_batch_timeout_ms: Option<i64>,
@@ -59,6 +64,9 @@ impl NifConfig {
             bootstrap_servers: self.bootstrap_servers,
             ..Config::default()
         };
+        if let Some(timeout) = self.connect_timeout_ms {
+            config.connect_timeout_ms = timeout;
+        }
         if let Some(n) = self.remote_file_download_thread_num {
             config.remote_file_download_thread_num = n as usize;
         }
@@ -82,6 +90,18 @@ impl NifConfig {
         }
         if let Some(n) = self.scanner_remote_log_read_concurrency {
             config.scanner_remote_log_read_concurrency = n as usize;
+        }
+        if let Some(protocol) = self.security_protocol {
+            config.security_protocol = protocol;
+        }
+        if let Some(mechanism) = self.security_sasl_mechanism {
+            config.security_sasl_mechanism = mechanism;
+        }
+        if let Some(password) = self.security_sasl_password {
+            config.security_sasl_password = password;
+        }
+        if let Some(username) = self.security_sasl_username {
+            config.security_sasl_username = username;
         }
         if let Some(size) = self.writer_batch_size {
             config.writer_batch_size = size;
