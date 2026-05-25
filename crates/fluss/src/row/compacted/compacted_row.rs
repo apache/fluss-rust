@@ -18,7 +18,7 @@
 use crate::client::WriteFormat;
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::{DataType, RowType};
+use crate::metadata::RowType;
 use crate::row::binary_array::FlussArray;
 use crate::row::binary_map::FlussMap;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
@@ -174,8 +174,8 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.decoded_row()?.get_array(pos)
     }
 
-    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap> {
-        self.decoded_row()?.get_map(pos, key_type, value_type)
+    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+        self.decoded_row()?.get_map(pos)
     }
 
     fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
@@ -508,9 +508,7 @@ mod tests {
         let bytes = writer.to_bytes();
         let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
-        let read_map = row
-            .get_map(0, &DataTypes::int(), &DataTypes::string())
-            .unwrap();
+        let read_map = row.get_map(0).unwrap();
         assert_eq!(read_map.size(), 2);
         assert_eq!(read_map.key_array().get_int(0).unwrap(), 1);
         assert_eq!(read_map.value_array().get_string(0).unwrap(), "a");
@@ -549,9 +547,7 @@ mod tests {
         let row2 = CompactedRow::from_bytes(&row_type, bytes2.as_ref());
         assert_eq!(row2.get_int(0).unwrap(), 99);
         assert!(!row2.is_null_at(1).unwrap());
-        let read_map = row2
-            .get_map(1, &DataTypes::int(), &DataTypes::string())
-            .unwrap();
+        let read_map = row2.get_map(1).unwrap();
         assert_eq!(read_map.size(), 1);
         assert_eq!(read_map.key_array().get_int(0).unwrap(), 7);
         assert_eq!(read_map.value_array().get_string(0).unwrap(), "hello");
@@ -593,7 +589,7 @@ mod tests {
         let bytes = writer.to_bytes();
         let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
-        let read_map = row.get_map(0, &DataTypes::string(), &array_type).unwrap();
+        let read_map = row.get_map(0).unwrap();
         assert_eq!(read_map.size(), 2);
         assert_eq!(read_map.key_array().get_string(0).unwrap(), "a");
         assert_eq!(read_map.key_array().get_string(1).unwrap(), "b");
@@ -622,9 +618,7 @@ mod tests {
         let bytes = writer.to_bytes();
         let row = CompactedRow::from_bytes(&row_type, bytes.as_ref());
 
-        let read_map = row
-            .get_map(0, &DataTypes::int(), &DataTypes::string())
-            .unwrap();
+        let read_map = row.get_map(0).unwrap();
         assert_eq!(read_map.size(), 0);
     }
 }

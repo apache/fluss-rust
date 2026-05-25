@@ -21,7 +21,6 @@
 use crate::client::WriteFormat;
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
-use crate::metadata::DataType;
 use crate::metadata::UNEXIST_MAPPING;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use crate::row::{Decimal, FlussArray, FlussMap, GenericRow, InternalRow};
@@ -143,8 +142,8 @@ impl<R: InternalRow> InternalRow for ProjectedRow<R> {
         project!(self, get_array, pos)
     }
 
-    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap> {
-        project!(self, get_map, pos, key_type, value_type)
+    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+        project!(self, get_map, pos)
     }
 
     fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {

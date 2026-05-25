@@ -681,7 +681,7 @@ fn append_fluss_map_to_map_builder(
     Ok(())
 }
 
-fn read_datum_from_fluss_array<'a>(
+pub(crate) fn read_datum_from_fluss_array<'a>(
     arr: &FlussArray,
     pos: usize,
     element_type: &crate::metadata::DataType,
@@ -691,6 +691,15 @@ fn read_datum_from_fluss_array<'a>(
         return Ok(Datum::Row(Box::new(internal_row_to_owned_generic(
             &compacted, row_type,
         )?)));
+    }
+
+    // FlussArray has no attached schema; use the typed inherent accessor.
+    if let DataType::Map(map_type) = element_type {
+        return Ok(Datum::Map(arr.get_map(
+            pos,
+            map_type.key_type(),
+            map_type.value_type(),
+        )?));
     }
 
     let getter = FieldGetter::create(element_type, pos);

@@ -468,6 +468,7 @@ Implements the `InternalRow` trait (see below).
 | `fn get_binary(&self, idx: usize, length: usize) -> Result<&[u8]>`                     | Get fixed-length binary value           |
 | `fn get_char(&self, idx: usize, length: usize) -> Result<&str>`                        | Get fixed-length char value             |
 | `fn get_array(&self, idx: usize) -> Result<FlussArray>`                                | Get array value                         |
+| `fn get_map(&self, idx: usize) -> Result<FlussMap>`                                    | Get map value                           |
 
 ## `FlussArray`
 
@@ -480,6 +481,34 @@ Implements the `InternalRow` trait (see below).
 | `fn as_bytes(&self) -> &[u8]` | Get encoded bytes of the array |
 
 Element getters mirror `InternalRow` typed getters and return `Result<T>`. For example, use `get_int()`, `get_long()`, and `get_double()` for primitive elements, and `get_string()`, `get_binary()`, `get_decimal()`, `get_timestamp_ntz()`, `get_timestamp_ltz()`, and `get_array()` for variable-length or nested elements.
+
+## `FlussMap`
+
+`FlussMap` is the Rust row representation for `MAP` values. You usually obtain it from `InternalRow::get_map()`.
+
+| Method | Description |
+|--------|-------------|
+| `fn size(&self) -> usize` | Number of entries in the map |
+| `fn as_bytes(&self) -> &[u8]` | Get encoded bytes of the map |
+| `fn key_type(&self) -> &DataType` | Schema-declared type of keys |
+| `fn value_type(&self) -> &DataType` | Schema-declared type of values |
+| `fn entries(&self) -> Entries<'_>` | Iterator yielding `Result<(Datum, Datum)>` pairs |
+| `fn get(&self, key: &Datum) -> Result<Option<Datum>>` | Linear-scan lookup by key (`O(n)`) |
+| `fn key_array(&self) -> &FlussArray` | Parallel keys array (zero-copy view) |
+| `fn value_array(&self) -> &FlussArray` | Parallel values array (zero-copy view) |
+
+Most user code should prefer `entries()` (iteration) and `get()` (lookup). The `key_array()` / `value_array()` views are for serdes and Arrow-adapter code that needs zero-copy access to the underlying parallel-array layout.
+
+## `FlussMapWriter`
+
+`FlussMapWriter` builds a `FlussMap` for write paths.
+
+| Method | Description |
+|--------|-------------|
+| `fn new(capacity: usize, key_type: &DataType, value_type: &DataType) -> Self` | Create a writer sized for `capacity` entries |
+| `fn write_entry(&mut self, key: Datum, value: Datum) -> Result<()>` | Append a single entry; rejects null keys and type mismatches |
+| `fn extend<I, K, V>(&mut self, entries: I) -> Result<()>` | Append every pair from `entries: IntoIterator<Item = (K, V)>` |
+| `fn complete(self) -> Result<FlussMap>` | Finalize the writer and produce the `FlussMap` |
 
 ## `ChangeType`
 

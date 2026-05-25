@@ -18,6 +18,10 @@ use crate::client::credentials::CredentialsReceiver;
 use crate::error::{Error, Result};
 use crate::io::{FileIO, Storage};
 use crate::metadata::TableBucket;
+use crate::metrics::{
+    SCANNER_REMOTE_FETCH_BYTES_TOTAL, SCANNER_REMOTE_FETCH_ERRORS_TOTAL,
+    SCANNER_REMOTE_FETCH_REQUESTS_TOTAL,
+};
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
 use futures::TryStreamExt;
 use parking_lot::Mutex;
@@ -494,12 +498,19 @@ async fn spawn_download_task(
         return DownloadResult::Cancelled;
     }
 
+    // Java reference: RemoteLogDownloader.java increments `remoteFetchRequestCount`
+    // immediately before initiating the download. Each retry of the same segment
+    // counts as a separate request (matches Java behavior).
+    metrics::counter!(SCANNER_REMOTE_FETCH_REQUESTS_TOTAL).increment(1);
+
     // Try download ONCE
     let download_result = fetcher.fetch(&request).await;
 
     match download_result {
         Ok(fetch_result) => {
             // Success - permit will be released on drop (FileSource handles file deletion)
+            metrics::counter!(SCANNER_REMOTE_FETCH_BYTES_TOTAL)
+                .increment(fetch_result.file_size as u64);
             DownloadResult::Success {
                 result: RemoteLogFile {
                     file_path: fetch_result.file_path,
@@ -516,6 +527,8 @@ async fn spawn_download_task(
         }
         Err(e) => {
             // Download failed - check if we should retry or give up
+            // Counted per attempt, so retries each contribute one error.
+            metrics::counter!(SCANNER_REMOTE_FETCH_ERRORS_TOTAL).increment(1);
             let retry_count = request.retry_count + 1;
 
             if retry_count > MAX_RETRY_COUNT {

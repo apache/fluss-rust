@@ -33,7 +33,6 @@ mod projected_row;
 mod row_decoder;
 
 use crate::client::WriteFormat;
-use crate::metadata::DataType;
 pub use binary_array::{FlussArray, FlussArrayWriter};
 pub use binary_map::{FlussMap, FlussMapWriter};
 use bytes::Bytes;
@@ -135,9 +134,9 @@ pub trait InternalRow: Send + Sync {
     fn get_array(&self, pos: usize) -> Result<FlussArray>;
 
     /// Returns the map value at the given position
-    fn get_map(&self, pos: usize, key_type: &DataType, value_type: &DataType) -> Result<FlussMap>;
+    fn get_map(&self, pos: usize) -> Result<FlussMap>;
 
-    /// Returns     the nested row value at the given position
+    /// Returns the nested row value at the given position
     fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
         Err(IllegalArgument {
             message: format!("get_row not supported at position {pos}"),
@@ -309,12 +308,7 @@ impl<'a> InternalRow for GenericRow<'a> {
         }
     }
 
-    fn get_map(
-        &self,
-        pos: usize,
-        _key_type: &DataType,
-        _value_type: &DataType,
-    ) -> Result<FlussMap> {
+    fn get_map(&self, pos: usize) -> Result<FlussMap> {
         match self.get_value(pos)? {
             Datum::Map(m) => Ok(m.clone()),
             other => Err(IllegalArgument {
