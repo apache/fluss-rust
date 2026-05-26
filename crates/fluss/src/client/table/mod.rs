@@ -25,6 +25,7 @@ use std::sync::Arc;
 pub const EARLIEST_OFFSET: i64 = -2;
 
 mod append;
+mod batch_scanner;
 mod lookup;
 
 mod log_fetch_buffer;
@@ -35,6 +36,7 @@ mod scanner;
 mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
+pub use batch_scanner::BatchScanner;
 pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
 pub use reader::{RecordBatchLogReader, SyncRecordBatchLogReader};
 pub use remote_log::{
