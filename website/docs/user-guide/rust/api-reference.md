@@ -141,6 +141,8 @@ Complete API reference for the Fluss Rust client.
 
 Single-consumer: do not call `poll` concurrently on the same scanner (e.g. from `tokio::join!` or two tasks sharing an `Arc`). Mirrors Java's `LogScannerImpl.acquire()` guard. Debug builds surface overlapping calls via a `debug_assert!`; release builds skip the check for performance and produce skewed poll-timing metrics (`fluss.client.scanner.time_between_poll_ms`, `fluss.client.scanner.poll_idle_ratio`) if the contract is violated.
 
+All `fluss.client.scanner.*` metrics carry `database` and `table` labels (matching Java's per-`TablePath` `ScannerMetricGroup`), so multi-table consumers get one time series per scanned table.
+
 | Method                                                                                                    | Description                                              |
 |-----------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
 | `async fn subscribe(&self, bucket_id: i32, start_offset: i64) -> Result<()>`                              | Subscribe to a bucket                                    |
