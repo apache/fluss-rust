@@ -94,9 +94,9 @@ pub const SCANNER_POLL_IDLE_RATIO: &str = "fluss.client.scanner.poll_idle_ratio"
 // and counters for throughput; the recorder/exporter handles rate
 // computation (e.g. Prometheus `rate()`).
 //
-// Java emits one `ScannerMetricGroup` per (database, table). Rust currently
-// emits without per-table labels — adding `database`/`table` labels is
-// tracked separately and intentionally deferred to keep this PR minimal.
+// Java emits one `ScannerMetricGroup` per (database, table); Rust matches
+// that by attaching `database` + `table` labels to every scanner metric
+// (see `ScannerMetrics` below).
 // ---------------------------------------------------------------------------
 
 /// Histogram: elapsed ms for each successful FetchLog RPC.
@@ -123,11 +123,13 @@ pub const SCANNER_REMOTE_FETCH_ERRORS_TOTAL: &str =
 // Per-table scanner metric handles
 // ---------------------------------------------------------------------------
 
+/// Cached `(database, table)`-labeled scanner metric handles.
 ///
 /// Adding a new scanner metric: declare the constant above, add one
-/// field plus an initializer line in [`Self::new`], and a `record_*`
-/// method. Callers go through the recorder methods so the labels stay
-/// attached automatically.
+/// field plus an initializer line in [`Self::new`] using the matching
+/// `scanner_{gauge,counter,histogram}` helper, and a `record_*` method.
+/// The helpers are the single source of truth for the label set, so a
+/// future label addition (e.g. `cluster_id`) is a one-line change.
 ///
 /// # Recorder binding
 ///
@@ -153,48 +155,28 @@ impl ScannerMetrics {
     /// Build a fresh handle cache for `table_path`. Resolves the
     /// currently installed recorder once per metric.
     pub fn new(table_path: &TablePath) -> Self {
-        let database = table_path.database().to_string();
-        let table = table_path.table().to_string();
+        let database = table_path.database();
+        let table = table_path.table();
         Self {
-            time_between_poll_ms: metrics::gauge!(
-                SCANNER_TIME_BETWEEN_POLL_MS,
-                LABEL_DATABASE => database.clone(),
-                LABEL_TABLE => table.clone()
-            ),
-            poll_idle_ratio: metrics::gauge!(
-                SCANNER_POLL_IDLE_RATIO,
-                LABEL_DATABASE => database.clone(),
-                LABEL_TABLE => table.clone()
-            ),
-            fetch_requests_total: metrics::counter!(
-                SCANNER_FETCH_REQUESTS_TOTAL,
-                LABEL_DATABASE => database.clone(),
-                LABEL_TABLE => table.clone()
-            ),
-            fetch_latency_ms: metrics::histogram!(
-                SCANNER_FETCH_LATENCY_MS,
-                LABEL_DATABASE => database.clone(),
-                LABEL_TABLE => table.clone()
-            ),
-            bytes_per_request: metrics::histogram!(
-                SCANNER_BYTES_PER_REQUEST,
-                LABEL_DATABASE => database.clone(),
-                LABEL_TABLE => table.clone()
-            ),
-            remote_fetch_requests_total: metrics::counter!(
+            time_between_poll_ms: scanner_gauge(SCANNER_TIME_BETWEEN_POLL_MS, database, table),
+            poll_idle_ratio: scanner_gauge(SCANNER_POLL_IDLE_RATIO, database, table),
+            fetch_requests_total: scanner_counter(SCANNER_FETCH_REQUESTS_TOTAL, database, table),
+            fetch_latency_ms: scanner_histogram(SCANNER_FETCH_LATENCY_MS, database, table),
+            bytes_per_request: scanner_histogram(SCANNER_BYTES_PER_REQUEST, database, table),
+            remote_fetch_requests_total: scanner_counter(
                 SCANNER_REMOTE_FETCH_REQUESTS_TOTAL,
-                LABEL_DATABASE => database.clone(),
-                LABEL_TABLE => table.clone()
+                database,
+                table,
             ),
-            remote_fetch_bytes_total: metrics::counter!(
+            remote_fetch_bytes_total: scanner_counter(
                 SCANNER_REMOTE_FETCH_BYTES_TOTAL,
-                LABEL_DATABASE => database.clone(),
-                LABEL_TABLE => table.clone()
+                database,
+                table,
             ),
-            remote_fetch_errors_total: metrics::counter!(
+            remote_fetch_errors_total: scanner_counter(
                 SCANNER_REMOTE_FETCH_ERRORS_TOTAL,
-                LABEL_DATABASE => database,
-                LABEL_TABLE => table
+                database,
+                table,
             ),
         }
     }
@@ -230,6 +212,35 @@ impl ScannerMetrics {
     pub fn record_remote_fetch_error(&self) {
         self.remote_fetch_errors_total.increment(1);
     }
+}
+
+// Per-table scanner handle factories. These centralize the
+// `(database, table)` label set so a future schema change (renaming a
+// label, adding `cluster_id`, etc.) is a one-line edit instead of
+// touching every callsite in `ScannerMetrics::new`.
+
+fn scanner_gauge(name: &'static str, database: &str, table: &str) -> metrics::Gauge {
+    metrics::gauge!(
+        name,
+        LABEL_DATABASE => database.to_string(),
+        LABEL_TABLE => table.to_string(),
+    )
+}
+
+fn scanner_counter(name: &'static str, database: &str, table: &str) -> metrics::Counter {
+    metrics::counter!(
+        name,
+        LABEL_DATABASE => database.to_string(),
+        LABEL_TABLE => table.to_string(),
+    )
+}
+
+fn scanner_histogram(name: &'static str, database: &str, table: &str) -> metrics::Histogram {
+    metrics::histogram!(
+        name,
+        LABEL_DATABASE => database.to_string(),
+        LABEL_TABLE => table.to_string(),
+    )
 }
 
 /// Returns a label value for reportable API keys, matching Java's
