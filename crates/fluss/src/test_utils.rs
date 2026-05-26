@@ -20,6 +20,7 @@ use crate::metadata::{
     DataField, DataTypes, PhysicalTablePath, Schema, TableBucket, TableDescriptor, TableInfo,
     TablePath,
 };
+use crate::metrics::{LABEL_DATABASE, LABEL_TABLE, ScannerMetrics};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -86,4 +87,60 @@ pub(crate) fn build_cluster_arc(
     buckets: i32,
 ) -> Arc<Cluster> {
     Arc::new(build_cluster(table_path, table_id, buckets))
+}
+
+/// Build an `Arc<ScannerMetrics>` for tests. Most callers don't install
+/// a recorder, so the cached handles are no-ops; tests that *do* install
+/// `metrics::with_local_recorder(...)` must call this *inside* the
+/// recorder closure for the cached handles to bind to that recorder.
+pub(crate) fn test_scanner_metrics(table_path: &TablePath) -> Arc<ScannerMetrics> {
+    Arc::new(ScannerMetrics::new(table_path))
+}
+
+/// Asserts that every entry whose name starts with `fluss.client.scanner.`
+/// carries both the `database` and `table` labels matching the expected
+/// values. Use after a `Snapshotter::snapshot().into_vec()` to verify all
+/// emitted scanner metrics in one shot — protects against future scanner
+/// metrics that bypass [`ScannerMetrics`].
+pub(crate) fn assert_scanner_entries_labeled(
+    entries: &[(
+        metrics_util::CompositeKey,
+        Option<metrics::Unit>,
+        Option<metrics::SharedString>,
+        metrics_util::debugging::DebugValue,
+    )],
+    expected_database: &str,
+    expected_table: &str,
+) {
+    for (key, _, _, _) in entries {
+        let name = key.key().name();
+        if !name.starts_with("fluss.client.scanner.") {
+            continue;
+        }
+        let labels: Vec<_> = key
+            .key()
+            .labels()
+            .map(|l| (l.key().to_string(), l.value().to_string()))
+            .collect();
+        let database = labels
+            .iter()
+            .find(|(k, _)| k == LABEL_DATABASE)
+            .unwrap_or_else(|| {
+                panic!("scanner metric `{name}` is missing the database label; labels={labels:?}")
+            });
+        let table = labels
+            .iter()
+            .find(|(k, _)| k == LABEL_TABLE)
+            .unwrap_or_else(|| {
+                panic!("scanner metric `{name}` is missing the table label; labels={labels:?}")
+            });
+        assert_eq!(
+            database.1, expected_database,
+            "scanner metric `{name}` has unexpected database label"
+        );
+        assert_eq!(
+            table.1, expected_table,
+            "scanner metric `{name}` has unexpected table label"
+        );
+    }
 }

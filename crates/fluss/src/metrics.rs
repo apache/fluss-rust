@@ -22,6 +22,7 @@
 //! recorder (e.g. `metrics-exporter-prometheus`) to collect them. When no
 //! recorder is installed, all metric calls are no-ops with zero overhead.
 
+use crate::metadata::TablePath;
 use crate::rpc::ApiKey;
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,10 @@ use crate::rpc::ApiKey;
 // ---------------------------------------------------------------------------
 
 pub const LABEL_API_KEY: &str = "api_key";
+
+/// Identifies the database and table for per-table scanner metrics.
+pub const LABEL_DATABASE: &str = "database";
+pub const LABEL_TABLE: &str = "table";
 
 // ---------------------------------------------------------------------------
 // Connection / RPC metrics
@@ -89,9 +94,9 @@ pub const SCANNER_POLL_IDLE_RATIO: &str = "fluss.client.scanner.poll_idle_ratio"
 // and counters for throughput; the recorder/exporter handles rate
 // computation (e.g. Prometheus `rate()`).
 //
-// Java emits one `ScannerMetricGroup` per (database, table). Rust currently
-// emits without per-table labels — adding `database`/`table` labels is
-// tracked separately and intentionally deferred to keep this PR minimal.
+// Java emits one `ScannerMetricGroup` per (database, table); Rust matches
+// that by attaching `database` + `table` labels to every scanner metric
+// (see `ScannerMetrics` below).
 // ---------------------------------------------------------------------------
 
 /// Histogram: elapsed ms for each successful FetchLog RPC.
@@ -114,6 +119,130 @@ pub const SCANNER_REMOTE_FETCH_BYTES_TOTAL: &str = "fluss.client.scanner.remote_
 pub const SCANNER_REMOTE_FETCH_ERRORS_TOTAL: &str =
     "fluss.client.scanner.remote_fetch_errors.total";
 
+// ---------------------------------------------------------------------------
+// Per-table scanner metric handles
+// ---------------------------------------------------------------------------
+
+/// Cached `(database, table)`-labeled scanner metric handles.
+///
+/// Adding a new scanner metric: declare the constant above, add one
+/// field plus an initializer line in [`Self::new`] using the matching
+/// `scanner_{gauge,counter,histogram}` helper, and a `record_*` method.
+/// The helpers are the single source of truth for the label set, so a
+/// future label addition (e.g. `cluster_id`) is a one-line change.
+///
+/// # Recorder binding
+///
+/// `metrics::counter!(...)` / `gauge!(...)` / `histogram!(...)` resolve
+/// the recorder at the macro callsite. Because this struct caches the
+/// returned handles, every cached handle is bound to whichever recorder
+/// is installed when [`Self::new`] runs. Construct the scanner *after*
+/// installing the production recorder; in tests, construct it inside
+/// the `metrics::with_local_recorder(...)` closure. With no recorder
+/// installed, all `record_*` calls are zero-overhead no-ops.
+pub(crate) struct ScannerMetrics {
+    time_between_poll_ms: metrics::Gauge,
+    poll_idle_ratio: metrics::Gauge,
+    fetch_requests_total: metrics::Counter,
+    fetch_latency_ms: metrics::Histogram,
+    bytes_per_request: metrics::Histogram,
+    remote_fetch_requests_total: metrics::Counter,
+    remote_fetch_bytes_total: metrics::Counter,
+    remote_fetch_errors_total: metrics::Counter,
+}
+
+impl ScannerMetrics {
+    /// Build a fresh handle cache for `table_path`. Resolves the
+    /// currently installed recorder once per metric.
+    pub(crate) fn new(table_path: &TablePath) -> Self {
+        let database = table_path.database();
+        let table = table_path.table();
+        Self {
+            time_between_poll_ms: scanner_gauge(SCANNER_TIME_BETWEEN_POLL_MS, database, table),
+            poll_idle_ratio: scanner_gauge(SCANNER_POLL_IDLE_RATIO, database, table),
+            fetch_requests_total: scanner_counter(SCANNER_FETCH_REQUESTS_TOTAL, database, table),
+            fetch_latency_ms: scanner_histogram(SCANNER_FETCH_LATENCY_MS, database, table),
+            bytes_per_request: scanner_histogram(SCANNER_BYTES_PER_REQUEST, database, table),
+            remote_fetch_requests_total: scanner_counter(
+                SCANNER_REMOTE_FETCH_REQUESTS_TOTAL,
+                database,
+                table,
+            ),
+            remote_fetch_bytes_total: scanner_counter(
+                SCANNER_REMOTE_FETCH_BYTES_TOTAL,
+                database,
+                table,
+            ),
+            remote_fetch_errors_total: scanner_counter(
+                SCANNER_REMOTE_FETCH_ERRORS_TOTAL,
+                database,
+                table,
+            ),
+        }
+    }
+
+    pub(crate) fn record_time_between_poll_ms(&self, value: f64) {
+        self.time_between_poll_ms.set(value);
+    }
+
+    pub(crate) fn record_poll_idle_ratio(&self, value: f64) {
+        self.poll_idle_ratio.set(value);
+    }
+
+    pub(crate) fn record_fetch_request(&self) {
+        self.fetch_requests_total.increment(1);
+    }
+
+    pub(crate) fn record_fetch_latency_ms(&self, value: f64) {
+        self.fetch_latency_ms.record(value);
+    }
+
+    pub(crate) fn record_bytes_per_request(&self, value: f64) {
+        self.bytes_per_request.record(value);
+    }
+
+    pub(crate) fn record_remote_fetch_request(&self) {
+        self.remote_fetch_requests_total.increment(1);
+    }
+
+    pub(crate) fn record_remote_fetch_bytes(&self, bytes: u64) {
+        self.remote_fetch_bytes_total.increment(bytes);
+    }
+
+    pub(crate) fn record_remote_fetch_error(&self) {
+        self.remote_fetch_errors_total.increment(1);
+    }
+}
+
+// Per-table scanner handle factories. These centralize the
+// `(database, table)` label set so a future schema change (renaming a
+// label, adding `cluster_id`, etc.) is a one-line edit instead of
+// touching every callsite in `ScannerMetrics::new`.
+
+fn scanner_gauge(name: &'static str, database: &str, table: &str) -> metrics::Gauge {
+    metrics::gauge!(
+        name,
+        LABEL_DATABASE => database.to_string(),
+        LABEL_TABLE => table.to_string(),
+    )
+}
+
+fn scanner_counter(name: &'static str, database: &str, table: &str) -> metrics::Counter {
+    metrics::counter!(
+        name,
+        LABEL_DATABASE => database.to_string(),
+        LABEL_TABLE => table.to_string(),
+    )
+}
+
+fn scanner_histogram(name: &'static str, database: &str, table: &str) -> metrics::Histogram {
+    metrics::histogram!(
+        name,
+        LABEL_DATABASE => database.to_string(),
+        LABEL_TABLE => table.to_string(),
+    )
+}
+
 /// Returns a label value for reportable API keys, matching Java's
 /// `ConnectionMetrics.REPORT_API_KEYS` filter (`ProduceLog`, `FetchLog`,
 /// `PutKv`, `Lookup`). Returns `None` for admin/metadata/auth calls to
@@ -131,6 +260,7 @@ pub(crate) fn api_key_label(api_key: ApiKey) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::assert_scanner_entries_labeled;
     use metrics_util::debugging::DebuggingRecorder;
 
     macro_rules! find_counter {
@@ -339,8 +469,10 @@ mod tests {
         let snapshotter = recorder.snapshotter();
 
         metrics::with_local_recorder(&recorder, || {
-            metrics::gauge!(SCANNER_TIME_BETWEEN_POLL_MS).set(200.0);
-            metrics::gauge!(SCANNER_POLL_IDLE_RATIO).set(0.8);
+            let table_path = TablePath::new("db", "tbl");
+            let m = ScannerMetrics::new(&table_path);
+            m.record_time_between_poll_ms(200.0);
+            m.record_poll_idle_ratio(0.8);
         });
 
         let snapshot = snapshotter.snapshot();
@@ -351,6 +483,7 @@ mod tests {
             Some(200.0)
         );
         assert_eq!(find_gauge!(entries, SCANNER_POLL_IDLE_RATIO), Some(0.8));
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 
     #[test]
@@ -359,9 +492,11 @@ mod tests {
         let snapshotter = recorder.snapshotter();
 
         metrics::with_local_recorder(&recorder, || {
-            metrics::counter!(SCANNER_FETCH_REQUESTS_TOTAL).increment(1);
-            metrics::histogram!(SCANNER_FETCH_LATENCY_MS).record(15.5);
-            metrics::histogram!(SCANNER_BYTES_PER_REQUEST).record(4096.0);
+            let table_path = TablePath::new("db", "tbl");
+            let m = ScannerMetrics::new(&table_path);
+            m.record_fetch_request();
+            m.record_fetch_latency_ms(15.5);
+            m.record_bytes_per_request(4096.0);
         });
 
         let snapshot = snapshotter.snapshot();
@@ -379,6 +514,7 @@ mod tests {
             find_histogram!(entries, SCANNER_BYTES_PER_REQUEST),
             Some(vec![4096.0])
         );
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 
     #[test]
@@ -387,9 +523,13 @@ mod tests {
         let snapshotter = recorder.snapshotter();
 
         metrics::with_local_recorder(&recorder, || {
-            metrics::counter!(SCANNER_REMOTE_FETCH_REQUESTS_TOTAL).increment(3);
-            metrics::counter!(SCANNER_REMOTE_FETCH_BYTES_TOTAL).increment(1024);
-            metrics::counter!(SCANNER_REMOTE_FETCH_ERRORS_TOTAL).increment(1);
+            let table_path = TablePath::new("db", "tbl");
+            let m = ScannerMetrics::new(&table_path);
+            m.record_remote_fetch_request();
+            m.record_remote_fetch_request();
+            m.record_remote_fetch_request();
+            m.record_remote_fetch_bytes(1024);
+            m.record_remote_fetch_error();
         });
 
         let snapshot = snapshotter.snapshot();
@@ -406,6 +546,72 @@ mod tests {
         assert_eq!(
             find_counter!(entries, SCANNER_REMOTE_FETCH_ERRORS_TOTAL),
             Some(1)
+        );
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
+    }
+
+    /// Two scanners on different tables must produce independent metric
+    /// series.
+    #[test]
+    fn different_table_paths_produce_separate_metric_series() {
+        use std::collections::HashMap;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            let m1 = ScannerMetrics::new(&TablePath::new("db1", "t1"));
+            let m2 = ScannerMetrics::new(&TablePath::new("db2", "t2"));
+
+            for _ in 0..5 {
+                m1.record_fetch_request();
+            }
+            for _ in 0..3 {
+                m2.record_fetch_request();
+            }
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        let request_entries: Vec<_> = entries
+            .iter()
+            .filter(|(key, _, _, _)| key.key().name() == SCANNER_FETCH_REQUESTS_TOTAL)
+            .collect();
+
+        assert_eq!(
+            request_entries.len(),
+            2,
+            "(db1,t1) and (db2,t2) must be separate metric series"
+        );
+
+        let mut counter_by_table: HashMap<(String, String), u64> = HashMap::new();
+        for (key, _, _, val) in request_entries {
+            let mut database = None;
+            let mut table = None;
+            for label in key.key().labels() {
+                if label.key() == LABEL_DATABASE {
+                    database = Some(label.value().to_string());
+                } else if label.key() == LABEL_TABLE {
+                    table = Some(label.value().to_string());
+                }
+            }
+            let database = database.expect("scanner metric must include database label");
+            let table = table.expect("scanner metric must include table label");
+            let counter_value = match val {
+                metrics_util::debugging::DebugValue::Counter(v) => *v,
+                other => panic!("expected Counter, got {other:?}"),
+            };
+            counter_by_table.insert((database, table), counter_value);
+        }
+
+        assert_eq!(
+            counter_by_table.get(&("db1".to_string(), "t1".to_string())),
+            Some(&5),
+        );
+        assert_eq!(
+            counter_by_table.get(&("db2".to_string(), "t2".to_string())),
+            Some(&3),
         );
     }
 }

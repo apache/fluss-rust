@@ -27,10 +27,7 @@ use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{LogFormat, PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
-use crate::metrics::{
-    SCANNER_BYTES_PER_REQUEST, SCANNER_FETCH_LATENCY_MS, SCANNER_FETCH_REQUESTS_TOTAL,
-    SCANNER_POLL_IDLE_RATIO, SCANNER_TIME_BETWEEN_POLL_MS,
-};
+use crate::metrics::ScannerMetrics;
 use crate::proto::{
     ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
 };
@@ -293,6 +290,9 @@ struct LogScannerInner {
     /// scanner trip a `debug_assert!` in `record_poll_start` (debug
     /// builds) or emit a `log::warn!` (release builds).
     poll_state: Mutex<PollState>,
+    /// Per-table scanner metric handles, pre-bound with `database`/`table`
+    /// labels.
+    metrics: Arc<ScannerMetrics>,
 }
 
 /// Snapshot state used to derive the scanner poll-timing metrics.
@@ -365,6 +365,7 @@ impl LogScannerInner {
             None => to_arrow_schema(full_row_type)?,
         };
 
+        let metrics = Arc::new(ScannerMetrics::new(&table_info.table_path));
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
@@ -378,10 +379,12 @@ impl LogScannerInner {
                 log_scanner_status.clone(),
                 config,
                 projected_fields,
+                Arc::clone(&metrics),
             )?,
             arrow_schema,
             reader_active: std::sync::atomic::AtomicBool::new(false),
             poll_state: Mutex::new(PollState::default()),
+            metrics,
         })
     }
 
@@ -485,7 +488,7 @@ impl LogScannerInner {
                  until the overlap clears"
             );
         }
-        metrics::gauge!(SCANNER_TIME_BETWEEN_POLL_MS).set(between_ms);
+        self.metrics.record_time_between_poll_ms(between_ms);
     }
 
     /// Computes `poll_idle_ratio = poll_time / (poll_time + between_time)`.
@@ -522,7 +525,7 @@ impl LogScannerInner {
             return;
         }
         if let Some(r) = ratio {
-            metrics::gauge!(SCANNER_POLL_IDLE_RATIO).set(r);
+            self.metrics.record_poll_idle_ratio(r);
         }
     }
 
@@ -918,6 +921,9 @@ struct LogFetcher {
     security_token_manager: Arc<SecurityTokenManager>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
+    /// Per-table scanner metric handles shared with the owning
+    /// `LogScannerInner` and `RemoteLogDownloader`.
+    metrics: Arc<ScannerMetrics>,
     max_poll_records: usize,
     fetch_max_bytes: i32,
     fetch_min_bytes: i32,
@@ -932,6 +938,8 @@ struct FetchResponseContext {
     read_context: ReadContext,
     remote_read_context: ReadContext,
     remote_log_downloader: Arc<RemoteLogDownloader>,
+    /// Per-table scanner metric handles for `scanner.fetch_*` recording.
+    metrics: Arc<ScannerMetrics>,
     /// `Instant` captured immediately before the FetchLog RPC; used to compute
     /// `scanner.fetch_latency_ms` on a successful response.
     request_start_time: Instant,
@@ -945,6 +953,7 @@ impl LogFetcher {
         log_scanner_status: Arc<LogScannerStatus>,
         config: &Config,
         projected_fields: Option<Vec<usize>>,
+        metrics: Arc<ScannerMetrics>,
     ) -> Result<Self> {
         let full_row_type = table_info.get_row_type();
         let full_arrow_schema = to_arrow_schema(full_row_type)?;
@@ -988,6 +997,7 @@ impl LogFetcher {
             config.remote_file_download_thread_num,
             config.scanner_remote_log_read_concurrency,
             credentials_rx,
+            Arc::clone(&metrics),
         )?);
 
         // Start the background token refresh task
@@ -1005,6 +1015,7 @@ impl LogFetcher {
             security_token_manager,
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
+            metrics,
             max_poll_records: config.scanner_log_max_poll_records,
             fetch_max_bytes: config.scanner_log_fetch_max_bytes,
             fetch_min_bytes: config.scanner_log_fetch_min_bytes,
@@ -1177,6 +1188,7 @@ impl LogFetcher {
             let remote_log_downloader = Arc::clone(&self.remote_log_downloader);
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
             let metadata = self.metadata.clone();
+            let metrics = Arc::clone(&self.metrics);
             // Spawn async task to handle the fetch request
             // Note: These tasks are not explicitly tracked or cancelled when LogFetcher is dropped.
             // This is acceptable because:
@@ -1211,7 +1223,7 @@ impl LogFetcher {
                 // Java increment the fetch counter and capture `requestStartTime` immediately
                 // before the RPC. Failed connection acquisition above is not counted.
                 let request_start_time = Instant::now();
-                metrics::counter!(SCANNER_FETCH_REQUESTS_TOTAL).increment(1);
+                metrics.record_fetch_request();
 
                 let fetch_response = match con
                     .request(message::FetchLogRequest::new(fetch_request.clone()))
@@ -1237,6 +1249,7 @@ impl LogFetcher {
                     read_context,
                     remote_read_context,
                     remote_log_downloader,
+                    metrics,
                     request_start_time,
                 };
                 Self::handle_fetch_response(fetch_response, response_context).await;
@@ -1267,6 +1280,7 @@ impl LogFetcher {
             read_context,
             remote_read_context,
             remote_log_downloader,
+            metrics,
             request_start_time,
         } = context;
 
@@ -1274,9 +1288,8 @@ impl LogFetcher {
         // both report the serialized API message body size, excluding protocol
         // headers and framing. Recorded unconditionally (including zero-record
         // responses) to match Java's histogram semantics.
-        metrics::histogram!(SCANNER_FETCH_LATENCY_MS)
-            .record(request_start_time.elapsed().as_secs_f64() * 1000.0);
-        metrics::histogram!(SCANNER_BYTES_PER_REQUEST).record(fetch_response.encoded_len() as f64);
+        metrics.record_fetch_latency_ms(request_start_time.elapsed().as_secs_f64() * 1000.0);
+        metrics.record_bytes_per_request(fetch_response.encoded_len() as f64);
 
         for pb_fetch_log_resp in fetch_response.tables_resp {
             let table_id = pb_fetch_log_resp.table_id;
@@ -2046,7 +2059,9 @@ mod tests {
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::test_utils::{build_cluster_arc, build_table_info};
+    use crate::test_utils::{
+        assert_scanner_entries_labeled, build_cluster_arc, build_table_info, test_scanner_metrics,
+    };
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
@@ -2084,6 +2099,7 @@ mod tests {
             status.clone(),
             &Config::default(),
             None,
+            test_scanner_metrics(&table_path),
         )?;
 
         let bucket = TableBucket::new(1, 0);
@@ -2117,6 +2133,7 @@ mod tests {
             status,
             &Config::default(),
             None,
+            test_scanner_metrics(&table_path),
         )?;
 
         let bucket = TableBucket::new(1, 0);
@@ -2154,6 +2171,7 @@ mod tests {
             status,
             &Config::default(),
             None,
+            test_scanner_metrics(&table_path),
         )?;
 
         fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
@@ -2178,6 +2196,7 @@ mod tests {
             status.clone(),
             &Config::default(),
             None,
+            test_scanner_metrics(&table_path),
         )?;
 
         let response = FetchLogResponse {
@@ -2203,6 +2222,7 @@ mod tests {
             read_context: fetcher.read_context.clone(),
             remote_read_context: fetcher.remote_read_context.clone(),
             remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            metrics: Arc::clone(&fetcher.metrics),
             request_start_time: Instant::now(),
         };
 
@@ -2229,6 +2249,7 @@ mod tests {
             status.clone(),
             &Config::default(),
             None,
+            test_scanner_metrics(&table_path),
         )?;
 
         let bucket = TableBucket::new(1, 0);
@@ -2257,6 +2278,7 @@ mod tests {
             read_context: fetcher.read_context.clone(),
             remote_read_context: fetcher.remote_read_context.clone(),
             remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            metrics: Arc::clone(&fetcher.metrics),
             request_start_time: Instant::now(),
         };
 
@@ -2361,6 +2383,7 @@ mod tests {
             status,
             &config,
             None,
+            test_scanner_metrics(&table_path),
         )?;
 
         let requests = fetcher.prepare_fetch_log_requests().await;
@@ -2474,6 +2497,10 @@ mod tests {
             (0.0..=1.0).contains(&ratio),
             "poll_idle_ratio must be in [0, 1], got {ratio}"
         );
+
+        // Both gauges must carry `database=db` / `table=tbl` (the fixture
+        // values from `with_test_log_scanner_inner`).
+        assert_scanner_entries_labeled(&snapshotter.snapshot().into_vec(), "db", "tbl");
     }
 
     /// Java parity: `ScannerMetricGroup.recordPollStart` emits
@@ -2501,6 +2528,7 @@ mod tests {
             between, 0.0,
             "first-poll time_between_poll_ms must be 0.0 (Java parity), got {between}"
         );
+        assert_scanner_entries_labeled(&snapshotter.snapshot().into_vec(), "db", "tbl");
     }
 
     /// Pins the single-consumer contract: overlapping `PollGuard`s on the
@@ -2560,6 +2588,7 @@ mod tests {
                     status,
                     &Config::default(),
                     None,
+                    test_scanner_metrics(&table_path),
                 )
                 .expect("build LogFetcher");
 
@@ -2586,6 +2615,7 @@ mod tests {
                     read_context: fetcher.read_context.clone(),
                     remote_read_context: fetcher.remote_read_context.clone(),
                     remote_log_downloader: fetcher.remote_log_downloader.clone(),
+                    metrics: Arc::clone(&fetcher.metrics),
                     request_start_time: Instant::now(),
                 };
 
@@ -2623,5 +2653,11 @@ mod tests {
             vec![expected_bytes],
             "bytes histogram must record encoded_len() for parity with Java fetchLogResponse.totalSize()",
         );
+
+        // Every emitted scanner metric must carry both `database` and `table`
+        // labels — that's the whole point of `ScannerMetrics`. If a future
+        // contributor adds a new `metrics::*!` macro inline (bypassing
+        // `ScannerMetrics`), this assertion catches it.
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 }
