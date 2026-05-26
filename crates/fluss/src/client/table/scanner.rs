@@ -296,6 +296,19 @@ struct LogScannerInner {
 }
 
 /// Snapshot state used to derive the scanner poll-timing metrics.
+///
+/// The mutex makes the state updates in `record_poll_start` /
+/// `record_poll_end` atomic with respect to themselves; metric
+/// emission (`metrics::gauge!(...).set(...)`) and `log::warn!` calls
+/// happen after the lock is released so a user-installed recorder or
+/// logger cannot stall the critical section. The mutex does **not** by
+/// itself preserve start↔end pairing across overlapping `poll()` calls
+/// — that invariant relies on the single-consumer contract that
+/// mirrors Java's `LogScannerImpl.acquire()`. Concurrent polls on the
+/// same scanner are detected by a `debug_assert!` in
+/// `record_poll_start` (panics in debug / tests) and a `log::warn!` on
+/// both anomalous paths (`record_poll_start` sees a stale `Some`;
+/// `record_poll_end` sees `None`) for release-build observability.
 #[derive(Default, Debug)]
 struct PollState {
     /// Instant captured at the most recent `record_poll_start()`. `None`
