@@ -2059,15 +2059,9 @@ mod tests {
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::test_utils::{build_cluster_arc, build_table_info};
-
-    /// Build a `ScannerMetrics` for tests. Most test callers don't install
-    /// a recorder, so the cached handles are no-ops; tests that *do* install
-    /// `with_local_recorder` must call this *inside* the recorder closure
-    /// for the metric handles to bind to that recorder.
-    fn test_scanner_metrics(table_path: &TablePath) -> Arc<ScannerMetrics> {
-        Arc::new(ScannerMetrics::new(table_path))
-    }
+    use crate::test_utils::{
+        assert_scanner_entries_labeled, build_cluster_arc, build_table_info, test_scanner_metrics,
+    };
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
@@ -2454,38 +2448,6 @@ mod tests {
             })
     }
 
-    /// Asserts the scanner gauge `name` was emitted with `database`/`table`
-    /// labels matching the test fixture (`("db", "tbl")` per
-    /// [`with_test_log_scanner_inner`]).
-    fn assert_scanner_gauge_carries_table_labels(
-        snapshotter: &metrics_util::debugging::Snapshotter,
-        name: &str,
-    ) {
-        let snapshot = snapshotter.snapshot().into_vec();
-        let entry = snapshot
-            .iter()
-            .find(|(key, _, _, _)| key.key().name() == name)
-            .unwrap_or_else(|| panic!("scanner gauge `{name}` was not emitted"));
-        let labels: Vec<_> = entry
-            .0
-            .key()
-            .labels()
-            .map(|l| (l.key().to_string(), l.value().to_string()))
-            .collect();
-        assert!(
-            labels
-                .iter()
-                .any(|(k, v)| k == crate::metrics::LABEL_DATABASE && v == "db"),
-            "scanner gauge `{name}` is missing `database=db`; labels={labels:?}",
-        );
-        assert!(
-            labels
-                .iter()
-                .any(|(k, v)| k == crate::metrics::LABEL_TABLE && v == "tbl"),
-            "scanner gauge `{name}` is missing `table=tbl`; labels={labels:?}",
-        );
-    }
-
     /// Exercises the `PollGuard` lifecycle across two consecutive
     /// `record_poll_start` calls. Asserts both poll-timing gauges are
     /// emitted at the right moments and `record_poll_end` runs on guard
@@ -2528,7 +2490,6 @@ mod tests {
             between > 0.0,
             "second-poll time_between_poll_ms must be positive, got {between}"
         );
-        assert_scanner_gauge_carries_table_labels(&snapshotter, SCANNER_TIME_BETWEEN_POLL_MS);
 
         let ratio = snapshot_gauge(&snapshotter, SCANNER_POLL_IDLE_RATIO)
             .expect("poll_idle_ratio must be emitted on poll end");
@@ -2536,7 +2497,10 @@ mod tests {
             (0.0..=1.0).contains(&ratio),
             "poll_idle_ratio must be in [0, 1], got {ratio}"
         );
-        assert_scanner_gauge_carries_table_labels(&snapshotter, SCANNER_POLL_IDLE_RATIO);
+
+        // Both gauges must carry `database=db` / `table=tbl` (the fixture
+        // values from `with_test_log_scanner_inner`).
+        assert_scanner_entries_labeled(&snapshotter.snapshot().into_vec(), "db", "tbl");
     }
 
     /// Java parity: `ScannerMetricGroup.recordPollStart` emits
@@ -2564,7 +2528,7 @@ mod tests {
             between, 0.0,
             "first-poll time_between_poll_ms must be 0.0 (Java parity), got {between}"
         );
-        assert_scanner_gauge_carries_table_labels(&snapshotter, SCANNER_TIME_BETWEEN_POLL_MS);
+        assert_scanner_entries_labeled(&snapshotter.snapshot().into_vec(), "db", "tbl");
     }
 
     /// Pins the single-consumer contract: overlapping `PollGuard`s on the
@@ -2694,28 +2658,6 @@ mod tests {
         // labels — that's the whole point of `ScannerMetrics`. If a future
         // contributor adds a new `metrics::*!` macro inline (bypassing
         // `ScannerMetrics`), this assertion catches it.
-        for (key, _, _, _) in &entries {
-            let name = key.key().name();
-            if !name.starts_with("fluss.client.scanner.") {
-                continue;
-            }
-            let labels: Vec<_> = key
-                .key()
-                .labels()
-                .map(|l| (l.key().to_string(), l.value().to_string()))
-                .collect();
-            assert!(
-                labels
-                    .iter()
-                    .any(|(k, v)| k == crate::metrics::LABEL_DATABASE && v == "db"),
-                "scanner metric `{name}` is missing the `database=db` label; labels={labels:?}",
-            );
-            assert!(
-                labels
-                    .iter()
-                    .any(|(k, v)| k == crate::metrics::LABEL_TABLE && v == "tbl"),
-                "scanner metric `{name}` is missing the `table=tbl` label; labels={labels:?}",
-            );
-        }
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 }

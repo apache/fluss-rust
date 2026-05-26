@@ -783,7 +783,7 @@ pub struct RemoteLogDownloader {
 }
 
 impl RemoteLogDownloader {
-    pub fn new(
+    pub(crate) fn new(
         local_log_dir: TempDir,
         max_prefetch_segments: usize,
         max_concurrent_downloads: usize,
@@ -806,7 +806,7 @@ impl RemoteLogDownloader {
     }
 
     /// Create a RemoteLogDownloader with a custom fetcher (for testing).
-    pub fn new_with_fetcher(
+    pub(crate) fn new_with_fetcher(
         fetcher: Arc<dyn RemoteLogFetcher>,
         max_prefetch_segments: usize,
         max_concurrent_downloads: usize,
@@ -987,6 +987,7 @@ impl RemoteLogDownloader {
 mod tests {
     use super::*;
     use crate::metadata::TablePath;
+    use crate::test_utils::test_scanner_metrics;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Helper function to create a TableBucket for testing
@@ -994,10 +995,12 @@ mod tests {
         TableBucket::new(table_id, bucket_id)
     }
 
-    /// Build a `ScannerMetrics` for tests; the labels don't matter since
-    /// these tests don't install a recorder.
-    fn test_scanner_metrics() -> Arc<ScannerMetrics> {
-        Arc::new(ScannerMetrics::new(&TablePath::new("db", "tbl")))
+    /// `ScannerMetrics` instance shared across the local test fixtures. The
+    /// labels are arbitrary because none of the tests in this module install
+    /// a metrics recorder; the metrics just need to exist for the API
+    /// surface.
+    fn metrics() -> Arc<ScannerMetrics> {
+        test_scanner_metrics(&TablePath::new("db", "tbl"))
     }
 
     /// Simplified fake fetcher for testing
@@ -1189,7 +1192,7 @@ mod tests {
             fake_fetcher.clone(),
             10, // High prefetch limit
             2,  // Max concurrent downloads = 2
-            test_scanner_metrics(),
+            metrics(),
         )
         .unwrap();
 
@@ -1237,7 +1240,7 @@ mod tests {
             fake_fetcher,
             2,  // Max prefetch = 2
             10, // High concurrent limit
-            test_scanner_metrics(),
+            metrics(),
         )
         .unwrap();
 
@@ -1296,13 +1299,8 @@ mod tests {
         // Test retry with exponential backoff
         let fake_fetcher = Arc::new(FakeFetcher::new(2, true)); // Fail twice, succeed third time
 
-        let downloader = RemoteLogDownloader::new_with_fetcher(
-            fake_fetcher.clone(),
-            10,
-            1,
-            test_scanner_metrics(),
-        )
-        .unwrap();
+        let downloader =
+            RemoteLogDownloader::new_with_fetcher(fake_fetcher.clone(), 10, 1, metrics()).unwrap();
 
         let bucket = create_table_bucket(1, 0);
         let seg = create_segment("seg1", 0, 1000, bucket);
@@ -1326,13 +1324,8 @@ mod tests {
         // Test cancellation
         let seg2 = create_segment("seg2", 100, 1000, create_table_bucket(1, 0));
         let fake_fetcher2 = Arc::new(FakeFetcher::new(100, true)); // Fail forever
-        let downloader2 = RemoteLogDownloader::new_with_fetcher(
-            fake_fetcher2.clone(),
-            10,
-            1,
-            test_scanner_metrics(),
-        )
-        .unwrap();
+        let downloader2 =
+            RemoteLogDownloader::new_with_fetcher(fake_fetcher2.clone(), 10, 1, metrics()).unwrap();
 
         let future2 = downloader2.request_remote_log("dir", &seg2);
         tokio::time::sleep(Duration::from_millis(50)).await;

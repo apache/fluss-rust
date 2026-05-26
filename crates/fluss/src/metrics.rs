@@ -140,7 +140,7 @@ pub const SCANNER_REMOTE_FETCH_ERRORS_TOTAL: &str =
 /// installing the production recorder; in tests, construct it inside
 /// the `metrics::with_local_recorder(...)` closure. With no recorder
 /// installed, all `record_*` calls are zero-overhead no-ops.
-pub struct ScannerMetrics {
+pub(crate) struct ScannerMetrics {
     time_between_poll_ms: metrics::Gauge,
     poll_idle_ratio: metrics::Gauge,
     fetch_requests_total: metrics::Counter,
@@ -154,7 +154,7 @@ pub struct ScannerMetrics {
 impl ScannerMetrics {
     /// Build a fresh handle cache for `table_path`. Resolves the
     /// currently installed recorder once per metric.
-    pub fn new(table_path: &TablePath) -> Self {
+    pub(crate) fn new(table_path: &TablePath) -> Self {
         let database = table_path.database();
         let table = table_path.table();
         Self {
@@ -181,35 +181,35 @@ impl ScannerMetrics {
         }
     }
 
-    pub fn record_time_between_poll_ms(&self, value: f64) {
+    pub(crate) fn record_time_between_poll_ms(&self, value: f64) {
         self.time_between_poll_ms.set(value);
     }
 
-    pub fn record_poll_idle_ratio(&self, value: f64) {
+    pub(crate) fn record_poll_idle_ratio(&self, value: f64) {
         self.poll_idle_ratio.set(value);
     }
 
-    pub fn record_fetch_request(&self) {
+    pub(crate) fn record_fetch_request(&self) {
         self.fetch_requests_total.increment(1);
     }
 
-    pub fn record_fetch_latency_ms(&self, value: f64) {
+    pub(crate) fn record_fetch_latency_ms(&self, value: f64) {
         self.fetch_latency_ms.record(value);
     }
 
-    pub fn record_bytes_per_request(&self, value: f64) {
+    pub(crate) fn record_bytes_per_request(&self, value: f64) {
         self.bytes_per_request.record(value);
     }
 
-    pub fn record_remote_fetch_request(&self) {
+    pub(crate) fn record_remote_fetch_request(&self) {
         self.remote_fetch_requests_total.increment(1);
     }
 
-    pub fn record_remote_fetch_bytes(&self, bytes: u64) {
+    pub(crate) fn record_remote_fetch_bytes(&self, bytes: u64) {
         self.remote_fetch_bytes_total.increment(bytes);
     }
 
-    pub fn record_remote_fetch_error(&self) {
+    pub(crate) fn record_remote_fetch_error(&self) {
         self.remote_fetch_errors_total.increment(1);
     }
 }
@@ -260,6 +260,7 @@ pub(crate) fn api_key_label(api_key: ApiKey) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::assert_scanner_entries_labeled;
     use metrics_util::debugging::DebuggingRecorder;
 
     macro_rules! find_counter {
@@ -462,49 +463,6 @@ mod tests {
         assert_eq!(counter_by_api_key.get("fetch_log"), Some(&3));
     }
 
-    /// Asserts that every entry whose name starts with `fluss.client.scanner.`
-    /// carries both the `database` and `table` labels with the given values.
-    /// Keeps the per-test assertions terse so it's obvious when a new scanner
-    /// metric forgets a label.
-    fn assert_all_scanner_entries_labeled(
-        entries: &[(
-            metrics_util::CompositeKey,
-            Option<metrics::Unit>,
-            Option<metrics::SharedString>,
-            metrics_util::debugging::DebugValue,
-        )],
-        expected_database: &str,
-        expected_table: &str,
-    ) {
-        for (key, _, _, _) in entries {
-            let name = key.key().name();
-            if !name.starts_with("fluss.client.scanner.") {
-                continue;
-            }
-            let labels: Vec<_> = key
-                .key()
-                .labels()
-                .map(|l| (l.key().to_string(), l.value().to_string()))
-                .collect();
-            let database = labels
-                .iter()
-                .find(|(k, _)| k == LABEL_DATABASE)
-                .unwrap_or_else(|| panic!("metric `{name}` is missing the database label"));
-            let table = labels
-                .iter()
-                .find(|(k, _)| k == LABEL_TABLE)
-                .unwrap_or_else(|| panic!("metric `{name}` is missing the table label"));
-            assert_eq!(
-                database.1, expected_database,
-                "metric `{name}` has unexpected database label"
-            );
-            assert_eq!(
-                table.1, expected_table,
-                "metric `{name}` has unexpected table label"
-            );
-        }
-    }
-
     #[test]
     fn scanner_poll_timing_metrics_emit_correctly() {
         let recorder = DebuggingRecorder::new();
@@ -525,7 +483,7 @@ mod tests {
             Some(200.0)
         );
         assert_eq!(find_gauge!(entries, SCANNER_POLL_IDLE_RATIO), Some(0.8));
-        assert_all_scanner_entries_labeled(&entries, "db", "tbl");
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 
     #[test]
@@ -556,7 +514,7 @@ mod tests {
             find_histogram!(entries, SCANNER_BYTES_PER_REQUEST),
             Some(vec![4096.0])
         );
-        assert_all_scanner_entries_labeled(&entries, "db", "tbl");
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 
     #[test]
@@ -589,7 +547,7 @@ mod tests {
             find_counter!(entries, SCANNER_REMOTE_FETCH_ERRORS_TOTAL),
             Some(1)
         );
-        assert_all_scanner_entries_labeled(&entries, "db", "tbl");
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 
     /// Two scanners on different tables must produce independent metric
