@@ -50,6 +50,34 @@ pub const CLIENT_REQUEST_LATENCY_MS: &str = "fluss.client.request_latency_ms";
 pub const CLIENT_REQUESTS_IN_FLIGHT: &str = "fluss.client.requests_in_flight";
 
 // ---------------------------------------------------------------------------
+// Scanner poll-timing metrics
+//
+// Java reference: ScannerMetricGroup.java, LogScannerImpl.java
+//
+// These track consumer liveness and processing efficiency at the `poll()`
+// boundary. Java records via `volatile long` fields read by gauge suppliers;
+// Rust snapshots the values at poll start/end.
+//
+// Java's `lastPollSecondsAgo` gauge is intentionally NOT ported. Java
+// implements it as a gauge supplier evaluated at scrape time, which the
+// `metrics` crate facade has no equivalent for. A snapshot-at-poll-start
+// port would just duplicate `time_between_poll_ms / 1000` and would not
+// advance while a consumer is hung — defeating the metric's purpose
+// (detecting a stuck consumer). Revisit if the `metrics` crate gains a
+// supplier abstraction or we add a background liveness task.
+// ---------------------------------------------------------------------------
+
+/// Gauge: milliseconds between the start of consecutive `poll()` calls. A
+/// large value usually means the consumer's downstream processing is slow.
+pub const SCANNER_TIME_BETWEEN_POLL_MS: &str = "fluss.client.scanner.time_between_poll_ms";
+
+/// Gauge: fraction of wall-clock time spent inside `poll()` —
+/// `poll_time_ms / (poll_time_ms + time_between_poll_ms)`. A value near 1.0
+/// means the scanner is starved for data; a low value means the consumer is
+/// the bottleneck.
+pub const SCANNER_POLL_IDLE_RATIO: &str = "fluss.client.scanner.poll_idle_ratio";
+
+// ---------------------------------------------------------------------------
 // Scanner fetch + remote download metrics
 //
 // Fetch metrics are recorded in the LogFetcher fetch loop on response
@@ -303,6 +331,26 @@ mod tests {
 
         assert_eq!(counter_by_api_key.get("produce_log"), Some(&5));
         assert_eq!(counter_by_api_key.get("fetch_log"), Some(&3));
+    }
+
+    #[test]
+    fn scanner_poll_timing_metrics_emit_correctly() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            metrics::gauge!(SCANNER_TIME_BETWEEN_POLL_MS).set(200.0);
+            metrics::gauge!(SCANNER_POLL_IDLE_RATIO).set(0.8);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        assert_eq!(
+            find_gauge!(entries, SCANNER_TIME_BETWEEN_POLL_MS),
+            Some(200.0)
+        );
+        assert_eq!(find_gauge!(entries, SCANNER_POLL_IDLE_RATIO), Some(0.8));
     }
 
     #[test]

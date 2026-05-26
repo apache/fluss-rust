@@ -29,6 +29,7 @@ use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{LogFormat, PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
 use crate::metrics::{
     SCANNER_BYTES_PER_REQUEST, SCANNER_FETCH_LATENCY_MS, SCANNER_FETCH_REQUESTS_TOTAL,
+    SCANNER_POLL_IDLE_RATIO, SCANNER_TIME_BETWEEN_POLL_MS,
 };
 use crate::proto::{
     ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
@@ -281,6 +282,64 @@ struct LogScannerInner {
     /// Guards against subscription changes while a
     /// [`crate::client::RecordBatchLogReader`] is iterating.
     reader_active: std::sync::atomic::AtomicBool,
+    /// Holds the snapshot fields used by [`PollGuard`] to derive the
+    /// scanner poll-timing metrics. The mutex makes the state updates
+    /// in `record_poll_start` / `record_poll_end` atomic; metric
+    /// emission and `log::warn!` calls happen after the lock is
+    /// released. The start↔end pairing depends on the single-consumer
+    /// contract documented on [`LogScanner::poll`] and
+    /// [`RecordBatchLogScanner::poll`] (mirrors Java's
+    /// `LogScannerImpl.acquire()`). Overlapping polls on the same
+    /// scanner trip a `debug_assert!` in `record_poll_start` (debug
+    /// builds) or emit a `log::warn!` (release builds).
+    poll_state: Mutex<PollState>,
+}
+
+/// Snapshot state used to derive the scanner poll-timing metrics.
+///
+/// The mutex makes the state updates in `record_poll_start` /
+/// `record_poll_end` atomic with respect to themselves; metric
+/// emission (`metrics::gauge!(...).set(...)`) and `log::warn!` calls
+/// happen after the lock is released so a user-installed recorder or
+/// logger cannot stall the critical section. The mutex does **not** by
+/// itself preserve start↔end pairing across overlapping `poll()` calls
+/// — that invariant relies on the single-consumer contract that
+/// mirrors Java's `LogScannerImpl.acquire()`. Concurrent polls on the
+/// same scanner are detected by a `debug_assert!` in
+/// `record_poll_start` (panics in debug / tests) and a `log::warn!` on
+/// both anomalous paths (`record_poll_start` sees a stale `Some`;
+/// `record_poll_end` sees `None`) for release-build observability.
+#[derive(Default, Debug)]
+struct PollState {
+    /// Instant captured at the most recent `record_poll_start()`. `None`
+    /// before the first poll.
+    last_poll_at: Option<Instant>,
+    /// Instant captured at the start of the in-flight poll. `None` after
+    /// the last `record_poll_end()`.
+    poll_start_at: Option<Instant>,
+    /// Cached ms between the two most recent poll starts, used to compute
+    /// `poll_idle_ratio` in `record_poll_end`.
+    time_between_poll_ms: f64,
+}
+
+/// Pairs `record_poll_start` with `record_poll_end`. Created
+/// at the top of `poll_records` / `poll_batches`; `record_poll_end` runs on
+/// drop, including the cancellation path (caller drops the future).
+struct PollGuard<'a> {
+    inner: &'a LogScannerInner,
+}
+
+impl<'a> PollGuard<'a> {
+    fn new(inner: &'a LogScannerInner) -> Self {
+        inner.record_poll_start();
+        Self { inner }
+    }
+}
+
+impl Drop for PollGuard<'_> {
+    fn drop(&mut self) {
+        self.inner.record_poll_end();
+    }
 }
 
 impl LogScannerInner {
@@ -322,6 +381,7 @@ impl LogScannerInner {
             )?,
             arrow_schema,
             reader_active: std::sync::atomic::AtomicBool::new(false),
+            poll_state: Mutex::new(PollState::default()),
         })
     }
 
@@ -340,6 +400,10 @@ impl LogScannerInner {
     }
 
     async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+        // Pairs record_poll_start (now) with record_poll_end
+        // (drop). Runs on every exit, including the cancellation path
+        // where the caller drops this future.
+        let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -375,6 +439,90 @@ impl LogScannerInner {
             }
 
             // Buffer became non-empty, try again
+        }
+    }
+
+    /// Records the start of a `poll()` call and emits
+    /// `SCANNER_TIME_BETWEEN_POLL_MS`. The first poll emits `0.0`,
+    /// matching Java's `ScannerMetricGroup.recordPollStart`
+    /// (`timeMsBetweenPoll = lastPollMs != 0L ? pollStartMs - lastPollMs : 0L`).
+    ///
+    /// Single-consumer contract: a previous poll must have recorded its
+    /// end before the next start. Java enforces this with
+    /// `LogScannerImpl.acquire()` (throws `ConcurrentModificationException`).
+    /// Rust surfaces violations as:
+    /// - debug builds: `debug_assert!` panics (caught by tests),
+    /// - release builds: `log::warn!` + the in-flight `poll_start_at` is
+    ///   overwritten so the metric series keeps moving; the resulting
+    ///   `time_between_poll_ms` / `poll_idle_ratio` values for the
+    ///   overlapping polls are not meaningful until the overlap clears.
+    fn record_poll_start(&self) {
+        let now = Instant::now();
+        // Compute under the lock; emit the metric outside the critical
+        // section so a user-installed recorder cannot stall the next poll.
+        let (between_ms, overlap) = {
+            let mut state = self.poll_state.lock();
+            let overlap = state.poll_start_at.is_some();
+            debug_assert!(
+                !overlap,
+                "concurrent poll() detected on the same scanner; \
+                 LogScanner / RecordBatchLogScanner are single-consumer \
+                 (see LogScannerImpl.acquire() for Java parity)"
+            );
+            let between_ms = match state.last_poll_at {
+                Some(prev) => now.duration_since(prev).as_secs_f64() * 1000.0,
+                None => 0.0,
+            };
+            state.time_between_poll_ms = between_ms;
+            state.last_poll_at = Some(now);
+            state.poll_start_at = Some(now);
+            (between_ms, overlap)
+        };
+        if overlap {
+            warn!(
+                "concurrent poll() detected on scanner; single-consumer \
+                 contract violated, poll-timing metrics will be inaccurate \
+                 until the overlap clears"
+            );
+        }
+        metrics::gauge!(SCANNER_TIME_BETWEEN_POLL_MS).set(between_ms);
+    }
+
+    /// Computes `poll_idle_ratio = poll_time / (poll_time + between_time)`.
+    /// On the first poll, `between_time` is 0 so the ratio is 1.0
+    /// (poll-bound).
+    ///
+    /// Orphan call: if no matching `record_poll_start` is in flight,
+    /// emits a `log::warn!` (single-consumer contract may have been
+    /// violated, e.g. in release builds where the start-side
+    /// `debug_assert!` is compiled out) and skips the metric update.
+    fn record_poll_end(&self) {
+        let now = Instant::now();
+        // Compute under the lock; emit metric / warn outside the critical
+        // section so neither the user-installed recorder nor the logger
+        // can stall the next poll.
+        let (orphan, ratio) = {
+            let mut state = self.poll_state.lock();
+            match state.poll_start_at.take() {
+                None => (true, None),
+                Some(start) => {
+                    let poll_time_ms = now.duration_since(start).as_secs_f64() * 1000.0;
+                    let total = poll_time_ms + state.time_between_poll_ms;
+                    let r = (total > 0.0).then_some(poll_time_ms / total);
+                    (false, r)
+                }
+            }
+        };
+        if orphan {
+            warn!(
+                "record_poll_end called without a matching record_poll_start; \
+                 single-consumer contract may have been violated, idle ratio \
+                 for this poll is not emitted"
+            );
+            return;
+        }
+        if let Some(r) = ratio {
+            metrics::gauge!(SCANNER_POLL_IDLE_RATIO).set(r);
         }
     }
 
@@ -520,6 +668,7 @@ impl LogScannerInner {
     }
 
     async fn poll_batches(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
+        let _poll_guard = PollGuard::new(self);
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -2230,6 +2379,144 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    /// Builds a self-contained `LogScannerInner` for poll-timing tests
+    /// inside a `current_thread` runtime so callers can drive `PollGuard`
+    /// lifecycles synchronously.
+    fn with_test_log_scanner_inner<F: FnOnce(&LogScannerInner)>(body: F) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current_thread runtime");
+        rt.block_on(async {
+            let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+            let table_info = build_table_info(table_path.clone(), 1, 1);
+            let cluster = build_cluster_arc(&table_path, 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(cluster));
+            let inner = LogScannerInner::new(
+                &table_info,
+                metadata,
+                Arc::new(RpcClient::new()),
+                &Config::default(),
+                None,
+            )
+            .expect("build LogScannerInner");
+            body(&inner);
+        });
+    }
+
+    fn snapshot_gauge(
+        snapshotter: &metrics_util::debugging::Snapshotter,
+        name: &str,
+    ) -> Option<f64> {
+        use metrics_util::debugging::DebugValue;
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find_map(|(key, _, _, val)| {
+                if key.key().name() == name {
+                    if let DebugValue::Gauge(g) = val {
+                        return Some(g.into_inner());
+                    }
+                }
+                None
+            })
+    }
+
+    /// Exercises the `PollGuard` lifecycle across two consecutive
+    /// `record_poll_start` calls. Asserts both poll-timing gauges are
+    /// emitted at the right moments and `record_poll_end` runs on guard
+    /// drop (also the cancellation-safety path, since dropping the
+    /// `poll()` future drops the guard).
+    #[test]
+    fn poll_guard_emits_time_between_poll_and_idle_ratio() {
+        use crate::metrics::{SCANNER_POLL_IDLE_RATIO, SCANNER_TIME_BETWEEN_POLL_MS};
+        use metrics_util::debugging::DebuggingRecorder;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            with_test_log_scanner_inner(|inner| {
+                // First poll: emits time_between_poll_ms=0 (Java parity:
+                // ScannerMetricGroup.recordPollStart emits 0 when there is
+                // no previous poll). Idle ratio is also emitted as 1.0
+                // on drop (poll_time / (poll_time + 0) = 1.0).
+                {
+                    let _g = PollGuard::new(inner);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+
+                // Brief gap so time_between_poll_ms is observably > 0.
+                std::thread::sleep(std::time::Duration::from_millis(5));
+
+                // Second poll: refreshes both time_between_poll_ms (>0)
+                // and a fresh idle ratio.
+                {
+                    let _g = PollGuard::new(inner);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            });
+        });
+
+        let between = snapshot_gauge(&snapshotter, SCANNER_TIME_BETWEEN_POLL_MS)
+            .expect("time_between_poll_ms must be emitted on every poll");
+        assert!(
+            between > 0.0,
+            "second-poll time_between_poll_ms must be positive, got {between}"
+        );
+
+        let ratio = snapshot_gauge(&snapshotter, SCANNER_POLL_IDLE_RATIO)
+            .expect("poll_idle_ratio must be emitted on poll end");
+        assert!(
+            (0.0..=1.0).contains(&ratio),
+            "poll_idle_ratio must be in [0, 1], got {ratio}"
+        );
+    }
+
+    /// Java parity: `ScannerMetricGroup.recordPollStart` emits
+    /// `timeMsBetweenPoll = 0` on the very first poll. The Rust gauge
+    /// must do the same so dashboards see the metric series from poll #1.
+    #[test]
+    fn time_between_poll_ms_emits_zero_on_first_poll() {
+        use crate::metrics::SCANNER_TIME_BETWEEN_POLL_MS;
+        use metrics_util::debugging::DebuggingRecorder;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            with_test_log_scanner_inner(|inner| {
+                let _g = PollGuard::new(inner);
+                // Drop at end of scope completes the poll; the value of
+                // SCANNER_TIME_BETWEEN_POLL_MS was emitted at start, not end.
+            });
+        });
+
+        let between = snapshot_gauge(&snapshotter, SCANNER_TIME_BETWEEN_POLL_MS)
+            .expect("time_between_poll_ms must be emitted on the first poll");
+        assert_eq!(
+            between, 0.0,
+            "first-poll time_between_poll_ms must be 0.0 (Java parity), got {between}"
+        );
+    }
+
+    /// Pins the single-consumer contract: overlapping `PollGuard`s on the
+    /// same scanner trip the `debug_assert!` in `record_poll_start`.
+    /// Release builds skip the check, so the test is gated on
+    /// `debug_assertions`.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "concurrent poll() detected")]
+    fn overlapping_polls_panic_in_debug_builds() {
+        with_test_log_scanner_inner(|inner| {
+            let _g1 = PollGuard::new(inner);
+            // _g1 has not been dropped → poll_start_at is still Some,
+            // so the second start must panic.
+            let _g2 = PollGuard::new(inner);
+        });
     }
 
     /// Drives `handle_fetch_response` against a local metrics recorder and
