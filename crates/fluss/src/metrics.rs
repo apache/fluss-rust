@@ -57,10 +57,21 @@ pub const CLIENT_REQUESTS_IN_FLIGHT: &str = "fluss.client.requests_in_flight";
 // ---------------------------------------------------------------------------
 // Scanner poll-timing metrics
 //
+// Java reference: ScannerMetricGroup.java, LogScannerImpl.java
+//
 // These track consumer liveness and processing efficiency at the `poll()`
 // boundary. Java records via `volatile long` fields read by gauge suppliers;
 // Rust snapshots the values at poll start/end.
-//---------------------------------------------------------------------------
+//
+// Java's `lastPollSecondsAgo` gauge is intentionally NOT ported. Java
+// implements it as a gauge supplier evaluated at scrape time, which the
+// `metrics` crate facade has no equivalent for. A snapshot-at-poll-start
+// port would just duplicate `time_between_poll_ms / 1000` and would not
+// advance while a consumer is hung — defeating the metric's purpose
+// (detecting a stuck consumer). Revisit if the `metrics` crate gains a
+// supplier abstraction or we add a background liveness task.
+// ---------------------------------------------------------------------------
+
 /// Gauge: milliseconds between the start of consecutive `poll()` calls. A
 /// large value usually means the consumer's downstream processing is slow.
 pub const SCANNER_TIME_BETWEEN_POLL_MS: &str = "fluss.client.scanner.time_between_poll_ms";
@@ -77,6 +88,15 @@ pub const SCANNER_POLL_IDLE_RATIO: &str = "fluss.client.scanner.poll_idle_ratio"
 // Fetch metrics are recorded in the LogFetcher fetch loop on response
 // completion. Remote metrics are recorded inside RemoteLogDownloader's
 // download task.
+//
+// Java uses a volatile-long gauge for fetch latency and Counter+MeterView
+// for rates. Rust uses a histogram for latency (richer percentile data)
+// and counters for throughput; the recorder/exporter handles rate
+// computation (e.g. Prometheus `rate()`).
+//
+// Java emits one `ScannerMetricGroup` per (database, table). Rust currently
+// emits without per-table labels — adding `database`/`table` labels is
+// tracked separately and intentionally deferred to keep this PR minimal.
 // ---------------------------------------------------------------------------
 
 /// Histogram: elapsed ms for each successful FetchLog RPC.
