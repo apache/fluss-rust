@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::ClientSchemaGetter;
 use crate::client::connection::FlussConnection;
-use crate::client::table::batch_scanner::BatchScanner;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
+use crate::client::table::batch_scanner::LimitBatchScanner;
 use crate::client::table::log_fetch_buffer::{
     CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
     LogFetchBuffer, RemotePendingFetch,
@@ -27,7 +28,9 @@ use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
 use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
-use crate::metadata::{LogFormat, PhysicalTablePath, RowType, TableBucket, TableInfo, TablePath};
+use crate::metadata::{
+    LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TablePath,
+};
 use crate::metrics::ScannerMetrics;
 use crate::proto::{
     ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
@@ -71,10 +74,10 @@ impl<'a> TableScan<'a> {
         }
     }
 
-    /// Sets a row limit for the scan, enabling [`Self::create_batch_scanner`].
+    /// Sets a row limit for the scan, enabling [`Self::create_bucket_batch_scanner`].
     ///
-    /// The limit must be positive. Callers configure a limit prior to
-    /// constructing a `BatchScanner` for a one-shot bounded read.
+    /// The limit must be positive. A limit is incompatible with the log
+    /// scanners, which reject it.
     pub fn limit(mut self, n: i32) -> Result<Self> {
         if n <= 0 {
             return Err(Error::IllegalArgument {
@@ -85,17 +88,31 @@ impl<'a> TableScan<'a> {
         Ok(self)
     }
 
-    /// Creates a `BatchScanner` that performs a single bounded scan of `table_bucket`.
+    /// Log scanners don't support limit pushdown; reject a configured limit
+    /// rather than silently ignoring it.
+    fn reject_limit(&self, scanner: &str) -> Result<()> {
+        if let Some(limit) = self.limit {
+            return Err(Error::UnsupportedOperation {
+                message: format!(
+                    "{scanner} doesn't support limit pushdown. Table: {}, requested limit: {limit}",
+                    self.table_info.table_path
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Creates a one-shot bounded scan of `table_bucket`.
     ///
-    /// Requires a previously-configured limit via [`Self::limit`]. The scanner sends
-    /// a `LimitScanRequest` eagerly and exposes the resulting batch through
-    /// [`BatchScanner::poll_batch`].
-    pub async fn create_batch_scanner(
+    /// Requires a previously-configured limit via [`Self::limit`]. Creation is
+    /// cheap; the `LimitScanRequest` runs on the first
+    /// [`LimitBatchScanner::next_batch`].
+    pub fn create_bucket_batch_scanner(
         self,
         table_bucket: TableBucket,
-    ) -> Result<BatchScanner> {
+    ) -> Result<LimitBatchScanner> {
         let limit = self.limit.ok_or_else(|| Error::IllegalArgument {
-            message: "create_batch_scanner requires a limit configured via .limit(n)"
+            message: "create_bucket_batch_scanner requires a limit configured via .limit(n)"
                 .to_string(),
         })?;
         if table_bucket.table_id() != self.table_info.table_id {
@@ -107,15 +124,40 @@ impl<'a> TableScan<'a> {
                 ),
             });
         }
-        BatchScanner::new(
+        let num_buckets = self.table_info.get_num_buckets();
+        if table_bucket.bucket_id() < 0 || table_bucket.bucket_id() >= num_buckets {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Bucket id {} out of range for table with {num_buckets} buckets",
+                    table_bucket.bucket_id()
+                ),
+            });
+        }
+        // Log tables decode as Arrow IPC, so only ARROW format is supported (KV
+        // tables use the value-record path and are exempt).
+        if !self.table_info.has_primary_key() {
+            validate_scan_support(&self.table_info.table_path, &self.table_info)?;
+        }
+        // Pre-seed the current schema; older versions are fetched lazily during
+        // KV decode. Mirrors `Table::new_lookup`.
+        let latest = SchemaInfo::new(
+            self.table_info.get_schema().clone(),
+            self.table_info.get_schema_id(),
+        );
+        let schema_getter = Arc::new(ClientSchemaGetter::new(
+            self.table_info.table_path.clone(),
+            self.conn.get_admin()?,
+            latest,
+        ));
+        Ok(LimitBatchScanner::new(
             self.conn.get_connections(),
             self.metadata.clone(),
             self.table_info,
+            schema_getter,
             self.projected_fields,
             table_bucket,
             limit,
-        )
-        .await
+        ))
     }
 
     /// Projects the scan to only include specified columns by their indices.
@@ -270,6 +312,7 @@ impl<'a> TableScan<'a> {
     }
 
     pub fn create_log_scanner(self) -> Result<LogScanner> {
+        self.reject_limit("LogScanner")?;
         validate_scan_support(&self.table_info.table_path, &self.table_info)?;
         let inner = LogScannerInner::new(
             &self.table_info,
@@ -284,6 +327,7 @@ impl<'a> TableScan<'a> {
     }
 
     pub fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner> {
+        self.reject_limit("RecordBatchLogScanner")?;
         validate_scan_support(&self.table_info.table_path, &self.table_info)?;
         let inner = LogScannerInner::new(
             &self.table_info,

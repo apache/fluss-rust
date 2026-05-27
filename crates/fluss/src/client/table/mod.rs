@@ -36,7 +36,7 @@ mod scanner;
 mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
-pub use batch_scanner::BatchScanner;
+pub use batch_scanner::LimitBatchScanner;
 pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
 pub use reader::{RecordBatchLogReader, SyncRecordBatchLogReader};
 pub use remote_log::{

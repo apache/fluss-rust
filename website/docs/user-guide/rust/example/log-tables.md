@@ -153,3 +153,20 @@ let scanner = table.new_scan()
     .project_by_name(&["event_id", "timestamp"])?
     .create_log_scanner()?;
 ```
+
+## Limit Scan
+
+For a bounded read of up to `n` rows from a single bucket, use a batch scanner
+instead of subscribing. It issues one request; poll it with `next_batch` until
+it returns `None`.
+
+```rust
+let bucket = TableBucket::new(table.get_table_info().table_id, 0);
+let mut scanner = table.new_scan().limit(10)?.create_bucket_batch_scanner(bucket)?;
+
+while let Some(batch) = scanner.next_batch().await? {
+    println!("rows: {}", batch.batch().num_rows());
+}
+```
+
+Limit applies per bucket; scan each bucket to cover a multi-bucket table.

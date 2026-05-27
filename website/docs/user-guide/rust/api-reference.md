@@ -134,8 +134,10 @@ Complete API reference for the Fluss Rust client.
 |-----------------------------------------------------------------------------|-----------------------------------------|
 | `fn project(self, indices: &[usize]) -> Result<Self>`                       | Project columns by index                |
 | `fn project_by_name(self, names: &[&str]) -> Result<Self>`                  | Project columns by name                 |
+| `fn limit(self, n: i32) -> Result<Self>`                                    | Set a row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
 | `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner       |
 | `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner |
+| `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
 
 ## `LogScanner`
 
@@ -210,6 +212,19 @@ bucket identity per batch, use `next_batch` instead.
 |-----------------------------------------------------------------|--------------------------------------------------|
 | `fn next(&mut self) -> Option<Result<RecordBatch, ArrowError>>` | Iterator: next batch, or `None` when caught up   |
 | `fn schema(&self) -> SchemaRef`                                 | Arrow schema for produced batches                |
+
+## `LimitBatchScanner`
+
+One-shot bounded scanner from `TableScan::limit(n).create_bucket_batch_scanner(bucket)`.
+Poll it with `next_batch` until it returns `None` (mirrors `RecordBatchLogReader`).
+Supports both log and primary-key tables (the latter returns the current,
+server-deduplicated state); yields a single batch of at most `n` rows.
+
+| Method                                                        | Description                          |
+|---------------------------------------------------------------|--------------------------------------|
+| `async fn next_batch(&mut self) -> Result<Option<ScanBatch>>` | Rows on the first call, `None` after |
+| `async fn collect_all_batches(&mut self) -> Result<Vec<ScanBatch>>` | Drain into all batches         |
+| `fn bucket(&self) -> &TableBucket`                            | The scanned bucket                   |
 
 ## `ScanRecord`
 
