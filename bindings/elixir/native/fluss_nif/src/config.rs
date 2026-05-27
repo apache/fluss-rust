@@ -15,18 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use fluss::config::Config;
-use rustler::NifStruct;
+use fluss::config::{Config, NoKeyAssigner};
+use rustler::{NifStruct, NifUnitEnum};
+
+/// Bucket-assigner strategy for tables without bucket keys.
+/// Maps to fluss::config::NoKeyAssigner.
+#[derive(NifUnitEnum)]
+pub enum NifNoKeyAssigner {
+    Sticky,
+    RoundRobin,
+}
 
 /// Decoded from `%Fluss.Config{}` Elixir struct.
 #[derive(NifStruct)]
 #[module = "Fluss.Config"]
 pub struct NifConfig {
     pub bootstrap_servers: String,
+    pub writer_acks: Option<String>,
     pub writer_batch_size: Option<i32>,
     pub writer_batch_timeout_ms: Option<i64>,
+    pub writer_bucket_no_key_assigner: Option<NifNoKeyAssigner>,
+    pub writer_buffer_memory_size: Option<u64>,
+    pub writer_buffer_wait_timeout_ms: Option<u64>,
     pub writer_dynamic_batch_size_enabled: Option<bool>,
     pub writer_dynamic_batch_size_min: Option<i32>,
+    pub writer_enable_idempotence: Option<bool>,
+    pub writer_max_inflight_requests_per_bucket: Option<u64>,
+    pub writer_request_max_size: Option<i32>,
+    pub writer_retries: Option<i32>,
 }
 
 impl NifConfig {
@@ -46,6 +62,33 @@ impl NifConfig {
         }
         if let Some(size) = self.writer_dynamic_batch_size_min {
             config.writer_dynamic_batch_size_min = size;
+        }
+        if let Some(acks) = self.writer_acks {
+            config.writer_acks = acks;
+        }
+        if let Some(assigner) = self.writer_bucket_no_key_assigner {
+            config.writer_bucket_no_key_assigner = match assigner {
+                NifNoKeyAssigner::Sticky => NoKeyAssigner::Sticky,
+                NifNoKeyAssigner::RoundRobin => NoKeyAssigner::RoundRobin,
+            };
+        }
+        if let Some(memory_size) = self.writer_buffer_memory_size {
+            config.writer_buffer_memory_size = memory_size as usize;
+        }
+        if let Some(timeout_ms) = self.writer_buffer_wait_timeout_ms {
+            config.writer_buffer_wait_timeout_ms = timeout_ms;
+        }
+        if let Some(enabled) = self.writer_enable_idempotence {
+            config.writer_enable_idempotence = enabled;
+        }
+        if let Some(requests_limit) = self.writer_max_inflight_requests_per_bucket {
+            config.writer_max_inflight_requests_per_bucket = requests_limit as usize;
+        }
+        if let Some(max_size) = self.writer_request_max_size {
+            config.writer_request_max_size = max_size;
+        }
+        if let Some(retries) = self.writer_retries {
+            config.writer_retries = retries;
         }
         config
     }
