@@ -169,8 +169,7 @@ mod table_test {
 
         create_table(&admin, &table_path, &table_descriptor).await;
 
-        // Wait for table to be fully initialized
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        wait_for_table_ready(&admin, &table_path).await;
 
         // Test earliest offset (should be 0 for empty table)
         let earliest_offsets = admin
@@ -217,8 +216,6 @@ mod table_test {
 
         // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         // Test latest offset after appending (should be 3)
         let latest_offsets_after = admin

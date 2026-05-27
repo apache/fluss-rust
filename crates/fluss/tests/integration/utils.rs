@@ -26,6 +26,7 @@ use fluss::row::FlussArray;
 use fluss::row::binary_array::FlussArrayWriter;
 use fluss::rpc::message::OffsetSpec;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -104,6 +105,34 @@ pub async fn create_table(
 const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
+async fn poll_until<F, Fut>(
+    timeout: Duration,
+    interval: Duration,
+    timeout_message: String,
+    mut probe: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    let start = std::time::Instant::now();
+
+    loop {
+        match probe().await {
+            Ok(()) => return,
+            Err(err) => {
+                if start.elapsed() >= timeout {
+                    panic!(
+                        "{timeout_message} after {} seconds. Last error: {err}",
+                        timeout.as_secs()
+                    );
+                }
+            }
+        }
+
+        tokio::time::sleep(interval).await;
+    }
+}
+
 /// Waits until the default bucket of a non-partitioned table can serve offset requests.
 ///
 /// Newly-created tables may not have bucket leaders immediately. Polling list offsets avoids
@@ -118,26 +147,19 @@ pub async fn wait_for_table_buckets_ready(
     table_path: &TablePath,
     buckets: &[i32],
 ) {
-    let start = std::time::Instant::now();
-
-    loop {
-        match admin
-            .list_offsets(table_path, buckets, OffsetSpec::Latest)
-            .await
-        {
-            Ok(_) => return,
-            Err(err) => {
-                if start.elapsed() >= READINESS_TIMEOUT {
-                    panic!(
-                        "Timed out waiting for table '{table_path}' buckets {buckets:?} to become ready after {} seconds. Last error: {err:?}",
-                        READINESS_TIMEOUT.as_secs()
-                    );
-                }
-            }
-        }
-
-        tokio::time::sleep(READINESS_POLL_INTERVAL).await;
-    }
+    poll_until(
+        READINESS_TIMEOUT,
+        READINESS_POLL_INTERVAL,
+        format!("Timed out waiting for table '{table_path}' buckets {buckets:?} to become ready"),
+        || async {
+            admin
+                .list_offsets(table_path, buckets, OffsetSpec::Latest)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("{err:?}"))
+        },
+    )
+    .await;
 }
 
 /// Waits until all listed partition values can serve offset requests for the default bucket.
@@ -167,26 +189,21 @@ pub async fn wait_for_partition_buckets_ready(
     partition_value: &str,
     buckets: &[i32],
 ) {
-    let start = std::time::Instant::now();
-
-    loop {
-        match admin
-            .list_partition_offsets(table_path, partition_value, buckets, OffsetSpec::Latest)
-            .await
-        {
-            Ok(_) => return,
-            Err(err) => {
-                if start.elapsed() >= READINESS_TIMEOUT {
-                    panic!(
-                        "Timed out waiting for table '{table_path}' partition '{partition_value}' buckets {buckets:?} to become ready after {} seconds. Last error: {err:?}",
-                        READINESS_TIMEOUT.as_secs()
-                    );
-                }
-            }
-        }
-
-        tokio::time::sleep(READINESS_POLL_INTERVAL).await;
-    }
+    poll_until(
+        READINESS_TIMEOUT,
+        READINESS_POLL_INTERVAL,
+        format!(
+            "Timed out waiting for table '{table_path}' partition '{partition_value}' buckets {buckets:?} to become ready"
+        ),
+        || async {
+            admin
+                .list_partition_offsets(table_path, partition_value, buckets, OffsetSpec::Latest)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("{err:?}"))
+        },
+    )
+    .await;
 }
 
 pub fn make_string_array(values: &[Option<&str>]) -> FlussArray {
@@ -230,38 +247,35 @@ pub fn extract_ids_from_batches(batches: &[ScanBatch]) -> Vec<i32> {
 
 /// Similar to wait_for_cluster_ready but connects with SASL credentials.
 pub async fn wait_for_cluster_ready_with_sasl(cluster: &FlussTestingCluster) {
-    let timeout = Duration::from_secs(30);
-    let poll_interval = Duration::from_millis(500);
-    let start = std::time::Instant::now();
-
     let (username, password) = cluster
         .sasl_users()
         .first()
         .expect("SASL cluster must have at least one user");
 
-    loop {
-        let connection = cluster
-            .get_fluss_connection_with_sasl(username, password)
-            .await;
-        if connection
-            .get_metadata()
-            .get_cluster()
-            .get_one_available_server()
-            .is_some()
-        {
-            return;
-        }
-
-        if start.elapsed() >= timeout {
-            panic!(
-                "SASL server readiness check timed out after {} seconds. \
-                 CoordinatorEventProcessor may not be initialized or TabletServer may not be available.",
-                timeout.as_secs()
-            );
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
+    poll_until(
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        "SASL server readiness check timed out".to_string(),
+        || async {
+            let connection = cluster
+                .get_fluss_connection_with_sasl(username, password)
+                .await;
+            if connection
+                .get_metadata()
+                .get_cluster()
+                .get_one_available_server()
+                .is_some()
+            {
+                Ok(())
+            } else {
+                Err(
+                    "CoordinatorEventProcessor may not be initialized or TabletServer may not be available"
+                        .to_string(),
+                )
+            }
+        },
+    )
+    .await;
 }
 
 /// Creates partitions for a partitioned table.
