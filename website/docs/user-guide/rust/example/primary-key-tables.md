@@ -124,3 +124,18 @@ println!("Rows: {}", batch.num_rows());
 ## Prefix Lookup
 
 To fetch all rows sharing a common primary-key prefix (by choosing a bucket key that's a strict prefix of the primary key), see [Prefix Lookup](./prefix-lookup.md).
+
+## Limit Scan
+
+To read up to `n` rows of a bucket's current state without supplying keys, use a batch scanner. The server returns the deduplicated current rows as Arrow batches, which is convenient for previews or DataFusion sources.
+
+```rust
+let bucket = TableBucket::new(table.get_table_info().table_id, 0);
+let mut scanner = table.new_scan().limit(10)?.create_bucket_batch_scanner(bucket)?;
+
+while let Some(batch) = scanner.next_batch().await? {
+    println!("rows: {}", batch.batch().num_rows());
+}
+```
+
+Limit applies per bucket; scan each bucket to cover a multi-bucket table.

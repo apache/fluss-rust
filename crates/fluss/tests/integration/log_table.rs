@@ -217,8 +217,6 @@ mod table_test {
         // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
         // Test latest offset after appending (should be 3)
         let latest_offsets_after = admin
             .list_offsets(&table_path, &[0], OffsetSpec::Latest)

@@ -22,6 +22,7 @@ mod kv_record_batch;
 mod kv_record_batch_builder;
 mod kv_record_read_context;
 mod read_context;
+mod value_record_batch;
 
 #[cfg(test)]
 mod test_util;
@@ -31,6 +32,7 @@ pub use kv_record_batch::*;
 pub use kv_record_batch_builder::*;
 pub use kv_record_read_context::{KvRecordReadContext, SchemaGetter};
 pub use read_context::ReadContext;
+pub use value_record_batch::ValueRecordBatch;
 
 /// Current KV magic value
 pub const CURRENT_KV_MAGIC_VALUE: u8 = 0;
