@@ -50,18 +50,18 @@ const RECORD_BATCH_HEADER_SIZE: usize = LENGTH_LENGTH + MAGIC_LENGTH + RECORD_CO
 const RECORD_LENGTH_LENGTH: usize = 4;
 
 /// Read-only view over a serialized value-record batch.
-pub struct ValueRecordBatch {
+pub(crate) struct ValueRecordBatch {
     data: Bytes,
 }
 
 impl ValueRecordBatch {
     /// Wraps raw batch bytes. The batch is expected to start at offset 0.
-    pub fn new(data: Bytes) -> Self {
+    pub(crate) fn new(data: Bytes) -> Self {
         Self { data }
     }
 
     /// Number of records declared in the batch header.
-    pub fn record_count(&self) -> Result<i32> {
+    pub(crate) fn record_count(&self) -> Result<i32> {
         if self.data.len() < RECORD_BATCH_HEADER_SIZE {
             return Err(corrupt(format!(
                 "value-record batch too short: {} bytes, need {} for header",
@@ -77,7 +77,7 @@ impl ValueRecordBatch {
     /// Returns one byte range per record, each spanning `[SchemaId | Value]`:
     /// the payload [`crate::row::FixedSchemaDecoder::decode`] expects. Index
     /// [`Self::data`] with a returned range to get it without copying.
-    pub fn value_ranges(&self) -> Result<Vec<Range<usize>>> {
+    pub(crate) fn value_ranges(&self) -> Result<Vec<Range<usize>>> {
         let count = self.record_count()?;
         if count < 0 {
             return Err(corrupt(format!("invalid record count {count}")));
@@ -108,7 +108,7 @@ impl ValueRecordBatch {
     }
 
     /// The underlying batch bytes.
-    pub fn data(&self) -> &Bytes {
+    pub(crate) fn data(&self) -> &Bytes {
         &self.data
     }
 }

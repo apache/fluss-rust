@@ -37,11 +37,10 @@ const MICROS_PER_MILLI: i64 = 1_000;
 /// - Variable-length types (string, binary) are written without length prefixes
 /// - Decimals are written as unscaled big-endian bytes without length prefixes
 ///
-/// The encoded bytes feed directly into [`IcebergBucketingFunction`]'s MurmurHash
+/// The encoded bytes feed directly into `IcebergBucketingFunction`'s MurmurHash
 /// for bucket assignment and must match the Java Fluss server's encoding exactly.
 ///
 /// [`CompactedRowWriter`]: crate::row::compacted::CompactedRowWriter
-/// [`IcebergBucketingFunction`]: crate::bucketing::IcebergBucketingFunction
 pub struct IcebergBinaryRowWriter {
     position: usize,
     buffer: BytesMut,
