@@ -22,7 +22,7 @@ mod table_test {
         ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
         dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
         get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
-        row_dt_basics_columns, scalar_dt_columns,
+        row_dt_basics_columns, scalar_dt_columns, wait_for_partitions_ready, wait_for_table_ready,
     };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
@@ -169,8 +169,7 @@ mod table_test {
 
         create_table(&admin, &table_path, &table_descriptor).await;
 
-        // Wait for table to be fully initialized
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        wait_for_table_ready(&admin, &table_path).await;
 
         // Test earliest offset (should be 0 for empty table)
         let earliest_offsets = admin
@@ -475,7 +474,7 @@ mod table_test {
             &TableDescriptor::builder().schema(schema).build().unwrap(),
         )
         .await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        wait_for_table_ready(&admin, &table_path).await;
 
         let table = connection.get_table(&table_path).await.unwrap();
         let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
@@ -595,8 +594,8 @@ mod table_test {
         // Create partitions
         create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
 
-        // Wait for partitions to be available
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Wait for partition bucket leaders to be available.
+        wait_for_partitions_ready(&admin, &table_path, &["US", "EU"]).await;
 
         let table = connection
             .get_table(&table_path)

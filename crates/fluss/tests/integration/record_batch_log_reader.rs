@@ -21,6 +21,7 @@
 mod reader_test {
     use crate::integration::utils::{
         create_partitions, create_table, extract_ids_from_batches, get_shared_cluster,
+        wait_for_partitions_ready, wait_for_table_buckets_ready, wait_for_table_ready,
     };
     use arrow::array::record_batch;
     use fluss::client::{EARLIEST_OFFSET, FlussConnection, RecordBatchLogReader};
@@ -48,7 +49,7 @@ mod reader_test {
             .build()
             .expect("Failed to build table");
         create_table(&admin, &table_path, &table_descriptor).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        wait_for_table_ready(&admin, &table_path).await;
 
         let table = connection
             .get_table(&table_path)
@@ -121,7 +122,7 @@ mod reader_test {
             .build()
             .expect("Failed to build table");
         create_table(&admin, &table_path, &table_descriptor).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        wait_for_table_ready(&admin, &table_path).await;
 
         let table = connection
             .get_table(&table_path)
@@ -189,7 +190,7 @@ mod reader_test {
             .build()
             .expect("Failed to build table");
         create_table(&admin, &table_path, &table_descriptor).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        wait_for_table_ready(&admin, &table_path).await;
 
         let table = connection
             .get_table(&table_path)
@@ -284,7 +285,7 @@ mod reader_test {
             .build()
             .expect("Failed to build table");
         create_table(&admin, &table_path, &table_descriptor).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1]).await;
 
         let table = connection
             .get_table(&table_path)
@@ -380,7 +381,7 @@ mod reader_test {
             .expect("Failed to build table");
 
         create_table(&admin, &table_path, &table_descriptor).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        wait_for_table_ready(&admin, &table_path).await;
 
         let table = connection
             .get_table(&table_path)
@@ -453,7 +454,7 @@ mod reader_test {
 
         create_table(&admin, &table_path, &table_descriptor).await;
         create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US", "EU"]).await;
 
         let table = connection
             .get_table(&table_path)
