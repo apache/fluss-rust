@@ -23,6 +23,70 @@ defmodule Fluss.ConfigTest do
     assert config == %Fluss.Config{bootstrap_servers: "localhost:9123"}
   end
 
+  test "set_remote_file_download_thread_num/2 sets the download thread num" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_remote_file_download_thread_num(4)
+
+    assert config.remote_file_download_thread_num == 4
+  end
+
+  test "set_scanner_log_fetch_max_bytes/2 sets the fetch max bytes" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_log_fetch_max_bytes(16_777_216)
+
+    assert config.scanner_log_fetch_max_bytes == 16_777_216
+  end
+
+  test "set_scanner_log_fetch_max_bytes_for_bucket/2 sets the per-bucket fetch limit" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_log_fetch_max_bytes_for_bucket(1_048_576)
+
+    assert config.scanner_log_fetch_max_bytes_for_bucket == 1_048_576
+  end
+
+  test "set_scanner_log_fetch_min_bytes/2 sets the fetch min bytes" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_log_fetch_min_bytes(1)
+
+    assert config.scanner_log_fetch_min_bytes == 1
+  end
+
+  test "set_scanner_log_fetch_wait_max_time_ms/2 sets the max wait time" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_log_fetch_wait_max_time_ms(500)
+
+    assert config.scanner_log_fetch_wait_max_time_ms == 500
+  end
+
+  test "set_scanner_log_max_poll_records/2 sets the max poll records" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_log_max_poll_records(1000)
+
+    assert config.scanner_log_max_poll_records == 1000
+  end
+
+  test "set_scanner_remote_log_prefetch_num/2 sets the prefetch num" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_remote_log_prefetch_num(2)
+
+    assert config.scanner_remote_log_prefetch_num == 2
+  end
+
+  test "set_scanner_remote_log_read_concurrency/2 sets the read concurrency" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_remote_log_read_concurrency(4)
+
+    assert config.scanner_remote_log_read_concurrency == 4
+  end
+
   test "set_writer_acks/2 sets the acks value" do
     config =
       Fluss.Config.new("localhost:9123")

@@ -31,6 +31,14 @@ pub enum NifNoKeyAssigner {
 #[module = "Fluss.Config"]
 pub struct NifConfig {
     pub bootstrap_servers: String,
+    pub remote_file_download_thread_num: Option<u64>,
+    pub scanner_log_fetch_max_bytes: Option<i32>,
+    pub scanner_log_fetch_max_bytes_for_bucket: Option<i32>,
+    pub scanner_log_fetch_min_bytes: Option<i32>,
+    pub scanner_log_fetch_wait_max_time_ms: Option<i32>,
+    pub scanner_log_max_poll_records: Option<u64>,
+    pub scanner_remote_log_prefetch_num: Option<u64>,
+    pub scanner_remote_log_read_concurrency: Option<u64>,
     pub writer_acks: Option<String>,
     pub writer_batch_size: Option<i32>,
     pub writer_batch_timeout_ms: Option<i64>,
@@ -51,6 +59,30 @@ impl NifConfig {
             bootstrap_servers: self.bootstrap_servers,
             ..Config::default()
         };
+        if let Some(n) = self.remote_file_download_thread_num {
+            config.remote_file_download_thread_num = n as usize;
+        }
+        if let Some(size) = self.scanner_log_fetch_max_bytes {
+            config.scanner_log_fetch_max_bytes = size;
+        }
+        if let Some(size) = self.scanner_log_fetch_max_bytes_for_bucket {
+            config.scanner_log_fetch_max_bytes_for_bucket = size;
+        }
+        if let Some(size) = self.scanner_log_fetch_min_bytes {
+            config.scanner_log_fetch_min_bytes = size;
+        }
+        if let Some(ms) = self.scanner_log_fetch_wait_max_time_ms {
+            config.scanner_log_fetch_wait_max_time_ms = ms;
+        }
+        if let Some(n) = self.scanner_log_max_poll_records {
+            config.scanner_log_max_poll_records = n as usize;
+        }
+        if let Some(n) = self.scanner_remote_log_prefetch_num {
+            config.scanner_remote_log_prefetch_num = n as usize;
+        }
+        if let Some(n) = self.scanner_remote_log_read_concurrency {
+            config.scanner_remote_log_read_concurrency = n as usize;
+        }
         if let Some(size) = self.writer_batch_size {
             config.writer_batch_size = size;
         }
