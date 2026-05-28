@@ -32,7 +32,7 @@ pub use kv_record_batch::*;
 pub use kv_record_batch_builder::*;
 pub use kv_record_read_context::{KvRecordReadContext, SchemaGetter};
 pub use read_context::ReadContext;
-pub use value_record_batch::ValueRecordBatch;
+pub(crate) use value_record_batch::ValueRecordBatch;
 
 /// Current KV magic value
 pub const CURRENT_KV_MAGIC_VALUE: u8 = 0;
