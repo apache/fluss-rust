@@ -75,7 +75,7 @@ impl ValueRecordBatch {
     }
 
     /// Returns one byte range per record, each spanning `[SchemaId | Value]`:
-    /// the payload [`crate::row::FixedSchemaDecoder::decode`] expects. Index
+    /// the payload that `FixedSchemaDecoder::decode` expects. Index
     /// [`Self::data`] with a returned range to get it without copying.
     pub fn value_ranges(&self) -> Result<Vec<Range<usize>>> {
         let count = self.record_count()?;

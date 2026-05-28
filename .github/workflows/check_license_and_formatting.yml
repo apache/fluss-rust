@@ -66,3 +66,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --workspace -- -D warnings
+
+      - name: Rustdoc
+        # fluss_python is excluded: its [lib] name = "fluss" collides with fluss-rs
+        run: cargo doc --workspace --no-deps --exclude fluss_python
+        env:
+          RUSTDOCFLAGS: -D warnings
