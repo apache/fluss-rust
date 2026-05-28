@@ -23,6 +23,14 @@ defmodule Fluss.ConfigTest do
     assert config == %Fluss.Config{bootstrap_servers: "localhost:9123"}
   end
 
+  test "set_connect_timeout_ms/2 sets the connect timeout" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_connect_timeout_ms(30_000)
+
+    assert config.connect_timeout_ms == 30_000
+  end
+
   test "set_remote_file_download_thread_num/2 sets the download thread num" do
     config =
       Fluss.Config.new("localhost:9123")
@@ -85,6 +93,54 @@ defmodule Fluss.ConfigTest do
       |> Fluss.Config.set_scanner_remote_log_read_concurrency(4)
 
     assert config.scanner_remote_log_read_concurrency == 4
+  end
+
+  test "set_security_protocol/2 sets the security protocol" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_security_protocol("sasl")
+
+    assert config.security_protocol == "sasl"
+  end
+
+  test "set_security_sasl_mechanism/2 sets the SASL mechanism" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_security_sasl_mechanism("PLAIN")
+
+    assert config.security_sasl_mechanism == "PLAIN"
+  end
+
+  test "set_security_sasl_username/2 sets the SASL username" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_security_sasl_username("admin")
+
+    assert config.security_sasl_username == "admin"
+  end
+
+  test "set_security_sasl_password/2 sets the SASL password" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_security_sasl_password("secret")
+
+    assert config.security_sasl_password == "secret"
+  end
+
+  test "inspect/1 redacts security_sasl_password when set" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_security_sasl_password("supersecret")
+
+    output = inspect(config)
+    refute output =~ "supersecret"
+    assert output =~ "[REDACTED]"
+  end
+
+  test "inspect/1 leaves nil security_sasl_password as nil" do
+    config = Fluss.Config.new("localhost:9123")
+    output = inspect(config)
+    assert output =~ "security_sasl_password: nil"
   end
 
   test "set_writer_acks/2 sets the acks value" do

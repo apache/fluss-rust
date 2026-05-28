@@ -33,6 +33,7 @@ defmodule Fluss.Config do
 
   @enforce_keys [:bootstrap_servers]
   defstruct bootstrap_servers: nil,
+            connect_timeout_ms: nil,
             remote_file_download_thread_num: nil,
             scanner_log_fetch_max_bytes: nil,
             scanner_log_fetch_max_bytes_for_bucket: nil,
@@ -41,6 +42,10 @@ defmodule Fluss.Config do
             scanner_log_max_poll_records: nil,
             scanner_remote_log_prefetch_num: nil,
             scanner_remote_log_read_concurrency: nil,
+            security_protocol: nil,
+            security_sasl_mechanism: nil,
+            security_sasl_password: nil,
+            security_sasl_username: nil,
             writer_acks: nil,
             writer_batch_size: nil,
             writer_batch_timeout_ms: nil,
@@ -56,6 +61,7 @@ defmodule Fluss.Config do
 
   @type t :: %__MODULE__{
           bootstrap_servers: String.t(),
+          connect_timeout_ms: non_neg_integer() | nil,
           remote_file_download_thread_num: non_neg_integer() | nil,
           scanner_log_fetch_max_bytes: non_neg_integer() | nil,
           scanner_log_fetch_max_bytes_for_bucket: non_neg_integer() | nil,
@@ -64,6 +70,10 @@ defmodule Fluss.Config do
           scanner_log_max_poll_records: non_neg_integer() | nil,
           scanner_remote_log_prefetch_num: non_neg_integer() | nil,
           scanner_remote_log_read_concurrency: non_neg_integer() | nil,
+          security_protocol: String.t() | nil,
+          security_sasl_mechanism: String.t() | nil,
+          security_sasl_password: String.t() | nil,
+          security_sasl_username: String.t() | nil,
           writer_acks: String.t() | nil,
           writer_batch_size: non_neg_integer() | nil,
           writer_batch_timeout_ms: non_neg_integer() | nil,
@@ -89,6 +99,10 @@ defmodule Fluss.Config do
   @spec set_bootstrap_servers(t(), String.t()) :: t()
   def set_bootstrap_servers(%__MODULE__{} = config, servers) when is_binary(servers),
     do: %{config | bootstrap_servers: servers}
+
+  @spec set_connect_timeout_ms(t(), non_neg_integer()) :: t()
+  def set_connect_timeout_ms(%__MODULE__{} = config, ms) when is_integer(ms),
+    do: %{config | connect_timeout_ms: ms}
 
   @spec set_remote_file_download_thread_num(t(), non_neg_integer()) :: t()
   def set_remote_file_download_thread_num(%__MODULE__{} = config, threads)
@@ -127,6 +141,22 @@ defmodule Fluss.Config do
   def set_scanner_remote_log_read_concurrency(%__MODULE__{} = config, concurrency)
       when is_integer(concurrency),
       do: %{config | scanner_remote_log_read_concurrency: concurrency}
+
+  @spec set_security_protocol(t(), String.t()) :: t()
+  def set_security_protocol(%__MODULE__{} = config, protocol) when is_binary(protocol),
+    do: %{config | security_protocol: protocol}
+
+  @spec set_security_sasl_mechanism(t(), String.t()) :: t()
+  def set_security_sasl_mechanism(%__MODULE__{} = config, mechanism) when is_binary(mechanism),
+    do: %{config | security_sasl_mechanism: mechanism}
+
+  @spec set_security_sasl_password(t(), String.t()) :: t()
+  def set_security_sasl_password(%__MODULE__{} = config, pass) when is_binary(pass),
+    do: %{config | security_sasl_password: pass}
+
+  @spec set_security_sasl_username(t(), String.t()) :: t()
+  def set_security_sasl_username(%__MODULE__{} = config, username) when is_binary(username),
+    do: %{config | security_sasl_username: username}
 
   @spec set_writer_acks(t(), String.t()) :: t()
   def set_writer_acks(%__MODULE__{} = config, acks) when is_binary(acks),
@@ -182,4 +212,28 @@ defmodule Fluss.Config do
 
   @spec get_bootstrap_servers(t()) :: String.t()
   def get_bootstrap_servers(%__MODULE__{bootstrap_servers: servers}), do: servers
+end
+
+defimpl Inspect, for: Fluss.Config do
+  import Inspect.Algebra
+
+  def inspect(%Fluss.Config{} = config, opts) do
+    sanitized = %{config | security_sasl_password: redact(config.security_sasl_password)}
+
+    fields = sanitized |> Map.from_struct() |> Map.to_list()
+
+    container_doc(
+      "%Fluss.Config{",
+      fields,
+      "}",
+      opts,
+      fn {key, value}, opts ->
+        concat([Atom.to_string(key), ": ", to_doc(value, opts)])
+      end,
+      separator: ","
+    )
+  end
+
+  defp redact(nil), do: nil
+  defp redact(_), do: "[REDACTED]"
 end
