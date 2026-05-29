@@ -1181,7 +1181,7 @@ mod tests {
 
         assert_eq!(
             resolve_api_version_for(None, ApiKey::PutKv).unwrap(),
-            ApiVersion(0)
+            ApiVersion(1)
         );
 
         let server_versions = vec![
@@ -1215,7 +1215,7 @@ mod tests {
         // Successful negotiation cases
         assert_eq!(
             negotiated.highest_available_version(ApiKey::PutKv).unwrap(),
-            ApiVersion(0)
+            ApiVersion(1)
         );
         assert_eq!(
             negotiated

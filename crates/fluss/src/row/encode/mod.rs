@@ -17,11 +17,13 @@
 
 mod compacted_key_encoder;
 mod compacted_row_encoder;
+mod paimon_key_encoder;
 
 use crate::error::{Error, Result};
 use crate::metadata::{DataLakeFormat, KvFormat, RowType};
 use crate::row::encode::compacted_key_encoder::CompactedKeyEncoder;
 use crate::row::encode::compacted_row_encoder::CompactedRowEncoder;
+use crate::row::encode::paimon_key_encoder::PaimonKeyEncoder;
 use crate::row::{Datum, InternalRow};
 use bytes::Bytes;
 
@@ -34,6 +36,61 @@ pub trait KeyEncoder: Send + Sync {
 pub struct KeyEncoderFactory;
 
 impl KeyEncoderFactory {
+    /// Create a key encoder for the primary key, mirroring Java's
+    /// `KeyEncoder.ofPrimaryKeyEncoder`.
+    ///
+    /// Use this encoder when encoding the primary key for KV writes/lookups,
+    /// or when encoding a prefix-lookup key (which is a strict prefix of the
+    /// primary key and must share its byte layout to support lexicographic
+    /// prefix matching).
+    ///
+    /// - `kv_format_version == 2` with `is_default_bucket_key == false`
+    ///   (i.e. the primary key differs from the bucket key) →
+    ///   `CompactedKeyEncoder::create_key_encoder` regardless of lake format
+    ///   (primary key must be decodable by the server without lake-specific
+    ///   format awareness).
+    /// - Otherwise (`kv_format_version == 1`, or `kv_format_version == 2`
+    ///   with `is_default_bucket_key == true` so the primary key matches the
+    ///   bucket key) → align with the lake format via `Self::of`, producing
+    ///   the same physical layout as the bucket key.
+    /// - Any other `kv_format_version` → [`Error::UnsupportedOperation`].
+    pub fn of_primary_key_encoder(
+        row_type: &RowType,
+        key_fields: &[String],
+        data_lake_format: &Option<DataLakeFormat>,
+        kv_format_version: i32,
+        is_default_bucket_key: bool,
+    ) -> Result<Box<dyn KeyEncoder>> {
+        match kv_format_version {
+            1 => Self::of(row_type, key_fields, data_lake_format),
+            2 if is_default_bucket_key => Self::of(row_type, key_fields, data_lake_format),
+            2 => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
+                row_type, key_fields,
+            )?)),
+            v => Err(Error::UnsupportedOperation {
+                message: format!("Unsupported kv format version: {v}"),
+            }),
+        }
+    }
+
+    /// Create a key encoder for the bucket key, mirroring Java's
+    /// `KeyEncoder.ofBucketKeyEncoder`.
+    ///
+    /// Use this encoder when computing the bucket id for a row. The bucket
+    /// key encoding is bound to the configured data lake format (delegating
+    /// to `Self::of`) because the resulting bucket id must stay consistent
+    /// with the bucket id computed by the downstream lake (e.g. Paimon /
+    /// Lance / Iceberg); otherwise the same row would land in different
+    /// buckets on the Fluss side and on the lake side, breaking lake-tiering
+    /// semantics.
+    pub fn of_bucket_key_encoder(
+        row_type: &RowType,
+        key_fields: &[String],
+        data_lake_format: &Option<DataLakeFormat>,
+    ) -> Result<Box<dyn KeyEncoder>> {
+        Self::of(row_type, key_fields, data_lake_format)
+    }
+
     /// Create a key encoder to encode the key bytes of the input row.
     /// # Arguments
     /// * `row_type` - the row type of the input row
@@ -42,15 +99,15 @@ impl KeyEncoderFactory {
     ///
     /// # Returns
     /// key encoder
-    pub fn of(
+    fn of(
         row_type: &RowType,
         key_fields: &[String],
         data_lake_format: &Option<DataLakeFormat>,
     ) -> Result<Box<dyn KeyEncoder>> {
         match data_lake_format {
-            Some(DataLakeFormat::Paimon) => Err(Error::UnsupportedOperation {
-                message: "KeyEncoder for Paimon format is not yet implemented".to_string(),
-            }),
+            Some(DataLakeFormat::Paimon) => {
+                Ok(Box::new(PaimonKeyEncoder::new(row_type, key_fields)?))
+            }
             Some(DataLakeFormat::Lance) => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
                 row_type, key_fields,
             )?)),

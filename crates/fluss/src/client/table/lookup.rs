@@ -303,14 +303,21 @@ impl TableLookup {
         let lookup_row_type = row_type.project_with_field_names(primary_keys)?;
 
         let physical_primary_keys = self.table_info.get_physical_primary_keys().to_vec();
-        let primary_key_encoder =
-            KeyEncoderFactory::of(&lookup_row_type, &physical_primary_keys, &data_lake_format)?;
+        let kv_format_version = self.table_info.get_table_config().get_kv_format_version()?;
+        let is_default_bucket_key = self.table_info.is_default_bucket_key();
+        let primary_key_encoder = KeyEncoderFactory::of_primary_key_encoder(
+            &lookup_row_type,
+            &physical_primary_keys,
+            &data_lake_format,
+            kv_format_version,
+            is_default_bucket_key,
+        )?;
 
-        let bucket_key_encoder = if self.table_info.is_default_bucket_key() {
+        let bucket_key_encoder = if is_default_bucket_key {
             None
         } else {
             let bucket_keys = self.table_info.get_bucket_keys().to_vec();
-            Some(KeyEncoderFactory::of(
+            Some(KeyEncoderFactory::of_bucket_key_encoder(
                 &lookup_row_type,
                 &bucket_keys,
                 &data_lake_format,
@@ -451,8 +458,37 @@ impl TablePrefixLookup {
         let lookup_row_type = row_type.project_with_field_names(&self.lookup_column_names)?;
 
         let bucket_keys = self.table_info.get_bucket_keys().to_vec();
-        let prefix_key_encoder =
-            KeyEncoderFactory::of(&lookup_row_type, &bucket_keys, &data_lake_format)?;
+        let kv_format_version = self.table_info.get_table_config().get_kv_format_version()?;
+        let is_default_bucket_key = self.table_info.is_default_bucket_key();
+
+        // The bytes produced here are sent to the server to perform a
+        // lexicographic byte-prefix match against the stored primary keys, so
+        // the encoder must follow the primary key encoder rules (row-level
+        // byte-comparable). The encoded fields are the bucket key columns,
+        // which `validate_prefix_lookup` guarantees to be a strict prefix of
+        // the physical primary keys.
+        let prefix_lookup_key_encoder = KeyEncoderFactory::of_primary_key_encoder(
+            &lookup_row_type,
+            &bucket_keys,
+            &data_lake_format,
+            kv_format_version,
+            is_default_bucket_key,
+        )?;
+
+        // Bucket id must stay consistent with the bucket id computed by the
+        // downstream lake, so when the bucket key differs from the primary
+        // key we need a separate lake-aligned encoder. When they are the
+        // same, the prefix-lookup key encoder already produces the right
+        // bytes and we fall back to it (None).
+        let bucket_key_encoder = if is_default_bucket_key || data_lake_format.is_none() {
+            None
+        } else {
+            Some(KeyEncoderFactory::of_bucket_key_encoder(
+                &lookup_row_type,
+                &bucket_keys,
+                &data_lake_format,
+            )?)
+        };
 
         let partition_getter = if self.table_info.is_partitioned() {
             Some(PartitionGetter::new(
@@ -471,7 +507,8 @@ impl TablePrefixLookup {
             metadata: self.metadata,
             lookup_client: self.lookup_client,
             bucketing_function,
-            prefix_key_encoder,
+            prefix_lookup_key_encoder,
+            bucket_key_encoder,
             partition_getter,
             num_buckets,
             schema_ctx,
@@ -574,7 +611,13 @@ pub struct PrefixKeyLookuper {
     metadata: Arc<Metadata>,
     lookup_client: Arc<LookupClient>,
     bucketing_function: Box<dyn BucketingFunction>,
-    prefix_key_encoder: Box<dyn KeyEncoder>,
+    /// Encodes the lookup row into the prefix bytes sent to the server for
+    /// byte-prefix matching against stored primary keys.
+    prefix_lookup_key_encoder: Box<dyn KeyEncoder>,
+    /// Optional lake-aligned encoder used solely to compute the bucket id.
+    /// `None` when the bucket key equals the primary key, in which case the
+    /// prefix lookup key bytes are reused for bucketing.
+    bucket_key_encoder: Option<Box<dyn KeyEncoder>>,
     partition_getter: Option<PartitionGetter>,
     num_buckets: i32,
     schema_ctx: LookupSchemaCtx,
@@ -582,7 +625,11 @@ pub struct PrefixKeyLookuper {
 
 impl PrefixKeyLookuper {
     pub async fn lookup(&mut self, row: &dyn InternalRow) -> Result<LookupResult> {
-        let prefix_bytes = self.prefix_key_encoder.encode_key(row)?;
+        let prefix_bytes = self.prefix_lookup_key_encoder.encode_key(row)?;
+        let bk_bytes = match &mut self.bucket_key_encoder {
+            Some(encoder) => encoder.encode_key(row)?,
+            None => prefix_bytes.clone(),
+        };
 
         let partition_id = if let Some(ref partition_getter) = self.partition_getter {
             let partition_name = partition_getter.get_partition(row)?;
@@ -604,7 +651,7 @@ impl PrefixKeyLookuper {
 
         let bucket_id = self
             .bucketing_function
-            .bucketing(&prefix_bytes, self.num_buckets)?;
+            .bucketing(&bk_bytes, self.num_buckets)?;
 
         let table_id = self.table_info.get_table_id();
         let table_bucket = TableBucket::new_with_partition(table_id, partition_id, bucket_id);

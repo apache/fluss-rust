@@ -78,12 +78,12 @@ impl ApiKey {
             | ApiKey::GetDatabaseInfo
             | ApiKey::CreatePartition
             | ApiKey::DropPartition
-            | ApiKey::Authenticate
-            // TODO(key-encoding-v1): The Java server supports v0..v1 for these
-            // APIs, but the Rust client has not yet implemented the v1 key
-            // encoding format. Pinned to v0 until that is done.
-            | ApiKey::PutKv | ApiKey::Lookup | ApiKey::PrefixLookup => {
-                Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0)))
+            | ApiKey::Authenticate => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
+            // PutKv / Lookup / PrefixLookup support v0 (legacy key encoding)
+            // and v1 (Paimon BinaryRow key encoding for kv_format_version=2
+            // non-default bucket keys). The Rust client encodes both.
+            ApiKey::PutKv | ApiKey::Lookup | ApiKey::PrefixLookup => {
+                Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1)))
             }
             Unknown(_) => None,
         }

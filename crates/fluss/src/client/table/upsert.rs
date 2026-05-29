@@ -143,9 +143,18 @@ impl UpsertWriterFactory {
             &partial_update_columns,
         )?;
 
-        let primary_key_encoder = KeyEncoderFactory::of(row_type, physical_pks, data_lake_format)?;
-        let bucket_key_encoder = if !table_info.is_default_bucket_key() {
-            Some(KeyEncoderFactory::of(
+        let kv_format_version = table_info.get_table_config().get_kv_format_version()?;
+        let is_default_bucket_key = table_info.is_default_bucket_key();
+
+        let primary_key_encoder = KeyEncoderFactory::of_primary_key_encoder(
+            row_type,
+            physical_pks,
+            data_lake_format,
+            kv_format_version,
+            is_default_bucket_key,
+        )?;
+        let bucket_key_encoder = if !is_default_bucket_key {
+            Some(KeyEncoderFactory::of_bucket_key_encoder(
                 row_type,
                 table_info.get_bucket_keys(),
                 data_lake_format,

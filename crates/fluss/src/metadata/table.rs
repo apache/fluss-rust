@@ -1172,6 +1172,19 @@ impl TableConfig {
         kv_format.parse().map_err(Into::into)
     }
 
+    /// Returns the KV-format version of the table, defaulting to `1` when the
+    /// `table.kv.format-version` property is absent. Matches Java's
+    /// `TableConfig.getKvFormatVersion().orElse(1)` semantics.
+    pub fn get_kv_format_version(&self) -> Result<i32> {
+        const DEFAULT: i32 = 1;
+        match self.properties.get("table.kv.format-version") {
+            Some(v) => v.parse::<i32>().map_err(|e| {
+                Error::invalid_table(format!("Invalid table.kv.format-version {v:?}: {e}"))
+            }),
+            None => Ok(DEFAULT),
+        }
+    }
+
     pub fn get_log_format(&self) -> Result<LogFormat> {
         // TODO: Consolidate configurations logic, constants, defaults in a single place
         const DEFAULT_LOG_FORMAT: &str = "ARROW";
