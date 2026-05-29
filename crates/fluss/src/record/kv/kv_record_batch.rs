@@ -373,7 +373,7 @@ mod tests {
     use crate::metadata::{DataTypes, KvFormat};
     use crate::record::kv::test_util::TestReadContext;
     use crate::record::kv::{CURRENT_KV_MAGIC_VALUE, KvRecordBatchBuilder};
-    use crate::row::InternalRow;
+    use crate::row::DataGetters;
     use crate::row::binary::BinaryWriter;
 
     use bytes::{BufMut, BytesMut};

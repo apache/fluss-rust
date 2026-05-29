@@ -626,6 +626,7 @@ impl PrefixKeyLookuper {
 mod tests {
     use super::*;
     use crate::metadata::{Column, DataTypes, Schema};
+    use crate::row::DataGetters;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
     use arrow::array::Int32Array;

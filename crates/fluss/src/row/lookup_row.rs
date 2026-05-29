@@ -24,7 +24,8 @@ use crate::error::Result;
 use crate::row::compacted::CompactedRow;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use crate::row::projected_row::ProjectedRow;
-use crate::row::{Decimal, FlussArray, FlussMap, GenericRow, InternalRow};
+use crate::row::view::{ArrayView, MapView, RowView};
+use crate::row::{DataGetters, Decimal, InternalRow};
 
 pub struct LookupRow<'a> {
     inner: Inner<'a>,
@@ -62,6 +63,13 @@ impl<'a> InternalRow for LookupRow<'a> {
     fn get_field_count(&self) -> usize {
         delegate!(self, get_field_count)
     }
+
+    fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
+        delegate!(self, as_encoded_bytes, write_format)
+    }
+}
+
+impl<'a> DataGetters for LookupRow<'a> {
     fn is_null_at(&self, pos: usize) -> Result<bool> {
         delegate!(self, is_null_at, pos)
     }
@@ -113,16 +121,13 @@ impl<'a> InternalRow for LookupRow<'a> {
     fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
         delegate!(self, get_bytes, pos)
     }
-    fn get_array(&self, pos: usize) -> Result<FlussArray> {
+    fn get_array(&self, pos: usize) -> Result<ArrayView<'_>> {
         delegate!(self, get_array, pos)
     }
-    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+    fn get_map(&self, pos: usize) -> Result<MapView<'_>> {
         delegate!(self, get_map, pos)
     }
-    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+    fn get_row(&self, pos: usize) -> Result<RowView<'_>> {
         delegate!(self, get_row, pos)
-    }
-    fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
-        delegate!(self, as_encoded_bytes, write_format)
     }
 }

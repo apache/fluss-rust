@@ -28,12 +28,13 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{DataType, RowType};
 use crate::row::Decimal;
-use crate::row::InternalRow;
 use crate::row::binary::{BinaryRowFormat, ValueWriter};
 use crate::row::binary_map::FlussMap;
 use crate::row::compacted::{CompactedRow, CompactedRowWriter, calculate_bit_set_width_in_bytes};
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
 use crate::row::field_getter::FieldGetter;
+use crate::row::view::ArrayView;
+use crate::row::{DataGetters, InternalArray, InternalRow};
 use bytes::Bytes;
 use serde::Serialize;
 use std::fmt;
@@ -768,79 +769,74 @@ impl InternalRow for FlussArray {
     fn get_field_count(&self) -> usize {
         self.size()
     }
+}
 
+impl InternalArray for FlussArray {
+    fn size(&self) -> usize {
+        FlussArray::size(self)
+    }
+}
+
+impl DataGetters for FlussArray {
     fn is_null_at(&self, pos: usize) -> Result<bool> {
-        Ok(self.is_null_at(pos))
+        Ok(FlussArray::is_null_at(self, pos))
     }
 
     fn get_boolean(&self, pos: usize) -> Result<bool> {
-        self.get_boolean(pos)
+        FlussArray::get_boolean(self, pos)
     }
     fn get_byte(&self, pos: usize) -> Result<i8> {
-        self.get_byte(pos)
+        FlussArray::get_byte(self, pos)
     }
     fn get_short(&self, pos: usize) -> Result<i16> {
-        self.get_short(pos)
+        FlussArray::get_short(self, pos)
     }
     fn get_int(&self, pos: usize) -> Result<i32> {
-        self.get_int(pos)
+        FlussArray::get_int(self, pos)
     }
     fn get_long(&self, pos: usize) -> Result<i64> {
-        self.get_long(pos)
+        FlussArray::get_long(self, pos)
     }
     fn get_float(&self, pos: usize) -> Result<f32> {
-        self.get_float(pos)
+        FlussArray::get_float(self, pos)
     }
     fn get_double(&self, pos: usize) -> Result<f64> {
-        self.get_double(pos)
+        FlussArray::get_double(self, pos)
     }
 
     fn get_char(&self, pos: usize, _length: usize) -> Result<&str> {
-        self.get_string(pos)
+        FlussArray::get_string(self, pos)
     }
-
     fn get_string(&self, pos: usize) -> Result<&str> {
-        self.get_string(pos)
+        FlussArray::get_string(self, pos)
     }
 
     fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Result<Decimal> {
-        self.get_decimal(pos, precision as u32, scale as u32)
+        FlussArray::get_decimal(self, pos, precision as u32, scale as u32)
     }
 
     fn get_date(&self, pos: usize) -> Result<Date> {
-        self.get_date(pos)
+        FlussArray::get_date(self, pos)
     }
     fn get_time(&self, pos: usize) -> Result<Time> {
-        self.get_time(pos)
+        FlussArray::get_time(self, pos)
     }
     fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz> {
-        self.get_timestamp_ntz(pos, precision)
+        FlussArray::get_timestamp_ntz(self, pos, precision)
     }
     fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz> {
-        self.get_timestamp_ltz(pos, precision)
+        FlussArray::get_timestamp_ltz(self, pos, precision)
     }
 
     fn get_binary(&self, pos: usize, _length: usize) -> Result<&[u8]> {
-        self.get_binary(pos)
+        FlussArray::get_binary(self, pos)
     }
-
     fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
-        self.get_binary(pos)
+        FlussArray::get_binary(self, pos)
     }
 
-    fn get_array(&self, pos: usize) -> Result<FlussArray> {
-        self.get_array(pos)
-    }
-
-    fn get_map(&self, pos: usize) -> Result<FlussMap> {
-        // FlussArray carries no schema; nested map reads must go through the
-        // inherent FlussArray::get_map(pos, key_type, value_type).
-        Err(IllegalArgument {
-            message: format!(
-                "InternalRow::get_map is not supported on FlussArray (pos {pos}); \
-                 use FlussArray::get_map(pos, key_type, value_type) directly"
-            ),
-        })
+    fn get_array(&self, pos: usize) -> Result<ArrayView<'_>> {
+        Ok(ArrayView::Binary(FlussArray::get_array(self, pos)?))
     }
 }
 
@@ -851,6 +847,23 @@ mod tests {
     use crate::row::binary::BinaryWriter as BinaryWriterTrait;
     use crate::row::compacted::CompactedRowWriter;
     use crate::row::{Datum, GenericRow};
+
+    #[test]
+    fn fluss_array_dispatches_through_internal_array_trait() {
+        let mut writer = FlussArrayWriter::new(3, &DataTypes::int());
+        writer.write_int(0, 10);
+        writer.set_null_at(1);
+        writer.write_int(2, 30);
+        let arr = writer.complete().unwrap();
+
+        let view: &dyn InternalArray = &arr;
+        assert_eq!(view.size(), 3);
+        assert!(!view.is_null_at(0).unwrap());
+        assert!(view.is_null_at(1).unwrap());
+        assert!(!view.is_null_at(2).unwrap());
+        assert_eq!(view.get_int(0).unwrap(), 10);
+        assert_eq!(view.get_int(2).unwrap(), 30);
+    }
 
     #[test]
     fn test_header_calculation() {
@@ -1169,7 +1182,7 @@ mod tests {
         let r1_tags = r1.get_array(0).unwrap();
         assert_eq!(r1_tags.size(), 3);
         assert_eq!(r1_tags.get_string(0).unwrap(), "x");
-        assert!(r1_tags.is_null_at(1));
+        assert!(r1_tags.is_null_at(1).unwrap());
         assert_eq!(r1_tags.get_string(2).unwrap(), "z");
     }
 
@@ -1207,7 +1220,7 @@ mod tests {
         let bytes = writer.to_bytes();
 
         let outer_compacted = CompactedRow::from_bytes(outer_row_type, &bytes);
-        let recovered_arr = outer_compacted.get_array(0).unwrap();
+        let recovered_arr = outer_compacted.get_array(0).unwrap().expect_binary();
         assert_eq!(recovered_arr.size(), 2);
 
         let recovered_r0 = recovered_arr.get_row(0, inner_row_type).unwrap();

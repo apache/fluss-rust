@@ -28,7 +28,8 @@ mod kv_table_test {
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
-        Date, Datum, Decimal, GenericRow, InternalRow, Time, TimestampLtz, TimestampNtz,
+        DataGetters, Date, Datum, Decimal, GenericRow, InternalArray, InternalMap, Time,
+        TimestampLtz, TimestampNtz,
     };
     use futures::stream::{FuturesUnordered, StreamExt};
 
@@ -441,7 +442,7 @@ mod kv_table_test {
         assert_eq!(r.get_string(1).unwrap(), "Verso", "name preserved");
         let n = r.get_row(3).unwrap();
         assert_eq!(n.get_int(0).unwrap(), 99, "ROW preserved");
-        let m = r.get_map(4).unwrap();
+        let m = r.get_map(4).unwrap().expect_binary();
         assert_eq!(m.size(), 1);
         assert_eq!(m.get(&Datum::from("z")).unwrap(), Some(Datum::from(99_i32)));
         assert_eq!(r.get_array(5).unwrap().size(), 2, "ARRAY preserved");
@@ -571,7 +572,7 @@ mod kv_table_test {
             let nested = row.get_row(4).unwrap();
             assert_eq!(nested.get_int(0).unwrap(), *seq);
             assert_eq!(nested.get_string(1).unwrap(), *label);
-            let attrs = row.get_map(5).unwrap();
+            let attrs = row.get_map(5).unwrap().expect_binary();
             assert_eq!(attrs.size(), 1);
             assert_eq!(
                 attrs.get(&Datum::from(*label)).unwrap(),
@@ -618,7 +619,7 @@ mod kv_table_test {
         assert_eq!(row.get_long(3).unwrap(), 999);
         let nested = row.get_row(4).unwrap();
         assert_eq!(nested.get_int(0).unwrap(), 999);
-        let attrs = row.get_map(5).unwrap();
+        let attrs = row.get_map(5).unwrap().expect_binary();
         assert_eq!(
             attrs.get(&Datum::from("u")).unwrap(),
             Some(Datum::from(999_i32))
@@ -1535,7 +1536,7 @@ mod kv_table_test {
         assert_eq!(arr_of_arr.get_array(1).unwrap().get_int(1).unwrap(), 4);
 
         // === ARRAY<ROW> ===
-        let aor = r1.get_array(4).unwrap();
+        let aor = r1.get_array(4).unwrap().expect_binary();
         assert_eq!(aor.size(), 2);
         let e0 = aor.get_row(0, &row_seq_label).unwrap();
         assert_eq!(e0.get_int(0).unwrap(), 1);
@@ -1573,23 +1574,23 @@ mod kv_table_test {
         assert_eq!(rr.get_binary(12, 4).unwrap(), b"\x01\x02\x03\x04");
         let f_arr = rr.get_array(13).unwrap();
         assert_eq!(f_arr.size(), 3);
-        assert!(f_arr.is_null_at(1));
+        assert!(f_arr.is_null_at(1).unwrap());
 
         // === MAP: basic ===
-        let m = r1.get_map(8).unwrap();
+        let m = r1.get_map(8).unwrap().expect_binary();
         assert_eq!(m.size(), 3);
         assert_eq!(m.get(&Datum::from("a")).unwrap(), Some(Datum::from(1_i32)));
         assert_eq!(m.get(&Datum::from("b")).unwrap(), Some(Datum::Null));
         assert_eq!(m.get(&Datum::from("c")).unwrap(), Some(Datum::from(3_i32)));
 
         // === MAP<K, ROW> ===
-        let m = r1.get_map(9).unwrap();
+        let m = r1.get_map(9).unwrap().expect_binary();
         let v0 = m.value_array().get_row(0, &row_seq_label).unwrap();
         assert_eq!(v0.get_int(0).unwrap(), 1);
         assert_eq!(v0.get_string(1).unwrap(), "open");
 
         // === MAP<K, MAP> ===
-        let m = r1.get_map(10).unwrap();
+        let m = r1.get_map(10).unwrap().expect_binary();
         let g1 = m
             .value_array()
             .get_map(0, &DataTypes::string(), &DataTypes::int())
@@ -1597,9 +1598,9 @@ mod kv_table_test {
         assert_eq!(g1.size(), 2);
 
         // === MAP<K, ARRAY> + ARRAY<MAP> ===
-        let m = r1.get_map(11).unwrap();
+        let m = r1.get_map(11).unwrap().expect_binary();
         assert_eq!(m.value_array().get_array(0).unwrap().size(), 3);
-        let am = r1.get_array(12).unwrap();
+        let am = r1.get_array(12).unwrap().expect_binary();
         assert_eq!(am.size(), 2);
         let am0 = am
             .get_map(0, &DataTypes::string(), &DataTypes::int())

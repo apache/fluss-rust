@@ -319,6 +319,8 @@ impl Drop for KvRecordBatchBuilder {
 mod tests {
     use super::*;
     use crate::metadata::{DataTypes, RowType};
+    use crate::record::kv::KvRecordBatch;
+    use crate::row::DataGetters;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::{CompactedRow, CompactedRowWriter};
     use std::sync::LazyLock;
@@ -497,9 +499,6 @@ mod tests {
 
     #[test]
     fn test_builder_with_compacted_row_writer() -> crate::error::Result<()> {
-        use crate::record::kv::KvRecordBatch;
-        use crate::row::InternalRow;
-
         let mut builder = KvRecordBatchBuilder::new(1, 100000, KvFormat::COMPACTED);
         builder.set_writer_state(100, 5);
 

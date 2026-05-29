@@ -79,9 +79,9 @@ mod tests {
     use super::*;
     use crate::metadata::{Column, DataTypes, Schema};
     use crate::record::kv::SCHEMA_ID_LENGTH;
-    use crate::row::InternalRow;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
+    use crate::row::{DataGetters, InternalRow};
 
     fn schema_with_ids(columns: &[(i32, &str, crate::metadata::DataType)]) -> Schema {
         let cols: Vec<Column> = columns

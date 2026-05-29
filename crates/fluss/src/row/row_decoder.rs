@@ -90,9 +90,9 @@ impl RowDecoderFactory {
 mod tests {
     use super::*;
     use crate::metadata::DataTypes;
-    use crate::row::InternalRow;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
+    use crate::row::{DataGetters, InternalRow};
 
     #[test]
     fn test_compacted_row_decoder() {

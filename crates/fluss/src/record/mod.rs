@@ -253,7 +253,7 @@ mod tests {
         let row_type = Arc::new(RowType::with_data_types(vec![
             crate::metadata::DataType::Int(crate::metadata::IntType::new()),
         ]));
-        ColumnarRow::new(Arc::new(batch), row_type, row_id, None)
+        ColumnarRow::new(Arc::new(batch), row_type, row_id, None).expect("ColumnarRow")
     }
 
     #[test]

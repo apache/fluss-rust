@@ -27,6 +27,7 @@ use crate::error::Result;
 use crate::metadata::DataType;
 use crate::row::binary_array::{FlussArray, FlussArrayWriter};
 use crate::row::datum::{Datum, read_datum_from_fluss_array};
+use crate::row::{InternalArray, InternalMap};
 use bytes::Bytes;
 use serde::Serialize;
 use std::fmt;
@@ -302,6 +303,20 @@ impl FlussMap {
     }
 }
 
+impl InternalMap for FlussMap {
+    fn size(&self) -> usize {
+        FlussMap::size(self)
+    }
+
+    fn key_array(&self) -> &dyn InternalArray {
+        FlussMap::key_array(self)
+    }
+
+    fn value_array(&self) -> &dyn InternalArray {
+        FlussMap::value_array(self)
+    }
+}
+
 pub struct Entries<'a> {
     map: &'a FlussMap,
     index: usize,
@@ -448,6 +463,24 @@ mod tests {
     use super::*;
     use crate::metadata::DataTypes;
     use crate::row::binary_array::FlussArrayWriter;
+
+    #[test]
+    fn fluss_map_dispatches_through_internal_map_trait() {
+        let mut writer = FlussMapWriter::new(2, &DataTypes::int(), &DataTypes::string());
+        writer.write_entry(1.into(), "a".into()).unwrap();
+        writer.write_entry(2.into(), "b".into()).unwrap();
+        let map = writer.complete().unwrap();
+
+        let view: &dyn InternalMap = &map;
+        assert_eq!(view.size(), 2);
+        let keys = view.key_array();
+        let values = view.value_array();
+        assert_eq!(keys.size(), 2);
+        assert_eq!(keys.get_int(0).unwrap(), 1);
+        assert_eq!(keys.get_int(1).unwrap(), 2);
+        assert_eq!(values.get_string(0).unwrap(), "a");
+        assert_eq!(values.get_string(1).unwrap(), "b");
+    }
 
     #[test]
     fn test_round_trip_int_to_string_map() {

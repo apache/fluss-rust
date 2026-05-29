@@ -26,7 +26,8 @@ use crate::row::datum::{
     MICROS_PER_MILLI, MILLIS_PER_SECOND, NANOS_PER_MILLI, append_decimal_to_builder,
     millis_nanos_to_micros, millis_nanos_to_nanos,
 };
-use crate::row::{FlussArray, FlussMap, InternalRow};
+use crate::row::view::{ArrayView, MapView, RowView};
+use crate::row::{DataGetters, InternalArray, InternalMap, InternalRow};
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     FixedSizeBinaryBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
@@ -459,14 +460,16 @@ impl ColumnWriter {
     /// Read one value from `row` at this writer's column position and append it
     /// directly to the concrete Arrow builder.
     #[inline]
-    pub fn write_field(&mut self, row: &dyn InternalRow) -> Result<()> {
+    pub fn write_field(&mut self, row: &dyn DataGetters) -> Result<()> {
         self.write_field_at(row, self.pos)
     }
 
     /// Read one value from `row` at position `pos` and append it
-    /// directly to the concrete Arrow builder.
+    /// directly to the concrete Arrow builder. Accepts any [`DataGetters`]
+    /// so array elements and row fields share the same writer surface
+    /// (no materialization when the source is a columnar slice).
     #[inline]
-    pub fn write_field_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
+    pub fn write_field_at(&mut self, row: &dyn DataGetters, pos: usize) -> Result<()> {
         if self.nullable && row.is_null_at(pos)? {
             self.append_null();
             return Ok(());
@@ -649,7 +652,7 @@ impl ColumnWriter {
     }
 
     #[inline]
-    fn write_non_null_at(&mut self, row: &dyn InternalRow, pos: usize) -> Result<()> {
+    fn write_non_null_at(&mut self, row: &dyn DataGetters, pos: usize) -> Result<()> {
         match &mut self.inner {
             TypedWriter::Bool(b) => {
                 b.append_value(row.get_boolean(pos)?);
@@ -831,55 +834,10 @@ impl ColumnWriter {
                 offsets,
                 validity,
             } => {
-                let array = row.get_array(pos)?;
-                let size = array.size();
-                match &mut element_writer.inner {
-                    TypedWriter::Struct {
-                        field_writers,
-                        validity: child_validity,
-                        row_type,
-                        ..
-                    } => {
-                        for i in 0..size {
-                            if array.is_null_at(i) {
-                                for child in field_writers.iter_mut() {
-                                    child.append_null();
-                                }
-                                child_validity.push(false);
-                            } else {
-                                let nested = array.get_row(i, row_type)?;
-                                for (j, child) in field_writers.iter_mut().enumerate() {
-                                    child.write_field_at(&nested, j)?;
-                                }
-                                child_validity.push(true);
-                            }
-                        }
-                    }
-                    TypedWriter::Map {
-                        key_writer,
-                        value_writer,
-                        key_type,
-                        value_type,
-                        offsets: child_offsets,
-                        validity: child_validity,
-                    } => {
-                        for i in 0..size {
-                            if array.is_null_at(i) {
-                                child_validity.push(false);
-                                let last = *child_offsets.last().unwrap();
-                                child_offsets.push(last);
-                            } else {
-                                let map = array.get_map(i, key_type, value_type)?;
-                                write_map_into(map, key_writer, value_writer, child_offsets)?;
-                                child_validity.push(true);
-                            }
-                        }
-                    }
-                    _ => {
-                        for i in 0..size {
-                            element_writer.write_field_at(&array, i)?;
-                        }
-                    }
+                let array_view = row.get_array(pos)?;
+                let size = array_view.size();
+                for i in 0..size {
+                    write_array_element_into_column(element_writer, &array_view, i)?;
                 }
                 let last = *offsets.last().unwrap();
                 offsets.push(
@@ -897,8 +855,7 @@ impl ColumnWriter {
                 validity,
                 ..
             } => {
-                let map = row.get_map(pos)?;
-                write_map_into(map, key_writer, value_writer, offsets)?;
+                write_map_into(row.get_map(pos)?, key_writer, value_writer, offsets)?;
                 validity.push(true);
                 Ok(())
             }
@@ -908,8 +865,14 @@ impl ColumnWriter {
                 ..
             } => {
                 let nested = row.get_row(pos)?;
+                // Zero-copy: ColumnarRow walks its TypedBatch in place, so the
+                // struct writer can pull fields without materializing.
+                let nested_ref: &dyn InternalRow = match &nested {
+                    RowView::Generic(g) => *g,
+                    RowView::Columnar(cr) => cr,
+                };
                 for (i, child) in field_writers.iter_mut().enumerate() {
-                    child.write_field_at(nested, i)?;
+                    child.write_field_at(nested_ref, i)?;
                 }
                 validity.push(true);
                 Ok(())
@@ -919,31 +882,42 @@ impl ColumnWriter {
 }
 
 fn write_map_into(
-    map: FlussMap,
+    map: MapView<'_>,
     key_writer: &mut ColumnWriter,
     value_writer: &mut ColumnWriter,
     offsets: &mut Vec<i32>,
 ) -> Result<()> {
-    let key_array = map.key_array();
-    let value_array = map.value_array();
-    for i in 0..map.size() {
-        write_array_element_into_column(key_writer, key_array, i)?;
-        write_array_element_into_column(value_writer, value_array, i)?;
+    let size = map.size();
+    let (key_view, value_view) = match map {
+        MapView::Binary(m) => (
+            ArrayView::Binary(m.key_array().clone()),
+            ArrayView::Binary(m.value_array().clone()),
+        ),
+        MapView::Columnar(cm) => (
+            ArrayView::Columnar(*cm.keys_slice()),
+            ArrayView::Columnar(*cm.values_slice()),
+        ),
+    };
+    for i in 0..size {
+        write_array_element_into_column(key_writer, &key_view, i)?;
+        write_array_element_into_column(value_writer, &value_view, i)?;
     }
     let last = *offsets.last().unwrap();
     offsets.push(
-        last + i32::try_from(map.size()).map_err(|_| RowConvertError {
-            message: format!("Map size {} exceeds i32 range", map.size()),
+        last + i32::try_from(size).map_err(|_| RowConvertError {
+            message: format!("Map size {size} exceeds i32 range"),
         })?,
     );
     Ok(())
 }
 
-// FlussArray carries no schema; nested row/map elements need the typed
-// inherent accessors (get_row/get_map with explicit types).
+/// Writes one element of `array` into `writer`. For nested ROW / MAP elements
+/// the source variant decides how to fetch the inner value: binary arrays
+/// need the inherent schema-carrying accessor; columnar slices walk the
+/// `TypedBatch` zero-copy.
 fn write_array_element_into_column(
     writer: &mut ColumnWriter,
-    array: &FlussArray,
+    array: &ArrayView<'_>,
     index: usize,
 ) -> Result<()> {
     match &mut writer.inner {
@@ -953,18 +927,32 @@ fn write_array_element_into_column(
             row_type,
             ..
         } => {
-            if array.is_null_at(index) {
+            if array.is_null_at(index)? {
                 for child in field_writers.iter_mut() {
                     child.append_null();
                 }
                 validity.push(false);
-            } else {
-                let nested = array.get_row(index, row_type)?;
-                for (j, child) in field_writers.iter_mut().enumerate() {
-                    child.write_field_at(&nested, j)?;
-                }
-                validity.push(true);
+                return Ok(());
             }
+            match array {
+                ArrayView::Binary(arr) => {
+                    let nested = arr.get_row(index, row_type)?;
+                    for (j, child) in field_writers.iter_mut().enumerate() {
+                        child.write_field_at(&nested, j)?;
+                    }
+                }
+                ArrayView::Columnar(slice) => {
+                    let nested = slice.get_row(index)?;
+                    let nested_ref: &dyn DataGetters = match &nested {
+                        RowView::Generic(g) => *g,
+                        RowView::Columnar(cr) => cr,
+                    };
+                    for (j, child) in field_writers.iter_mut().enumerate() {
+                        child.write_field_at(nested_ref, j)?;
+                    }
+                }
+            }
+            validity.push(true);
             Ok(())
         }
         TypedWriter::Map {
@@ -975,15 +963,20 @@ fn write_array_element_into_column(
             offsets,
             validity,
         } => {
-            if array.is_null_at(index) {
+            if array.is_null_at(index)? {
                 validity.push(false);
                 let last = *offsets.last().unwrap();
                 offsets.push(last);
-            } else {
-                let nested = array.get_map(index, key_type, value_type)?;
-                write_map_into(nested, key_writer, value_writer, offsets)?;
-                validity.push(true);
+                return Ok(());
             }
+            let nested = match array {
+                ArrayView::Binary(arr) => {
+                    MapView::Binary(arr.get_map(index, key_type, value_type)?)
+                }
+                ArrayView::Columnar(slice) => slice.get_map(index)?,
+            };
+            write_map_into(nested, key_writer, value_writer, offsets)?;
+            validity.push(true);
             Ok(())
         }
         _ => writer.write_field_at(array, index),
@@ -1077,14 +1070,21 @@ fn finish_map_array(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::DataTypes;
+    use crate::metadata::{DataField, DataTypes, RowType};
     use crate::record::to_arrow_type;
     use crate::row::binary_array::FlussArrayWriter;
     use crate::row::binary_map::FlussMapWriter;
-    use crate::row::{Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz};
+    use crate::row::column::ColumnarRow;
+    use crate::row::view::ArrayView;
+    use crate::row::{
+        DataGetters, Date, Datum, Decimal, GenericRow, Time, TimestampLtz, TimestampNtz,
+    };
     use arrow::array::*;
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{Field, Fields, Schema};
     use bigdecimal::BigDecimal;
     use std::str::FromStr;
+    use std::sync::Arc;
 
     /// Helper: create a ColumnWriter from a Fluss DataType, deriving the Arrow type automatically.
     fn writer_for(fluss_type: &DataType, capacity: usize) -> ColumnWriter {
@@ -1398,5 +1398,212 @@ mod tests {
 
         assert_eq!(map_arr.len(), 1);
         assert!(map_arr.is_null(0));
+    }
+
+    #[test]
+    fn writes_row_with_nested_array_from_columnar_input() {
+        // Two outer rows of ROW<x: INT, y: ARRAY<INT>>:
+        //   { x: 1, y: [10, 20] }
+        //   { x: 2, y: [30] }
+        let x = Int32Array::from(vec![1, 2]);
+        let y_values = Int32Array::from(vec![10, 20, 30]);
+        let y_offsets = OffsetBuffer::new(vec![0_i32, 2, 3].into());
+        let y_list = ListArray::new(
+            Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+            y_offsets,
+            Arc::new(y_values),
+            None,
+        );
+        let row_fields = Fields::from(vec![
+            Field::new("x", ArrowDataType::Int32, true),
+            Field::new(
+                "y",
+                ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Int32, true))),
+                true,
+            ),
+        ]);
+        let struct_arr = StructArray::new(
+            row_fields.clone(),
+            vec![Arc::new(x) as ArrayRef, Arc::new(y_list) as ArrayRef],
+            None,
+        );
+        let rb = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "nested",
+                ArrowDataType::Struct(row_fields.clone()),
+                true,
+            )])),
+            vec![Arc::new(struct_arr) as ArrayRef],
+        )
+        .unwrap();
+
+        let nested_fields = vec![
+            DataField::new("x", DataTypes::int(), None),
+            DataField::new("y", DataTypes::array(DataTypes::int()), None),
+        ];
+        let outer_row_type = Arc::new(RowType::with_data_types(vec![DataTypes::row(
+            nested_fields.clone(),
+        )]));
+        let mut row = ColumnarRow::new(Arc::new(rb), outer_row_type, 0, None).unwrap();
+
+        let nested_fluss = DataTypes::row(nested_fields);
+        let nested_arrow = to_arrow_type(&nested_fluss).unwrap();
+        let mut writer = ColumnWriter::create(&nested_fluss, &nested_arrow, 0, 2).unwrap();
+
+        for i in 0..2 {
+            row.set_row_id(i);
+            writer.write_field(&row).unwrap();
+        }
+
+        let result = writer.finish();
+        let result_struct = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(result_struct.len(), 2);
+
+        let x_col = result_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(x_col.value(0), 1);
+        assert_eq!(x_col.value(1), 2);
+
+        let y_col = result_struct
+            .column(1)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let y0 = y_col.value(0);
+        let y0_ints = y0.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(y0_ints.len(), 2);
+        assert_eq!(y0_ints.value(0), 10);
+        assert_eq!(y0_ints.value(1), 20);
+        let y1 = y_col.value(1);
+        let y1_ints = y1.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(y1_ints.len(), 1);
+        assert_eq!(y1_ints.value(0), 30);
+    }
+
+    #[test]
+    fn writes_array_of_primitives_from_columnar_input_without_materializing() {
+        // [ [10, 20], [30] ]
+        let values = Int32Array::from(vec![10, 20, 30]);
+        let offsets = OffsetBuffer::new(vec![0_i32, 2, 3].into());
+        let list = ListArray::new(
+            Arc::new(Field::new("item", ArrowDataType::Int32, true)),
+            offsets,
+            Arc::new(values),
+            None,
+        );
+        let rb = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "arr",
+                list.data_type().clone(),
+                true,
+            )])),
+            vec![Arc::new(list) as ArrayRef],
+        )
+        .unwrap();
+
+        let arr_fluss = DataTypes::array(DataTypes::int());
+        let outer_row_type = Arc::new(RowType::with_data_types(vec![arr_fluss.clone()]));
+        let mut row = ColumnarRow::new(Arc::new(rb), outer_row_type, 0, None).unwrap();
+
+        match row.get_array(0).unwrap() {
+            ArrayView::Columnar(_) => {}
+            ArrayView::Binary(_) => panic!("scan-output array must be Columnar"),
+        }
+
+        let arrow_ty = to_arrow_type(&arr_fluss).unwrap();
+        let mut writer = ColumnWriter::create(&arr_fluss, &arrow_ty, 0, 2).unwrap();
+
+        for i in 0..2 {
+            row.set_row_id(i);
+            writer.write_field(&row).unwrap();
+        }
+
+        let result = writer.finish();
+        let result_list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(result_list.len(), 2);
+        let r0 = result_list.value(0);
+        let r0_ints = r0.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(r0_ints.len(), 2);
+        assert_eq!(r0_ints.value(0), 10);
+        assert_eq!(r0_ints.value(1), 20);
+        let r1 = result_list.value(1);
+        let r1_ints = r1.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(r1_ints.len(), 1);
+        assert_eq!(r1_ints.value(0), 30);
+    }
+
+    #[test]
+    fn writes_map_of_primitives_from_columnar_input_without_materializing() {
+        // { "a" -> 1, "b" -> 2 }
+        let keys = StringArray::from(vec!["a", "b"]);
+        let values = Int32Array::from(vec![1, 2]);
+        let entries_fields = arrow_schema::Fields::from(vec![
+            Field::new("keys", ArrowDataType::Utf8, false),
+            Field::new("values", ArrowDataType::Int32, true),
+        ]);
+        let entries = StructArray::new(
+            entries_fields.clone(),
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+            None,
+        );
+        let offsets = OffsetBuffer::new(vec![0_i32, 2].into());
+        let map = MapArray::new(
+            Arc::new(Field::new(
+                "entries",
+                ArrowDataType::Struct(entries_fields),
+                false,
+            )),
+            offsets,
+            entries,
+            None,
+            false,
+        );
+        let rb = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "m",
+                map.data_type().clone(),
+                true,
+            )])),
+            vec![Arc::new(map) as ArrayRef],
+        )
+        .unwrap();
+
+        let map_fluss = DataTypes::map(DataTypes::string(), DataTypes::int());
+        let outer_row_type = Arc::new(RowType::with_data_types(vec![map_fluss.clone()]));
+        let row = ColumnarRow::new(Arc::new(rb), outer_row_type, 0, None).unwrap();
+
+        match row.get_map(0).unwrap() {
+            MapView::Columnar(_) => {}
+            MapView::Binary(_) => panic!("scan-output map must be Columnar"),
+        }
+
+        let arrow_ty = to_arrow_type(&map_fluss).unwrap();
+        let mut writer = ColumnWriter::create(&map_fluss, &arrow_ty, 0, 1).unwrap();
+
+        writer.write_field(&row).unwrap();
+
+        let result = writer.finish();
+        let result_map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(result_map.len(), 1);
+        let entries = result_map.value(0);
+        let entries_struct = entries.as_any().downcast_ref::<StructArray>().unwrap();
+        let key_col = entries_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let val_col = entries_struct
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(key_col.len(), 2);
+        assert_eq!(key_col.value(0), "a");
+        assert_eq!(key_col.value(1), "b");
+        assert_eq!(val_col.value(0), 1);
+        assert_eq!(val_col.value(1), 2);
     }
 }

@@ -2400,7 +2400,10 @@ mod row_reader {
         validate(row, columns, field, "get_array", |dt| {
             matches!(dt, fcore::metadata::DataType::Array(_))
         })?;
-        row.get_array(field).map_err(|e| e.to_string())
+        row.get_array(field)
+            .map_err(|e| e.to_string())?
+            .try_into_binary()
+            .map_err(|e| e.to_string())
     }
 
     pub fn get_array_element_type(

@@ -20,7 +20,7 @@
 mod table_remote_scan_test {
     use crate::integration::utils::{create_table, get_shared_cluster};
     use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-    use fluss::row::{GenericRow, InternalRow};
+    use fluss::row::{DataGetters, GenericRow};
     use std::time::Duration;
 
     #[tokio::test]

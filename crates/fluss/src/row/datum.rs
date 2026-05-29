@@ -706,7 +706,7 @@ pub(crate) fn read_datum_from_fluss_array<'a>(
     Ok(getter.get_field(arr)?.into_owned())
 }
 
-fn internal_row_to_owned_generic(
+pub(crate) fn internal_row_to_owned_generic(
     row: &dyn InternalRow,
     row_type: &RowType,
 ) -> Result<GenericRow<'static>> {
@@ -832,7 +832,7 @@ fn append_generic_row_to_struct_builder(
         })?;
 
     let row_type = match fluss_type {
-        crate::metadata::DataType::Row(rt) => rt,
+        DataType::Row(rt) => rt,
         _ => {
             return Err(RowConvertError {
                 message: format!("Expected Row Fluss type for Row datum, got: {fluss_type:?}"),
@@ -1475,9 +1475,9 @@ mod tests {
 #[cfg(test)]
 mod timestamp_tests {
     use super::*;
-    use crate::metadata::{DataField, DataTypes};
+    use crate::metadata::{DataField, DataTypes, RowType};
     use crate::record::to_arrow_type;
-    use crate::row::InternalRow;
+    use crate::row::DataGetters;
     use crate::row::column::ColumnarRow;
     use arrow::array::{RecordBatch, StructArray, StructBuilder};
     use arrow::datatypes::{Field, Fields, Schema};
@@ -1529,7 +1529,7 @@ mod timestamp_tests {
 
     #[test]
     fn test_row_arrow_struct_round_trip() {
-        let row_type = crate::metadata::RowType::new(vec![
+        let row_type = RowType::new(vec![
             DataField::new("x", DataTypes::int(), None),
             DataField::new("label", DataTypes::string(), None),
         ]);
@@ -1571,7 +1571,14 @@ mod timestamp_tests {
             RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).expect("record batch"),
         );
 
-        let mut columnar = ColumnarRow::new(batch, Arc::new(row_type), 0, None);
+        // Outer batch has one column ("nested") whose type is ROW<x INT, label STRING>.
+        let outer_row_type = RowType::new(vec![DataField::new(
+            "nested",
+            DataType::Row(row_type),
+            None,
+        )]);
+        let mut columnar =
+            ColumnarRow::new(batch, Arc::new(outer_row_type), 0, None).expect("ColumnarRow");
 
         let nested = columnar.get_row(0).expect("get_row 0");
         assert_eq!(nested.get_int(0).unwrap(), 42);

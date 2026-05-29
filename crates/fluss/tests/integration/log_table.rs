@@ -31,7 +31,8 @@ mod table_test {
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
-        Date, Datum, Decimal, FlussArray, GenericRow, InternalRow, Time, TimestampLtz, TimestampNtz,
+        DataGetters, Date, Datum, Decimal, GenericRow, InternalArray, InternalMap, Time,
+        TimestampLtz, TimestampNtz,
     };
     use fluss::rpc::message::OffsetSpec;
     use std::collections::HashMap;
@@ -937,7 +938,10 @@ mod table_test {
         assert_eq!(projected_nested.get_string(1).unwrap(), "hello");
 
         // === Projection: MAP ===
-        let m = r.get_map(1).expect("get_map over projection");
+        let m = r
+            .get_map(1)
+            .expect("get_map over projection")
+            .expect_binary();
         assert_eq!(m.size(), 2);
         assert_eq!(m.get(&Datum::from("x")).unwrap(), Some(Datum::from(1_i32)));
         assert_eq!(m.get(&Datum::from("y")).unwrap(), Some(Datum::from(2_i32)));
@@ -1543,13 +1547,13 @@ mod table_test {
         assert_eq!(r1.get_array(1).unwrap().size(), 0);
         let arr_string_r1 = r1.get_array(2).unwrap();
         assert_eq!(arr_string_r1.size(), 1);
-        assert!(arr_string_r1.is_null_at(0));
+        assert!(arr_string_r1.is_null_at(0).unwrap());
         let arr_of_arr_r1 = r1.get_array(3).unwrap();
         assert_eq!(arr_of_arr_r1.size(), 3);
         let aa0 = arr_of_arr_r1.get_array(0).unwrap();
         assert_eq!(aa0.size(), 1);
         assert_eq!(aa0.get_int(0).unwrap(), 5);
-        assert!(arr_of_arr_r1.is_null_at(1));
+        assert!(arr_of_arr_r1.is_null_at(1).unwrap());
         assert_eq!(arr_of_arr_r1.get_array(2).unwrap().size(), 0);
 
         // === ARRAY: null whole column on row 2 ===
@@ -1558,7 +1562,7 @@ mod table_test {
         assert!(r2.is_null_at(3).unwrap());
 
         // === ARRAY<ROW>: row 0 + row 1 with null element + row 2 null whole ===
-        let aor0 = r0.get_array(4).unwrap();
+        let aor0 = r0.get_array(4).unwrap().expect_binary();
         assert_eq!(aor0.size(), 2);
         let e0 = aor0.get_row(0, &row_seq_label).unwrap();
         assert_eq!(e0.get_int(0).unwrap(), 1);
@@ -1566,7 +1570,7 @@ mod table_test {
         let e1 = aor0.get_row(1, &row_seq_label).unwrap();
         assert_eq!(e1.get_int(0).unwrap(), 2);
         assert_eq!(e1.get_string(1).unwrap(), "close");
-        let aor1 = r1.get_array(4).unwrap();
+        let aor1 = r1.get_array(4).unwrap().expect_binary();
         assert_eq!(aor1.size(), 3);
         let e0 = aor1.get_row(0, &row_seq_label).unwrap();
         assert_eq!(e0.get_int(0).unwrap(), 7);
@@ -1605,13 +1609,13 @@ mod table_test {
         let f_arr = rr.get_array(13).unwrap();
         assert_eq!(f_arr.size(), 3);
         assert_eq!(f_arr.get_int(0).unwrap(), 7);
-        assert!(f_arr.is_null_at(1));
+        assert!(f_arr.is_null_at(1).unwrap());
         assert!(r2.is_null_at(5).unwrap());
         assert!(r2.is_null_at(6).unwrap());
         assert!(r2.is_null_at(7).unwrap());
 
         // === MAP: basic (with null value) + empty (row 1) + null (row 2) ===
-        let m = r0.get_map(8).unwrap();
+        let m = r0.get_map(8).unwrap().expect_binary();
         assert_eq!(m.size(), 3);
         assert_eq!(m.get(&Datum::from("a")).unwrap(), Some(Datum::from(1_i32)));
         assert_eq!(m.get(&Datum::from("b")).unwrap(), Some(Datum::Null));
@@ -1620,7 +1624,7 @@ mod table_test {
         assert!(r2.is_null_at(8).unwrap());
 
         // === MAP<K, ROW> ===
-        let m = r0.get_map(9).unwrap();
+        let m = r0.get_map(9).unwrap().expect_binary();
         assert_eq!(m.size(), 2);
         let keys = m.key_array();
         let values = m.value_array();
@@ -1634,7 +1638,7 @@ mod table_test {
         assert_eq!(v1.get_string(1).unwrap(), "close");
 
         // === MAP<K, MAP> ===
-        let m = r0.get_map(10).unwrap();
+        let m = r0.get_map(10).unwrap().expect_binary();
         assert_eq!(m.size(), 2);
         let g1 = m
             .value_array()
@@ -1650,12 +1654,12 @@ mod table_test {
         assert_eq!(g2.get(&Datum::from("c")).unwrap(), Some(Datum::from(3_i32)));
 
         // === MAP<K, ARRAY> + ARRAY<MAP> ===
-        let m = r0.get_map(11).unwrap();
+        let m = r0.get_map(11).unwrap().expect_binary();
         assert_eq!(m.size(), 2);
         let primes = m.value_array().get_array(0).unwrap();
         assert_eq!(primes.size(), 3);
         assert_eq!(primes.get_int(2).unwrap(), 5);
-        let am = r0.get_array(12).unwrap();
+        let am = r0.get_array(12).unwrap().expect_binary();
         assert_eq!(am.size(), 2);
         let am0 = am
             .get_map(0, &DataTypes::string(), &DataTypes::int())
@@ -1674,13 +1678,13 @@ mod table_test {
         let ab = r0.get_array(13).unwrap();
         assert_eq!(ab.size(), 2);
         assert_eq!(ab.get_bytes(0).unwrap(), bytes_v.as_slice());
-        assert!(ab.is_null_at(1));
+        assert!(ab.is_null_at(1).unwrap());
         let ad = r0.get_array(14).unwrap();
         assert_eq!(ad.get_date(0).unwrap().get_inner(), date_v.get_inner());
-        assert!(ad.is_null_at(1));
+        assert!(ad.is_null_at(1).unwrap());
         let at = r0.get_array(15).unwrap();
         assert_eq!(at.get_time(0).unwrap().get_inner(), time_v.get_inner());
-        assert!(at.is_null_at(1));
+        assert!(at.is_null_at(1).unwrap());
         let ats = r0.get_array(16).unwrap();
         let read_ts = ats.get_timestamp_ntz(0, 6).unwrap();
         assert_eq!(read_ts.get_millisecond(), ts_v.get_millisecond());
@@ -1688,16 +1692,16 @@ mod table_test {
             read_ts.get_nano_of_millisecond(),
             ts_v.get_nano_of_millisecond()
         );
-        assert!(ats.is_null_at(1));
+        assert!(ats.is_null_at(1).unwrap());
         let atl = r0.get_array(17).unwrap();
         assert_eq!(
             atl.get_timestamp_ltz(0, 3).unwrap().get_epoch_millisecond(),
             ts_ltz_v.get_epoch_millisecond()
         );
-        assert!(atl.is_null_at(1));
+        assert!(atl.is_null_at(1).unwrap());
         let adc = r0.get_array(18).unwrap();
         assert_eq!(adc.get_decimal(0, 10, 2).unwrap(), dec);
-        assert!(adc.is_null_at(1));
+        assert!(adc.is_null_at(1).unwrap());
         let adb = r0.get_array(19).unwrap();
         assert_eq!(adb.get_decimal(0, 22, 5).unwrap(), dec_big);
         let af = r0.get_array(20).unwrap();
@@ -1709,7 +1713,7 @@ mod table_test {
         assert_f64_special(adbl.get_double(0).unwrap(), f64::NAN);
         assert_f64_special(adbl.get_double(1).unwrap(), f64::INFINITY);
         assert_f64_special(adbl.get_double(2).unwrap(), f64::NEG_INFINITY);
-        let fb: FlussArray = r0.get_array(22).unwrap();
+        let fb = r0.get_array(22).unwrap().expect_binary();
         assert_eq!(fb.get_binary(0).unwrap(), fixed_a.as_slice());
         assert_eq!(fb.get_binary(1).unwrap(), fixed_b.as_slice());
 
@@ -1747,7 +1751,7 @@ mod table_test {
         let m = r0.get_map(31).unwrap();
         assert!(m.value_array().get_boolean(0).unwrap());
         assert!(!m.value_array().get_boolean(1).unwrap());
-        let m = r0.get_map(32).unwrap();
+        let m = r0.get_map(32).unwrap().expect_binary();
         assert_eq!(m.value_array().get_binary(0).unwrap(), fixed_a.as_slice());
         let m = r0.get_map(33).unwrap();
         assert_eq!(m.size(), 2);
@@ -1756,7 +1760,7 @@ mod table_test {
 
         // === Convenience API: entries / get / key_type / value_type ===
         // (exercised on row 0's map_string_int at index 8)
-        let m = r0.get_map(8).unwrap();
+        let m = r0.get_map(8).unwrap().expect_binary();
         assert_eq!(m.key_type(), &DataTypes::string().as_non_nullable());
         assert_eq!(m.value_type(), &DataTypes::int());
         let mut got: HashMap<String, Option<i32>> = HashMap::with_capacity(m.size());

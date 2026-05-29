@@ -365,7 +365,7 @@ mod row_type_tests {
     use crate::row::compacted::compacted_row_writer::CompactedRowWriter;
     use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
     use crate::row::field_getter::FieldGetter;
-    use crate::row::{Datum, GenericRow, InternalRow};
+    use crate::row::{DataGetters, Datum, GenericRow, InternalRow};
 
     fn round_trip<F>(outer_row_type: &RowType, outer_row: &GenericRow, verify: F)
     where

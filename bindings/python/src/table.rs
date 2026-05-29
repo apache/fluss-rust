@@ -1519,6 +1519,8 @@ pub fn datum_to_python_value(
         DataType::Array(array_type) => {
             let array_data = row
                 .get_array(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?
+                .try_into_binary()
                 .map_err(|e| FlussError::from_core_error(&e))?;
 
             let element_type = array_type.get_element_type();
