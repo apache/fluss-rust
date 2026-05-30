@@ -50,6 +50,21 @@ defmodule Fluss.Admin do
     end
   end
 
+  @spec get_server_nodes(t()) :: {:ok, [Fluss.ServerNode.t()]} | {:error, Fluss.Error.t()}
+  def get_server_nodes(admin) do
+    admin
+    |> Native.admin_get_server_nodes()
+    |> Native.await_nif()
+  end
+
+  @spec get_server_nodes!(t()) :: [Fluss.ServerNode.t()]
+  def get_server_nodes!(admin) do
+    case get_server_nodes(admin) do
+      {:ok, nodes} -> nodes
+      {:error, %Fluss.Error{} = err} -> raise err
+    end
+  end
+
   @spec create_database(t(), String.t(), boolean()) :: :ok | {:error, Fluss.Error.t()}
   def create_database(admin, name, ignore_if_exists \\ true) do
     admin
@@ -75,6 +90,21 @@ defmodule Fluss.Admin do
   def list_databases!(admin) do
     case list_databases(admin) do
       {:ok, dbs} -> dbs
+      {:error, %Fluss.Error{} = err} -> raise err
+    end
+  end
+
+  @spec database_exists(t(), String.t()) :: {:ok, boolean()} | {:error, Fluss.Error.t()}
+  def database_exists(admin, database_name) do
+    admin
+    |> Native.admin_database_exists(database_name)
+    |> Native.await_nif()
+  end
+
+  @spec database_exists!(t(), String.t()) :: boolean()
+  def database_exists!(admin, database_name) do
+    case database_exists(admin, database_name) do
+      {:ok, exists} -> exists
       {:error, %Fluss.Error{} = err} -> raise err
     end
   end
@@ -105,6 +135,21 @@ defmodule Fluss.Admin do
   def list_tables!(admin, database) do
     case list_tables(admin, database) do
       {:ok, tables} -> tables
+      {:error, %Fluss.Error{} = err} -> raise err
+    end
+  end
+
+  @spec table_exists(t(), String.t(), String.t()) :: {:ok, boolean()} | {:error, Fluss.Error.t()}
+  def table_exists(admin, database_name, table_name) do
+    admin
+    |> Native.admin_table_exists(database_name, table_name)
+    |> Native.await_nif()
+  end
+
+  @spec table_exists!(t(), String.t(), String.t()) :: boolean()
+  def table_exists!(admin, database_name, table_name) do
+    case table_exists(admin, database_name, table_name) do
+      {:ok, exists} -> exists
       {:error, %Fluss.Error{} = err} -> raise err
     end
   end
