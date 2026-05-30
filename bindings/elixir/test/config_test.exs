@@ -214,6 +214,14 @@ defmodule Fluss.ConfigTest do
     assert config.writer_retries == 5
   end
 
+  test "set_writer_batch_size/2 rejects negative integers" do
+    config = Fluss.Config.new("h:9123")
+
+    assert_raise FunctionClauseError, fn ->
+      Fluss.Config.set_writer_batch_size(config, -1)
+    end
+  end
+
   test "setters chain correctly" do
     config =
       Fluss.Config.new("localhost:9123")

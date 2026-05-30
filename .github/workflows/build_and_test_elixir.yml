@@ -91,6 +91,18 @@ jobs:
         working-directory: bindings/elixir
         run: mix credo
 
+      - name: Cache PLT
+        uses: actions/cache@v4
+        with:
+          path: bindings/elixir/priv/plts/
+          key: ${{ runner.os }}-otp-${{ steps.beam.outputs.otp-version }}-elixir-${{ steps.beam.outputs.elixir-version }}-mix-${{ hashFiles('bindings/elixir/mix.lock') }}-plt
+          restore-keys: |
+            ${{ runner.os }}-otp-${{ steps.beam.outputs.otp-version }}-elixir-${{ steps.beam.outputs.elixir-version }}-mix-
+
+      - name: Dialyzer
+        working-directory: bindings/elixir
+        run: mix dialyzer
+
       - name: Run unit tests
         working-directory: bindings/elixir
         run: mix test
