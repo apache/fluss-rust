@@ -88,8 +88,7 @@ pub const SCANNER_POLL_IDLE_RATIO: &str = "fluss.client.scanner.poll_idle_ratio"
 /// skipped until the first `poll()` happens; Java's equivalent
 /// `lastPollSecondsAgo` returns roughly the current Unix-epoch seconds
 /// before the first poll (an unguarded `(now - 0)/1000`), which would trip
-/// every consumer-liveness alert on startup. Classified as `can-differ` per
-/// `java-rust-parity-criteria.mdc` since this is purely client-side display.
+/// every consumer-liveness alert on startup.
 ///
 pub const SCANNER_LAST_POLL_SECONDS_AGO: &str = "fluss.client.scanner.last_poll_seconds_ago";
 
