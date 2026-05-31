@@ -27,8 +27,14 @@ defmodule Fluss.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
+      aliases: aliases(),
       deps: deps(),
       description: "Elixir client for Apache Fluss",
+      dialyzer: [
+        plt_add_apps: [:ex_unit, :mix],
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
+        list_unused_filters: true
+      ],
       package: package()
     ]
   end
@@ -46,7 +52,23 @@ defmodule Fluss.MixProject do
     [
       {:rustler, "~> 0.37"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  defp aliases do
+    [
+      check: static_checks()
+    ]
+  end
+
+  defp static_checks do
+    [
+      "format --check-formatted",
+      "credo --strict",
+      "compile --warnings-as-errors",
+      "dialyzer"
     ]
   end
 

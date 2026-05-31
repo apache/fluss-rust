@@ -88,6 +88,8 @@ defmodule Fluss.Config do
           writer_retries: non_neg_integer() | nil
         }
 
+  defguardp is_non_neg_integer(n) when is_integer(n) and n >= 0
+
   @spec new(String.t()) :: t()
   def new(bootstrap_servers) when is_binary(bootstrap_servers) do
     %__MODULE__{bootstrap_servers: bootstrap_servers}
@@ -101,45 +103,46 @@ defmodule Fluss.Config do
     do: %{config | bootstrap_servers: servers}
 
   @spec set_connect_timeout_ms(t(), non_neg_integer()) :: t()
-  def set_connect_timeout_ms(%__MODULE__{} = config, ms) when is_integer(ms),
+  def set_connect_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | connect_timeout_ms: ms}
 
   @spec set_remote_file_download_thread_num(t(), non_neg_integer()) :: t()
   def set_remote_file_download_thread_num(%__MODULE__{} = config, threads)
-      when is_integer(threads),
+      when is_non_neg_integer(threads),
       do: %{config | remote_file_download_thread_num: threads}
 
   @spec set_scanner_log_fetch_max_bytes(t(), non_neg_integer()) :: t()
   def set_scanner_log_fetch_max_bytes(%__MODULE__{} = config, max_bytes)
-      when is_integer(max_bytes),
+      when is_non_neg_integer(max_bytes),
       do: %{config | scanner_log_fetch_max_bytes: max_bytes}
 
   @spec set_scanner_log_fetch_max_bytes_for_bucket(t(), non_neg_integer()) :: t()
   def set_scanner_log_fetch_max_bytes_for_bucket(%__MODULE__{} = config, max_bytes)
-      when is_integer(max_bytes),
+      when is_non_neg_integer(max_bytes),
       do: %{config | scanner_log_fetch_max_bytes_for_bucket: max_bytes}
 
   @spec set_scanner_log_fetch_min_bytes(t(), non_neg_integer()) :: t()
   def set_scanner_log_fetch_min_bytes(%__MODULE__{} = config, min_bytes)
-      when is_integer(min_bytes),
+      when is_non_neg_integer(min_bytes),
       do: %{config | scanner_log_fetch_min_bytes: min_bytes}
 
   @spec set_scanner_log_fetch_wait_max_time_ms(t(), non_neg_integer()) :: t()
   def set_scanner_log_fetch_wait_max_time_ms(%__MODULE__{} = config, wait_ms)
-      when is_integer(wait_ms),
+      when is_non_neg_integer(wait_ms),
       do: %{config | scanner_log_fetch_wait_max_time_ms: wait_ms}
 
   @spec set_scanner_log_max_poll_records(t(), non_neg_integer()) :: t()
-  def set_scanner_log_max_poll_records(%__MODULE__{} = config, num) when is_integer(num),
+  def set_scanner_log_max_poll_records(%__MODULE__{} = config, num) when is_non_neg_integer(num),
     do: %{config | scanner_log_max_poll_records: num}
 
   @spec set_scanner_remote_log_prefetch_num(t(), non_neg_integer()) :: t()
-  def set_scanner_remote_log_prefetch_num(%__MODULE__{} = config, num) when is_integer(num),
-    do: %{config | scanner_remote_log_prefetch_num: num}
+  def set_scanner_remote_log_prefetch_num(%__MODULE__{} = config, num)
+      when is_non_neg_integer(num),
+      do: %{config | scanner_remote_log_prefetch_num: num}
 
   @spec set_scanner_remote_log_read_concurrency(t(), non_neg_integer()) :: t()
   def set_scanner_remote_log_read_concurrency(%__MODULE__{} = config, concurrency)
-      when is_integer(concurrency),
+      when is_non_neg_integer(concurrency),
       do: %{config | scanner_remote_log_read_concurrency: concurrency}
 
   @spec set_security_protocol(t(), String.t()) :: t()
@@ -163,11 +166,11 @@ defmodule Fluss.Config do
     do: %{config | writer_acks: acks}
 
   @spec set_writer_batch_size(t(), non_neg_integer()) :: t()
-  def set_writer_batch_size(%__MODULE__{} = config, size) when is_integer(size),
+  def set_writer_batch_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
     do: %{config | writer_batch_size: size}
 
   @spec set_writer_batch_timeout_ms(t(), non_neg_integer()) :: t()
-  def set_writer_batch_timeout_ms(%__MODULE__{} = config, ms) when is_integer(ms),
+  def set_writer_batch_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | writer_batch_timeout_ms: ms}
 
   @spec set_writer_bucket_no_key_assigner(t(), :sticky | :round_robin) :: t()
@@ -176,11 +179,11 @@ defmodule Fluss.Config do
       do: %{config | writer_bucket_no_key_assigner: assigner}
 
   @spec set_writer_buffer_memory_size(t(), non_neg_integer()) :: t()
-  def set_writer_buffer_memory_size(%__MODULE__{} = config, size) when is_integer(size),
+  def set_writer_buffer_memory_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
     do: %{config | writer_buffer_memory_size: size}
 
   @spec set_writer_buffer_wait_timeout_ms(t(), non_neg_integer()) :: t()
-  def set_writer_buffer_wait_timeout_ms(%__MODULE__{} = config, ms) when is_integer(ms),
+  def set_writer_buffer_wait_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | writer_buffer_wait_timeout_ms: ms}
 
   @spec set_writer_dynamic_batch_size_enabled(t(), boolean()) :: t()
@@ -189,8 +192,9 @@ defmodule Fluss.Config do
       do: %{config | writer_dynamic_batch_size_enabled: enabled}
 
   @spec set_writer_dynamic_batch_size_min(t(), non_neg_integer()) :: t()
-  def set_writer_dynamic_batch_size_min(%__MODULE__{} = config, size) when is_integer(size),
-    do: %{config | writer_dynamic_batch_size_min: size}
+  def set_writer_dynamic_batch_size_min(%__MODULE__{} = config, size)
+      when is_non_neg_integer(size),
+      do: %{config | writer_dynamic_batch_size_min: size}
 
   @spec set_writer_enable_idempotence(t(), boolean()) :: t()
   def set_writer_enable_idempotence(%__MODULE__{} = config, enabled)
@@ -199,15 +203,15 @@ defmodule Fluss.Config do
 
   @spec set_writer_max_inflight_requests_per_bucket(t(), non_neg_integer()) :: t()
   def set_writer_max_inflight_requests_per_bucket(%__MODULE__{} = config, n)
-      when is_integer(n),
+      when is_non_neg_integer(n),
       do: %{config | writer_max_inflight_requests_per_bucket: n}
 
   @spec set_writer_request_max_size(t(), non_neg_integer()) :: t()
-  def set_writer_request_max_size(%__MODULE__{} = config, size) when is_integer(size),
+  def set_writer_request_max_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
     do: %{config | writer_request_max_size: size}
 
   @spec set_writer_retries(t(), non_neg_integer()) :: t()
-  def set_writer_retries(%__MODULE__{} = config, n) when is_integer(n),
+  def set_writer_retries(%__MODULE__{} = config, n) when is_non_neg_integer(n),
     do: %{config | writer_retries: n}
 
   @spec get_bootstrap_servers(t()) :: String.t()
