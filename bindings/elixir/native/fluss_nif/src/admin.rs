@@ -20,9 +20,10 @@ use crate::atoms::to_nif_err;
 use crate::connection::ConnectionResource;
 use crate::schema::TableDescriptorResource;
 use fluss::client::FlussAdmin;
-use fluss::metadata::TablePath;
+use fluss::metadata::{DatabaseDescriptor, DatabaseInfo, TablePath};
 use fluss::{ServerNode, ServerType};
 use rustler::{Env, NifStruct, NifUnitEnum, ResourceArc, Term};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(NifUnitEnum)]
@@ -52,6 +53,42 @@ impl NifServerNode {
                 ServerType::TabletServer => NifServerType::TabletServer,
                 ServerType::CoordinatorServer => NifServerType::CoordinatorServer,
             },
+        }
+    }
+}
+
+#[derive(NifStruct)]
+#[module = "Fluss.DatabaseDescriptor"]
+pub struct NifDatabaseDescriptor {
+    pub comment: Option<String>,
+    pub custom_properties: HashMap<String, String>,
+}
+
+impl NifDatabaseDescriptor {
+    pub fn from_core(desc: &DatabaseDescriptor) -> Self {
+        Self {
+            comment: desc.comment().map(String::from),
+            custom_properties: desc.custom_properties().clone(),
+        }
+    }
+}
+
+#[derive(NifStruct)]
+#[module = "Fluss.DatabaseInfo"]
+pub struct NifDatabaseInfo {
+    pub database_name: String,
+    pub descriptor: NifDatabaseDescriptor,
+    pub created_time: i64,
+    pub modified_time: i64,
+}
+
+impl NifDatabaseInfo {
+    pub fn from_core(info: &DatabaseInfo) -> Self {
+        Self {
+            database_name: info.database_name().to_string(),
+            descriptor: NifDatabaseDescriptor::from_core(info.database_descriptor()),
+            created_time: info.created_time(),
+            modified_time: info.modified_time(),
         }
     }
 }
@@ -94,6 +131,18 @@ fn admin_create_database<'a>(
             .inner
             .create_database(&database_name, None, ignore_if_exists)
             .await
+    })
+}
+
+#[rustler::nif]
+fn admin_get_database_info<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+) -> Term<'a> {
+    async_nif::spawn_task_with_result(env, async move {
+        let info: DatabaseInfo = admin.inner.get_database_info(&database_name).await?;
+        Ok(NifDatabaseInfo::from_core(&info))
     })
 }
 

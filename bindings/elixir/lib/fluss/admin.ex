@@ -72,6 +72,22 @@ defmodule Fluss.Admin do
     |> Native.await_nif()
   end
 
+  @spec get_database_info(t(), String.t()) ::
+          {:ok, Fluss.DatabaseInfo.t()} | {:error, Fluss.Error.t()}
+  def get_database_info(admin, database_name) do
+    admin
+    |> Native.admin_get_database_info(database_name)
+    |> Native.await_nif()
+  end
+
+  @spec get_database_info!(t(), String.t()) :: Fluss.DatabaseInfo.t()
+  def get_database_info!(admin, database_name) do
+    case get_database_info(admin, database_name) do
+      {:ok, info} -> info
+      {:error, %Fluss.Error{} = err} -> raise err
+    end
+  end
+
   @spec drop_database(t(), String.t(), boolean()) :: :ok | {:error, Fluss.Error.t()}
   def drop_database(admin, name, ignore_if_not_exists \\ true) do
     admin

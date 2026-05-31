@@ -30,6 +30,8 @@ defmodule Fluss.Native do
   def admin_create_database(_admin, _name, _ignore_if_exists),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def admin_get_database_info(_admin, _database_name), do: :erlang.nif_error(:nif_not_loaded)
+
   def admin_drop_database(_admin, _name, _ignore_if_not_exists),
     do: :erlang.nif_error(:nif_not_loaded)
 

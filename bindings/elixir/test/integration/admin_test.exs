@@ -53,6 +53,25 @@ defmodule Fluss.Integration.AdminTest do
     end
   end
 
+  describe "get_database_info/2" do
+    test "returns DatabaseInfo for an existing database", %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+      :ok = Fluss.Admin.create_database(admin, db, true)
+      on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
+
+      assert {:ok, %Fluss.DatabaseInfo{} = info} = Fluss.Admin.get_database_info(admin, db)
+      assert info.database_name == db
+      assert %Fluss.DatabaseDescriptor{} = info.descriptor
+      assert is_integer(info.created_time)
+      assert is_integer(info.modified_time)
+    end
+
+    test "returns error for a non-existent database", %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+      assert {:error, %Fluss.Error{}} = Fluss.Admin.get_database_info(admin, db)
+    end
+  end
+
   describe "database_exists/2" do
     test "returns {:ok, true} for an existing database", %{admin: admin} do
       db = "fluss_data_sources_#{:rand.uniform(100_000)}"
