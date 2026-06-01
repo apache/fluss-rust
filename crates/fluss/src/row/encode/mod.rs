@@ -17,13 +17,16 @@
 
 mod compacted_key_encoder;
 mod compacted_row_encoder;
+mod iceberg_key_encoder;
 
 use crate::error::{Error, Result};
-use crate::metadata::{DataLakeFormat, KvFormat, RowType};
+use crate::metadata::{DataLakeFormat, KvFormat, KvFormatVersion, RowType, TableConfig};
 use crate::row::encode::compacted_key_encoder::CompactedKeyEncoder;
 use crate::row::encode::compacted_row_encoder::CompactedRowEncoder;
 use crate::row::{Datum, InternalRow};
 use bytes::Bytes;
+
+pub use iceberg_key_encoder::IcebergKeyEncoder;
 
 /// An interface for encoding key of row into bytes.
 #[allow(dead_code)]
@@ -34,15 +37,7 @@ pub trait KeyEncoder: Send + Sync {
 pub struct KeyEncoderFactory;
 
 impl KeyEncoderFactory {
-    /// Create a key encoder to encode the key bytes of the input row.
-    /// # Arguments
-    /// * `row_type` - the row type of the input row
-    /// * `key_fields` - the key fields to encode
-    /// * `lake_format` - the data lake format
-    ///
-    /// # Returns
-    /// key encoder
-    pub fn of(
+    fn of(
         row_type: &RowType,
         key_fields: &[String],
         data_lake_format: &Option<DataLakeFormat>,
@@ -54,10 +49,41 @@ impl KeyEncoderFactory {
             Some(DataLakeFormat::Lance) => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
                 row_type, key_fields,
             )?)),
-            Some(DataLakeFormat::Iceberg) => Err(Error::UnsupportedOperation {
-                message: "KeyEncoder for Iceberg format is not yet implemented".to_string(),
-            }),
+            Some(DataLakeFormat::Iceberg) => Ok(Box::new(IcebergKeyEncoder::create_key_encoder(
+                row_type, key_fields,
+            )?)),
             None => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
+                row_type, key_fields,
+            )?)),
+        }
+    }
+
+    pub fn of_bucket_key(
+        row_type: &RowType,
+        key_fields: &[String],
+        data_lake_format: &Option<DataLakeFormat>,
+    ) -> Result<Box<dyn KeyEncoder>> {
+        Self::of(row_type, key_fields, data_lake_format)
+    }
+
+    /// When `table.kv.format-version` is **2** and the table uses a **custom** bucket key
+    /// (`is_default_bucket_key == false`), the primary key is encoded with
+    /// [`CompactedKeyEncoder`] so prefix lookups work, even for Iceberg-tiered tables.
+    /// Otherwise encoding follows [`Self::of`] (v1 tables, or v2 with default bucket key).
+    pub fn of_primary_key(
+        row_type: &RowType,
+        key_fields: &[String],
+        table_config: &TableConfig,
+        is_default_bucket_key: bool,
+    ) -> Result<Box<dyn KeyEncoder>> {
+        let kv_version = table_config.get_kv_format_version();
+        let data_lake_format = &table_config.get_datalake_format()?;
+
+        match (kv_version, is_default_bucket_key) {
+            (KvFormatVersion::V1, _) | (KvFormatVersion::V2, true) => {
+                Self::of(row_type, key_fields, data_lake_format)
+            }
+            (KvFormatVersion::V2, false) => Ok(Box::new(CompactedKeyEncoder::create_key_encoder(
                 row_type, key_fields,
             )?)),
         }
@@ -123,5 +149,68 @@ impl RowEncoderFactory {
             }
             KvFormat::COMPACTED => CompactedRowEncoder::new(row_type),
         }
+    }
+}
+
+#[cfg(test)]
+mod key_encoder_factory_tests {
+    use super::*;
+    use crate::metadata::DataTypes;
+    use crate::row::{Datum, GenericRow};
+    use std::collections::HashMap;
+
+    fn table_config(pairs: &[(&str, &str)]) -> TableConfig {
+        TableConfig::from_properties(
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    #[test]
+    fn primary_key_kv2_default_bucket_iceberg_uses_iceberg_encoding() {
+        let cfg = table_config(&[
+            ("table.kv.format-version", "2"),
+            ("table.datalake.format", "iceberg"),
+        ]);
+        let row_type = RowType::with_data_types(vec![DataTypes::int()]);
+        let mut enc =
+            KeyEncoderFactory::of_primary_key(&row_type, &["f0".to_string()], &cfg, true).unwrap();
+        let row = GenericRow::from_data(vec![Datum::from(7i32)]);
+        let bytes = enc.encode_key(&row).unwrap();
+        assert_eq!(bytes.as_ref(), (7i64).to_le_bytes());
+    }
+
+    #[test]
+    fn primary_key_kv2_custom_bucket_uses_compacted_even_with_iceberg() {
+        let cfg = table_config(&[
+            ("table.kv.format-version", "2"),
+            ("table.datalake.format", "iceberg"),
+        ]);
+        let row_type = RowType::with_data_types(vec![DataTypes::int(), DataTypes::string()]);
+        let mut enc = KeyEncoderFactory::of_primary_key(
+            &row_type,
+            &["f0".to_string(), "f1".to_string()],
+            &cfg,
+            false,
+        )
+        .unwrap();
+        let row = GenericRow::from_data(vec![Datum::from(1i32), Datum::from("x")]);
+        let bytes = enc.encode_key(&row).unwrap();
+        assert_ne!(bytes.as_ref(), (1i64).to_le_bytes());
+    }
+
+    #[test]
+    fn primary_key_invalid_kv_format_version_defaults_to_v1() {
+        let cfg = table_config(&[
+            ("table.kv.format-version", "99"),
+            ("table.datalake.format", "iceberg"),
+        ]);
+        let row_type = RowType::with_data_types(vec![DataTypes::int()]);
+        let mut enc =
+            KeyEncoderFactory::of_primary_key(&row_type, &["f0".to_string()], &cfg, false).unwrap();
+        let row = GenericRow::from_data(vec![Datum::from(7i32)]);
+        assert_eq!(enc.encode_key(&row).unwrap().as_ref(), (7i64).to_le_bytes());
     }
 }
