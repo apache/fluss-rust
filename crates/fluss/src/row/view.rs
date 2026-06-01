@@ -54,7 +54,8 @@ impl ArrayView<'_> {
         }
     }
 
-    /// [`try_into_binary`](Self::try_into_binary) with `.expect()`. For tests.
+    /// [`try_into_binary`](Self::try_into_binary) with `.expect()`. Test-only.
+    #[cfg(any(test, feature = "integration_tests"))]
     pub fn expect_binary(self) -> FlussArray {
         self.try_into_binary()
             .expect("materialize ColumnarArray to FlussArray")
@@ -149,7 +150,8 @@ impl MapView<'_> {
         }
     }
 
-    /// [`try_into_binary`](Self::try_into_binary) with `.expect()`. For tests.
+    /// [`try_into_binary`](Self::try_into_binary) with `.expect()`. Test-only.
+    #[cfg(any(test, feature = "integration_tests"))]
     pub fn expect_binary(self) -> FlussMap {
         self.try_into_binary()
             .expect("materialize ColumnarMap to FlussMap")

@@ -32,7 +32,7 @@
 //! use fluss::config::Config;
 //! use fluss::error::Result;
 //! use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-//! use fluss::row::{GenericRow, InternalRow};
+//! use fluss::row::{DataGetters, GenericRow, InternalRow};
 //! use std::time::Duration;
 //!
 //! #[tokio::main]

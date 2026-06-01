@@ -484,12 +484,39 @@ Implements the `InternalRow` trait (see below).
 | `fn get_bytes(&self, idx: usize) -> Result<&[u8]>`                                     | Get bytes value                         |
 | `fn get_binary(&self, idx: usize, length: usize) -> Result<&[u8]>`                     | Get fixed-length binary value           |
 | `fn get_char(&self, idx: usize, length: usize) -> Result<&str>`                        | Get fixed-length char value             |
-| `fn get_array(&self, idx: usize) -> Result<FlussArray>`                                | Get array value                         |
-| `fn get_map(&self, idx: usize) -> Result<FlussMap>`                                    | Get map value                           |
+| `fn get_array(&self, idx: usize) -> Result<ArrayView<'_>>`                             | Get array value (zero-copy view)        |
+| `fn get_map(&self, idx: usize) -> Result<MapView<'_>>`                                 | Get map value (zero-copy view)          |
+| `fn get_row(&self, idx: usize) -> Result<RowView<'_>>`                                 | Get nested row value (zero-copy view)   |
+
+The nested getters return borrowed views — `ArrayView`, `MapView`, `RowView`. Read elements directly through the `DataGetters` accessors, or call `try_into_binary()` (`try_into_generic()` for rows) for the owned binary form.
+
+## `ArrayView<'a>`
+
+Returned by `get_array()`. Implements `InternalArray` + `DataGetters`, so elements are read in place via the typed getters (`get_int()`, `get_string()`, nested `get_array()` / `get_map()`, …).
+
+| Method | Description |
+|--------|-------------|
+| `fn try_into_binary(self) -> Result<FlussArray>` | Materialize the owned binary `FlussArray`, re-encoding a columnar slice if needed |
+
+## `MapView<'a>`
+
+Returned by `get_map()`. Implements `InternalMap`.
+
+| Method | Description |
+|--------|-------------|
+| `fn try_into_binary(self) -> Result<FlussMap>` | Materialize the owned binary `FlussMap`, re-encoding a columnar slice if needed |
+
+## `RowView<'a>`
+
+Returned by `get_row()`. Implements `InternalRow`, so nested fields are read in place via the typed getters.
+
+| Method | Description |
+|--------|-------------|
+| `fn try_into_generic(self, row_type: &RowType) -> Result<GenericRow<'static>>` | Materialize the owned `GenericRow`, walking a columnar cursor field-by-field if needed |
 
 ## `FlussArray`
 
-`FlussArray` is the Rust row representation for `ARRAY` values. You usually obtain it from `InternalRow::get_array()`.
+`FlussArray` is the owned binary row representation for `ARRAY` values. You obtain it from `ArrayView::try_into_binary()`.
 
 | Method | Description |
 |--------|-------------|
@@ -501,7 +528,7 @@ Element getters mirror `InternalRow` typed getters and return `Result<T>`. For e
 
 ## `FlussMap`
 
-`FlussMap` is the Rust row representation for `MAP` values. You usually obtain it from `InternalRow::get_map()`.
+`FlussMap` is the owned binary row representation for `MAP` values. You obtain it from `MapView::try_into_binary()`.
 
 | Method | Description |
 |--------|-------------|

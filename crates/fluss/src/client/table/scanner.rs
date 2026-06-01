@@ -174,7 +174,7 @@ impl<'a> TableScan<'a> {
     /// # use fluss::config::Config;
     /// # use fluss::error::Result;
     /// # use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-    /// # use fluss::row::InternalRow;
+    /// # use fluss::row::{DataGetters, InternalRow};
     /// # use std::time::Duration;
     ///
     /// # pub async fn example() -> Result<()> {
@@ -250,7 +250,7 @@ impl<'a> TableScan<'a> {
     /// # use fluss::config::Config;
     /// # use fluss::error::Result;
     /// # use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-    /// # use fluss::row::InternalRow;
+    /// # use fluss::row::{DataGetters, InternalRow};
     /// # use std::time::Duration;
     ///
     /// # pub async fn example() -> Result<()> {

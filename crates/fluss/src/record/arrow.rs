@@ -997,7 +997,7 @@ impl LogRecordBatch {
             Arc::new(record_batch),
             read_context.row_type.clone(),
             read_context.fluss_row_type().cloned(),
-        );
+        )?;
         let log_record_iterator = LogRecordIterator::Arrow(ArrowLogRecordIterator {
             reader: arrow_reader,
             base_offset: self.base_log_offset(),
@@ -1024,7 +1024,7 @@ impl LogRecordBatch {
                     Arc::new(record_batch),
                     read_context.row_type.clone(),
                     read_context.fluss_row_type().cloned(),
-                );
+                )?;
                 LogRecordIterator::Arrow(ArrowLogRecordIterator {
                     reader: arrow_reader,
                     base_offset: self.base_log_offset(),
@@ -1672,7 +1672,7 @@ pub struct ArrowReader {
 }
 
 impl ArrowReader {
-    pub fn new(record_batch: Arc<RecordBatch>, row_type: Arc<RowType>) -> Self {
+    pub fn new(record_batch: Arc<RecordBatch>, row_type: Arc<RowType>) -> Result<Self> {
         Self::new_with_fluss_row_type(record_batch, row_type, None)
     }
 
@@ -1680,13 +1680,12 @@ impl ArrowReader {
         record_batch: Arc<RecordBatch>,
         row_type: Arc<RowType>,
         fluss_row_type: Option<Arc<RowType>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let schema = fluss_row_type.as_deref().unwrap_or(&row_type);
-        let typed = TypedBatch::build(&record_batch, schema)
-            .expect("ArrowReader: TypedBatch::build failed — schema mismatch in scan setup");
-        ArrowReader {
+        let typed = TypedBatch::build(&record_batch, schema)?;
+        Ok(ArrowReader {
             batch: Arc::new(typed),
-        }
+        })
     }
 
     pub fn row_count(&self) -> usize {

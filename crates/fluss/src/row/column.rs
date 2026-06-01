@@ -67,16 +67,23 @@ impl ColumnarRow {
         self.row_id
     }
 
-    /// Returns the source `RecordBatch`. Panics on a nested cursor (returned
-    /// from [`DataGetters::get_row`]) — those have no batch of their own.
-    pub fn get_record_batch(&self) -> &RecordBatch {
-        self.batch.record_batch.as_ref().expect(
-            "get_record_batch called on a nested ColumnarRow; only the outer scan-level \
-             cursor carries a RecordBatch",
-        )
+    /// Returns the source `RecordBatch`, or `None` for a nested cursor
+    /// (from [`DataGetters::get_row`]), which has no batch of its own.
+    pub fn get_record_batch(&self) -> Option<&RecordBatch> {
+        self.batch.record_batch.as_ref()
     }
 
+    /// Resolves the column at `pos`, bounds-checking `row_id` first — the
+    /// single guard shared by every accessor.
     fn column(&self, pos: usize) -> Result<&TypedColumn> {
+        if self.row_id >= self.batch.num_rows {
+            return Err(IllegalArgument {
+                message: format!(
+                    "row index {} out of bounds (batch has {} rows)",
+                    self.row_id, self.batch.num_rows
+                ),
+            });
+        }
         self.batch.columns.get(pos).ok_or_else(|| IllegalArgument {
             message: format!(
                 "column index {pos} out of bounds (batch has {} columns)",

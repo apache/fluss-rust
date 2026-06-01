@@ -208,8 +208,9 @@ impl Utils {
             let columnar_row = record.row();
             let row_id = columnar_row.get_row_id();
             if row_id == 0 {
-                let record_batch = columnar_row.get_record_batch();
-                result.push(Arc::new(record_batch.clone()));
+                if let Some(record_batch) = columnar_row.get_record_batch() {
+                    result.push(Arc::new(record_batch.clone()));
+                }
             }
         }
         result
