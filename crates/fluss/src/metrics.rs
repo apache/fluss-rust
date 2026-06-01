@@ -60,16 +60,15 @@ pub const CLIENT_REQUESTS_IN_FLIGHT: &str = "fluss.client.requests_in_flight";
 // Java reference: ScannerMetricGroup.java, LogScannerImpl.java
 //
 // These track consumer liveness and processing efficiency at the `poll()`
-// boundary. Java records via `volatile long` fields read by gauge suppliers;
-// Rust snapshots the values at poll start/end.
+// boundary. Java records via `volatile long` fields read by gauge suppliers
+// at scrape time; Rust pushes values via the `metrics` facade.
 //
-// Java's `lastPollSecondsAgo` gauge is intentionally NOT ported. Java
-// implements it as a gauge supplier evaluated at scrape time, which the
-// `metrics` crate facade has no equivalent for. A snapshot-at-poll-start
-// port would just duplicate `time_between_poll_ms / 1000` and would not
-// advance while a consumer is hung — defeating the metric's purpose
-// (detecting a stuck consumer). Revisit if the `metrics` crate gains a
-// supplier abstraction or we add a background liveness task.
+// `time_between_poll_ms` and `poll_idle_ratio` are snapshot at poll
+// start / poll end. `last_poll_seconds_ago` must keep advancing between
+// polls (it measures elapsed time, not activity), so it is emitted by a
+// per-scanner 1-second background tokio task spawned in
+// `LogScannerInner::new`. The task is aborted when the last scanner
+// `Arc` is dropped, matching Java's `ScannerMetricGroup.close()`.
 // ---------------------------------------------------------------------------
 
 /// Gauge: milliseconds between the start of consecutive `poll()` calls. A
@@ -81,6 +80,17 @@ pub const SCANNER_TIME_BETWEEN_POLL_MS: &str = "fluss.client.scanner.time_betwee
 /// means the scanner is starved for data; a low value means the consumer is
 /// the bottleneck.
 pub const SCANNER_POLL_IDLE_RATIO: &str = "fluss.client.scanner.poll_idle_ratio";
+
+/// Gauge: integer seconds since the most recent `poll()` started. Advances
+/// monotonically between polls — the primary stuck-consumer signal.
+///
+/// Pushed every second by a per-scanner background tokio task. Emission is
+/// skipped until the first `poll()` happens; Java's equivalent
+/// `lastPollSecondsAgo` returns roughly the current Unix-epoch seconds
+/// before the first poll (an unguarded `(now - 0)/1000`), which would trip
+/// every consumer-liveness alert on startup.
+///
+pub const SCANNER_LAST_POLL_SECONDS_AGO: &str = "fluss.client.scanner.last_poll_seconds_ago";
 
 // ---------------------------------------------------------------------------
 // Scanner fetch + remote download metrics
@@ -143,6 +153,7 @@ pub const SCANNER_REMOTE_FETCH_ERRORS_TOTAL: &str =
 pub(crate) struct ScannerMetrics {
     time_between_poll_ms: metrics::Gauge,
     poll_idle_ratio: metrics::Gauge,
+    last_poll_seconds_ago: metrics::Gauge,
     fetch_requests_total: metrics::Counter,
     fetch_latency_ms: metrics::Histogram,
     bytes_per_request: metrics::Histogram,
@@ -160,6 +171,7 @@ impl ScannerMetrics {
         Self {
             time_between_poll_ms: scanner_gauge(SCANNER_TIME_BETWEEN_POLL_MS, database, table),
             poll_idle_ratio: scanner_gauge(SCANNER_POLL_IDLE_RATIO, database, table),
+            last_poll_seconds_ago: scanner_gauge(SCANNER_LAST_POLL_SECONDS_AGO, database, table),
             fetch_requests_total: scanner_counter(SCANNER_FETCH_REQUESTS_TOTAL, database, table),
             fetch_latency_ms: scanner_histogram(SCANNER_FETCH_LATENCY_MS, database, table),
             bytes_per_request: scanner_histogram(SCANNER_BYTES_PER_REQUEST, database, table),
@@ -187,6 +199,10 @@ impl ScannerMetrics {
 
     pub(crate) fn record_poll_idle_ratio(&self, value: f64) {
         self.poll_idle_ratio.set(value);
+    }
+
+    pub(crate) fn record_last_poll_seconds_ago(&self, value: f64) {
+        self.last_poll_seconds_ago.set(value);
     }
 
     pub(crate) fn record_fetch_request(&self) {
@@ -483,6 +499,27 @@ mod tests {
             Some(200.0)
         );
         assert_eq!(find_gauge!(entries, SCANNER_POLL_IDLE_RATIO), Some(0.8));
+        assert_scanner_entries_labeled(&entries, "db", "tbl");
+    }
+
+    #[test]
+    fn scanner_last_poll_seconds_ago_emits_correctly() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            let table_path = TablePath::new("db", "tbl");
+            let m = ScannerMetrics::new(&table_path);
+            m.record_last_poll_seconds_ago(42.0);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        assert_eq!(
+            find_gauge!(entries, SCANNER_LAST_POLL_SECONDS_AGO),
+            Some(42.0)
+        );
         assert_scanner_entries_labeled(&entries, "db", "tbl");
     }
 

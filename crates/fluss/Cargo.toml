@@ -82,6 +82,10 @@ jiff = { workspace = true, features = ["js"] }
 [dev-dependencies]
 metrics-util = "0.20"
 fluss-test-cluster = { path = "../fluss-test-cluster" }
+# `test-util` (paused clock + `tokio::time::advance`) is not part of the
+# workspace `full` feature set; enable it for tests so the
+# `last_poll_seconds_ago` ticker loop can be driven deterministically.
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 prost-build = "0.14"
