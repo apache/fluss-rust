@@ -46,6 +46,28 @@ defmodule Fluss.Test.Cluster do
     end
   end
 
+  def connect_with_retry(config, timeout_s) do
+    deadline = System.monotonic_time(:second) + timeout_s
+    do_connect_retry(config, deadline, nil)
+  end
+
+  defp do_connect_retry(config, deadline, last_error) do
+    if System.monotonic_time(:second) >= deadline do
+      raise "Could not connect to Fluss cluster: #{inspect(last_error)}"
+    end
+
+    try do
+      conn = Fluss.Connection.new!(config)
+      admin = Fluss.Admin.new!(conn)
+      {:ok, _databases} = Fluss.Admin.list_databases(admin)
+      {conn, admin}
+    rescue
+      e ->
+        Process.sleep(2_000)
+        do_connect_retry(config, deadline, e)
+    end
+  end
+
   defp start_cluster do
     with {:ok, cli} <- find_cli_binary(),
          {output, 0} <-

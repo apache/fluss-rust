@@ -25,6 +25,8 @@ defmodule Fluss.Native do
   # Admin
   def admin_new(_conn), do: :erlang.nif_error(:nif_not_loaded)
 
+  def admin_get_server_nodes(_admin), do: :erlang.nif_error(:nif_not_loaded)
+
   def admin_create_database(_admin, _name, _ignore_if_exists),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -33,6 +35,8 @@ defmodule Fluss.Native do
 
   def admin_list_databases(_admin), do: :erlang.nif_error(:nif_not_loaded)
 
+  def admin_database_exists(_admin, _database_name), do: :erlang.nif_error(:nif_not_loaded)
+
   def admin_create_table(_admin, _db, _table, _descriptor, _ignore_if_exists),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -40,6 +44,9 @@ defmodule Fluss.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_list_tables(_admin, _database), do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_table_exists(_admin, _database_name, _table_name),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   # Schema / TableDescriptor
   def table_descriptor_new(_schema, _bucket_count, _properties),

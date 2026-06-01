@@ -16,28 +16,9 @@
 # under the License.
 
 defmodule Fluss.Integration.LogTableTest do
-  use ExUnit.Case, async: false
-
-  alias Fluss.Test.Cluster
-
-  @moduletag :integration
+  use Fluss.Test.IntegrationCase, async: false
 
   @database "fluss"
-
-  setup_all do
-    case Cluster.ensure_started() do
-      {:ok, servers} ->
-        config = Fluss.Config.new(servers)
-
-        # Wait for cluster to be fully ready (connection + admin working)
-        {conn, admin} = connect_with_retry(config, 90)
-
-        %{conn: conn, admin: admin, config: config}
-
-      {:error, reason} ->
-        raise "Failed to start Fluss cluster: #{reason}"
-    end
-  end
 
   describe "append and scan" do
     test "append rows and scan with log scanner", %{conn: conn, admin: admin} do
@@ -387,27 +368,5 @@ defmodule Fluss.Integration.LogTableTest do
 
   defp cleanup_table(admin, table_name) do
     Fluss.Admin.drop_table(admin, @database, table_name, true)
-  end
-
-  defp connect_with_retry(config, timeout_s) do
-    deadline = System.monotonic_time(:second) + timeout_s
-    do_connect_retry(config, deadline, nil)
-  end
-
-  defp do_connect_retry(config, deadline, last_error) do
-    if System.monotonic_time(:second) >= deadline do
-      raise "Could not connect to Fluss cluster: #{inspect(last_error)}"
-    end
-
-    try do
-      conn = Fluss.Connection.new!(config)
-      admin = Fluss.Admin.new!(conn)
-      {:ok, _databases} = Fluss.Admin.list_databases(admin)
-      {conn, admin}
-    rescue
-      e ->
-        Process.sleep(2_000)
-        do_connect_retry(config, deadline, e)
-    end
   end
 end
