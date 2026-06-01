@@ -88,7 +88,10 @@ impl FieldGetter {
                 key_type: m.key_type().clone(),
                 value_type: m.value_type().clone(),
             },
-            DataType::Row(_) => InnerFieldGetter::Row { pos },
+            DataType::Row(rt) => InnerFieldGetter::Row {
+                pos,
+                row_type: rt.clone(),
+            },
         };
 
         if data_type.is_nullable() {
@@ -165,6 +168,9 @@ pub enum InnerFieldGetter {
     },
     Row {
         pos: usize,
+        /// Schema needed to materialize a columnar `RowView` back into an
+        /// owned `GenericRow` for `Datum::Row`.
+        row_type: RowType,
     },
 }
 
@@ -195,9 +201,13 @@ impl InnerFieldGetter {
             InnerFieldGetter::TimestampLtz { pos, precision } => {
                 Datum::TimestampLtz(row.get_timestamp_ltz(*pos, *precision)?)
             }
-            InnerFieldGetter::Array { pos } => Datum::Array(row.get_array(*pos)?),
-            InnerFieldGetter::Map { pos, .. } => Datum::Map(row.get_map(*pos)?),
-            InnerFieldGetter::Row { pos } => Datum::Row(Box::new(row.get_row(*pos)?.clone())),
+            InnerFieldGetter::Array { pos } => {
+                Datum::Array(row.get_array(*pos)?.try_into_binary()?)
+            }
+            InnerFieldGetter::Map { pos, .. } => Datum::Map(row.get_map(*pos)?.try_into_binary()?),
+            InnerFieldGetter::Row { pos, row_type } => {
+                Datum::Row(Box::new(row.get_row(*pos)?.try_into_generic(row_type)?))
+            }
         })
     }
 
@@ -221,7 +231,7 @@ impl InnerFieldGetter {
             | Self::TimestampLtz { pos, .. }
             | Self::Array { pos }
             | Self::Map { pos, .. }
-            | Self::Row { pos } => *pos,
+            | Self::Row { pos, .. } => *pos,
         }
     }
 }

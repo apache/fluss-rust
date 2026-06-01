@@ -18,6 +18,9 @@
 pub mod binary_array;
 pub mod binary_map;
 mod column;
+pub(crate) mod column_vector;
+pub mod columnar;
+pub mod view;
 
 pub(crate) mod datum;
 mod decimal;
@@ -46,6 +49,7 @@ pub use lookup_row::LookupRow;
 pub(crate) use projected_row::ProjectedRow;
 pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
 use serde::Serialize;
+pub use view::{ArrayView, MapView, RowView};
 
 pub struct BinaryRow<'a> {
     data: BinaryDataWrapper<'a>,
@@ -69,84 +73,74 @@ impl<'a> BinaryRow<'a> {
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 
-pub trait InternalRow: Send + Sync {
-    /// Returns the number of fields in this row
-    fn get_field_count(&self) -> usize;
-
-    /// Returns true if the element is null at the given position
+/// Positional typed reads shared by rows and arrays. Lets one writer accept
+/// either shape without materializing.
+pub trait DataGetters: Send + Sync {
     fn is_null_at(&self, pos: usize) -> Result<bool>;
 
-    /// Returns the boolean value at the given position
     fn get_boolean(&self, pos: usize) -> Result<bool>;
-
-    /// Returns the byte value at the given position
     fn get_byte(&self, pos: usize) -> Result<i8>;
-
-    /// Returns the short value at the given position
     fn get_short(&self, pos: usize) -> Result<i16>;
-
-    /// Returns the integer value at the given position
     fn get_int(&self, pos: usize) -> Result<i32>;
-
-    /// Returns the long value at the given position
     fn get_long(&self, pos: usize) -> Result<i64>;
-
-    /// Returns the float value at the given position
     fn get_float(&self, pos: usize) -> Result<f32>;
-
-    /// Returns the double value at the given position
     fn get_double(&self, pos: usize) -> Result<f64>;
-
-    /// Returns the string value at the given position with fixed length
     fn get_char(&self, pos: usize, length: usize) -> Result<&str>;
-
-    /// Returns the string value at the given position
     fn get_string(&self, pos: usize) -> Result<&str>;
-
-    /// Returns the decimal value at the given position
     fn get_decimal(&self, pos: usize, precision: usize, scale: usize) -> Result<Decimal>;
-
-    /// Returns the date value at the given position (date as days since epoch)
     fn get_date(&self, pos: usize) -> Result<Date>;
-
-    /// Returns the time value at the given position (time as milliseconds since midnight)
     fn get_time(&self, pos: usize) -> Result<Time>;
-
-    /// Returns the timestamp value at the given position (timestamp without timezone)
-    ///
-    /// The precision is required to determine whether the timestamp value was stored
-    /// in a compact representation (precision <= 3) or with nanosecond precision.
     fn get_timestamp_ntz(&self, pos: usize, precision: u32) -> Result<TimestampNtz>;
-
-    /// Returns the timestamp value at the given position (timestamp with local timezone)
-    ///
-    /// The precision is required to determine whether the timestamp value was stored
-    /// in a compact representation (precision <= 3) or with nanosecond precision.
     fn get_timestamp_ltz(&self, pos: usize, precision: u32) -> Result<TimestampLtz>;
-
-    /// Returns the binary value at the given position with fixed length
     fn get_binary(&self, pos: usize, length: usize) -> Result<&[u8]>;
-
-    /// Returns the binary value at the given position
     fn get_bytes(&self, pos: usize) -> Result<&[u8]>;
 
-    /// Returns the array value at the given position
-    fn get_array(&self, pos: usize) -> Result<FlussArray>;
+    fn get_array(&self, pos: usize) -> Result<view::ArrayView<'_>> {
+        Err(IllegalArgument {
+            message: format!("get_array not supported at position {pos}"),
+        })
+    }
 
-    /// Returns the map value at the given position
-    fn get_map(&self, pos: usize) -> Result<FlussMap>;
+    fn get_map(&self, pos: usize) -> Result<view::MapView<'_>> {
+        Err(IllegalArgument {
+            message: format!("get_map not supported at position {pos}"),
+        })
+    }
 
-    /// Returns the nested row value at the given position
-    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+    fn get_row(&self, pos: usize) -> Result<view::RowView<'_>> {
         Err(IllegalArgument {
             message: format!("get_row not supported at position {pos}"),
         })
     }
+}
+
+pub trait InternalRow: DataGetters {
+    /// Returns the number of fields in this row
+    fn get_field_count(&self) -> usize;
 
     /// Returns encoded bytes if already encoded
     fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
         None
     }
+}
+
+/// Read-side accessor for an ARRAY column.
+pub trait InternalArray: DataGetters {
+    /// Number of elements (including nulls).
+    fn size(&self) -> usize;
+}
+
+/// Read-side accessor for a MAP column. Keys and values are parallel
+/// [`InternalArray`]s indexed in lockstep.
+pub trait InternalMap: Send + Sync {
+    /// Number of key/value entries.
+    fn size(&self) -> usize;
+
+    /// Keys in entry order; the binary-map invariant guarantees no nulls.
+    fn key_array(&self) -> &dyn InternalArray;
+
+    /// Values in entry order, paired with [`Self::key_array`] by position.
+    fn value_array(&self) -> &dyn InternalArray;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -182,7 +176,9 @@ impl<'a> InternalRow for GenericRow<'a> {
     fn get_field_count(&self) -> usize {
         self.values.len()
     }
+}
 
+impl<'a> DataGetters for GenericRow<'a> {
     fn is_null_at(&self, pos: usize) -> Result<bool> {
         Ok(self.get_value(pos)?.is_null())
     }
@@ -299,27 +295,27 @@ impl<'a> InternalRow for GenericRow<'a> {
         }
     }
 
-    fn get_array(&self, pos: usize) -> Result<FlussArray> {
+    fn get_array(&self, pos: usize) -> Result<view::ArrayView<'_>> {
         match self.get_value(pos)? {
-            Datum::Array(a) => Ok(a.clone()),
+            Datum::Array(a) => Ok(view::ArrayView::Binary(a.clone())),
             other => Err(IllegalArgument {
                 message: format!("type mismatch at position {pos}: expected Array, got {other:?}"),
             }),
         }
     }
 
-    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+    fn get_map(&self, pos: usize) -> Result<view::MapView<'_>> {
         match self.get_value(pos)? {
-            Datum::Map(m) => Ok(m.clone()),
+            Datum::Map(m) => Ok(view::MapView::Binary(m.clone())),
             other => Err(IllegalArgument {
                 message: format!("type mismatch at position {pos}: expected Map, got {other:?}"),
             }),
         }
     }
 
-    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+    fn get_row(&self, pos: usize) -> Result<view::RowView<'_>> {
         match self.get_value(pos)? {
-            Datum::Row(r) => Ok(r.as_ref()),
+            Datum::Row(r) => Ok(view::RowView::Generic(r.as_ref())),
             other => Err(IllegalArgument {
                 message: format!("type mismatch at position {pos}: expected Row, got {other:?}"),
             }),

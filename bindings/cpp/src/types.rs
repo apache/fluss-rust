@@ -588,8 +588,10 @@ pub fn compacted_row_to_owned(
             fcore::metadata::DataType::Binary(dt) => {
                 Datum::Blob(Cow::Owned(row.get_binary(i, dt.length())?.to_vec()))
             }
-            fcore::metadata::DataType::Array(_) => Datum::Array(row.get_array(i)?),
-            fcore::metadata::DataType::Map(_) => Datum::Map(row.get_map(i)?),
+            fcore::metadata::DataType::Array(_) => {
+                Datum::Array(row.get_array(i)?.try_into_binary()?)
+            }
+            fcore::metadata::DataType::Map(_) => Datum::Map(row.get_map(i)?.try_into_binary()?),
             other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
         };
 

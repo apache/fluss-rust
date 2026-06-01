@@ -19,11 +19,10 @@ use crate::client::WriteFormat;
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::RowType;
-use crate::row::binary_array::FlussArray;
-use crate::row::binary_map::FlussMap;
 use crate::row::compacted::compacted_row_reader::{CompactedRowDeserializer, CompactedRowReader};
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
-use crate::row::{Decimal, GenericRow, InternalRow};
+use crate::row::view::{ArrayView, MapView, RowView};
+use crate::row::{DataGetters, Decimal, GenericRow, InternalRow};
 use std::sync::{Arc, OnceLock};
 
 pub fn calculate_bit_set_width_in_bytes(arity: usize) -> usize {
@@ -93,6 +92,16 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.arity
     }
 
+    fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
+        match write_format {
+            WriteFormat::CompactedKv => Some(self.as_bytes()),
+            WriteFormat::ArrowLog => None,
+            WriteFormat::CompactedLog => None,
+        }
+    }
+}
+
+impl<'a> DataGetters for CompactedRow<'a> {
     fn is_null_at(&self, pos: usize) -> Result<bool> {
         let fields = self.deserializer.get_row_type().fields();
         if pos >= fields.len() {
@@ -170,24 +179,16 @@ impl<'a> InternalRow for CompactedRow<'a> {
         self.decoded_row()?.get_bytes(pos)
     }
 
-    fn get_array(&self, pos: usize) -> Result<FlussArray> {
+    fn get_array(&self, pos: usize) -> Result<ArrayView<'_>> {
         self.decoded_row()?.get_array(pos)
     }
 
-    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+    fn get_map(&self, pos: usize) -> Result<MapView<'_>> {
         self.decoded_row()?.get_map(pos)
     }
 
-    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+    fn get_row(&self, pos: usize) -> Result<RowView<'_>> {
         self.decoded_row()?.get_row(pos)
-    }
-
-    fn as_encoded_bytes(&self, write_format: WriteFormat) -> Option<&[u8]> {
-        match write_format {
-            WriteFormat::CompactedKv => Some(self.as_bytes()),
-            WriteFormat::ArrowLog => None,
-            WriteFormat::CompactedLog => None,
-        }
     }
 }
 
@@ -198,6 +199,7 @@ mod tests {
     use crate::row::binary::BinaryWriter;
     use crate::row::binary_array::FlussArrayWriter;
     use crate::row::binary_map::FlussMapWriter;
+    use crate::row::{InternalArray, InternalMap};
 
     use crate::metadata::{
         BigIntType, BooleanType, BytesType, DataType, DoubleType, FloatType, IntType, SmallIntType,
@@ -424,10 +426,10 @@ mod tests {
 
         let read_arr = row.get_array(0).unwrap();
         assert_eq!(read_arr.size(), 3);
-        assert!(!read_arr.is_null_at(0));
+        assert!(!read_arr.is_null_at(0).unwrap());
         assert_eq!(read_arr.get_int(0).unwrap(), 10);
-        assert!(read_arr.is_null_at(1));
-        assert!(!read_arr.is_null_at(2));
+        assert!(read_arr.is_null_at(1).unwrap());
+        assert!(!read_arr.is_null_at(2).unwrap());
         assert_eq!(read_arr.get_int(2).unwrap(), 30);
     }
 

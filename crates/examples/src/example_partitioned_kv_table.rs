@@ -20,7 +20,7 @@ use fluss::client::{FlussAdmin, FlussConnection};
 use fluss::config::Config;
 use fluss::error::Result;
 use fluss::metadata::{DataTypes, PartitionSpec, Schema, TableDescriptor, TablePath};
-use fluss::row::{GenericRow, InternalRow};
+use fluss::row::{DataGetters, GenericRow};
 use std::collections::HashMap;
 
 #[tokio::main]

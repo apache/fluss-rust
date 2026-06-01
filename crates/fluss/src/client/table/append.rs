@@ -131,7 +131,7 @@ impl AppendWriter {
                 Arc::new(self.table_info.row_type.clone()),
                 0,
                 None,
-            );
+            )?;
             Arc::new(get_physical_path(
                 &self.table_path,
                 self.partition_getter.as_ref(),

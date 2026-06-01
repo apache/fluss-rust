@@ -23,7 +23,8 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::UNEXIST_MAPPING;
 use crate::row::datum::{Date, Time, TimestampLtz, TimestampNtz};
-use crate::row::{Decimal, FlussArray, FlussMap, GenericRow, InternalRow};
+use crate::row::view::{ArrayView, MapView, RowView};
+use crate::row::{DataGetters, Decimal, InternalRow};
 use std::sync::Arc;
 
 pub(crate) struct ProjectedRow<R> {
@@ -73,6 +74,14 @@ impl<R: InternalRow> InternalRow for ProjectedRow<R> {
         self.index_mapping.len()
     }
 
+    fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
+        // Projection changes the field layout, so the inner row's
+        // encoded form no longer matches.
+        None
+    }
+}
+
+impl<R: InternalRow> DataGetters for ProjectedRow<R> {
     fn is_null_at(&self, pos: usize) -> Result<bool> {
         let mapped = self
             .index_mapping
@@ -138,22 +147,16 @@ impl<R: InternalRow> InternalRow for ProjectedRow<R> {
     fn get_bytes(&self, pos: usize) -> Result<&[u8]> {
         project!(self, get_bytes, pos)
     }
-    fn get_array(&self, pos: usize) -> Result<FlussArray> {
+    fn get_array(&self, pos: usize) -> Result<ArrayView<'_>> {
         project!(self, get_array, pos)
     }
 
-    fn get_map(&self, pos: usize) -> Result<FlussMap> {
+    fn get_map(&self, pos: usize) -> Result<MapView<'_>> {
         project!(self, get_map, pos)
     }
 
-    fn get_row(&self, pos: usize) -> Result<&GenericRow<'_>> {
+    fn get_row(&self, pos: usize) -> Result<RowView<'_>> {
         project!(self, get_row, pos)
-    }
-
-    fn as_encoded_bytes(&self, _write_format: WriteFormat) -> Option<&[u8]> {
-        // Projection changes the field layout, so the inner row's
-        // encoded form no longer matches.
-        None
     }
 }
 

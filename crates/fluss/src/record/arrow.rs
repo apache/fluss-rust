@@ -22,8 +22,9 @@ use crate::compression::{
 use crate::error::{Error, Result};
 use crate::metadata::{DataField, DataType, RowType};
 use crate::record::{ChangeType, ScanRecord};
+use crate::row::column_vector::TypedBatch;
 use crate::row::column_writer::{ColumnWriter, round_up_to_8};
-use crate::row::{ColumnarRow, InternalRow, arrow_row_column_indices, fluss_row_column_indices};
+use crate::row::{ColumnarRow, InternalRow};
 use arrow::array::{ArrayBuilder, ArrayRef};
 use arrow::{
     array::RecordBatch,
@@ -996,7 +997,7 @@ impl LogRecordBatch {
             Arc::new(record_batch),
             read_context.row_type.clone(),
             read_context.fluss_row_type().cloned(),
-        );
+        )?;
         let log_record_iterator = LogRecordIterator::Arrow(ArrowLogRecordIterator {
             reader: arrow_reader,
             base_offset: self.base_log_offset(),
@@ -1023,7 +1024,7 @@ impl LogRecordBatch {
                     Arc::new(record_batch),
                     read_context.row_type.clone(),
                     read_context.fluss_row_type().cloned(),
-                );
+                )?;
                 LogRecordIterator::Arrow(ArrowLogRecordIterator {
                     reader: arrow_reader,
                     base_offset: self.base_log_offset(),
@@ -1667,52 +1668,32 @@ impl Iterator for ArrowLogRecordIterator {
 }
 
 pub struct ArrowReader {
-    record_batch: Arc<RecordBatch>,
-    row_type: Arc<RowType>,
-    fluss_row_type: Option<Arc<RowType>>,
-    row_column_indices: Arc<[usize]>,
+    batch: Arc<TypedBatch>,
 }
 
 impl ArrowReader {
-    pub fn new(record_batch: Arc<RecordBatch>, row_type: Arc<RowType>) -> Self {
-        let row_column_indices = arrow_row_column_indices(&record_batch);
-        ArrowReader {
-            record_batch,
-            row_type,
-            fluss_row_type: None,
-            row_column_indices,
-        }
+    pub fn new(record_batch: Arc<RecordBatch>, row_type: Arc<RowType>) -> Result<Self> {
+        Self::new_with_fluss_row_type(record_batch, row_type, None)
     }
 
     pub fn new_with_fluss_row_type(
         record_batch: Arc<RecordBatch>,
         row_type: Arc<RowType>,
         fluss_row_type: Option<Arc<RowType>>,
-    ) -> Self {
-        let row_column_indices = match &fluss_row_type {
-            Some(rt) => fluss_row_column_indices(rt),
-            None => arrow_row_column_indices(&record_batch),
-        };
-        ArrowReader {
-            record_batch,
-            row_type,
-            fluss_row_type,
-            row_column_indices,
-        }
+    ) -> Result<Self> {
+        let schema = fluss_row_type.as_deref().unwrap_or(&row_type);
+        let typed = TypedBatch::build(&record_batch, schema)?;
+        Ok(ArrowReader {
+            batch: Arc::new(typed),
+        })
     }
 
     pub fn row_count(&self) -> usize {
-        self.record_batch.num_rows()
+        self.batch.num_rows
     }
 
     pub fn read(&self, row_id: usize) -> ColumnarRow {
-        ColumnarRow::with_indices(
-            self.record_batch.clone(),
-            self.row_type.clone(),
-            row_id,
-            self.fluss_row_type.clone(),
-            self.row_column_indices.clone(),
-        )
+        ColumnarRow::from_typed_batch(Arc::clone(&self.batch), row_id)
     }
 }
 pub struct MyVec<T>(pub StreamReader<T>);

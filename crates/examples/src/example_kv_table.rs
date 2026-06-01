@@ -20,7 +20,7 @@ use fluss::client::FlussConnection;
 use fluss::config::Config;
 use fluss::error::Result;
 use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-use fluss::row::{GenericRow, InternalRow};
+use fluss::row::{DataGetters, GenericRow};
 
 #[tokio::main]
 #[allow(dead_code)]
