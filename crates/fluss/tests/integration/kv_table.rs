@@ -1182,15 +1182,8 @@ mod kv_table_test {
             .expect("Failed to drop table");
     }
 
-    /// Test that KV format v2 tables with non-default bucket key reject v0 clients.
-    /// The Rust client currently only supports API version 0 for PutKv/Lookup/PrefixLookup.
-    /// When the server creates a table with kv_format_version=2 and a non-default bucket key,
-    /// it rejects v0 clients because CompactedKeyEncoder (v1) is required.
-    // TODO(key-encoding-v1): Once v1 key encoding is implemented and the client advertises
-    //  PutKv/Lookup/PrefixLookup v1, this test should be updated to verify that v1 clients
-    //  can successfully write to and read from kv_format_v2 tables with non-default bucket keys.
     #[tokio::test]
-    async fn kv_format_v2_table_rejects_v0_client() {
+    async fn upsert_and_prefix_lookup_with_paimon_format_v1() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
 
@@ -1199,7 +1192,7 @@ mod kv_table_test {
         let table_path = TablePath::new("fluss", "test_kv_format_v2_reject_v0");
 
         // Create a KV table with:
-        // 1. kv_format_version = 2
+        // 1. kv_format_version = 1
         // 2. non-default bucket key ("a" is a subset of pk ("a", "b"))
         // 3. datalake format is exist.
         let table_descriptor = TableDescriptor::builder()
@@ -1213,39 +1206,323 @@ mod kv_table_test {
                     .expect("Failed to build schema"),
             )
             .distributed_by(Some(2), vec!["a".to_string()])
-            .property("table.kv.format-version", "2")
-            .property("table.datalake.format", "lance")
+            .property("table.kv.format-version", "1")
+            .property("table.datalake.format", "paimon")
             .build()
             .expect("Failed to build table");
 
         create_table(&admin, &table_path, &table_descriptor).await;
 
         let table = connection.get_table(&table_path).await.unwrap();
+        assert_eq!(
+            table
+                .get_table_info()
+                .get_properties()
+                .get("table.kv.format-version")
+                .unwrap(),
+            "1"
+        );
 
-        // Test PutKv with v0 client - should fail with UNSUPPORTED_VERSION
         let table_upsert = table.new_upsert().expect("Failed to create upsert");
         let upsert_writer = table_upsert
             .create_writer()
             .expect("Failed to create writer");
 
-        let mut row = GenericRow::new(3);
-        row.set_field(0, 1);
-        row.set_field(1, "a");
-        row.set_field(2, "value1");
-        let upsert_result = upsert_writer
-            .upsert(&row)
-            .expect("Failed to upsert row")
-            .await;
-        assert!(
-            upsert_result.is_err(),
-            "PutKv with v0 client should be rejected for kv_format_v2 table with non-default bucket key"
+        let mut upsert_row = GenericRow::new(3);
+        upsert_row.set_field(0, 1);
+        upsert_row.set_field(1, "a");
+        upsert_row.set_field(2, "value1");
+        upsert_writer
+            .upsert(&upsert_row)
+            .unwrap()
+            .await
+            .expect("Failed to upsert row");
+
+        // prefix lookup
+        let mut lookup_row = GenericRow::new(1);
+        lookup_row.set_field(0, 1);
+        let mut prefix_lookup = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .lookup_by(vec!["a".to_string()])
+            .create_lookuper()
+            .expect("Failed to create prefix lookuper");
+        let lookup_result = prefix_lookup
+            .lookup(&lookup_row)
+            .await
+            .expect("fail to lookup");
+        let row = lookup_result
+            .get_single_row()
+            .unwrap()
+            .expect("Row should exist");
+        assert_eq!(row.get_string(2).unwrap(), "value1");
+    }
+
+    /// Verifies upsert/lookup/update/delete on a KV table whose data lake format
+    /// is `paimon`, exercising every scalar `DataType` supported by Paimon's
+    /// BinaryRow encoder. With the default `kv_format_version=1`, the client
+    /// uses `PaimonKeyEncoder` for both the bucket key and the primary key,
+    /// so this also exercises the end-to-end Paimon key encoding path.
+    /// ARRAY/MAP/ROW are intentionally excluded because Paimon's BinaryRow
+    /// writer rejects them.
+    #[tokio::test]
+    async fn upsert_and_lookup_with_paimon_format_v2() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+
+        let admin = connection.get_admin().unwrap();
+
+        let table_path = TablePath::new("fluss", "test_kv_paimon_format");
+
+        // Schema covering every Paimon-supported scalar type.
+        // INT primary key keeps the bucket-key/primary-key encoding focused
+        // while the value columns sweep all remaining scalar types.
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("col_tinyint", DataTypes::tinyint())
+                    .column("col_smallint", DataTypes::smallint())
+                    .column("col_bigint", DataTypes::bigint())
+                    .column("col_float", DataTypes::float())
+                    .column("col_double", DataTypes::double())
+                    .column("col_boolean", DataTypes::boolean())
+                    .column("col_char", DataTypes::char(10))
+                    .column("col_string", DataTypes::string())
+                    .column("col_decimal", DataTypes::decimal(10, 2))
+                    .column("col_date", DataTypes::date())
+                    .column("col_time_s", DataTypes::time_with_precision(0))
+                    .column("col_time_ms", DataTypes::time_with_precision(3))
+                    .column("col_time_us", DataTypes::time_with_precision(6))
+                    .column("col_time_ns", DataTypes::time_with_precision(9))
+                    .column("col_timestamp", DataTypes::timestamp_with_precision(0))
+                    .column(
+                        "col_timestamp_ltz",
+                        DataTypes::timestamp_ltz_with_precision(6),
+                    )
+                    .column("col_bytes", DataTypes::bytes())
+                    .column("col_binary", DataTypes::binary(4))
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.datalake.format", "paimon")
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.unwrap();
+        assert_eq!(
+            table
+                .get_table_info()
+                .get_properties()
+                .get("table.kv.format-version")
+                .unwrap(),
+            "2"
         );
-        let err_msg = upsert_result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("Client API version 0 is not supported"),
-            "Expected 'Client API version 0 is not supported' error, got: {}",
-            err_msg
+
+        let field_count = table.get_table_info().schema.columns().len();
+
+        let table_upsert = table.new_upsert().expect("Failed to create upsert");
+        let upsert_writer = table_upsert
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Test data covering every Paimon scalar type.
+        let id: i32 = 1;
+        let col_tinyint: i8 = 127;
+        let col_smallint: i16 = 32767;
+        let col_bigint: i64 = 9_223_372_036_854_775_807;
+        let col_float: f32 = std::f32::consts::PI;
+        let col_double: f64 = std::f64::consts::E;
+        let col_boolean: bool = true;
+        let col_char: &str = "hello";
+        let col_string: &str = "world of fluss rust client (paimon format)";
+        let col_decimal = Decimal::from_unscaled_long(12345, 10, 2).unwrap(); // 123.45
+        let col_date = Date::new(20476); // 2026-01-23
+        let col_time_s = Time::new(36_827_000); // 10:13:47
+        let col_time_ms = Time::new(36_827_123);
+        let col_time_us = Time::new(86_399_999);
+        let col_time_ns = Time::new(1);
+        // col_timestamp uses precision 0 (second granularity); col_timestamp_ltz
+        // uses precision 6 (microsecond granularity) to also exercise the
+        // sub-millisecond nanos path.
+        let col_timestamp = TimestampNtz::new(1_769_163_227_000);
+        let col_timestamp_ltz =
+            TimestampLtz::from_millis_nanos(1_769_163_227_123, 456_000).unwrap();
+        let col_bytes: Vec<u8> = b"binary data".to_vec();
+        let col_binary: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+
+        let build_full_row = |id_val: i32| {
+            let mut row = GenericRow::new(field_count);
+            row.set_field(0, id_val);
+            row.set_field(1, col_tinyint);
+            row.set_field(2, col_smallint);
+            row.set_field(3, col_bigint);
+            row.set_field(4, col_float);
+            row.set_field(5, col_double);
+            row.set_field(6, col_boolean);
+            row.set_field(7, col_char);
+            row.set_field(8, col_string);
+            row.set_field(9, col_decimal.clone());
+            row.set_field(10, col_date);
+            row.set_field(11, col_time_s);
+            row.set_field(12, col_time_ms);
+            row.set_field(13, col_time_us);
+            row.set_field(14, col_time_ns);
+            row.set_field(15, col_timestamp);
+            row.set_field(16, col_timestamp_ltz);
+            row.set_field(17, col_bytes.as_slice());
+            row.set_field(18, col_binary.as_slice());
+            row
+        };
+
+        // Upsert two rows so we can also exercise delete on one and keep the
+        // other intact afterwards.
+        upsert_writer
+            .upsert(&build_full_row(id))
+            .expect("Failed to upsert paimon row");
+        upsert_writer
+            .upsert(&build_full_row(id + 1))
+            .expect("Failed to upsert second paimon row");
+        upsert_writer.flush().await.expect("Failed to flush");
+
+        let mut lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
+
+        // Verify every type round-trips through paimon-format upsert/lookup.
+        let assert_full_row = |row: &dyn DataGetters, expected_id: i32| {
+            assert_eq!(row.get_int(0).unwrap(), expected_id, "id mismatch");
+            assert_eq!(row.get_byte(1).unwrap(), col_tinyint, "tinyint mismatch");
+            assert_eq!(row.get_short(2).unwrap(), col_smallint, "smallint mismatch");
+            assert_eq!(row.get_long(3).unwrap(), col_bigint, "bigint mismatch");
+            assert!(
+                (row.get_float(4).unwrap() - col_float).abs() < f32::EPSILON,
+                "float mismatch",
+            );
+            assert!(
+                (row.get_double(5).unwrap() - col_double).abs() < f64::EPSILON,
+                "double mismatch",
+            );
+            assert_eq!(row.get_boolean(6).unwrap(), col_boolean, "boolean mismatch");
+            assert_eq!(row.get_char(7, 10).unwrap(), col_char, "char mismatch");
+            assert_eq!(row.get_string(8).unwrap(), col_string, "string mismatch");
+            assert_eq!(
+                row.get_decimal(9, 10, 2).unwrap(),
+                col_decimal,
+                "decimal mismatch",
+            );
+            assert_eq!(
+                row.get_date(10).unwrap().get_inner(),
+                col_date.get_inner(),
+                "date mismatch",
+            );
+            assert_eq!(
+                row.get_time(11).unwrap().get_inner(),
+                col_time_s.get_inner(),
+                "time(0) mismatch",
+            );
+            assert_eq!(
+                row.get_time(12).unwrap().get_inner(),
+                col_time_ms.get_inner(),
+                "time(3) mismatch",
+            );
+            assert_eq!(
+                row.get_time(13).unwrap().get_inner(),
+                col_time_us.get_inner(),
+                "time(6) mismatch",
+            );
+            assert_eq!(
+                row.get_time(14).unwrap().get_inner(),
+                col_time_ns.get_inner(),
+                "time(9) mismatch",
+            );
+            assert_eq!(
+                row.get_timestamp_ntz(15, 0).unwrap().get_millisecond(),
+                col_timestamp.get_millisecond(),
+                "timestamp(0) mismatch",
+            );
+            let ts_ltz = row.get_timestamp_ltz(16, 6).unwrap();
+            assert_eq!(
+                ts_ltz.get_epoch_millisecond(),
+                col_timestamp_ltz.get_epoch_millisecond(),
+                "timestamp_ltz(6) millis mismatch",
+            );
+            assert_eq!(
+                ts_ltz.get_nano_of_millisecond(),
+                col_timestamp_ltz.get_nano_of_millisecond(),
+                "timestamp_ltz(6) nanos mismatch",
+            );
+            assert_eq!(row.get_bytes(17).unwrap(), col_bytes, "bytes mismatch");
+            assert_eq!(
+                row.get_binary(18, 4).unwrap(),
+                col_binary,
+                "binary mismatch",
+            );
+        };
+
+        for expected_id in [id, id + 1] {
+            let result = lookuper
+                .lookup(&make_key_with_field_count(expected_id, 1))
+                .await
+                .expect("Failed to lookup");
+            let row = result.get_single_row().unwrap().expect("Row should exist");
+            assert_full_row(&row, expected_id);
+        }
+
+        // Update one row by upserting again with a different decimal value to
+        // verify update path under paimon format.
+        let updated_decimal = Decimal::from_unscaled_long(98765, 10, 2).unwrap(); // 987.65
+        let mut updated_row = build_full_row(id);
+        updated_row.set_field(9, updated_decimal.clone());
+        upsert_writer
+            .upsert(&updated_row)
+            .expect("Failed to upsert updated row")
+            .await
+            .expect("Failed to wait for upsert acknowledgment");
+
+        let result = lookuper
+            .lookup(&make_key_with_field_count(id, 1))
+            .await
+            .expect("Failed to lookup after update");
+        let found_row = result.get_single_row().unwrap().expect("Row should exist");
+        assert_eq!(
+            found_row.get_decimal(9, 10, 2).unwrap(),
+            updated_decimal,
+            "Decimal should be updated under paimon format",
         );
+        // Other columns remain unchanged.
+        assert_eq!(found_row.get_string(8).unwrap(), col_string);
+
+        // Delete the updated record.
+        let mut delete_row = GenericRow::new(field_count);
+        delete_row.set_field(0, id);
+        upsert_writer
+            .delete(&delete_row)
+            .expect("Failed to delete")
+            .await
+            .expect("Failed to wait for delete acknowledgment");
+
+        let result = lookuper
+            .lookup(&make_key_with_field_count(id, 1))
+            .await
+            .expect("Failed to lookup deleted record");
+        assert!(
+            result.get_single_row().unwrap().is_none(),
+            "Record {id} should not exist after delete under paimon format",
+        );
+
+        // The other record remains intact and still round-trips correctly.
+        let result = lookuper
+            .lookup(&make_key_with_field_count(id + 1, 1))
+            .await
+            .expect("Failed to lookup remaining record");
+        let row = result.get_single_row().unwrap().expect("Row should exist");
+        assert_full_row(&row, id + 1);
 
         admin
             .drop_table(&table_path, false)

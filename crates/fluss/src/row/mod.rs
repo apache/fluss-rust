@@ -32,6 +32,7 @@ pub mod encode;
 pub mod field_getter;
 mod fixed_schema_decoder;
 mod lookup_row;
+pub mod paimon;
 mod projected_row;
 mod row_decoder;
 
