@@ -53,10 +53,68 @@ defmodule Fluss.Integration.AdminTest do
     end
   end
 
-  describe "get_database_info/2" do
-    test "returns DatabaseInfo for an existing database", %{admin: admin} do
+  describe "create_database/3 with a descriptor" do
+    test "accepts a comment-only descriptor", %{admin: admin} do
       db = "fluss_data_sources_#{:rand.uniform(100_000)}"
-      :ok = Fluss.Admin.create_database(admin, db, true)
+      descriptor = Fluss.DatabaseDescriptor.new() |> Fluss.DatabaseDescriptor.comment("hello")
+      :ok = Fluss.Admin.create_database(admin, db, descriptor)
+      on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_database_info(admin, db)
+      assert info.descriptor.comment == "hello"
+      assert info.descriptor.custom_properties == %{}
+    end
+
+    test "accepts a properties-only descriptor", %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+
+      descriptor =
+        Fluss.DatabaseDescriptor.new()
+        |> Fluss.DatabaseDescriptor.put_custom_property("region", "eu-west-1")
+
+      :ok = Fluss.Admin.create_database(admin, db, descriptor)
+      on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_database_info(admin, db)
+      assert info.descriptor.custom_properties == %{"region" => "eu-west-1"}
+    end
+
+    test "accepts a struct constructed directly without builders", %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+      descriptor = %Fluss.DatabaseDescriptor{comment: "direct", custom_properties: %{"k" => "v"}}
+      :ok = Fluss.Admin.create_database(admin, db, descriptor)
+      on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_database_info(admin, db)
+      assert info.descriptor.comment == "direct"
+      assert info.descriptor.custom_properties == %{"k" => "v"}
+    end
+  end
+
+  describe "get_database_info/2" do
+    test "returns DatabaseInfo with the descriptor used at creation", %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+
+      descriptor =
+        Fluss.DatabaseDescriptor.new()
+        |> Fluss.DatabaseDescriptor.comment("Integration test database")
+        |> Fluss.DatabaseDescriptor.put_custom_property("owner", "ci")
+        |> Fluss.DatabaseDescriptor.put_custom_property("env", "test")
+
+      :ok = Fluss.Admin.create_database(admin, db, descriptor)
+      on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
+
+      assert {:ok, %Fluss.DatabaseInfo{} = info} = Fluss.Admin.get_database_info(admin, db)
+      assert info.database_name == db
+      assert info.descriptor.comment == "Integration test database"
+      assert info.descriptor.custom_properties == %{"owner" => "ci", "env" => "test"}
+      assert is_integer(info.created_time)
+      assert is_integer(info.modified_time)
+    end
+
+    test "returns DatabaseInfo for a database created with no descriptor", %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+      :ok = Fluss.Admin.create_database(admin, db)
       on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
 
       assert {:ok, %Fluss.DatabaseInfo{} = info} = Fluss.Admin.get_database_info(admin, db)
@@ -76,7 +134,7 @@ defmodule Fluss.Integration.AdminTest do
     test "returns {:ok, true} for an existing database", %{admin: admin} do
       db = "fluss_data_sources_#{:rand.uniform(100_000)}"
 
-      :ok = Fluss.Admin.create_database(admin, db, true)
+      :ok = Fluss.Admin.create_database(admin, db)
       on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
 
       assert {:ok, true} = Fluss.Admin.database_exists(admin, db)

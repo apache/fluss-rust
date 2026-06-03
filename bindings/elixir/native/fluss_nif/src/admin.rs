@@ -71,6 +71,16 @@ impl NifDatabaseDescriptor {
             custom_properties: desc.custom_properties().clone(),
         }
     }
+
+    pub fn to_core(&self) -> DatabaseDescriptor {
+        let mut desc = DatabaseDescriptor::builder();
+        if let Some(comment) = &self.comment {
+            desc = desc.comment(comment);
+        }
+
+        desc.custom_properties(self.custom_properties.clone())
+            .build()
+    }
 }
 
 #[derive(NifStruct)]
@@ -124,12 +134,14 @@ fn admin_create_database<'a>(
     env: Env<'a>,
     admin: ResourceArc<AdminResource>,
     database_name: String,
+    descriptor: Option<NifDatabaseDescriptor>,
     ignore_if_exists: bool,
 ) -> Term<'a> {
     async_nif::spawn_task(env, async move {
+        let core_descriptor = descriptor.as_ref().map(NifDatabaseDescriptor::to_core);
         admin
             .inner
-            .create_database(&database_name, None, ignore_if_exists)
+            .create_database(&database_name, core_descriptor.as_ref(), ignore_if_exists)
             .await
     })
 }

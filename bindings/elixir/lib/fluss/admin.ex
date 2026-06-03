@@ -24,6 +24,12 @@ defmodule Fluss.Admin do
       admin = Fluss.Admin.new!(conn)
       :ok = Fluss.Admin.create_database(admin, "my_db")
 
+      database_descriptor =
+        Fluss.DatabaseDescriptor.new()
+        |> Fluss.DatabaseDescriptor.comment("App data")
+
+      :ok = Fluss.Admin.create_database(admin, "another_db", database_descriptor)
+
       schema = Fluss.Schema.new() |> Fluss.Schema.column("ts", :bigint)
       descriptor = Fluss.TableDescriptor.new!(schema)
       :ok = Fluss.Admin.create_table(admin, "my_db", "events", descriptor)
@@ -65,10 +71,11 @@ defmodule Fluss.Admin do
     end
   end
 
-  @spec create_database(t(), String.t(), boolean()) :: :ok | {:error, Fluss.Error.t()}
-  def create_database(admin, name, ignore_if_exists \\ true) do
+  @spec create_database(t(), String.t(), Fluss.DatabaseDescriptor.t() | nil, boolean()) ::
+          :ok | {:error, Fluss.Error.t()}
+  def create_database(admin, name, descriptor \\ nil, ignore_if_exists \\ true) do
     admin
-    |> Native.admin_create_database(name, ignore_if_exists)
+    |> Native.admin_create_database(name, descriptor, ignore_if_exists)
     |> Native.await_nif()
   end
 
