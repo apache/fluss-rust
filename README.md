@@ -24,9 +24,12 @@
 [![docs.rs](https://img.shields.io/docsrs/fluss-rs)](https://docs.rs/fluss-rs/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-The official Rust client for [Apache Fluss™](https://fluss.apache.org/) (Incubating) — a streaming storage built for real-time analytics, serving as the real-time data layer for Lakehouse architectures.
+The official Rust **client** library for [Apache Fluss™](https://fluss.apache.org/) (Incubating) — a streaming storage built for real-time analytics, serving as the real-time data layer for Lakehouse architectures. This is a **client SDK**, not the Fluss server itself.
 
-This repository contains the **Rust core client** (`fluss-rs`) and **language bindings** for Python, C++, and Elixir.
+This repository contains:
+
+- **`fluss-rs`** — the Rust core client (crates.io: [`fluss-rs`](https://crates.io/crates/fluss-rs))
+- **Language bindings** — Python, C++, and Elixir clients built on top of `fluss-rs`
 
 ---
 
