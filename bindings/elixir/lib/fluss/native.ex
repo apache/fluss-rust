@@ -17,7 +17,11 @@
 
 defmodule Fluss.Native do
   @moduledoc false
-  use Rustler, otp_app: :fluss, crate: "fluss_nif"
+  # Release only when packaging for prod; debug keeps dev/test compiles fast.
+  use Rustler,
+    otp_app: :fluss,
+    crate: "fluss_nif",
+    mode: if(Mix.env() == :prod, do: :release, else: :debug)
 
   # Connection
   def connection_new(_config), do: :erlang.nif_error(:nif_not_loaded)
