@@ -121,7 +121,7 @@ cd fluss-0.8.0-incubating/
 ```toml
 [dependencies]
 fluss = { package = "fluss-rs", version = "0.2" }
-tokio = "1"
+tokio = { version = "1", features = ["full"] }
 ```
 
 ### 3. Write Code
@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
     let admin = conn.get_admin()?;
 
     // Create a log table
-    let table_path = TablePath::new("my_db", "events");
+    let table_path = TablePath::new("fluss", "events");
     let schema = Schema::builder()
         .column("ts", DataTypes::bigint())
         .column("message", DataTypes::string())
@@ -162,13 +162,13 @@ async fn main() -> Result<()> {
     writer.flush().await?;
 
     // Scan logs
-    let scanner = table.new_scan()?.create_log_scanner()?;
+    let scanner = table.new_scan().create_log_scanner()?;
     scanner.subscribe(0, EARLIEST_OFFSET).await?;
     loop {
         let records = scanner.poll(Duration::from_secs(5)).await?;
         for record in records {
             let row = record.row();
-            println!("offset={}, c1={}, c2={}",
+            println!("offset={}, ts={}, message={}",
                      record.offset(), row.get_long(0)?, row.get_string(1)?);
         }
     }
@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
     let admin = conn.get_admin()?;
 
     // Create a KV table
-    let table_path = TablePath::new("my_db", "users");
+    let table_path = TablePath::new("fluss", "users");
     let schema = Schema::builder()
         .column("id", DataTypes::int())
         .column("name", DataTypes::string())
@@ -232,8 +232,8 @@ async fn main() -> Result<()> {
 | Example                                  | Description                                    |
 | ---------------------------------------- | ---------------------------------------------- |
 | `example-table`                          | Log table: append + scan with Arrow batch      |
-| `example-kv-table`                       | KV table: upsert + point lookup                |
-| `example-partitioned-kv-table`           | KV table with partitions                       |
+| `example-upsert-lookup`                  | KV table: upsert + point lookup                |
+| `example-partitioned-upsert-lookup`      | KV table with partitions                       |
 | `example-prefix-lookup`                  | Prefix lookup on bucket keys                   |
 | `example-partitioned-prefix-lookup`      | Prefix lookup on partitioned tables            |
 
@@ -252,16 +252,16 @@ cargo build --example example-table --release
 
 | Option                                | Default           | Description                                   |
 | ------------------------------------- | ----------------- | --------------------------------------------- |
-| `bootstrap_servers`                   | `127.0.0.1:9123`  | Fluss coordinator address                     |
-| `writer.batch.size`                   | 2 MB              | Max batch size before flushing                |
-| `writer.batch.timeout_ms`             | 100 ms            | Max time before auto-flush                    |
-| `writer.buffer.memory`                | 64 MB             | Total buffer memory for pending writes        |
-| `writer.retries`                      | `i32::MAX`        | Max write retries                             |
-| `scanner.log.fetch.max.bytes`         | 16 MB             | Max bytes per fetch request                   |
-| `scanner.log.fetch.wait.max.time_ms`  | 500 ms            | Max wait time for fetch                       |
-| `scanner.remote_log.read.concurrency` | 4                 | Concurrency for remote log reads              |
-| `connect.timeout_ms`                  | 120 s             | Connection timeout                            |
-| `security.sasl.username` / `password` | —                  | SASL PLAIN authentication                     |
+| `bootstrap_servers`                    | `127.0.0.1:9123`  | Fluss coordinator address                     |
+| `writer_batch_size`                    | 2 MB              | Max batch size before flushing                |
+| `writer_batch_timeout_ms`              | 100 ms            | Max time before auto-flush                    |
+| `writer_buffer_memory_size`            | 64 MB             | Total buffer memory for pending writes        |
+| `writer_retries`                       | `i32::MAX`        | Max write retries                             |
+| `scanner_log_fetch_max_bytes`          | 16 MB             | Max bytes per fetch request                   |
+| `scanner_log_fetch_wait_max_time_ms`   | 500 ms            | Max wait time for fetch                       |
+| `scanner_remote_log_read_concurrency`  | 4                 | Concurrency for remote log reads              |
+| `connect_timeout_ms`                   | 120 s             | Connection timeout                            |
+| `security_sasl_username` / `security_sasl_password` | — | SASL PLAIN authentication             |
 
 Configuration can be set programmatically or via CLI flags (using [`clap`](https://docs.rs/clap)).
 
