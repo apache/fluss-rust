@@ -23,7 +23,10 @@ use std::time::Duration;
 
 use fluss as fcore;
 use fluss::PartitionId;
+use fluss::client::PrefixKeyLookuper;
 use fluss::error::Error;
+use fluss::metadata::{Column, TableInfo};
+use fluss::row::{Datum, GenericRow};
 use fluss::rpc::FlussError as CoreFlussError;
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
@@ -285,11 +288,13 @@ mod ffi {
         type LogScanner;
         type UpsertWriter;
         type Lookuper;
+        type PrefixLookuper;
 
         // Opaque types for optimized FFI
         type ScanResultInner;
         type GenericRowInner;
         type LookupResultInner;
+        type PrefixLookupResultInner;
         type ArrayWriterInner;
         type ArrayViewInner;
 
@@ -379,6 +384,7 @@ mod ffi {
         fn has_primary_key(self: &Table) -> bool;
         fn create_upsert_writer(self: &Table, column_indices: Vec<usize>) -> FfiPtrResult;
         fn new_lookuper(self: &Table) -> FfiPtrResult;
+        fn new_prefix_lookuper(self: &Table, lookup_column_names: Vec<String>) -> FfiPtrResult;
 
         // GenericRowInner — opaque row for writes
         fn new_generic_row(field_count: usize) -> Box<GenericRowInner>;
@@ -540,6 +546,152 @@ mod ffi {
         fn lv_get_array_element_type(self: &LookupResultInner, field: usize) -> Result<i32>;
         fn lv_get_array_view(self: &LookupResultInner, field: usize)
         -> Result<Box<ArrayViewInner>>;
+
+        // PrefixLookuper
+        unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper);
+        fn prefix_lookup(
+            self: &mut PrefixLookuper,
+            prefix_row: &GenericRowInner,
+        ) -> Box<PrefixLookupResultInner>;
+
+        // PrefixLookupResultInner accessors — like LookupResultInner but indexed
+        // by record, since a prefix lookup returns zero-or-more rows.
+        fn plv_has_error(self: &PrefixLookupResultInner) -> bool;
+        fn plv_error_code(self: &PrefixLookupResultInner) -> i32;
+        fn plv_error_message(self: &PrefixLookupResultInner) -> &str;
+        fn plv_row_count(self: &PrefixLookupResultInner) -> usize;
+        fn plv_field_count(self: &PrefixLookupResultInner) -> usize;
+        fn plv_column_name(self: &PrefixLookupResultInner, field: usize) -> Result<&str>;
+        fn plv_column_type(self: &PrefixLookupResultInner, field: usize) -> Result<i32>;
+        fn plv_is_null(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<bool>;
+        fn plv_get_bool(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<bool>;
+        fn plv_get_i32(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<i32>;
+        fn plv_get_i64(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<i64>;
+        fn plv_get_f32(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<f32>;
+        fn plv_get_f64(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<f64>;
+        fn plv_get_str(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<&str>;
+        fn plv_get_bytes(self: &PrefixLookupResultInner, rec: usize, field: usize)
+        -> Result<&[u8]>;
+        fn plv_get_date_days(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn plv_get_time_millis(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn plv_get_ts_millis(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<i64>;
+        fn plv_get_ts_nanos(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn plv_is_ts_ltz(self: &PrefixLookupResultInner, rec: usize, field: usize) -> Result<bool>;
+        fn plv_get_decimal_str(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<String>;
+
+        fn plv_get_array_size(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<usize>;
+        fn plv_get_array_is_null(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<bool>;
+        fn plv_get_array_bool(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<bool>;
+        fn plv_get_array_i32(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<i32>;
+        fn plv_get_array_i64(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<i64>;
+        fn plv_get_array_f32(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<f32>;
+        fn plv_get_array_f64(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<f64>;
+        fn plv_get_array_str(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<String>;
+        fn plv_get_array_bytes(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<Vec<u8>>;
+        fn plv_get_array_date_days(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<i32>;
+        fn plv_get_array_time_millis(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<i32>;
+        fn plv_get_array_ts_millis(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<i64>;
+        fn plv_get_array_ts_nanos(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<i32>;
+        fn plv_get_array_decimal_str(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+            element: usize,
+        ) -> Result<String>;
+        fn plv_get_array_element_type(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<i32>;
+        fn plv_get_array_view(
+            self: &PrefixLookupResultInner,
+            rec: usize,
+            field: usize,
+        ) -> Result<Box<ArrayViewInner>>;
 
         // ArrayViewInner — opaque recursive array reader for C++ bindings
         fn av_size(self: &ArrayViewInner) -> usize;
@@ -834,6 +986,13 @@ pub struct UpsertWriter {
 pub struct Lookuper {
     inner: fcore::client::Lookuper,
     table_info: fcore::metadata::TableInfo,
+}
+
+pub struct PrefixLookuper {
+    inner: PrefixKeyLookuper,
+    table_info: TableInfo,
+    /// Full-schema indices of the lookup columns, used to compact the input row.
+    lookup_column_indices: Vec<usize>,
 }
 
 /// Error code for client-side errors that did not originate from the server API protocol.
@@ -1595,6 +1754,38 @@ impl Table {
         }));
         ok_ptr(ptr as usize)
     }
+
+    fn new_prefix_lookuper(&self, lookup_column_names: Vec<String>) -> ffi::FfiPtrResult {
+        let _enter = RUNTIME.enter();
+
+        let table_lookup = match self.fluss_table().new_lookup() {
+            Ok(l) => l,
+            Err(e) => return err_ptr_from_core(&e),
+        };
+
+        // `create_lookuper` validates the column names (rejecting unknown ones),
+        // so by the time it succeeds every name resolves to an index.
+        let row_type = self.table_info.row_type();
+        let lookup_column_indices: Vec<usize> = lookup_column_names
+            .iter()
+            .filter_map(|name| row_type.get_field_index(name))
+            .collect();
+
+        let lookuper = match table_lookup
+            .lookup_by(lookup_column_names)
+            .create_lookuper()
+        {
+            Ok(l) => l,
+            Err(e) => return err_ptr_from_core(&e),
+        };
+
+        let ptr = Box::into_raw(Box::new(PrefixLookuper {
+            inner: lookuper,
+            table_info: self.table_info.clone(),
+            lookup_column_indices,
+        }));
+        ok_ptr(ptr as usize)
+    }
 }
 
 // AppendWriter implementation
@@ -1834,6 +2025,85 @@ impl Lookuper {
                 ))
             }
         }
+    }
+}
+
+// PrefixLookuper implementation
+unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper) {
+    if !lookuper.is_null() {
+        unsafe {
+            drop(Box::from_raw(lookuper));
+        }
+    }
+}
+
+impl PrefixLookuper {
+    /// Compact a sparse input row (prefix columns set at their schema positions)
+    /// into the dense, lookup-column-ordered row the core prefix encoder expects.
+    fn dense_prefix_row<'a>(&self, mut row: GenericRow<'a>) -> GenericRow<'a> {
+        let mut dense = GenericRow::new(self.lookup_column_indices.len());
+        for (dense_idx, &schema_idx) in self.lookup_column_indices.iter().enumerate() {
+            if schema_idx < row.values.len() {
+                dense.values[dense_idx] =
+                    std::mem::replace(&mut row.values[schema_idx], Datum::Null);
+            }
+        }
+        dense
+    }
+
+    fn prefix_lookup(&mut self, prefix_row: &GenericRowInner) -> Box<PrefixLookupResultInner> {
+        let schema = self.table_info.get_schema();
+        let generic_row = match types::resolve_row_types(&prefix_row.row, Some(schema)) {
+            Ok(r) => self.dense_prefix_row(r),
+            Err(e) => {
+                return Box::new(PrefixLookupResultInner::from_error(
+                    CLIENT_ERROR_CODE,
+                    e.to_string(),
+                ));
+            }
+        };
+
+        let lookup_result = match RUNTIME.block_on(self.inner.lookup(&generic_row)) {
+            Ok(r) => r,
+            Err(e) => {
+                let ffi_err = err_from_core_error(&e);
+                return Box::new(PrefixLookupResultInner::from_error(
+                    ffi_err.error_code,
+                    ffi_err.error_message,
+                ));
+            }
+        };
+
+        let lookup_rows = match lookup_result.get_rows() {
+            Ok(rows) => rows,
+            Err(e) => {
+                let ffi_err = err_from_core_error(&e);
+                return Box::new(PrefixLookupResultInner::from_error(
+                    ffi_err.error_code,
+                    ffi_err.error_message,
+                ));
+            }
+        };
+
+        let mut rows = Vec::with_capacity(lookup_rows.len());
+        for row in &lookup_rows {
+            match types::compacted_row_to_owned(row, &self.table_info) {
+                Ok(owned_row) => rows.push(owned_row),
+                Err(e) => {
+                    return Box::new(PrefixLookupResultInner::from_error(
+                        CLIENT_ERROR_CODE,
+                        e.to_string(),
+                    ));
+                }
+            }
+        }
+
+        let columns = self.table_info.get_schema().columns().to_vec();
+        Box::new(PrefixLookupResultInner {
+            error: None,
+            rows,
+            columns,
+        })
     }
 }
 
@@ -3238,6 +3508,146 @@ impl LookupResultInner {
     }
     fn lv_get_array_view(&self, field: usize) -> Result<Box<ArrayViewInner>, String> {
         let r = self.lv_row()?;
+        let (arr, elem) = row_reader::get_array_and_elem_type(r, &self.columns, field)?;
+        Ok(Box::new(ArrayViewInner {
+            array: arr,
+            element_type: elem.clone(),
+        }))
+    }
+}
+
+// ============================================================================
+// Opaque types: PrefixLookupResultInner (prefix lookup read path)
+//
+// Like LookupResultInner but holds 0..n rows; accessors take a record index.
+// ============================================================================
+
+pub struct PrefixLookupResultInner {
+    error: Option<(i32, String)>,
+    rows: Vec<GenericRow<'static>>,
+    columns: Vec<Column>,
+}
+
+macro_rules! plv_array_element_getters {
+    ($( $method:ident, $reader_fn:ident, $ret:ty; )+) => {
+        $(
+            fn $method(&self, rec: usize, field: usize, element: usize) -> Result<$ret, String> {
+                let r = self.plv_row(rec)?;
+                row_reader::$reader_fn(r, &self.columns, field, element)
+            }
+        )+
+    };
+}
+
+impl PrefixLookupResultInner {
+    fn from_error(code: i32, msg: String) -> Self {
+        Self {
+            error: Some((code, msg)),
+            rows: Vec::new(),
+            columns: Vec::new(),
+        }
+    }
+
+    fn plv_has_error(&self) -> bool {
+        self.error.is_some()
+    }
+
+    fn plv_error_code(&self) -> i32 {
+        self.error.as_ref().map_or(0, |e| e.0)
+    }
+
+    fn plv_error_message(&self) -> &str {
+        self.error.as_ref().map_or("", |e| e.1.as_str())
+    }
+
+    fn plv_row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn plv_field_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    fn plv_column_type(&self, field: usize) -> Result<i32, String> {
+        row_reader::column_type(&self.columns, field)
+    }
+
+    fn plv_column_name(&self, field: usize) -> Result<&str, String> {
+        row_reader::column_name(&self.columns, field)
+    }
+
+    fn plv_row(&self, rec: usize) -> Result<&GenericRow<'static>, String> {
+        self.rows
+            .get(rec)
+            .ok_or_else(|| format!("record index {rec} out of range ({} rows)", self.rows.len()))
+    }
+
+    // Field accessors — delegate to shared row_reader helpers.
+    fn plv_is_null(&self, rec: usize, field: usize) -> Result<bool, String> {
+        row_reader::is_null(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_bool(&self, rec: usize, field: usize) -> Result<bool, String> {
+        row_reader::get_bool(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_i32(&self, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_i32(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_i64(&self, rec: usize, field: usize) -> Result<i64, String> {
+        row_reader::get_i64(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_f32(&self, rec: usize, field: usize) -> Result<f32, String> {
+        row_reader::get_f32(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_f64(&self, rec: usize, field: usize) -> Result<f64, String> {
+        row_reader::get_f64(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_str(&self, rec: usize, field: usize) -> Result<&str, String> {
+        row_reader::get_str(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_bytes(&self, rec: usize, field: usize) -> Result<&[u8], String> {
+        row_reader::get_bytes(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_date_days(&self, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_date_days(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_time_millis(&self, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_time_millis(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_ts_millis(&self, rec: usize, field: usize) -> Result<i64, String> {
+        row_reader::get_ts_millis(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_ts_nanos(&self, rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_ts_nanos(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_is_ts_ltz(&self, _rec: usize, field: usize) -> Result<bool, String> {
+        row_reader::is_ts_ltz(&self.columns, field)
+    }
+    fn plv_get_decimal_str(&self, rec: usize, field: usize) -> Result<String, String> {
+        row_reader::get_decimal_str(self.plv_row(rec)?, &self.columns, field)
+    }
+    fn plv_get_array_size(&self, rec: usize, field: usize) -> Result<usize, String> {
+        row_reader::get_array_size(self.plv_row(rec)?, &self.columns, field)
+    }
+    plv_array_element_getters! {
+        plv_get_array_is_null, get_array_is_null, bool;
+        plv_get_array_bool,    get_array_bool,    bool;
+        plv_get_array_i32,     get_array_i32,     i32;
+        plv_get_array_i64,     get_array_i64,     i64;
+        plv_get_array_f32,     get_array_f32,     f32;
+        plv_get_array_f64,     get_array_f64,     f64;
+        plv_get_array_str,     get_array_str,     String;
+        plv_get_array_bytes,   get_array_bytes,   Vec<u8>;
+        plv_get_array_date_days,   get_array_date_days,   i32;
+        plv_get_array_time_millis, get_array_time_millis, i32;
+        plv_get_array_ts_millis,   get_array_ts_millis,   i64;
+        plv_get_array_ts_nanos,    get_array_ts_nanos,    i32;
+        plv_get_array_decimal_str, get_array_decimal_str, String;
+    }
+    fn plv_get_array_element_type(&self, _rec: usize, field: usize) -> Result<i32, String> {
+        row_reader::get_array_element_type_id(&self.columns, field)
+    }
+    fn plv_get_array_view(&self, rec: usize, field: usize) -> Result<Box<ArrayViewInner>, String> {
+        let r = self.plv_row(rec)?;
         let (arr, elem) = row_reader::get_array_and_elem_type(r, &self.columns, field)?;
         Ok(Box::new(ArrayViewInner {
             array: arr,
