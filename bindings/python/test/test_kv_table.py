@@ -27,6 +27,15 @@ from decimal import Decimal
 
 import pyarrow as pa
 import pytest
+from conftest import (
+    assert_complex_edge,
+    assert_complex_full,
+    complex_column_names,
+    complex_edge_row,
+    complex_full_row,
+    complex_null_row,
+    complex_schema,
+)
 
 import fluss
 
@@ -175,7 +184,9 @@ async def test_composite_primary_keys(connection, admin):
     assert result is not None
     assert result["score"] == 500
 
-    prefix_lookuper = table.new_lookup().lookup_by(["region", "user_id"]).create_lookuper()
+    prefix_lookuper = (
+        table.new_lookup().lookup_by(["region", "user_id"]).create_lookuper()
+    )
 
     # Prefix (US, 1) should match 2 rows (event_id 1 and 2)
     rows = await prefix_lookuper.lookup({"region": "US", "user_id": 1})
@@ -220,9 +231,7 @@ async def test_partial_update(connection, admin):
 
     # Insert initial record
     upsert_writer = table.new_upsert().create_writer()
-    handle = upsert_writer.upsert(
-        {"id": 1, "name": "Verso", "age": 32, "score": 6942}
-    )
+    handle = upsert_writer.upsert({"id": 1, "name": "Verso", "age": 32, "score": 6942})
     await handle.wait()
 
     lookuper = table.new_lookup().create_lookuper()
@@ -272,15 +281,11 @@ async def test_partial_update_by_index(connection, admin):
     table = await connection.get_table(table_path)
 
     upsert_writer = table.new_upsert().create_writer()
-    handle = upsert_writer.upsert(
-        {"id": 1, "name": "Verso", "age": 32, "score": 6942}
-    )
+    handle = upsert_writer.upsert({"id": 1, "name": "Verso", "age": 32, "score": 6942})
     await handle.wait()
 
     # Partial update by indices: columns 0=id (PK), 1=name
-    partial_writer = (
-        table.new_upsert().partial_update_by_index([0, 1]).create_writer()
-    )
+    partial_writer = table.new_upsert().partial_update_by_index([0, 1]).create_writer()
     handle = partial_writer.upsert([1, "Verso Renamed"])
     await handle.wait()
 
@@ -289,6 +294,82 @@ async def test_partial_update_by_index(connection, admin):
     assert result is not None
     assert result["name"] == "Verso Renamed", "name should be updated"
     assert result["score"] == 6942, "score should remain unchanged"
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_partial_update_complex(connection, admin):
+    """Partial updates preserve non-targeted ROW/MAP/ARRAY columns and update the
+    targeted ones (mirrors the Rust partial_update IT)."""
+    table_path = fluss.TablePath("fluss", "py_test_partial_update_complex")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema(
+            [
+                pa.field("id", pa.int32()),
+                pa.field("name", pa.string()),
+                pa.field(
+                    "nested", pa.struct([("seq", pa.int32()), ("label", pa.string())])
+                ),
+                pa.field("attrs", pa.map_(pa.string(), pa.int32())),
+                pa.field("tags", pa.list_(pa.string())),
+            ]
+        ),
+        primary_keys=["id"],
+    )
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
+    table = await connection.get_table(table_path)
+
+    await _upsert_and_wait(
+        table.new_upsert().create_writer(),
+        {
+            "id": 1,
+            "name": "Verso",
+            "nested": {"seq": 10, "label": "alpha"},
+            "attrs": {"a": 1, "b": 2},
+            "tags": ["alpha-tag", "beta-tag"],
+        },
+    )
+
+    lookuper = table.new_lookup().create_lookuper()
+
+    # Update only `name`: ROW/MAP/ARRAY columns must be preserved.
+    await _upsert_and_wait(
+        table.new_upsert().partial_update_by_name(["id", "name"]).create_writer(),
+        {"id": 1, "name": "Renamed"},
+    )
+    r = await lookuper.lookup({"id": 1})
+    assert r["name"] == "Renamed"
+    assert r["nested"] == {"seq": 10, "label": "alpha"}
+    assert dict(r["attrs"]) == {"a": 1, "b": 2}
+    assert r["tags"] == ["alpha-tag", "beta-tag"]
+
+    # Update only `nested`: scalar + other complex columns preserved.
+    await _upsert_and_wait(
+        table.new_upsert().partial_update_by_name(["id", "nested"]).create_writer(),
+        {"id": 1, "nested": {"seq": 99, "label": "omega"}},
+    )
+    r = await lookuper.lookup({"id": 1})
+    assert r["nested"] == {"seq": 99, "label": "omega"}
+    assert r["name"] == "Renamed"
+    assert dict(r["attrs"]) == {"a": 1, "b": 2}
+    assert r["tags"] == ["alpha-tag", "beta-tag"]
+
+    # Update `attrs` and `tags`.
+    await _upsert_and_wait(
+        table.new_upsert()
+        .partial_update_by_name(["id", "attrs", "tags"])
+        .create_writer(),
+        {"id": 1, "attrs": {"z": 99}, "tags": ["gamma"]},
+    )
+    r = await lookuper.lookup({"id": 1})
+    assert dict(r["attrs"]) == {"z": 99}
+    assert r["tags"] == ["gamma"]
+    assert r["nested"] == {"seq": 99, "label": "omega"}
+    assert r["name"] == "Renamed"
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
@@ -379,163 +460,179 @@ async def test_partitioned_table_upsert_and_lookup(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
-async def test_upsert_and_lookup_with_array(connection, admin):
-    """Test upsert and lookup with flat, nested, and null-pattern arrays in KV tables."""
-    table_path = fluss.TablePath("fluss", "py_test_kv_arrays")
+async def test_omit_nullable_vs_required_fields(connection, admin):
+    """Omitting a nullable field defaults it to null; omitting a non-nullable (or
+    PK) field is a clear client-side error -- at both top level and inside a ROW."""
+    table_path = fluss.TablePath("fluss", "py_test_omit_fields")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
 
+    nested_type = pa.struct(
+        [
+            pa.field("a", pa.int32()),  # nullable
+            pa.field("b", pa.int32(), nullable=False),  # NOT NULL
+        ]
+    )
     schema = fluss.Schema(
         pa.schema(
             [
                 pa.field("id", pa.int32()),
-                pa.field("tags", pa.list_(pa.string())),
-                pa.field("scores", pa.list_(pa.int32())),
-                pa.field("matrix", pa.list_(pa.list_(pa.int32()))),
+                pa.field("opt", pa.int32()),  # nullable
+                pa.field("req", pa.int32(), nullable=False),  # NOT NULL
+                pa.field("nested", nested_type),
             ]
         ),
         primary_keys=["id"],
     )
-    table_descriptor = fluss.TableDescriptor(schema)
-    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
-
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
     table = await connection.get_table(table_path)
-    upsert_writer = table.new_upsert().create_writer()
-
-    await _upsert_and_wait(
-        upsert_writer,
-        {
-            "id": 1,
-            "tags": ["hello", "world"],
-            "scores": [10, 20, 30],
-            "matrix": [[1, 2], [3, 4]],
-        },
-    )
-    await _upsert_and_wait(
-        upsert_writer,
-        {"id": 2, "tags": [None], "scores": [], "matrix": None},
-    )
-    await _upsert_and_wait(
-        upsert_writer,
-        {"id": 3, "tags": None, "scores": [42], "matrix": [[], [5], [6, 7, 8]]},
-    )
-    await _upsert_and_wait(
-        upsert_writer,
-        {"id": 4, "tags": None, "scores": None, "matrix": [[1, None], None, []]},
-    )
-
+    writer = table.new_upsert().create_writer()
     lookuper = table.new_lookup().create_lookuper()
 
-    result1 = await lookuper.lookup({"id": 1})
-    assert result1 is not None
-    assert result1["tags"] == ["hello", "world"]
-    assert result1["scores"] == [10, 20, 30]
-    assert result1["matrix"] == [[1, 2], [3, 4]]
+    # Omit nullable top-level field `opt` -> Null.
+    await _upsert_and_wait(writer, {"id": 1, "req": 5, "nested": {"a": 1, "b": 2}})
+    r = await lookuper.lookup({"id": 1})
+    assert r["opt"] is None
+    assert r["req"] == 5
+    assert r["nested"] == {"a": 1, "b": 2}
 
-    result2 = await lookuper.lookup({"id": 2})
-    assert result2 is not None
-    assert result2["tags"] == [None]
-    assert result2["scores"] == []
-    assert result2["matrix"] is None
+    # Omit nullable nested field `a` -> Null.
+    await _upsert_and_wait(writer, {"id": 2, "req": 9, "nested": {"b": 3}})
+    r = await lookuper.lookup({"id": 2})
+    assert r["nested"] == {"a": None, "b": 3}
 
-    result3 = await lookuper.lookup({"id": 3})
-    assert result3 is not None
-    assert result3["tags"] is None
-    assert result3["scores"] == [42]
-    assert result3["matrix"] == [[], [5], [6, 7, 8]]
+    # Omit non-nullable top-level field `req` -> error.
+    with pytest.raises(Exception, match="non-nullable field 'req'"):
+        writer.upsert({"id": 3, "opt": 1, "nested": {"a": 1, "b": 2}})
 
-    result4 = await lookuper.lookup({"id": 4})
-    assert result4 is not None
-    assert result4["tags"] is None
-    assert result4["scores"] is None
-    assert result4["matrix"] == [[1, None], None, []]
+    # Omit non-nullable nested field `b` -> error.
+    with pytest.raises(Exception, match="non-nullable row field 'b'"):
+        writer.upsert({"id": 4, "req": 5, "nested": {"a": 1}})
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
-async def test_upsert_and_lookup_with_array_rich_types(connection, admin):
-    """Test upsert/lookup for arrays with rich element types and encoding edge cases."""
-    table_path = fluss.TablePath("fluss", "py_test_kv_arrays_rich_types")
+async def test_partitioned_complex(connection, admin):
+    """ROW/MAP/ARRAY columns round-trip and update correctly across partitions
+    (mirrors the complex columns in the Rust partitioned_table_upsert_and_lookup IT)."""
+    table_path = fluss.TablePath("fluss", "py_test_partitioned_complex")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
 
     schema = fluss.Schema(
         pa.schema(
             [
-                pa.field("id", pa.int32()),
-                pa.field("arr_bytes", pa.list_(pa.binary())),
-                pa.field("arr_date", pa.list_(pa.date32())),
-                pa.field("arr_time", pa.list_(pa.time32("ms"))),
-                pa.field("arr_ts_ntz", pa.list_(pa.timestamp("us"))),
-                pa.field("arr_ts_ltz", pa.list_(pa.timestamp("us", tz="UTC"))),
-                pa.field("arr_decimal", pa.list_(pa.decimal128(10, 2))),
-                pa.field("arr_long_str", pa.list_(pa.string())),
-                pa.field("arr_big_decimal", pa.list_(pa.decimal128(22, 5))),
-                pa.field("arr_ts_nano", pa.list_(pa.timestamp("ns"))),
-                pa.field("arr_float", pa.list_(pa.float32())),
-                pa.field("arr_double", pa.list_(pa.float64())),
-                # TODO(fluss-python#524): support PyArrow FixedSizeBinary in schema
-                # conversion. Then switch to pa.binary(4).
-                pa.field("arr_binary", pa.list_(pa.binary())),
+                pa.field("region", pa.string()),
+                pa.field("user_id", pa.int32()),
+                pa.field(
+                    "nested", pa.struct([("seq", pa.int32()), ("label", pa.string())])
+                ),
+                pa.field("attrs", pa.map_(pa.string(), pa.int32())),
+                pa.field("tags", pa.list_(pa.string())),
             ]
         ),
-        primary_keys=["id"],
+        primary_keys=["region", "user_id"],
     )
-    table_descriptor = fluss.TableDescriptor(schema)
-    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
+    await admin.create_table(
+        table_path,
+        fluss.TableDescriptor(schema, partition_keys=["region"]),
+        ignore_if_exists=False,
+    )
+    for region in ["US", "EU"]:
+        await admin.create_partition(
+            table_path, {"region": region}, ignore_if_exists=True
+        )
 
     table = await connection.get_table(table_path)
-    upsert_writer = table.new_upsert().create_writer()
-
+    writer = table.new_upsert().create_writer()
     await _upsert_and_wait(
-        upsert_writer,
+        writer,
         {
-            "id": 1,
-            "arr_bytes": [b"\x10\x20\x30", None],
-            "arr_date": [date(2026, 1, 23), None],
-            "arr_time": [dt_time(10, 13, 47, 123000), None],
-            "arr_ts_ntz": [datetime(2026, 1, 23, 10, 13, 47, 123000)],
-            "arr_ts_ltz": [
-                datetime(2026, 1, 23, 10, 13, 47, 123000, tzinfo=timezone.utc)
-            ],
-            "arr_decimal": [Decimal("123.45"), None],
-            "arr_long_str": [
-                "abcdefgh",
-                "this is a much longer string that definitely exceeds inline",
-            ],
-            "arr_big_decimal": [
-                Decimal("12345678901234567.12345"),
-                Decimal("-99999999999999999.99999"),
-            ],
-            "arr_ts_nano": [datetime(2026, 1, 23, 10, 13, 47, 123456)],
-            "arr_float": [float("nan"), float("inf"), float("-inf")],
-            "arr_double": [float("nan"), float("inf"), float("-inf")],
-            "arr_binary": [b"\xde\xad\xbe\xef", b"\x00\x01\x02\x03"],
+            "region": "US",
+            "user_id": 1,
+            "nested": {"seq": 11, "label": "a"},
+            "attrs": {"x": 1},
+            "tags": ["alpha"],
+        },
+    )
+    await _upsert_and_wait(
+        writer,
+        {
+            "region": "EU",
+            "user_id": 1,
+            "nested": {"seq": 22, "label": "b"},
+            "attrs": {"y": 2},
+            "tags": ["beta"],
         },
     )
 
     lookuper = table.new_lookup().create_lookuper()
-    result = await lookuper.lookup({"id": 1})
-    assert result is not None
+    r = await lookuper.lookup({"region": "US", "user_id": 1})
+    assert r["nested"] == {"seq": 11, "label": "a"}
+    assert dict(r["attrs"]) == {"x": 1}
+    assert r["tags"] == ["alpha"]
+    r = await lookuper.lookup({"region": "EU", "user_id": 1})
+    assert r["nested"] == {"seq": 22, "label": "b"}
+    assert dict(r["attrs"]) == {"y": 2}
+    assert r["tags"] == ["beta"]
 
-    assert result["arr_bytes"] == [b"\x10\x20\x30", None]
-    assert result["arr_date"] == [date(2026, 1, 23), None]
-    assert result["arr_time"] == [dt_time(10, 13, 47, 123000), None]
-    assert result["arr_ts_ntz"] == [datetime(2026, 1, 23, 10, 13, 47, 123000)]
-    assert result["arr_ts_ltz"] == [
-        datetime(2026, 1, 23, 10, 13, 47, 123000, tzinfo=timezone.utc)
-    ]
-    assert result["arr_decimal"] == [Decimal("123.45"), None]
-    assert result["arr_long_str"] == [
-        "abcdefgh",
-        "this is a much longer string that definitely exceeds inline",
-    ]
-    assert result["arr_big_decimal"] == [
-        Decimal("12345678901234567.12345"),
-        Decimal("-99999999999999999.99999"),
-    ]
-    assert result["arr_ts_nano"] == [datetime(2026, 1, 23, 10, 13, 47, 123456)]
-    _assert_float_specials(result["arr_float"])
-    _assert_float_specials(result["arr_double"])
-    assert result["arr_binary"] == [b"\xde\xad\xbe\xef", b"\x00\x01\x02\x03"]
+    # Update complex columns within one partition; sibling partition unaffected.
+    await _upsert_and_wait(
+        writer,
+        {
+            "region": "US",
+            "user_id": 1,
+            "nested": {"seq": 99, "label": "updated"},
+            "attrs": {"z": 99},
+            "tags": ["renamed"],
+        },
+    )
+    r = await lookuper.lookup({"region": "US", "user_id": 1})
+    assert r["nested"] == {"seq": 99, "label": "updated"}
+    assert dict(r["attrs"]) == {"z": 99}
+    assert r["tags"] == ["renamed"]
+    r = await lookuper.lookup({"region": "EU", "user_id": 1})
+    assert r["nested"] == {"seq": 22, "label": "b"}
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_all_complex_datatypes(connection, admin):
+    """Comprehensive ARRAY/MAP/ROW coverage via upsert+lookup: full, edge, null rows.
+
+    Mirrors the section-based ``all_supported_datatypes`` structure of the Rust
+    integration tests: the schema is composed from the shared array/row/map
+    sections, and three rows exercise fully-populated, edge-case, and all-null
+    values (see complex_types.py).
+    """
+    table_path = fluss.TablePath("fluss", "py_test_kv_all_complex")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = complex_schema(primary_keys=["id"])
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    upsert_writer = table.new_upsert().create_writer()
+    await _upsert_and_wait(upsert_writer, complex_full_row(1))
+    await _upsert_and_wait(upsert_writer, complex_edge_row(2))
+    await _upsert_and_wait(upsert_writer, complex_null_row(3))
+
+    lookuper = table.new_lookup().create_lookuper()
+
+    r1 = await lookuper.lookup({"id": 1})
+    assert r1 is not None
+    assert_complex_full(r1)
+
+    r2 = await lookuper.lookup({"id": 2})
+    assert r2 is not None
+    assert_complex_edge(r2)
+
+    r3 = await lookuper.lookup({"id": 3})
+    assert r3 is not None
+    for col in complex_column_names():
+        assert r3[col] is None, f"{col} should be null"
 
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
@@ -677,7 +774,9 @@ async def test_prefix_lookup_validation_errors(connection, admin):
 
     # Partitioned table: lookup columns must include partition keys first,
     # followed by bucket keys.
-    partitioned_table_path = fluss.TablePath("fluss", "py_test_prefix_lookup_validation_pt")
+    partitioned_table_path = fluss.TablePath(
+        "fluss", "py_test_prefix_lookup_validation_pt"
+    )
     await admin.drop_table(partitioned_table_path, ignore_if_not_exists=True)
 
     partitioned_schema = fluss.Schema(
@@ -708,13 +807,19 @@ async def test_prefix_lookup_validation_errors(connection, admin):
 
     # A non-existent partition returns empty list.
     partitioned_prefix_lookuper = (
-        partitioned_table.new_lookup().lookup_by(["region", "user_id"]).create_lookuper()
+        partitioned_table.new_lookup()
+        .lookup_by(["region", "user_id"])
+        .create_lookuper()
     )
-    rows = await partitioned_prefix_lookuper.lookup({"region": "UNKNOWN_REGION", "user_id": 1})
+    rows = await partitioned_prefix_lookuper.lookup(
+        {"region": "UNKNOWN_REGION", "user_id": 1}
+    )
     assert rows == []
 
     # After partition keys, remaining columns must equal bucket keys.
     with pytest.raises(fluss.FlussError, match="bucket keys"):
-        partitioned_table.new_lookup().lookup_by(["region", "event_id"]).create_lookuper()
+        partitioned_table.new_lookup().lookup_by(
+            ["region", "event_id"]
+        ).create_lookuper()
 
     await admin.drop_table(partitioned_table_path, ignore_if_not_exists=False)

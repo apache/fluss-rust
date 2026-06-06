@@ -639,11 +639,22 @@ class AppendWriter:
             - Bytes, Binary (binary data)
             - Date, Time, Timestamp, TimestampLTZ (temporal)
             - Decimal (arbitrary precision)
+            - Array (Python list)
+            - Map (dict, or list of (key, value) tuples)
+            - Row (dict keyed by field name, or list/tuple by position)
             - Null values
+
+        Nested combinations of Array, Map, and Row are supported. On read,
+        Array -> list, Map -> list of (key, value) tuples, Row -> dict.
+
+        When the row is a dict, a nullable column may be omitted (it defaults to
+        null); a non-nullable or primary-key column must be present.
 
         Example:
             writer.append({'id': 1, 'name': 'Alice', 'score': 95.5})
             writer.append([1, 'Alice', 95.5])
+            writer.append({'id': 2, 'tags': ['a', 'b'],
+                           'attrs': {'k': 1}, 'profile': {'age': 30}})
 
         Note:
             For high-throughput bulk loading, prefer write_arrow_batch().
