@@ -18,6 +18,7 @@
 use crate::*;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_schema::SchemaRef;
+use fcore::record::from_arrow_field;
 use std::sync::Arc;
 
 /// Utilities for schema conversion between PyArrow, Arrow, and Fluss
@@ -42,7 +43,7 @@ impl Utils {
     pub fn arrow_field_to_fluss_type(
         field: &arrow::datatypes::Field,
     ) -> PyResult<fcore::metadata::DataType> {
-        fcore::record::from_arrow_field(field).map_err(|e| FlussError::from_core_error(&e))
+        from_arrow_field(field).map_err(|e| FlussError::from_core_error(&e))
     }
 
     /// Convert Fluss DataType to string representation, appending " NOT NULL"

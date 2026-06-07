@@ -1292,11 +1292,16 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
         ArrowDataType::Int16 => DataTypes::smallint(),
         ArrowDataType::Int32 => DataTypes::int(),
         ArrowDataType::Int64 => DataTypes::bigint(),
+        // No unsigned types in Fluss; map to the signed type of the same width.
+        ArrowDataType::UInt8 => DataTypes::tinyint(),
+        ArrowDataType::UInt16 => DataTypes::smallint(),
+        ArrowDataType::UInt32 => DataTypes::int(),
+        ArrowDataType::UInt64 => DataTypes::bigint(),
         ArrowDataType::Float32 => DataTypes::float(),
         ArrowDataType::Float64 => DataTypes::double(),
-        ArrowDataType::Utf8 => DataTypes::string(),
-        ArrowDataType::Binary => DataTypes::bytes(),
-        ArrowDataType::Date32 => DataTypes::date(),
+        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 => DataTypes::string(),
+        ArrowDataType::Binary | ArrowDataType::LargeBinary => DataTypes::bytes(),
+        ArrowDataType::Date32 | ArrowDataType::Date64 => DataTypes::date(),
         ArrowDataType::FixedSizeBinary(len) => {
             if *len < 0 {
                 return Err(Error::IllegalArgument {
@@ -1889,6 +1894,38 @@ mod tests {
             }
             other => panic!("expected Map, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_from_arrow_type_accepts_unsigned_large_and_date64() {
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt8).unwrap(),
+            DataType::TinyInt(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt16).unwrap(),
+            DataType::SmallInt(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt32).unwrap(),
+            DataType::Int(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt64).unwrap(),
+            DataType::BigInt(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::LargeUtf8).unwrap(),
+            DataType::String(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::LargeBinary).unwrap(),
+            DataType::Bytes(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::Date64).unwrap(),
+            DataType::Date(_)
+        ));
     }
 
     #[test]
