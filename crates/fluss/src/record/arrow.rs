@@ -1196,11 +1196,20 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
                 });
             }
         },
+        // TIMESTAMP_LTZ is an instant, so it carries the UTC zone. This keeps
+        // `to_arrow_type` symmetric with `from_arrow_type` (which treats a
+        // zoned Arrow timestamp as LTZ) so the type round-trips losslessly.
         DataType::TimestampLTz(timestamp_ltz_type) => match timestamp_ltz_type.precision() {
-            0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None),
-            1..=3 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
-            4..=6 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
-            7..=9 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+            0 => ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, Some("UTC".into())),
+            1..=3 => {
+                ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, Some("UTC".into()))
+            }
+            4..=6 => {
+                ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
+            }
+            7..=9 => {
+                ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, Some("UTC".into()))
+            }
             invalid => {
                 return Err(Error::IllegalArgument {
                     message: format!(
@@ -1264,7 +1273,7 @@ pub fn to_arrow_type(fluss_type: &DataType) -> Result<ArrowDataType> {
 
 /// Like `from_arrow_type`, but also reads the Field's nullability —
 /// Arrow stores it on the Field wrapper, not the leaf data type.
-pub(crate) fn from_arrow_field(field: &arrow_schema::Field) -> Result<DataType> {
+pub fn from_arrow_field(field: &arrow_schema::Field) -> Result<DataType> {
     let mut dt = from_arrow_type(field.data_type())?;
     if !field.is_nullable() {
         dt = dt.as_non_nullable();
@@ -1283,11 +1292,16 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
         ArrowDataType::Int16 => DataTypes::smallint(),
         ArrowDataType::Int32 => DataTypes::int(),
         ArrowDataType::Int64 => DataTypes::bigint(),
+        // No unsigned types in Fluss; map to the signed type of the same width.
+        ArrowDataType::UInt8 => DataTypes::tinyint(),
+        ArrowDataType::UInt16 => DataTypes::smallint(),
+        ArrowDataType::UInt32 => DataTypes::int(),
+        ArrowDataType::UInt64 => DataTypes::bigint(),
         ArrowDataType::Float32 => DataTypes::float(),
         ArrowDataType::Float64 => DataTypes::double(),
-        ArrowDataType::Utf8 => DataTypes::string(),
-        ArrowDataType::Binary => DataTypes::bytes(),
-        ArrowDataType::Date32 => DataTypes::date(),
+        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 => DataTypes::string(),
+        ArrowDataType::Binary | ArrowDataType::LargeBinary => DataTypes::bytes(),
+        ArrowDataType::Date32 | ArrowDataType::Date64 => DataTypes::date(),
         ArrowDataType::FixedSizeBinary(len) => {
             if *len < 0 {
                 return Err(Error::IllegalArgument {
@@ -1784,19 +1798,19 @@ mod tests {
         );
         assert_eq!(
             to_arrow_type(&DataTypes::timestamp_ltz_with_precision(0)).unwrap(),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, None)
+            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, Some("UTC".into()))
         );
         assert_eq!(
             to_arrow_type(&DataTypes::timestamp_ltz_with_precision(3)).unwrap(),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None)
+            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, Some("UTC".into()))
         );
         assert_eq!(
             to_arrow_type(&DataTypes::timestamp_ltz_with_precision(6)).unwrap(),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
         );
         assert_eq!(
             to_arrow_type(&DataTypes::timestamp_ltz_with_precision(9)).unwrap(),
-            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None)
+            ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, Some("UTC".into()))
         );
         assert_eq!(
             to_arrow_type(&DataTypes::bytes()).unwrap(),
@@ -1880,6 +1894,38 @@ mod tests {
             }
             other => panic!("expected Map, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_from_arrow_type_accepts_unsigned_large_and_date64() {
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt8).unwrap(),
+            DataType::TinyInt(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt16).unwrap(),
+            DataType::SmallInt(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt32).unwrap(),
+            DataType::Int(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::UInt64).unwrap(),
+            DataType::BigInt(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::LargeUtf8).unwrap(),
+            DataType::String(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::LargeBinary).unwrap(),
+            DataType::Bytes(_)
+        ));
+        assert!(matches!(
+            from_arrow_type(&ArrowDataType::Date64).unwrap(),
+            DataType::Date(_)
+        ));
     }
 
     #[test]
