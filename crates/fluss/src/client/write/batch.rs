@@ -71,6 +71,14 @@ impl InnerWriteBatch {
         max(0i64, now - self.create_ms)
     }
 
+    /// Time the batch spent queued in the accumulator, from creation until it
+    /// was drained for sending. Returns 0 if the batch has not been drained
+    /// yet (`drained_ms == -1`). Distinct from [`Self::waited_time_ms`], which
+    /// measures the batch's current age for timeout purposes.
+    fn queue_time_ms(&self) -> i64 {
+        max(0i64, self.drained_ms - self.create_ms)
+    }
+
     fn complete(&self, write_result: BatchWriteResult) -> bool {
         if self
             .completed
@@ -133,6 +141,20 @@ impl WriteBatch {
 
     pub fn waited_time_ms(&self, now: i64) -> i64 {
         self.inner_batch().waited_time_ms(now)
+    }
+
+    /// Time the batch spent queued in the accumulator before being drained
+    /// (`drained_ms - create_ms`). See [`InnerWriteBatch::queue_time_ms`].
+    pub(crate) fn queue_time_ms(&self) -> i64 {
+        self.inner_batch().queue_time_ms()
+    }
+
+    /// Number of records currently in this batch. Used for writer metrics.
+    pub(crate) fn record_count(&self) -> i32 {
+        match self {
+            WriteBatch::ArrowLog(batch) => batch.arrow_builder.records_count(),
+            WriteBatch::Kv(batch) => batch.record_count(),
+        }
     }
 
     pub fn close(&mut self) -> Result<()> {
@@ -408,6 +430,11 @@ impl KvWriteBatch {
     pub fn estimated_size_in_bytes(&self) -> usize {
         self.kv_batch_builder.get_size_in_bytes()
     }
+
+    /// Number of records appended to this KV batch. Used for writer metrics.
+    pub(crate) fn record_count(&self) -> i32 {
+        self.kv_batch_builder.record_count()
+    }
 }
 
 #[cfg(test)]
@@ -434,6 +461,106 @@ mod tests {
         assert_eq!(batch.attempts(), 0);
         batch.re_enqueued();
         assert_eq!(batch.attempts(), 1);
+    }
+
+    #[test]
+    fn queue_time_ms_is_drained_minus_create() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let physical_path = PhysicalTablePath::of(Arc::new(table_path));
+        let mut batch = InnerWriteBatch::new(1, Arc::new(physical_path), 1_000);
+        // Not drained yet -> 0 (drained_ms == -1).
+        assert_eq!(batch.queue_time_ms(), 0);
+        batch.drained(1_150);
+        assert_eq!(batch.queue_time_ms(), 150);
+        // drained() keeps the max; an earlier timestamp does not shrink it.
+        batch.drained(1_120);
+        assert_eq!(batch.queue_time_ms(), 150);
+    }
+
+    #[test]
+    fn record_count_reflects_appended_rows() {
+        use crate::client::WriteRecord;
+        use crate::compression::{
+            ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+        };
+        use crate::metadata::{DataField, DataTypes, RowType};
+        use crate::row::GenericRow;
+
+        let row_type = RowType::new(vec![DataField::new(
+            "id".to_string(),
+            DataTypes::int(),
+            None,
+        )]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let arrow_batch = ArrowLogWriteBatch::new(
+            1,
+            Arc::clone(&physical_table_path),
+            1,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            &row_type,
+            0,
+            false,
+            2 * 1024 * 1024,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )
+        .unwrap();
+        let mut batch = WriteBatch::ArrowLog(arrow_batch);
+
+        assert_eq!(batch.record_count(), 0);
+        for _ in 0..5 {
+            let mut row = GenericRow::new(1);
+            row.set_field(0, 1_i32);
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_table_path),
+                1,
+                &row,
+            );
+            batch.try_append(&record).unwrap();
+        }
+        assert_eq!(batch.record_count(), 5);
+    }
+
+    #[test]
+    fn kv_record_count_reflects_appended_records() {
+        use crate::client::WriteRecord;
+        use crate::metadata::KvFormat;
+
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut batch = WriteBatch::Kv(KvWriteBatch::new(
+            1,
+            Arc::clone(&physical_path),
+            1,
+            64 * 1024,
+            KvFormat::COMPACTED,
+            None,
+            0,
+        ));
+
+        assert_eq!(batch.record_count(), 0);
+        for _ in 0..3 {
+            let record = WriteRecord::for_upsert(
+                Arc::clone(&table_info),
+                Arc::clone(&physical_path),
+                1,
+                Bytes::from(vec![1_u8, 2_u8, 3_u8]),
+                None,
+                WriteFormat::CompactedKv,
+                None,
+                Some(RowBytes::Owned(Bytes::from(vec![1_u8, 2_u8, 3_u8]))),
+            );
+            batch.try_append(&record).unwrap();
+        }
+        assert_eq!(batch.record_count(), 3);
     }
 
     #[test]

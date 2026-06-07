@@ -128,6 +128,13 @@ Complete API reference for the Fluss Rust client.
 | `fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture>` | Append an Arrow RecordBatch                       |
 | `async fn flush(&self) -> Result<()>`                                           | Flush all pending writes to the server            |
 
+The writer pipeline emits `fluss.client.writer.*` metrics (send latency, batch
+queue time, records/bytes sent, retries, per-batch size, and buffer-pool
+gauges). Unlike scanner metrics, these are **unlabeled** (global per process),
+matching Java's single `WriterMetricGroup` per client (Java scopes only by
+`client_id`, which the Rust `metrics` facade has no concept of yet). The same
+series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
+
 ## `TableScan<'a>`
 
 | Method                                                                      | Description                             |

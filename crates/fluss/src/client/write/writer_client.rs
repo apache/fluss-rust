@@ -29,6 +29,7 @@ use crate::config::Config;
 use crate::config::NoKeyAssigner;
 use crate::error::{Error, Result};
 use crate::metadata::{PhysicalTablePath, TableInfo};
+use crate::metrics::WriterMetrics;
 use bytes::Bytes;
 use dashmap::DashMap;
 use log::warn;
@@ -66,6 +67,10 @@ impl WriterClient {
             Arc::clone(&idempotence_manager),
         ));
 
+        // Writer metrics are emitted unlabeled (global per process). Resolve the
+        // recorder once and share the cached handles with the sender.
+        let metrics = Arc::new(WriterMetrics::new());
+
         let sender = Arc::new(Sender::new(
             metadata.clone(),
             accumulator.clone(),
@@ -74,6 +79,7 @@ impl WriterClient {
             ack,
             config.writer_retries,
             Arc::clone(&idempotence_manager),
+            Arc::clone(&metrics),
         ));
 
         let join_handle = tokio::spawn(async move {

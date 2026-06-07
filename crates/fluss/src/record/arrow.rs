@@ -561,6 +561,11 @@ impl MemoryLogRecordsArrowBuilder {
         let estimated_body = self.estimated_compressed_size(body);
         RECORD_BATCH_HEADER_SIZE + self.ipc_overhead + estimated_body
     }
+
+    /// Number of records appended so far. Used for writer throughput metrics.
+    pub(crate) fn records_count(&self) -> i32 {
+        self.arrow_record_batch_builder.records_count()
+    }
 }
 
 /// Estimate the Arrow IPC overhead (metadata + body framing) for a given schema.
