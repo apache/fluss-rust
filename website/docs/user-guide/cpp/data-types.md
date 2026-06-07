@@ -22,6 +22,11 @@ sidebar_position: 3
 | `DataType::TimestampLtz()` | Timestamp with timezone (default precision 6, microseconds)    |
 | `DataType::Decimal(p, s)`  | Decimal with precision and scale                               |
 | `DataType::Array(element)` | Array of the given element type (supports nesting)             |
+| `DataType::Map(key, value)`| Map of key/value types (either may itself be complex)          |
+| `DataType::Row({{name, type}, ...})` | Row (struct) of named fields (types may be complex) |
+
+`MAP` / `ROW` columns (and arrays nesting them) compose to any depth — see
+[Declaring MAP and ROW columns](#declaring-map-and-row-columns).
 
 ## Nullability
 
@@ -56,6 +61,36 @@ You can query nullability at runtime:
 auto info = table.GetTableInfo();
 bool is_nullable = info.schema.columns[0].data_type.nullable();
 ```
+
+## Declaring MAP and ROW columns
+
+`MAP<K,V>` and `ROW<...>` columns are declared with the `DataType::Map` and
+`DataType::Row` factories, composed like any other type — to any depth:
+
+```cpp
+auto schema = fluss::Schema::NewBuilder()
+    .AddColumn("id", fluss::DataType::Int())
+    .AddColumn("attrs", fluss::DataType::Map(fluss::DataType::String(),
+                                             fluss::DataType::Int()))
+    .AddColumn("profile", fluss::DataType::Row({
+        {"seq",   fluss::DataType::Int()},
+        {"label", fluss::DataType::String()},
+    }))
+    // arbitrarily nested, e.g. array<row<seq: int, attrs: map<string,int>>>:
+    .AddColumn("events", fluss::DataType::Array(fluss::DataType::Row({
+        {"seq",   fluss::DataType::Int()},
+        {"attrs", fluss::DataType::Map(fluss::DataType::String(), fluss::DataType::Int())},
+    })))
+    .SetPrimaryKeys({"id"})
+    .Build();
+```
+
+:::note Arrow escape hatch
+If you already have an `arrow::Schema`, pass it directly with
+`fluss::Schema::FromArrow(arrow_schema, /*primary_keys=*/{"id"})`. It's
+equivalent — the native factories above lower to the same Arrow types
+internally, without pulling Arrow into your code.
+:::
 
 ## GenericRow Setters
 
@@ -95,6 +130,43 @@ inner.SetInt32(1, 2);
 fluss::ArrayWriter outer(1, fluss::DataType::Array(fluss::DataType::Int()));
 outer.SetArray(0, std::move(inner));
 row.SetArray(9, std::move(outer));
+```
+
+### Map Columns
+
+Map values are built with `MapWriter`: stage each entry's key and value, then
+`Commit()`. Keys cannot be null; an unset value defaults to null.
+
+```cpp
+fluss::MapWriter mw(2, fluss::DataType::String(), fluss::DataType::Int());
+mw.SetKeyString("a"); mw.SetValueInt32(1); mw.Commit();
+mw.SetKeyString("b"); mw.SetValueNull();  mw.Commit();
+row.SetMap(10, std::move(mw));
+```
+
+When the key or value is itself a `ROW` / `MAP` / `ARRAY`, pass the compound type
+natively and stage values with the compound setters (`SetValueRow` /
+`SetValueMap` / `SetValueArray`):
+
+```cpp
+fluss::MapWriter mr(1, fluss::DataType::String(),
+                    fluss::DataType::Row({{"seq", fluss::DataType::Int()}}));
+mr.SetKeyString("k");
+fluss::GenericRow v(1); v.SetInt32(0, 7);
+mr.SetValueRow(std::move(v));
+mr.Commit();
+row.SetMap(11, std::move(mr));
+```
+
+### Row Columns
+
+A `ROW` value is a nested, schema-less `GenericRow`, attached via `SetRow`:
+
+```cpp
+fluss::GenericRow nested(2);
+nested.SetInt32(0, 7);
+nested.SetString(1, "seven");
+row.SetRow(12, std::move(nested));
 ```
 
 ## Name-Based Setters
@@ -168,36 +240,44 @@ if (result.Found()) {
 }
 ```
 
-### Reading Array Columns
+### Reading Complex Columns (ARRAY / MAP / ROW)
 
-Array columns can be read element-by-element using index-based getters, or via an `ArrayView` for recursive access:
+Complex columns are read through a single recursive `Value` handle returned by
+`GetValue(idx)` / `GetValue(name)`. **Navigate** the structure with
+`At` / `KeyAt` / `ValueAt` / `Field` (each returns a child `Value`); **read** a
+leaf with the `Get*()` methods (the handle already points at one value, so no
+index):
 
 ```cpp
-// Element-by-element access (flat arrays)
-size_t len = rec.row.GetArraySize(8);
-for (size_t i = 0; i < len; i++) {
-    if (!rec.row.IsArrayElementNull(8, i)) {
-        int32_t val = rec.row.GetArrayInt32(8, i);
+// ARRAY<INT>
+auto arr = rec.row.GetValue("ids");
+for (size_t i = 0; i < arr.Size(); i++) {
+    if (!arr.At(i).IsNull()) {
+        int32_t v = arr.At(i).GetInt32();
     }
 }
 
-// ArrayView for nested arrays or when you need a standalone handle
-fluss::ArrayView av = rec.row.GetArrayView(8);
-for (size_t i = 0; i < av.Size(); i++) {
-    if (!av.IsNull(i)) {
-        int32_t val = av.GetInt32(i);
+// MAP<STRING, INT> — entries addressed by position
+auto m = rec.row.GetValue("attrs");
+for (size_t i = 0; i < m.Size(); i++) {
+    auto key = m.KeyAt(i).GetString();
+    if (!m.ValueAt(i).IsNull()) {
+        int32_t v = m.ValueAt(i).GetInt32();
     }
 }
 
-// Nested arrays: ArrayView::GetArray() returns a child ArrayView
-fluss::ArrayView outer = rec.row.GetArrayView(9);
-for (size_t i = 0; i < outer.Size(); i++) {
-    fluss::ArrayView inner = outer.GetArray(i);
-    for (size_t j = 0; j < inner.Size(); j++) {
-        int32_t val = inner.GetInt32(j);
-    }
-}
+// ROW<seq: INT, label: STRING> — fields by index or name
+auto r = rec.row.GetValue("profile");
+int32_t seq = r.Field(0).GetInt32();
+auto label = r.Field("label").GetString();
+
+// Nesting is just chained navigation, with the same Get* leaf reads:
+auto rows = rec.row.GetValue("arr_of_rows");   // ARRAY<ROW<...>>
+int32_t first_seq = rows.At(0).Field("seq").GetInt32();
 ```
+
+`GetValue` works the same on `RowView` (scan), `LookupResult`, and
+`PrefixRowView`. A typed `Get*()` on a null or wrong-typed value throws.
 
 ## TypeId Enum
 
@@ -219,7 +299,9 @@ for (size_t i = 0; i < outer.Size(); i++) {
 | `Timestamp`     | `Timestamp`                                 | `GetTimestamp(idx)`       |
 | `TimestampLtz`  | `Timestamp`                                 | `GetTimestamp(idx)`       |
 | `Decimal`       | `std::string`                               | `GetDecimalString(idx)`   |
-| `Array`         | `ArrayView`                                 | `GetArrayView(idx)`       |
+| `Array`         | `Value`                                     | `GetValue(idx)`           |
+| `Map`           | `Value`                                     | `GetValue(idx)`           |
+| `Row`           | `Value`                                     | `GetValue(idx)`           |
 
 ## Type Checking
 
