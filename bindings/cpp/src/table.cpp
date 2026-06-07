@@ -1607,8 +1607,9 @@ Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupRe
                                  std::string(result_box->plv_error_message()));
     }
 
-    // Wrap the raw pointer immediately so it's never leaked on exception, then
-    // build the column map eagerly — shared by all PrefixRowViews.
+    // Take ownership of the FFI box first (~PrefixData calls from_raw), so the
+    // column-map loop below can't leak it if a string/map allocation throws.
+    // The map is built eagerly and shared by all PrefixRowViews.
     auto data = std::make_shared<detail::PrefixData>(result_box.into_raw(), detail::ColumnMap{});
     auto col_count = data->raw->plv_field_count();
     for (size_t i = 0; i < col_count; ++i) {
