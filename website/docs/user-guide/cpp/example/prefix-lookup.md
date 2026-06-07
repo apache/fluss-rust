@@ -63,6 +63,8 @@ for (size_t i = 0; i < result.Size(); ++i) {
 
 Unlike primary-key lookup (which returns a single row via `LookupResult::Found()`), prefix lookup returns zero or more rows via `Size()` / `GetRow(i)`, in primary-key order.
 
+Each `GetRow(i)` is a `PrefixRowView` with the same getters as a scan `RowView`: scalars by index or name, and complex (`ARRAY` / `MAP` / `ROW`) columns via `GetValue(...)` — see [Reading Complex Columns](../data-types.md#reading-complex-columns-array--map--row).
+
 ## Partitioned Table
 
 On a partitioned table, the partition columns are stripped from the primary key before the bucket-prefix rule is evaluated. The lookup key must still carry the partition values so the client can route the request to the right partition — so the columns passed to `NewPrefixLookup()` are `partition_keys ++ bucket_key`.

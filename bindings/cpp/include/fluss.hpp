@@ -34,6 +34,8 @@
 // Forward declare Arrow classes to avoid including heavy Arrow headers in header
 namespace arrow {
 class RecordBatch;
+class Schema;
+class DataType;
 }
 
 namespace fluss {
@@ -54,7 +56,8 @@ struct GenericRowInner;
 struct LookupResultInner;
 struct PrefixLookupResultInner;
 struct ArrayWriterInner;
-struct ArrayViewInner;
+struct MapWriterInner;
+struct ValueInner;
 }  // namespace ffi
 
 /// Named constants for Fluss API error codes.
@@ -282,6 +285,8 @@ enum class TypeId {
     Char = 15,
     Binary = 16,
     Array = 17,
+    Map = 18,
+    Row = 19,
 };
 
 class DataType {
@@ -320,6 +325,10 @@ class DataType {
         dt.element_type_ = std::make_shared<DataType>(std::move(element));
         return dt;
     }
+    /// Constructs a `MAP<key, value>` type. Either side may itself be complex.
+    static DataType Map(DataType key, DataType value);
+    /// Constructs a `ROW<name: type, ...>` type from `{name, type}` fields.
+    static DataType Row(std::vector<std::pair<std::string, DataType>> fields);
 
     TypeId id() const { return id_; }
     int32_t precision() const { return precision_; }
@@ -329,11 +338,22 @@ class DataType {
     /// types. The returned pointer is valid as long as this DataType (or a
     /// copy holding the same shared element) is alive.
     const DataType* element_type() const { return element_type_.get(); }
+    /// MAP key / value types. Return `nullptr` for non-MAP types.
+    const DataType* key_type() const { return key_type_.get(); }
+    const DataType* value_type() const { return value_type_.get(); }
+    /// ROW fields (empty for non-ROW types).
+    size_t field_count() const { return row_field_types_.size(); }
+    const std::string& field_name(size_t i) const { return row_field_names_.at(i); }
+    const DataType* field_type(size_t i) const { return row_field_types_.at(i).get(); }
 
     /// Returns a copy of this DataType with nullable set to false.
     DataType NotNull() const {
         DataType dt(id_, precision_, scale_, false);
         dt.element_type_ = element_type_;
+        dt.key_type_ = key_type_;
+        dt.value_type_ = value_type_;
+        dt.row_field_names_ = row_field_names_;
+        dt.row_field_types_ = row_field_types_;
         return dt;
     }
 
@@ -343,7 +363,29 @@ class DataType {
     int32_t scale_{0};
     bool nullable_{true};
     std::shared_ptr<DataType> element_type_;
+    std::shared_ptr<DataType> key_type_;
+    std::shared_ptr<DataType> value_type_;
+    std::vector<std::string> row_field_names_;
+    std::vector<std::shared_ptr<DataType>> row_field_types_;
 };
+
+inline DataType DataType::Map(DataType key, DataType value) {
+    DataType dt(TypeId::Map, 0, 0);
+    dt.key_type_ = std::make_shared<DataType>(std::move(key));
+    dt.value_type_ = std::make_shared<DataType>(std::move(value));
+    return dt;
+}
+
+inline DataType DataType::Row(std::vector<std::pair<std::string, DataType>> fields) {
+    DataType dt(TypeId::Row, 0, 0);
+    dt.row_field_names_.reserve(fields.size());
+    dt.row_field_types_.reserve(fields.size());
+    for (auto& f : fields) {
+        dt.row_field_names_.push_back(std::move(f.first));
+        dt.row_field_types_.push_back(std::make_shared<DataType>(std::move(f.second)));
+    }
+    return dt;
+}
 
 constexpr int64_t EARLIEST_OFFSET = -2;
 
@@ -392,6 +434,10 @@ struct Column {
 struct Schema {
     std::vector<Column> columns;
     std::vector<std::string> primary_keys;
+    /// When set (via FromArrow), the table's column types come from this Arrow
+    /// schema instead of `columns` — the only way to express nested MAP/ROW
+    /// columns. `columns` stays empty in that case.
+    std::shared_ptr<arrow::Schema> arrow_schema;
 
     class Builder {
        public:
@@ -413,6 +459,15 @@ struct Schema {
     };
 
     static Builder NewBuilder() { return Builder(); }
+
+    /// Build a Schema whose column types come from an Arrow schema. Use this
+    /// for tables with nested MAP/ROW columns (`arrow::map()`, `arrow::struct_()`);
+    /// `Admin::CreateTable` routes Arrow-backed schemas through the C Data
+    /// Interface automatically.
+    static Schema FromArrow(std::shared_ptr<arrow::Schema> arrow_schema,
+                            std::vector<std::string> primary_keys = {}) {
+        return Schema{{}, std::move(primary_keys), std::move(arrow_schema)};
+    }
 };
 
 struct TableDescriptor {
@@ -522,10 +577,11 @@ inline size_t ResolveColumn(const ColumnMap& map, const std::string& name) {
     return it->second.index;
 }
 
-// Forward declaration so NamedGetters can declare GetArrayView(...) even
-// though the concrete class is defined further down.
 }  // namespace detail
-class ArrayView;
+class Value;
+class GenericRow;
+class ArrayWriter;
+class MapWriter;
 namespace detail {
 
 /// CRTP mixin that adds name-based getters to any class with index-based getters.
@@ -553,51 +609,6 @@ struct NamedGetters {
     std::string GetDecimalString(const std::string& n) const {
         return Self().GetDecimalString(Self().Resolve(n));
     }
-    size_t GetArraySize(const std::string& n) const {
-        return Self().GetArraySize(Self().Resolve(n));
-    }
-    TypeId GetArrayElementType(const std::string& n) const {
-        return Self().GetArrayElementType(Self().Resolve(n));
-    }
-    bool IsArrayElementNull(const std::string& n, size_t element) const {
-        return Self().IsArrayElementNull(Self().Resolve(n), element);
-    }
-    bool GetArrayBool(const std::string& n, size_t element) const {
-        return Self().GetArrayBool(Self().Resolve(n), element);
-    }
-    int32_t GetArrayInt32(const std::string& n, size_t element) const {
-        return Self().GetArrayInt32(Self().Resolve(n), element);
-    }
-    int64_t GetArrayInt64(const std::string& n, size_t element) const {
-        return Self().GetArrayInt64(Self().Resolve(n), element);
-    }
-    float GetArrayFloat32(const std::string& n, size_t element) const {
-        return Self().GetArrayFloat32(Self().Resolve(n), element);
-    }
-    double GetArrayFloat64(const std::string& n, size_t element) const {
-        return Self().GetArrayFloat64(Self().Resolve(n), element);
-    }
-    std::string GetArrayString(const std::string& n, size_t element) const {
-        return Self().GetArrayString(Self().Resolve(n), element);
-    }
-    std::vector<uint8_t> GetArrayBytes(const std::string& n, size_t element) const {
-        return Self().GetArrayBytes(Self().Resolve(n), element);
-    }
-    fluss::Date GetArrayDate(const std::string& n, size_t element) const {
-        return Self().GetArrayDate(Self().Resolve(n), element);
-    }
-    fluss::Time GetArrayTime(const std::string& n, size_t element) const {
-        return Self().GetArrayTime(Self().Resolve(n), element);
-    }
-    fluss::Timestamp GetArrayTimestamp(const std::string& n, size_t element) const {
-        return Self().GetArrayTimestamp(Self().Resolve(n), element);
-    }
-    std::string GetArrayDecimalString(const std::string& n, size_t element) const {
-        return Self().GetArrayDecimalString(Self().Resolve(n), element);
-    }
-    // Definition appears below the ArrayView class; return-by-value requires
-    // the complete type so we cannot inline the body here.
-    ArrayView GetArrayView(const std::string& n) const;
 
    private:
     const Derived& Self() const { return static_cast<const Derived&>(*this); }
@@ -628,60 +639,60 @@ struct PrefixData {
 };
 }  // namespace detail
 
-/**
- * @brief Read-only view over a FlussArray column value.
- *
- * Obtained from RowView::GetArrayView() / LookupResult::GetArrayView(), and
- * recursively from ArrayView::GetArray() for nested `ARRAY<ARRAY<...>>`
- * columns. Owns an opaque Rust handle (FlussArray + element DataType) that
- * is released on destruction. Move-only.
- */
-class ArrayView {
+/// One recursive handle for reading a complex (ARRAY / MAP / ROW) column value.
+/// `Navigate` with At/KeyAt/ValueAt/Field — each returns a child `Value`; read a
+/// leaf with the Get* methods (no index — the handle points at one value).
+/// Obtained from LookupResult::GetValue() / RowView::GetValue(). Move-only;
+/// owns an opaque Rust handle released on destruction.
+class Value {
    public:
-    ~ArrayView() noexcept;
+    ~Value() noexcept;
+    Value(const Value&) = delete;
+    Value& operator=(const Value&) = delete;
+    Value(Value&& other) noexcept;
+    Value& operator=(Value&& other) noexcept;
 
-    ArrayView(const ArrayView&) = delete;
-    ArrayView& operator=(const ArrayView&) = delete;
-    ArrayView(ArrayView&& other) noexcept;
-    ArrayView& operator=(ArrayView&& other) noexcept;
+    TypeId Type() const noexcept;
+    bool IsNull() const noexcept;
 
-    size_t Size() const noexcept;
-    TypeId ElementType() const noexcept;
-    bool IsNull(size_t element) const;
+    // ── Leaf reads ──
+    bool GetBool() const;
+    int32_t GetInt32() const;
+    int64_t GetInt64() const;
+    float GetFloat32() const;
+    double GetFloat64() const;
+    std::string GetString() const;
+    std::vector<uint8_t> GetBytes() const;
+    fluss::Date GetDate() const;
+    fluss::Time GetTime() const;
+    fluss::Timestamp GetTimestamp() const;
+    std::string GetDecimalString() const;
 
-    bool GetBool(size_t element) const;
-    int32_t GetInt32(size_t element) const;
-    int64_t GetInt64(size_t element) const;
-    float GetFloat32(size_t element) const;
-    double GetFloat64(size_t element) const;
-    std::string GetString(size_t element) const;
-    std::vector<uint8_t> GetBytes(size_t element) const;
-    fluss::Date GetDate(size_t element) const;
-    fluss::Time GetTime(size_t element) const;
-    fluss::Timestamp GetTimestampNtz(size_t element) const;
-    fluss::Timestamp GetTimestampLtz(size_t element) const;
-    std::string GetDecimalString(size_t element) const;
-    ArrayView GetArray(size_t element) const;
+    // ── Navigation ──
+    size_t Size() const;             // ARRAY / MAP entry count
+    size_t FieldCount() const;       // ROW
+    Value At(size_t i) const;        // ARRAY element
+    Value KeyAt(size_t i) const;     // MAP key
+    Value ValueAt(size_t i) const;   // MAP value
+    Value Field(size_t i) const;     // ROW field
+    Value Field(const std::string& name) const;  // ROW field by name
 
    private:
-    friend class RowView;
     friend class LookupResult;
+    friend class RowView;
     friend class PrefixRowView;
-    explicit ArrayView(ffi::ArrayViewInner* inner) : inner_(inner) {}
+    explicit Value(ffi::ValueInner* inner) : inner_(inner) {}
     void Destroy() noexcept;
-    ffi::ArrayViewInner* inner_{nullptr};
+    ffi::ValueInner* inner_{nullptr};
 };
-
-namespace detail {
-template <typename Derived>
-inline ArrayView NamedGetters<Derived>::GetArrayView(const std::string& n) const {
-    return Self().GetArrayView(Self().Resolve(n));
-}
-}  // namespace detail
 
 class ArrayWriter {
    public:
     ArrayWriter(size_t size, DataType element_type);
+    /// Builds an array whose element is a ROW / MAP (which DataType can't
+    /// express). Pass the element type as an Arrow type, e.g.
+    /// `arrow::struct_({...})` or `arrow::map(...)`.
+    ArrayWriter(size_t size, std::shared_ptr<arrow::DataType> element_type);
     ~ArrayWriter() noexcept;
 
     ArrayWriter(const ArrayWriter&) = delete;
@@ -706,12 +717,79 @@ class ArrayWriter {
     void SetTimestampLtz(size_t idx, fluss::Timestamp ts);
     void SetDecimal(size_t idx, const std::string& value);
     void SetArray(size_t idx, ArrayWriter&& nested);
+    /// Sets a ROW / MAP element. The nested row/map is consumed (moved-from).
+    void SetRow(size_t idx, GenericRow&& row);
+    void SetMap(size_t idx, MapWriter&& map);
 
    private:
     friend class GenericRow;
+    friend class MapWriter;
     void Destroy() noexcept;
     ffi::ArrayWriterInner* inner_{nullptr};
     DataType element_type_;
+};
+
+/// Builder for a MAP column value. Construct with the key/value types, then for
+/// each entry set the key and value and call Commit(). Keys cannot be null.
+/// Move-only; consumed by GenericRow::SetMap / Set(name, MapWriter&&).
+class MapWriter {
+   public:
+    MapWriter(size_t capacity, DataType key_type, DataType value_type);
+    /// Builds a map whose key/value is a ROW / MAP / ARRAY (which DataType
+    /// can't express). Pass the key and value types as Arrow types.
+    MapWriter(size_t capacity, std::shared_ptr<arrow::DataType> key_type,
+              std::shared_ptr<arrow::DataType> value_type);
+    ~MapWriter() noexcept;
+
+    MapWriter(const MapWriter&) = delete;
+    MapWriter& operator=(const MapWriter&) = delete;
+    MapWriter(MapWriter&& other) noexcept;
+    MapWriter& operator=(MapWriter&& other) noexcept;
+
+    bool Available() const;
+
+    // ── Key setters ──────────────────────────────────────────────────────
+    void SetKeyBool(bool k);
+    void SetKeyInt32(int32_t k);
+    void SetKeyInt64(int64_t k);
+    void SetKeyFloat32(float k);
+    void SetKeyFloat64(double k);
+    void SetKeyString(const std::string& k);
+    void SetKeyBytes(const std::vector<uint8_t>& k);
+    void SetKeyDate(fluss::Date k);
+    void SetKeyTime(fluss::Time k);
+    /// NTZ vs LTZ is chosen from the map's declared key type.
+    void SetKeyTimestamp(fluss::Timestamp k);
+    void SetKeyDecimal(const std::string& k);
+
+    // ── Value setters ──────────────────────────────────────────────────────
+    void SetValueNull();
+    void SetValueBool(bool v);
+    void SetValueInt32(int32_t v);
+    void SetValueInt64(int64_t v);
+    void SetValueFloat32(float v);
+    void SetValueFloat64(double v);
+    void SetValueString(const std::string& v);
+    void SetValueBytes(const std::vector<uint8_t>& v);
+    void SetValueDate(fluss::Date v);
+    void SetValueTime(fluss::Time v);
+    /// NTZ vs LTZ is chosen from the map's declared value type.
+    void SetValueTimestamp(fluss::Timestamp v);
+    void SetValueDecimal(const std::string& v);
+    // Compound values: the writer/row is consumed (moved-from).
+    void SetValueRow(GenericRow&& v);
+    void SetValueMap(MapWriter&& v);
+    void SetValueArray(ArrayWriter&& v);
+
+    void Commit();
+
+   private:
+    friend class GenericRow;
+    friend class ArrayWriter;
+    void Destroy() noexcept;
+    ffi::MapWriterInner* inner_{nullptr};
+    DataType key_type_;
+    DataType value_type_;
 };
 
 class GenericRow {
@@ -743,6 +821,10 @@ class GenericRow {
     void SetTimestampLtz(size_t idx, fluss::Timestamp ts);
     void SetDecimal(size_t idx, const std::string& value);
     void SetArray(size_t idx, ArrayWriter&& writer);
+    void SetMap(size_t idx, MapWriter&& writer);
+    /// Sets a ROW-typed field from a nested row built with GenericRow. The
+    /// nested row is consumed (moved-from) by this call.
+    void SetRow(size_t idx, GenericRow&& nested);
 
     // ── Name-based setters (require schema — see Table::NewRow()) ───
     void Set(const std::string& name, std::nullptr_t) { SetNull(Resolve(name)); }
@@ -791,6 +873,8 @@ class GenericRow {
         }
     }
     void Set(const std::string& name, ArrayWriter&& writer) { SetArray(Resolve(name), std::move(writer)); }
+    void Set(const std::string& name, MapWriter&& writer) { SetMap(Resolve(name), std::move(writer)); }
+    void Set(const std::string& name, GenericRow&& nested) { SetRow(Resolve(name), std::move(nested)); }
 
    private:
     friend class Table;
@@ -798,6 +882,8 @@ class GenericRow {
     friend class UpsertWriter;
     friend class Lookuper;
     friend class PrefixLookuper;
+    friend class ArrayWriter;
+    friend class MapWriter;
 
     using ColumnInfo = detail::ColumnInfo;
     using ColumnMap = detail::ColumnMap;
@@ -851,25 +937,9 @@ class RowView : public detail::NamedGetters<RowView> {
     bool IsDecimal(size_t idx) const;
     std::string GetDecimalString(size_t idx) const;
 
-    // ── Array getters ────────────────────────────────────────────────
-    size_t GetArraySize(size_t idx) const;
-    TypeId GetArrayElementType(size_t idx) const;
-    bool IsArrayElementNull(size_t idx, size_t element) const;
-    bool GetArrayBool(size_t idx, size_t element) const;
-    int32_t GetArrayInt32(size_t idx, size_t element) const;
-    int64_t GetArrayInt64(size_t idx, size_t element) const;
-    float GetArrayFloat32(size_t idx, size_t element) const;
-    double GetArrayFloat64(size_t idx, size_t element) const;
-    std::string GetArrayString(size_t idx, size_t element) const;
-    std::vector<uint8_t> GetArrayBytes(size_t idx, size_t element) const;
-    fluss::Date GetArrayDate(size_t idx, size_t element) const;
-    fluss::Time GetArrayTime(size_t idx, size_t element) const;
-    fluss::Timestamp GetArrayTimestamp(size_t idx, size_t element) const;
-    std::string GetArrayDecimalString(size_t idx, size_t element) const;
-    /// Returns an owning ArrayView over the array column at `idx`. ArrayView
-    /// supports nested arrays via ArrayView::GetArray(). Parity with Python's
-    /// recursive list return from `row.get_array(i)`.
-    ArrayView GetArrayView(size_t idx) const;
+    /// One recursive handle for any complex (ARRAY/MAP/ROW) column.
+    Value GetValue(size_t idx) const;
+    Value GetValue(const std::string& name) const;
 
     // Name-based getters inherited from detail::NamedGetters<RowView>
     using detail::NamedGetters<RowView>::IsNull;
@@ -884,21 +954,6 @@ class RowView : public detail::NamedGetters<RowView> {
     using detail::NamedGetters<RowView>::GetTime;
     using detail::NamedGetters<RowView>::GetTimestamp;
     using detail::NamedGetters<RowView>::GetDecimalString;
-    using detail::NamedGetters<RowView>::GetArraySize;
-    using detail::NamedGetters<RowView>::GetArrayElementType;
-    using detail::NamedGetters<RowView>::IsArrayElementNull;
-    using detail::NamedGetters<RowView>::GetArrayBool;
-    using detail::NamedGetters<RowView>::GetArrayInt32;
-    using detail::NamedGetters<RowView>::GetArrayInt64;
-    using detail::NamedGetters<RowView>::GetArrayFloat32;
-    using detail::NamedGetters<RowView>::GetArrayFloat64;
-    using detail::NamedGetters<RowView>::GetArrayString;
-    using detail::NamedGetters<RowView>::GetArrayBytes;
-    using detail::NamedGetters<RowView>::GetArrayDate;
-    using detail::NamedGetters<RowView>::GetArrayTime;
-    using detail::NamedGetters<RowView>::GetArrayTimestamp;
-    using detail::NamedGetters<RowView>::GetArrayDecimalString;
-    using detail::NamedGetters<RowView>::GetArrayView;
 
    private:
     size_t Resolve(const std::string& name) const {
@@ -941,22 +996,9 @@ class PrefixRowView : public detail::NamedGetters<PrefixRowView> {
     bool IsDecimal(size_t idx) const;
     std::string GetDecimalString(size_t idx) const;
 
-    // ── Array getters ────────────────────────────────────────────────
-    size_t GetArraySize(size_t idx) const;
-    TypeId GetArrayElementType(size_t idx) const;
-    bool IsArrayElementNull(size_t idx, size_t element) const;
-    bool GetArrayBool(size_t idx, size_t element) const;
-    int32_t GetArrayInt32(size_t idx, size_t element) const;
-    int64_t GetArrayInt64(size_t idx, size_t element) const;
-    float GetArrayFloat32(size_t idx, size_t element) const;
-    double GetArrayFloat64(size_t idx, size_t element) const;
-    std::string GetArrayString(size_t idx, size_t element) const;
-    std::vector<uint8_t> GetArrayBytes(size_t idx, size_t element) const;
-    fluss::Date GetArrayDate(size_t idx, size_t element) const;
-    fluss::Time GetArrayTime(size_t idx, size_t element) const;
-    fluss::Timestamp GetArrayTimestamp(size_t idx, size_t element) const;
-    std::string GetArrayDecimalString(size_t idx, size_t element) const;
-    ArrayView GetArrayView(size_t idx) const;
+    /// One recursive handle for any complex (ARRAY/MAP/ROW) column, by index or name.
+    Value GetValue(size_t idx) const;
+    Value GetValue(const std::string& name) const;
 
     // Name-based getters inherited from detail::NamedGetters<PrefixRowView>
     using detail::NamedGetters<PrefixRowView>::IsNull;
@@ -971,21 +1013,6 @@ class PrefixRowView : public detail::NamedGetters<PrefixRowView> {
     using detail::NamedGetters<PrefixRowView>::GetTime;
     using detail::NamedGetters<PrefixRowView>::GetTimestamp;
     using detail::NamedGetters<PrefixRowView>::GetDecimalString;
-    using detail::NamedGetters<PrefixRowView>::GetArraySize;
-    using detail::NamedGetters<PrefixRowView>::GetArrayElementType;
-    using detail::NamedGetters<PrefixRowView>::IsArrayElementNull;
-    using detail::NamedGetters<PrefixRowView>::GetArrayBool;
-    using detail::NamedGetters<PrefixRowView>::GetArrayInt32;
-    using detail::NamedGetters<PrefixRowView>::GetArrayInt64;
-    using detail::NamedGetters<PrefixRowView>::GetArrayFloat32;
-    using detail::NamedGetters<PrefixRowView>::GetArrayFloat64;
-    using detail::NamedGetters<PrefixRowView>::GetArrayString;
-    using detail::NamedGetters<PrefixRowView>::GetArrayBytes;
-    using detail::NamedGetters<PrefixRowView>::GetArrayDate;
-    using detail::NamedGetters<PrefixRowView>::GetArrayTime;
-    using detail::NamedGetters<PrefixRowView>::GetArrayTimestamp;
-    using detail::NamedGetters<PrefixRowView>::GetArrayDecimalString;
-    using detail::NamedGetters<PrefixRowView>::GetArrayView;
 
    private:
     size_t Resolve(const std::string& name) const {
@@ -1286,23 +1313,9 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
     bool IsDecimal(size_t idx) const;
     std::string GetDecimalString(size_t idx) const;
 
-    // ── Array getters ────────────────────────────────────────────────
-    size_t GetArraySize(size_t idx) const;
-    TypeId GetArrayElementType(size_t idx) const;
-    bool IsArrayElementNull(size_t idx, size_t element) const;
-    bool GetArrayBool(size_t idx, size_t element) const;
-    int32_t GetArrayInt32(size_t idx, size_t element) const;
-    int64_t GetArrayInt64(size_t idx, size_t element) const;
-    float GetArrayFloat32(size_t idx, size_t element) const;
-    double GetArrayFloat64(size_t idx, size_t element) const;
-    std::string GetArrayString(size_t idx, size_t element) const;
-    std::vector<uint8_t> GetArrayBytes(size_t idx, size_t element) const;
-    fluss::Date GetArrayDate(size_t idx, size_t element) const;
-    fluss::Time GetArrayTime(size_t idx, size_t element) const;
-    fluss::Timestamp GetArrayTimestamp(size_t idx, size_t element) const;
-    std::string GetArrayDecimalString(size_t idx, size_t element) const;
-    /// See RowView::GetArrayView for semantics. Supports nested arrays.
-    ArrayView GetArrayView(size_t idx) const;
+    /// One recursive handle for any complex (ARRAY/MAP/ROW) column, by index or name.
+    Value GetValue(size_t idx) const;
+    Value GetValue(const std::string& name) const;
 
     // Name-based getters inherited from detail::NamedGetters<LookupResult>
     using detail::NamedGetters<LookupResult>::IsNull;
@@ -1317,21 +1330,6 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
     using detail::NamedGetters<LookupResult>::GetTime;
     using detail::NamedGetters<LookupResult>::GetTimestamp;
     using detail::NamedGetters<LookupResult>::GetDecimalString;
-    using detail::NamedGetters<LookupResult>::GetArraySize;
-    using detail::NamedGetters<LookupResult>::GetArrayElementType;
-    using detail::NamedGetters<LookupResult>::IsArrayElementNull;
-    using detail::NamedGetters<LookupResult>::GetArrayBool;
-    using detail::NamedGetters<LookupResult>::GetArrayInt32;
-    using detail::NamedGetters<LookupResult>::GetArrayInt64;
-    using detail::NamedGetters<LookupResult>::GetArrayFloat32;
-    using detail::NamedGetters<LookupResult>::GetArrayFloat64;
-    using detail::NamedGetters<LookupResult>::GetArrayString;
-    using detail::NamedGetters<LookupResult>::GetArrayBytes;
-    using detail::NamedGetters<LookupResult>::GetArrayDate;
-    using detail::NamedGetters<LookupResult>::GetArrayTime;
-    using detail::NamedGetters<LookupResult>::GetArrayTimestamp;
-    using detail::NamedGetters<LookupResult>::GetArrayDecimalString;
-    using detail::NamedGetters<LookupResult>::GetArrayView;
 
    private:
     friend class Lookuper;
@@ -1459,6 +1457,9 @@ class Admin {
 
     bool Available() const;
 
+    /// Creates a table. For nested MAP/ROW columns, build `descriptor`'s schema
+    /// via `Schema::FromArrow(...)` — `CreateTable` routes Arrow-backed schemas
+    /// through the C Data Interface automatically.
     Result CreateTable(const TablePath& table_path, const TableDescriptor& descriptor,
                        bool ignore_if_exists = false);
 
