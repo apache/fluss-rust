@@ -44,6 +44,10 @@ import fluss
 
 DEFAULT_BOOTSTRAP_SERVERS = "127.0.0.1:9123"
 
+# Total rows written before the scans run (3 + 2 + 1 + 1 + 2). The
+# context-manager demo writes one more row, but only after the scans.
+EXPECTED_ROWS = 9
+
 
 async def main(bootstrap_servers: Optional[str] = None):
     bootstrap_servers = bootstrap_servers or os.environ.get(
@@ -249,11 +253,17 @@ async def _scan_batch(table, num_buckets):
     scanner = await table.new_scan().create_record_batch_log_scanner()
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
     pa_table_result = await scanner.to_arrow()
+    assert pa_table_result.num_rows == EXPECTED_ROWS, (
+        f"to_arrow() returned {pa_table_result.num_rows}, expected {EXPECTED_ROWS}"
+    )
     print(f"to_arrow() returned {pa_table_result.num_rows} rows")
 
     scanner2 = await table.new_scan().create_record_batch_log_scanner()
     scanner2.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
     df_result = await scanner2.to_pandas()
+    assert len(df_result) == EXPECTED_ROWS, (
+        f"to_pandas() returned {len(df_result)}, expected {EXPECTED_ROWS}"
+    )
     print(f"to_pandas() returned {len(df_result)} rows")
 
     print("\n--- Batch scanner: to_arrow_batch_reader() (lazy) ---")
@@ -263,6 +273,10 @@ async def _scan_batch(table, num_buckets):
     )
     arrow_reader = reader_scanner.to_arrow_batch_reader()
     reader_table = pa.Table.from_batches(list(arrow_reader), schema=arrow_reader.schema)
+    assert reader_table.num_rows == EXPECTED_ROWS, (
+        f"to_arrow_batch_reader() yielded {reader_table.num_rows}, "
+        f"expected {EXPECTED_ROWS}"
+    )
     print(f"to_arrow_batch_reader() yielded {reader_table.num_rows} rows")
 
     print("\n--- Batch scanner: poll_arrow() ---")
@@ -326,6 +340,10 @@ async def _projection(table, num_buckets):
         {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
     )
     df_projected = await scanner_index.to_pandas()
+    assert list(df_projected.columns) == ["id", "name"], (
+        f"Unexpected projected columns: {list(df_projected.columns)}"
+    )
+    assert len(df_projected) == EXPECTED_ROWS
     print(f"Projected columns: {list(df_projected.columns)}")
 
     print("\n--- Projection by name ['name', 'score'] ---")
@@ -338,6 +356,10 @@ async def _projection(table, num_buckets):
         {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
     )
     df_named = await scanner_names.to_pandas()
+    assert list(df_named.columns) == ["name", "score"], (
+        f"Unexpected projected columns: {list(df_named.columns)}"
+    )
+    assert len(df_named) == EXPECTED_ROWS
     print(f"Projected columns: {list(df_named.columns)}")
 
 

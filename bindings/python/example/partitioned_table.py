@@ -79,6 +79,9 @@ async def _run(conn):
     print("Created partitions: region=US, region=EU")
 
     partition_infos = await admin.list_partition_infos(table_path)
+    assert len(partition_infos) == 2, (
+        f"Expected 2 partitions, got {len(partition_infos)}"
+    )
     print(f"Partitions: {[p.partition_name for p in partition_infos]}")
 
     print("\n--- Writing across partitions ---")
@@ -94,6 +97,9 @@ async def _run(conn):
     print("\n--- list_partition_infos() with a partition_spec filter ---")
     us_partitions = await admin.list_partition_infos(
         table_path, partition_spec={"region": "US"}
+    )
+    assert len(us_partitions) == 1, (
+        f"Expected 1 partition for region=US, got {len(us_partitions)}"
     )
     print(f"Filtered partitions (region=US): {us_partitions}")
 
@@ -130,6 +136,7 @@ async def _scan_partitions(table, partition_infos):
             start_offset=fluss.EARLIEST_OFFSET,
         )
     arrow = await scanner.to_arrow()
+    assert arrow.num_rows == 4, f"Expected 4 records, got {arrow.num_rows}"
     print(f"to_arrow() returned {arrow.num_rows} records across all partitions")
 
     print("\n--- subscribe_partition_buckets() + to_arrow() ---")
@@ -139,6 +146,7 @@ async def _scan_partitions(table, partition_infos):
     }
     batch_scanner.subscribe_partition_buckets(partition_bucket_offsets)
     batch_arrow = await batch_scanner.to_arrow()
+    assert batch_arrow.num_rows == 4, f"Expected 4 records, got {batch_arrow.num_rows}"
     print(f"to_arrow() returned {batch_arrow.num_rows} records")
 
     print("\n--- unsubscribe_partition() ---")
@@ -148,6 +156,8 @@ async def _scan_partitions(table, partition_infos):
     first = partition_infos[0]
     scanner3.unsubscribe_partition(first.partition_id, 0)
     remaining = await scanner3.to_arrow()
+    # Each partition holds 2 records, so dropping one leaves 2.
+    assert remaining.num_rows == 2, f"Expected 2 records, got {remaining.num_rows}"
     print(
         f"After unsubscribing partition {first.partition_name}: "
         f"{remaining.num_rows} records from the rest"
@@ -158,6 +168,7 @@ async def _scan_partitions(table, partition_infos):
     for p in partition_infos:
         scanner4.subscribe_partition(p.partition_id, 0, fluss.EARLIEST_OFFSET)
     df = await scanner4.to_pandas()
+    assert len(df) == 4, f"Expected 4 records, got {len(df)}"
     print(f"to_pandas() returned {len(df)} records")
 
 
