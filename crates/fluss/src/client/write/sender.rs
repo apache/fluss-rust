@@ -311,6 +311,15 @@ impl Sender {
         if batches.is_empty() {
             return Ok(());
         }
+
+        // Record attempted-send per-batch metrics for the whole drained set
+        // up front, before any early return (unknown leader, connection
+        // failure) can drop batches. So a leader/connection failure
+        // still counts toward `records_send_total` / `bytes_send_total`.
+        // Retries re-drain the batch and therefore contribute one sample per
+        // send attempt.
+        self.record_request_batch_metrics(&batches);
+
         let mut records_by_bucket = HashMap::new();
         let mut write_batch_by_table: HashMap<TableId, Vec<TableBucket>> = HashMap::new();
 
@@ -375,13 +384,6 @@ impl Sender {
                     continue;
                 }
             };
-
-            // Record attempted-send per-batch metrics after
-            // `build_write_request` (so `estimated_size_in_bytes` and
-            // `record_count` reflect the final serialized batch), before the
-            // actual request round-trip. Retries therefore contribute one
-            // sample per send attempt.
-            self.record_request_batch_metrics(&request_batches);
 
             // Put batches back into records_by_bucket since response handling
             // will use them.
@@ -741,11 +743,13 @@ impl Sender {
         Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path))
     }
 
-    /// Record per-batch writer throughput/queue metrics for a set of built
-    /// request batches. Invoked from `send_write_request` after
-    /// `build_write_request` has serialized the batches (so byte/record counts
-    /// are final). Extracted as a seam so the wiring can be unit-tested without
-    /// a live connection.
+    /// Record per-batch writer throughput/queue metrics for a drained set of
+    /// batches. Invoked once at the start of `send_write_request`, before the
+    /// leader lookup / connection / serialization steps, so every drained
+    /// batch is counted exactly once per send attempt regardless of whether
+    /// the send later succeeds. Because this runs before serialization, 
+    /// `estimated_size_in_bytes` is the pre-serialization estimate rather than 
+    /// the final encoded length.
     fn record_request_batch_metrics(&self, request_batches: &[ReadyWriteBatch]) {
         for request_batch in request_batches {
             let batch = &request_batch.write_batch;
@@ -1065,7 +1069,7 @@ impl WriteResponse for PutKvResponse {
 mod tests {
     use super::*;
     use crate::client::WriteRecord;
-    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
+    use crate::cluster::{Cluster, ServerType};
     use crate::config::Config;
     use crate::metadata::{PhysicalTablePath, TablePath};
     use crate::proto::{
@@ -1073,7 +1077,7 @@ mod tests {
     };
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::test_utils::{build_cluster_arc, build_table_info};
+    use crate::test_utils::{build_cluster_arc, build_cluster_arc_with_port, build_table_info};
     use prost::Message;
     use std::collections::{HashMap, HashSet};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1106,56 +1110,6 @@ mod tests {
         let mut drained = batches.remove(&1).expect("drained batches");
         let batch = drained.pop().expect("batch");
         Ok((batch, result_handle))
-    }
-
-    fn build_cluster_arc_with_port(
-        table_path: &TablePath,
-        table_id: i64,
-        buckets: i32,
-        port: u32,
-    ) -> Arc<Cluster> {
-        let server = ServerNode::new(1, "127.0.0.1".to_string(), port, ServerType::TabletServer);
-
-        let mut servers = HashMap::new();
-        servers.insert(server.id(), server.clone());
-
-        let mut locations_by_path = HashMap::new();
-        let mut locations_by_bucket = HashMap::new();
-        let mut bucket_locations = Vec::new();
-
-        for bucket_id in 0..buckets {
-            let table_bucket = TableBucket::new(table_id, bucket_id);
-            let bucket_location = BucketLocation::new(
-                table_bucket.clone(),
-                Some(server.clone()),
-                Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
-            );
-            bucket_locations.push(bucket_location.clone());
-            locations_by_bucket.insert(table_bucket, bucket_location);
-        }
-        locations_by_path.insert(
-            Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
-            bucket_locations,
-        );
-
-        let mut table_id_by_path = HashMap::new();
-        table_id_by_path.insert(table_path.clone(), table_id);
-
-        let mut table_info_by_path = HashMap::new();
-        table_info_by_path.insert(
-            table_path.clone(),
-            build_table_info(table_path.clone(), table_id, buckets),
-        );
-
-        Arc::new(Cluster::new(
-            None,
-            servers,
-            locations_by_path,
-            locations_by_bucket,
-            table_id_by_path,
-            table_info_by_path,
-            HashMap::new(),
-        ))
     }
 
     #[tokio::test]
@@ -1477,6 +1431,71 @@ mod tests {
             attempted_records,
             Some(1),
             "records_send_total should count attempted sends"
+        );
+    }
+
+    #[test]
+    fn send_write_request_unknown_leader_still_records_attempted_send_metrics() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || -> Result<()> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+
+            rt.block_on(async {
+                let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+                let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+                let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+                let idempotence = disabled_idempotence();
+                let accumulator = Arc::new(RecordAccumulator::new(
+                    Config::default(),
+                    Arc::clone(&idempotence),
+                ));
+                let sender = Sender::new(
+                    metadata,
+                    accumulator.clone(),
+                    1024 * 1024,
+                    1000,
+                    1,
+                    1,
+                    idempotence,
+                    Arc::new(crate::metrics::WriterMetrics::new()),
+                );
+
+                let (batch, _handle) =
+                    build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+                // Destination 999 is absent from cluster metadata, so the send
+                // bails out with LeaderNotAvailableException before the batch is
+                // serialized or dispatched. Metrics must still be recorded so the
+                // count matches Java, which updates writer metrics over the whole
+                // drained set regardless of send outcome.
+                sender.send_write_request(999, 1, vec![batch]).await?;
+                Ok(())
+            })
+        })
+        .expect("sender attempted-send metrics");
+
+        let entries = snapshotter.snapshot().into_vec();
+
+        let attempted_records = entries.iter().find_map(|(key, _, _, val)| {
+            if key.key().name() == crate::metrics::WRITER_RECORDS_SEND_TOTAL {
+                match val {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            attempted_records,
+            Some(1),
+            "records_send_total must count batches dropped before send on unknown leader"
         );
     }
 
