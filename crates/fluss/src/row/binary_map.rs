@@ -463,6 +463,7 @@ mod tests {
     use super::*;
     use crate::metadata::DataTypes;
     use crate::row::binary_array::FlussArrayWriter;
+    use crate::row::datum::TimestampNtz;
 
     #[test]
     fn fluss_map_dispatches_through_internal_map_trait() {
@@ -509,6 +510,29 @@ mod tests {
         assert_eq!(decoded_keys.get_int(1).unwrap(), 2);
         assert_eq!(decoded_values.get_string(0).unwrap(), "a");
         assert_eq!(decoded_values.get_string(1).unwrap(), "b");
+    }
+
+    #[test]
+    fn test_round_trip_map_with_noncompact_timestamp_value() {
+        // Regression: a non-compact timestamp (precision > 3) packs
+        // nanoOfMillisecond in the low word, which `FlussArray::extent` (used by
+        // map validation) must not treat as a byte length.
+        let key_type = DataTypes::string();
+        let value_type = DataTypes::timestamp_with_precision(6);
+        let ts = TimestampNtz::from_millis_nanos(1_769_163_227_123, 456_000).unwrap();
+
+        let mut writer = FlussMapWriter::new(2, &key_type, &value_type);
+        writer
+            .write_entry("a".into(), Datum::TimestampNtz(ts))
+            .unwrap();
+        writer.write_entry("b".into(), Datum::Null).unwrap();
+        let map = writer.complete().unwrap();
+
+        // Re-decode from the serialized bytes (the compacted / KV-lookup path).
+        let decoded = FlussMap::from_bytes(map.as_bytes(), &key_type, &value_type).unwrap();
+        assert_eq!(decoded.size(), 2);
+        assert_eq!(decoded.value_array().get_timestamp_ntz(0, 6).unwrap(), ts);
+        assert!(decoded.value_array().is_null_at(1));
     }
 
     #[test]

@@ -18,6 +18,7 @@
 use crate::*;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_schema::SchemaRef;
+use fcore::record::from_arrow_field;
 use std::sync::Arc;
 
 /// Utilities for schema conversion between PyArrow, Arrow, and Fluss
@@ -36,82 +37,13 @@ impl Utils {
         })
     }
 
-    /// Convert an Arrow Field to a Fluss DataType, preserving nullability.
+    /// Convert an Arrow Field to a Fluss DataType. Delegates to core's canonical
+    /// Arrow->Fluss converter, which handles scalars, list, map, and struct
+    /// recursively and preserves per-field nullability.
     pub fn arrow_field_to_fluss_type(
         field: &arrow::datatypes::Field,
     ) -> PyResult<fcore::metadata::DataType> {
-        use arrow::datatypes::DataType as ArrowDataType;
-        use fcore::metadata::DataTypes;
-
-        let fluss_type = match field.data_type() {
-            ArrowDataType::Boolean => DataTypes::boolean(),
-            ArrowDataType::Int8 => DataTypes::tinyint(),
-            ArrowDataType::Int16 => DataTypes::smallint(),
-            ArrowDataType::Int32 => DataTypes::int(),
-            ArrowDataType::Int64 => DataTypes::bigint(),
-            ArrowDataType::UInt8 => DataTypes::tinyint(),
-            ArrowDataType::UInt16 => DataTypes::smallint(),
-            ArrowDataType::UInt32 => DataTypes::int(),
-            ArrowDataType::UInt64 => DataTypes::bigint(),
-            ArrowDataType::Float32 => DataTypes::float(),
-            ArrowDataType::Float64 => DataTypes::double(),
-            ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 => DataTypes::string(),
-            ArrowDataType::Binary | ArrowDataType::LargeBinary => DataTypes::bytes(),
-            ArrowDataType::FixedSizeBinary(n) => DataTypes::binary(*n as usize),
-            ArrowDataType::Date32 => DataTypes::date(),
-            ArrowDataType::Date64 => DataTypes::date(),
-            ArrowDataType::Time32(unit) => match unit {
-                arrow_schema::TimeUnit::Second => DataTypes::time_with_precision(0),
-                arrow_schema::TimeUnit::Millisecond => DataTypes::time_with_precision(3),
-                _ => {
-                    return Err(FlussError::new_err(format!(
-                        "Unsupported Time32 unit: {unit:?}"
-                    )));
-                }
-            },
-            ArrowDataType::Time64(unit) => match unit {
-                arrow_schema::TimeUnit::Microsecond => DataTypes::time_with_precision(6),
-                arrow_schema::TimeUnit::Nanosecond => DataTypes::time_with_precision(9),
-                _ => {
-                    return Err(FlussError::new_err(format!(
-                        "Unsupported Time64 unit: {unit:?}"
-                    )));
-                }
-            },
-            ArrowDataType::Timestamp(unit, tz) => {
-                let precision = match unit {
-                    arrow_schema::TimeUnit::Second => 0,
-                    arrow_schema::TimeUnit::Millisecond => 3,
-                    arrow_schema::TimeUnit::Microsecond => 6,
-                    arrow_schema::TimeUnit::Nanosecond => 9,
-                };
-                // Arrow Timestamp with timezone -> Fluss TimestampLtz
-                // Arrow Timestamp without timezone -> Fluss Timestamp (NTZ)
-                if tz.is_some() {
-                    DataTypes::timestamp_ltz_with_precision(precision)
-                } else {
-                    DataTypes::timestamp_with_precision(precision)
-                }
-            }
-            ArrowDataType::Decimal128(precision, scale) => {
-                DataTypes::decimal(*precision as u32, *scale as u32)
-            }
-            ArrowDataType::List(element_field) => {
-                let element_type = Utils::arrow_field_to_fluss_type(element_field)?;
-                DataTypes::array(element_type)
-            }
-            other => {
-                return Err(FlussError::new_err(format!(
-                    "Unsupported Arrow data type: {other:?}"
-                )));
-            }
-        };
-
-        if field.is_nullable() {
-            Ok(fluss_type)
-        } else {
-            Ok(fluss_type.as_non_nullable())
-        }
+        from_arrow_field(field).map_err(|e| FlussError::from_core_error(&e))
     }
 
     /// Convert Fluss DataType to string representation, appending " NOT NULL"

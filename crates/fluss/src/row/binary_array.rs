@@ -250,15 +250,24 @@ impl FlussArray {
 
         let mut max_extent = fixed_part_size;
         for i in 0..self.size {
-            if !self.is_null_at(i) {
-                let packed = self.read_i64(i, "extent calculation")? as u64;
-                let mark = packed & HIGHEST_FIRST_BIT;
-                if mark == 0 {
-                    let offset = (packed >> 32) as usize;
-                    let len = (packed & 0xFFFF_FFFF) as usize;
-                    max_extent = max_extent.max(offset + len);
-                }
+            if self.is_null_at(i) {
+                continue;
             }
+            let packed = self.read_i64(i, "extent calculation")? as u64;
+            let offset = (packed >> 32) as usize;
+            let var_len = match element_type {
+                // Non-compact timestamps pack `nanoOfMillisecond` in the low word
+                // (not a byte length) and store a fixed 8-byte millisecond value
+                // in the variable section (see `write_timestamp_ntz`).
+                DataType::Timestamp(_) | DataType::TimestampLTz(_) => round_to_nearest_word(8),
+                _ => {
+                    if packed & HIGHEST_FIRST_BIT != 0 {
+                        continue;
+                    }
+                    (packed & 0xFFFF_FFFF) as usize
+                }
+            };
+            max_extent = max_extent.max(offset + var_len);
         }
 
         Ok(round_to_nearest_word(max_extent))

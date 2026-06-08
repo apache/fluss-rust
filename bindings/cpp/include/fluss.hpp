@@ -47,9 +47,11 @@ struct WriteResult;
 struct LogScanner;
 struct UpsertWriter;
 struct Lookuper;
+struct PrefixLookuper;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
+struct PrefixLookupResultInner;
 struct ArrayWriterInner;
 struct ArrayViewInner;
 }  // namespace ffi
@@ -610,6 +612,19 @@ struct ScanData {
     ScanData(const ScanData&) = delete;
     ScanData& operator=(const ScanData&) = delete;
 };
+
+/// Backing store for a prefix lookup result; mirrors ScanData.
+struct PrefixData {
+    ffi::PrefixLookupResultInner* raw;
+    ColumnMap columns;
+
+    PrefixData(ffi::PrefixLookupResultInner* r, ColumnMap cols)
+        : raw(r), columns(std::move(cols)) {}
+    ~PrefixData();
+
+    PrefixData(const PrefixData&) = delete;
+    PrefixData& operator=(const PrefixData&) = delete;
+};
 }  // namespace detail
 
 /**
@@ -650,6 +665,7 @@ class ArrayView {
    private:
     friend class RowView;
     friend class LookupResult;
+    friend class PrefixRowView;
     explicit ArrayView(ffi::ArrayViewInner* inner) : inner_(inner) {}
     void Destroy() noexcept;
     ffi::ArrayViewInner* inner_{nullptr};
@@ -780,6 +796,7 @@ class GenericRow {
     friend class AppendWriter;
     friend class UpsertWriter;
     friend class Lookuper;
+    friend class PrefixLookuper;
 
     using ColumnInfo = detail::ColumnInfo;
     using ColumnMap = detail::ColumnMap;
@@ -892,6 +909,118 @@ class RowView : public detail::NamedGetters<RowView> {
     std::shared_ptr<const detail::ScanData> data_;
     size_t bucket_idx_;
     size_t rec_idx_;
+};
+
+/// Read-only view over one row of a prefix lookup result.
+///
+/// Like RowView, but backed by PrefixData (a prefix lookup result) rather than
+/// scan data. Shares ownership of the underlying handle via reference counting,
+/// so it can safely outlive the PrefixLookupResult that produced it.
+class PrefixRowView : public detail::NamedGetters<PrefixRowView> {
+    friend struct detail::NamedGetters<PrefixRowView>;
+
+   public:
+    PrefixRowView(std::shared_ptr<const detail::PrefixData> data, size_t rec_idx)
+        : data_(std::move(data)), rec_idx_(rec_idx) {}
+
+    // ── Index-based getters ──────────────────────────────────────────
+    size_t FieldCount() const;
+    TypeId GetType(size_t idx) const;
+    bool IsNull(size_t idx) const;
+    bool GetBool(size_t idx) const;
+    int32_t GetInt32(size_t idx) const;
+    int64_t GetInt64(size_t idx) const;
+    float GetFloat32(size_t idx) const;
+    double GetFloat64(size_t idx) const;
+    std::string_view GetString(size_t idx) const;
+    std::pair<const uint8_t*, size_t> GetBytes(size_t idx) const;
+    fluss::Date GetDate(size_t idx) const;
+    fluss::Time GetTime(size_t idx) const;
+    fluss::Timestamp GetTimestamp(size_t idx) const;
+    bool IsDecimal(size_t idx) const;
+    std::string GetDecimalString(size_t idx) const;
+
+    // ── Array getters ────────────────────────────────────────────────
+    size_t GetArraySize(size_t idx) const;
+    TypeId GetArrayElementType(size_t idx) const;
+    bool IsArrayElementNull(size_t idx, size_t element) const;
+    bool GetArrayBool(size_t idx, size_t element) const;
+    int32_t GetArrayInt32(size_t idx, size_t element) const;
+    int64_t GetArrayInt64(size_t idx, size_t element) const;
+    float GetArrayFloat32(size_t idx, size_t element) const;
+    double GetArrayFloat64(size_t idx, size_t element) const;
+    std::string GetArrayString(size_t idx, size_t element) const;
+    std::vector<uint8_t> GetArrayBytes(size_t idx, size_t element) const;
+    fluss::Date GetArrayDate(size_t idx, size_t element) const;
+    fluss::Time GetArrayTime(size_t idx, size_t element) const;
+    fluss::Timestamp GetArrayTimestamp(size_t idx, size_t element) const;
+    std::string GetArrayDecimalString(size_t idx, size_t element) const;
+    ArrayView GetArrayView(size_t idx) const;
+
+    // Name-based getters inherited from detail::NamedGetters<PrefixRowView>
+    using detail::NamedGetters<PrefixRowView>::IsNull;
+    using detail::NamedGetters<PrefixRowView>::GetBool;
+    using detail::NamedGetters<PrefixRowView>::GetInt32;
+    using detail::NamedGetters<PrefixRowView>::GetInt64;
+    using detail::NamedGetters<PrefixRowView>::GetFloat32;
+    using detail::NamedGetters<PrefixRowView>::GetFloat64;
+    using detail::NamedGetters<PrefixRowView>::GetString;
+    using detail::NamedGetters<PrefixRowView>::GetBytes;
+    using detail::NamedGetters<PrefixRowView>::GetDate;
+    using detail::NamedGetters<PrefixRowView>::GetTime;
+    using detail::NamedGetters<PrefixRowView>::GetTimestamp;
+    using detail::NamedGetters<PrefixRowView>::GetDecimalString;
+    using detail::NamedGetters<PrefixRowView>::GetArraySize;
+    using detail::NamedGetters<PrefixRowView>::GetArrayElementType;
+    using detail::NamedGetters<PrefixRowView>::IsArrayElementNull;
+    using detail::NamedGetters<PrefixRowView>::GetArrayBool;
+    using detail::NamedGetters<PrefixRowView>::GetArrayInt32;
+    using detail::NamedGetters<PrefixRowView>::GetArrayInt64;
+    using detail::NamedGetters<PrefixRowView>::GetArrayFloat32;
+    using detail::NamedGetters<PrefixRowView>::GetArrayFloat64;
+    using detail::NamedGetters<PrefixRowView>::GetArrayString;
+    using detail::NamedGetters<PrefixRowView>::GetArrayBytes;
+    using detail::NamedGetters<PrefixRowView>::GetArrayDate;
+    using detail::NamedGetters<PrefixRowView>::GetArrayTime;
+    using detail::NamedGetters<PrefixRowView>::GetArrayTimestamp;
+    using detail::NamedGetters<PrefixRowView>::GetArrayDecimalString;
+    using detail::NamedGetters<PrefixRowView>::GetArrayView;
+
+   private:
+    size_t Resolve(const std::string& name) const {
+        if (!data_) {
+            throw std::runtime_error("PrefixRowView: name-based access not available");
+        }
+        return detail::ResolveColumn(data_->columns, name);
+    }
+    std::shared_ptr<const detail::PrefixData> data_;
+    size_t rec_idx_;
+};
+
+/// Read-only result of a prefix lookup: zero-or-more matched rows, via Size()/GetRow(i).
+class PrefixLookupResult {
+   public:
+    PrefixLookupResult() = default;
+
+    /// Number of matched rows.
+    size_t Size() const;
+    bool IsEmpty() const { return Size() == 0; }
+
+    /// Returns a view over the row at `index`. Throws std::out_of_range if
+    /// `index >= Size()`.
+    PrefixRowView GetRow(size_t index) const {
+        if (!data_) {
+            throw std::logic_error("PrefixLookupResult: not available (moved-from or null)");
+        }
+        if (index >= Size()) {
+            throw std::out_of_range("PrefixLookupResult::GetRow: index out of range");
+        }
+        return PrefixRowView(data_, index);
+    }
+
+   private:
+    friend class PrefixLookuper;
+    std::shared_ptr<const detail::PrefixData> data_;
 };
 
 /// Identifies a specific bucket, optionally within a partition.
@@ -1214,6 +1343,7 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
 class AppendWriter;
 class UpsertWriter;
 class Lookuper;
+class PrefixLookuper;
 class WriteResult;
 class LogScanner;
 class Admin;
@@ -1400,6 +1530,10 @@ class Table {
     TableUpsert NewUpsert();
     TableLookup NewLookup();
     TableScan NewScan();
+
+    /// Creates a prefix lookuper. `lookup_columns` must be the table's bucket-key
+    /// columns (a strict prefix of the primary key); fails otherwise.
+    Result NewPrefixLookup(std::vector<std::string> lookup_columns, PrefixLookuper& out);
 
     TableInfo GetTableInfo() const;
     TablePath GetTablePath() const;
@@ -1598,6 +1732,29 @@ class Lookuper {
     Lookuper(ffi::Lookuper* lookuper) noexcept;
     void Destroy() noexcept;
     ffi::Lookuper* lookuper_{nullptr};
+};
+
+/// Performs bucket-key prefix lookups; create via Table::NewPrefixLookup(). Move-only.
+class PrefixLookuper {
+   public:
+    PrefixLookuper() noexcept;
+    ~PrefixLookuper() noexcept;
+
+    PrefixLookuper(const PrefixLookuper&) = delete;
+    PrefixLookuper& operator=(const PrefixLookuper&) = delete;
+    PrefixLookuper(PrefixLookuper&& other) noexcept;
+    PrefixLookuper& operator=(PrefixLookuper&& other) noexcept;
+
+    bool Available() const;
+
+    /// Looks up all rows matching the prefix columns set on `prefix_row`.
+    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out);
+
+   private:
+    friend class Table;
+    PrefixLookuper(ffi::PrefixLookuper* lookuper) noexcept;
+    void Destroy() noexcept;
+    ffi::PrefixLookuper* lookuper_{nullptr};
 };
 
 class LogScanner {
