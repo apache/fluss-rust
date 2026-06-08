@@ -259,6 +259,138 @@ fn scanner_histogram(name: &'static str, database: &str, table: &str) -> metrics
     )
 }
 
+// ---------------------------------------------------------------------------
+// Writer pipeline metrics
+//
+//
+// Java's `WriterMetricGroup` carries only the `client_id`
+// variable inherited from `ClientMetricGroup` -- no table or bucket label
+// (one series per client). The Rust `metrics` facade has no `client_id`
+// concept, so writer metrics are emitted UNLABELED (global per process).
+// TODO: A future `client.id` config option can attach a `client_id` label without
+// breaking these series (it only splits the existing global series).
+//
+// Semantic deviations from Java:
+//   * Java `sendLatencyMs` / `batchQueueTimeMs` are volatile-long gauges
+//     (latest sample only); Rust uses histograms for full p50/p95/p99.
+//   * Java `recordSendPerSecond` / `bytesSendPerSecond` / `recordsRetryPerSecond`
+//     are `MeterView` rates; Rust emits raw counters and lets the exporter
+//     compute `rate()`.
+// ---------------------------------------------------------------------------
+
+/// Histogram: elapsed ms for each write request (ProduceLog / PutKv) round
+/// trip.
+pub const WRITER_SEND_LATENCY_MS: &str = "fluss.client.writer.send_latency_ms";
+
+/// Histogram: ms a batch spent queued in the accumulator (`drained_ms -
+/// create_ms`).
+pub const WRITER_BATCH_QUEUE_TIME_MS: &str = "fluss.client.writer.batch_queue_time_ms";
+
+/// Counter: total records handed to the cluster across all sent batches.
+pub const WRITER_RECORDS_SEND_TOTAL: &str = "fluss.client.writer.records_send.total";
+
+/// Counter: total serialized batch bytes sent.
+pub const WRITER_BYTES_SEND_TOTAL: &str = "fluss.client.writer.bytes_send.total";
+
+/// Counter: total records re-enqueued for retry.
+pub const WRITER_RECORDS_RETRY_TOTAL: &str = "fluss.client.writer.records_retry.total";
+
+/// Histogram: records per sent batch.
+pub const WRITER_RECORDS_PER_BATCH: &str = "fluss.client.writer.records_per_batch";
+
+/// Histogram: serialized bytes per sent batch.
+pub const WRITER_BYTES_PER_BATCH: &str = "fluss.client.writer.bytes_per_batch";
+
+/// Gauge: total writer buffer memory in bytes (constant).
+pub const WRITER_BUFFER_TOTAL_BYTES: &str = "fluss.client.writer.buffer_total_bytes";
+
+/// Gauge: currently-available writer buffer memory in bytes.
+pub const WRITER_BUFFER_AVAILABLE_BYTES: &str = "fluss.client.writer.buffer_available_bytes";
+
+/// Gauge: number of producer threads blocked waiting for buffer memory --
+/// a high-signal backpressure indicator.
+pub const WRITER_BUFFER_WAITING_THREADS: &str = "fluss.client.writer.buffer_waiting_threads";
+
+/// Cached, unlabeled writer-pipeline metric handles.
+///
+/// Constructed once per [`crate::client::write::WriterClient`] and shared
+/// (`Arc`) into the `Sender`.
+/// Like [`ScannerMetrics`], every cached handle is bound to whichever
+/// recorder is installed when [`Self::new`] runs. Construct it *after*
+/// installing the production recorder; in tests, construct it inside the
+/// `metrics::with_local_recorder(...)` closure. With no recorder installed,
+/// all `record_*` calls are zero-overhead no-ops.
+pub(crate) struct WriterMetrics {
+    send_latency_ms: metrics::Histogram,
+    batch_queue_time_ms: metrics::Histogram,
+    records_send_total: metrics::Counter,
+    bytes_send_total: metrics::Counter,
+    records_retry_total: metrics::Counter,
+    records_per_batch: metrics::Histogram,
+    bytes_per_batch: metrics::Histogram,
+    buffer_total_bytes: metrics::Gauge,
+    buffer_available_bytes: metrics::Gauge,
+    buffer_waiting_threads: metrics::Gauge,
+}
+
+impl WriterMetrics {
+    /// Build a fresh handle cache. Resolves the currently installed recorder
+    /// once per metric.
+    pub(crate) fn new() -> Self {
+        Self {
+            send_latency_ms: metrics::histogram!(WRITER_SEND_LATENCY_MS),
+            batch_queue_time_ms: metrics::histogram!(WRITER_BATCH_QUEUE_TIME_MS),
+            records_send_total: metrics::counter!(WRITER_RECORDS_SEND_TOTAL),
+            bytes_send_total: metrics::counter!(WRITER_BYTES_SEND_TOTAL),
+            records_retry_total: metrics::counter!(WRITER_RECORDS_RETRY_TOTAL),
+            records_per_batch: metrics::histogram!(WRITER_RECORDS_PER_BATCH),
+            bytes_per_batch: metrics::histogram!(WRITER_BYTES_PER_BATCH),
+            buffer_total_bytes: metrics::gauge!(WRITER_BUFFER_TOTAL_BYTES),
+            buffer_available_bytes: metrics::gauge!(WRITER_BUFFER_AVAILABLE_BYTES),
+            buffer_waiting_threads: metrics::gauge!(WRITER_BUFFER_WAITING_THREADS),
+        }
+    }
+
+    pub(crate) fn record_send_latency_ms(&self, value: f64) {
+        self.send_latency_ms.record(value);
+    }
+
+    /// Record per-batch send statistics (records, bytes, queue time) for one
+    /// built+sent batch.
+    pub(crate) fn record_sent_batch(
+        &self,
+        record_count: i32,
+        batch_bytes: usize,
+        queue_time_ms: i64,
+    ) {
+        let records = record_count.max(0) as u64;
+        let bytes = batch_bytes as u64;
+        self.records_send_total.increment(records);
+        self.bytes_send_total.increment(bytes);
+        self.records_per_batch.record(record_count.max(0) as f64);
+        self.bytes_per_batch.record(batch_bytes as f64);
+        self.batch_queue_time_ms.record(queue_time_ms.max(0) as f64);
+    }
+
+    pub(crate) fn record_records_retry(&self, record_count: i32) {
+        self.records_retry_total
+            .increment(record_count.max(0) as u64);
+    }
+
+    /// Push the current buffer-pool gauges. Called once per sender poll-loop
+    /// iteration (Java registers these as lazy suppliers on the accumulator).
+    pub(crate) fn record_buffer_state(
+        &self,
+        total_bytes: usize,
+        available_bytes: usize,
+        waiting_threads: usize,
+    ) {
+        self.buffer_total_bytes.set(total_bytes as f64);
+        self.buffer_available_bytes.set(available_bytes as f64);
+        self.buffer_waiting_threads.set(waiting_threads as f64);
+    }
+}
+
 /// Returns a label value for reportable API keys, matching Java's
 /// `ConnectionMetrics.REPORT_API_KEYS` filter (`ProduceLog`, `FetchLog`,
 /// `PutKv`, `Lookup`). Returns `None` for admin/metadata/auth calls to
@@ -650,5 +782,94 @@ mod tests {
             counter_by_table.get(&("db2".to_string(), "t2".to_string())),
             Some(&3),
         );
+    }
+
+    #[test]
+    fn writer_metrics_emit_all_writer_series() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            let m = WriterMetrics::new();
+            // Two sent batches: (3 records, 300 bytes, 12ms queue) and
+            // (2 records, 200 bytes, 8ms queue).
+            m.record_sent_batch(3, 300, 12);
+            m.record_sent_batch(2, 200, 8);
+            m.record_send_latency_ms(5.5);
+            m.record_records_retry(4);
+            m.record_buffer_state(64 * 1024 * 1024, 32 * 1024 * 1024, 2);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        // Counters accumulate across both batches.
+        assert_eq!(find_counter!(entries, WRITER_RECORDS_SEND_TOTAL), Some(5));
+        assert_eq!(find_counter!(entries, WRITER_BYTES_SEND_TOTAL), Some(500));
+        assert_eq!(find_counter!(entries, WRITER_RECORDS_RETRY_TOTAL), Some(4));
+
+        // Histograms capture one sample per batch.
+        assert_eq!(
+            find_histogram!(entries, WRITER_RECORDS_PER_BATCH),
+            Some(vec![3.0, 2.0])
+        );
+        assert_eq!(
+            find_histogram!(entries, WRITER_BYTES_PER_BATCH),
+            Some(vec![300.0, 200.0])
+        );
+        assert_eq!(
+            find_histogram!(entries, WRITER_BATCH_QUEUE_TIME_MS),
+            Some(vec![12.0, 8.0])
+        );
+        assert_eq!(
+            find_histogram!(entries, WRITER_SEND_LATENCY_MS),
+            Some(vec![5.5])
+        );
+
+        // Buffer gauges hold the latest pushed value.
+        assert_eq!(
+            find_gauge!(entries, WRITER_BUFFER_TOTAL_BYTES),
+            Some((64 * 1024 * 1024) as f64)
+        );
+        assert_eq!(
+            find_gauge!(entries, WRITER_BUFFER_AVAILABLE_BYTES),
+            Some((32 * 1024 * 1024) as f64)
+        );
+        assert_eq!(
+            find_gauge!(entries, WRITER_BUFFER_WAITING_THREADS),
+            Some(2.0)
+        );
+    }
+
+    /// Writer metrics carry no labels.
+    #[test]
+    fn writer_metrics_are_unlabeled() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            let m = WriterMetrics::new();
+            m.record_sent_batch(1, 10, 1);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        let writer_entries: Vec<_> = entries
+            .iter()
+            .filter(|(key, _, _, _)| key.key().name().starts_with("fluss.client.writer."))
+            .collect();
+        assert!(
+            !writer_entries.is_empty(),
+            "expected writer metrics to be emitted"
+        );
+        for (key, _, _, _) in writer_entries {
+            assert_eq!(
+                key.key().labels().count(),
+                0,
+                "writer metric {} must be unlabeled",
+                key.key().name()
+            );
+        }
     }
 }

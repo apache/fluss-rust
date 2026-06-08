@@ -133,6 +133,21 @@ impl MemoryLimiter {
         self.waiting_count.load(Ordering::Relaxed) > 0
     }
 
+    /// Total buffer memory in bytes (constant)
+    pub(crate) fn total_bytes(&self) -> usize {
+        self.max_memory
+    }
+
+    /// Currently-available buffer memory in bytes
+    pub(crate) fn available_bytes(&self) -> usize {
+        self.max_memory.saturating_sub(*self.state.lock())
+    }
+
+    /// Number of producer threads currently blocked waiting for buffer memory.
+    pub(crate) fn waiting_threads(&self) -> usize {
+        self.waiting_count.load(Ordering::Relaxed)
+    }
+
     /// Mark the limiter as closed and wake all blocked producers.
     fn close(&self) {
         self.closed.store(true, Ordering::Release);
@@ -207,6 +222,21 @@ impl RecordAccumulator {
             memory_limiter,
             sender_wakeup: Notify::new(),
         }
+    }
+
+    /// Total writer buffer memory in bytes (constant).
+    pub(crate) fn buffer_total_bytes(&self) -> usize {
+        self.memory_limiter.total_bytes()
+    }
+
+    /// Currently-available writer buffer memory in bytes.
+    pub(crate) fn buffer_available_bytes(&self) -> usize {
+        self.memory_limiter.available_bytes()
+    }
+
+    /// Number of producer threads blocked waiting for buffer memory.
+    pub(crate) fn buffer_waiting_threads(&self) -> usize {
+        self.memory_limiter.waiting_threads()
     }
 
     fn try_append(

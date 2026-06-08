@@ -241,6 +241,11 @@ impl KvRecordBatchBuilder {
         self.size_in_bytes
     }
 
+    /// Number of records appended so far. Used for writer throughput metrics.
+    pub(crate) fn record_count(&self) -> i32 {
+        self.current_record_number
+    }
+
     // ----------------------- Internal methods -------------------------------
 
     /// Write the batch header.

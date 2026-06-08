@@ -37,7 +37,16 @@ pub(crate) fn build_table_info(table_path: TablePath, table_id: i64, buckets: i3
 }
 
 pub(crate) fn build_cluster(table_path: &TablePath, table_id: i64, buckets: i32) -> Cluster {
-    let server = ServerNode::new(1, "127.0.0.1".to_string(), 9092, ServerType::TabletServer);
+    build_cluster_with_port(table_path, table_id, buckets, 9092)
+}
+
+pub(crate) fn build_cluster_with_port(
+    table_path: &TablePath,
+    table_id: i64,
+    buckets: i32,
+    port: u32,
+) -> Cluster {
+    let server = ServerNode::new(1, "127.0.0.1".to_string(), port, ServerType::TabletServer);
 
     let mut servers = HashMap::new();
     servers.insert(server.id(), server.clone());
@@ -87,6 +96,15 @@ pub(crate) fn build_cluster_arc(
     buckets: i32,
 ) -> Arc<Cluster> {
     Arc::new(build_cluster(table_path, table_id, buckets))
+}
+
+pub(crate) fn build_cluster_arc_with_port(
+    table_path: &TablePath,
+    table_id: i64,
+    buckets: i32,
+    port: u32,
+) -> Arc<Cluster> {
+    Arc::new(build_cluster_with_port(table_path, table_id, buckets, port))
 }
 
 /// Build an `Arc<ScannerMetrics>` for tests. Most callers don't install

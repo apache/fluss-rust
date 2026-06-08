@@ -23,6 +23,7 @@ use crate::client::{ReadyWriteBatch, RecordAccumulator};
 use crate::error::Error::UnexpectedError;
 use crate::error::{FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
+use crate::metrics::WriterMetrics;
 use crate::proto::{
     PbProduceLogRespForBucket, PbPutKvRespForBucket, PbTablePath, ProduceLogResponse, PutKvResponse,
 };
@@ -39,7 +40,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
@@ -62,9 +63,11 @@ pub struct Sender {
     max_request_timeout_ms: i32,
     retries: i32,
     idempotence_manager: Arc<IdempotenceManager>,
+    metrics: Arc<WriterMetrics>,
 }
 
 impl Sender {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         metadata: Arc<Metadata>,
         accumulator: Arc<RecordAccumulator>,
@@ -73,6 +76,7 @@ impl Sender {
         ack: i16,
         retries: i32,
         idempotence_manager: Arc<IdempotenceManager>,
+        metrics: Arc<WriterMetrics>,
     ) -> Self {
         Self {
             running: AtomicBool::new(true),
@@ -84,6 +88,7 @@ impl Sender {
             max_request_timeout_ms,
             retries,
             idempotence_manager,
+            metrics,
         }
     }
 
@@ -306,6 +311,15 @@ impl Sender {
         if batches.is_empty() {
             return Ok(());
         }
+
+        // Record attempted-send per-batch metrics for the whole drained set
+        // up front, before any early return (unknown leader, connection
+        // failure) can drop batches. So a leader/connection failure
+        // still counts toward `records_send_total` / `bytes_send_total`.
+        // Retries re-drain the batch and therefore contribute one sample per
+        // send attempt.
+        self.record_request_batch_metrics(&batches);
+
         let mut records_by_bucket = HashMap::new();
         let mut write_batch_by_table: HashMap<TableId, Vec<TableBucket>> = HashMap::new();
 
@@ -371,8 +385,8 @@ impl Sender {
                 }
             };
 
-            // let's put in back into records_by_bucket
-            // since response handle will use it.
+            // Put batches back into records_by_bucket since response handling
+            // will use them.
             for request_batch in request_batches {
                 records_by_bucket.insert(request_batch.table_bucket.clone(), request_batch);
             }
@@ -448,8 +462,14 @@ impl Sender {
         records_by_bucket: &mut HashMap<TableBucket, ReadyWriteBatch>,
     ) -> Result<()> {
         macro_rules! send {
-            ($request:expr) => {
-                match connection.request($request).await {
+            ($request:expr) => {{
+                // Record send latency for the request round trip regardless of
+                // outcome, so it is captured before the success/error branch.
+                let send_start = Instant::now();
+                let response_result = connection.request($request).await;
+                self.metrics
+                    .record_send_latency_ms(send_start.elapsed().as_secs_f64() * 1000.0);
+                match response_result {
                     Ok(response) => {
                         self.handle_write_response(
                             table_id,
@@ -471,7 +491,7 @@ impl Sender {
                         .await
                     }
                 }
-            };
+            }};
         }
 
         match write_request {
@@ -723,9 +743,28 @@ impl Sender {
         Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path))
     }
 
+    /// Record per-batch writer throughput/queue metrics for a drained set of
+    /// batches. Invoked once at the start of `send_write_request`, before the
+    /// leader lookup / connection / serialization steps, so every drained
+    /// batch is counted exactly once per send attempt regardless of whether
+    /// the send later succeeds. Because this runs before serialization,
+    /// `estimated_size_in_bytes` is the pre-serialization estimate rather than  
+    /// the final encoded length.
+    fn record_request_batch_metrics(&self, request_batches: &[ReadyWriteBatch]) {
+        for request_batch in request_batches {
+            let batch = &request_batch.write_batch;
+            self.metrics.record_sent_batch(
+                batch.record_count(),
+                batch.estimated_size_in_bytes(),
+                batch.queue_time_ms(),
+            );
+        }
+    }
+
     fn re_enqueue_batch(&self, ready_write_batch: ReadyWriteBatch) {
         self.remove_from_inflight_batches(&ready_write_batch);
-        // TODO: add retry metrics (Java: writerMetricGroup.recordsRetryTotal().inc(recordCount))
+        self.metrics
+            .record_records_retry(ready_write_batch.write_batch.record_count());
         self.accumulator.re_enqueue(ready_write_batch);
     }
 
@@ -842,6 +881,16 @@ impl Sender {
         let mut next_delay_ms: u64 = 1;
 
         loop {
+            // Sample buffer-pool gauges once per loop iteration. Cheap (three
+            // field reads) and naturally sampled. Java registers these as
+            // lazy gauge suppliers on the accumulator; the push model means
+            // we refresh them here on the sender's own cadence.
+            self.metrics.record_buffer_state(
+                self.accumulator.buffer_total_bytes(),
+                self.accumulator.buffer_available_bytes(),
+                self.accumulator.buffer_waiting_threads(),
+            );
+
             // Spawn writer-ID init task if needed and not already running.
             if init_futs.is_empty()
                 && self.idempotence_manager.is_enabled()
@@ -1020,14 +1069,19 @@ impl WriteResponse for PutKvResponse {
 mod tests {
     use super::*;
     use crate::client::WriteRecord;
-    use crate::cluster::Cluster;
+    use crate::cluster::{Cluster, ServerType};
     use crate::config::Config;
     use crate::metadata::{PhysicalTablePath, TablePath};
-    use crate::proto::{PbProduceLogRespForBucket, ProduceLogResponse};
+    use crate::proto::{
+        ApiVersionsResponse, PbApiVersion, PbProduceLogRespForBucket, ProduceLogResponse,
+    };
     use crate::row::{Datum, GenericRow};
     use crate::rpc::FlussError;
-    use crate::test_utils::{build_cluster_arc, build_table_info};
+    use crate::test_utils::{build_cluster_arc, build_cluster_arc_with_port, build_table_info};
+    use prost::Message;
     use std::collections::{HashMap, HashSet};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn disabled_idempotence() -> Arc<IdempotenceManager> {
         Arc::new(IdempotenceManager::new(false, 5))
@@ -1076,6 +1130,7 @@ mod tests {
             1,
             1,
             idempotence,
+            Arc::new(crate::metrics::WriterMetrics::new()),
         );
 
         let (batch, _handle) =
@@ -1100,6 +1155,350 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn retriable_error_records_retry_metric() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        let result: Result<()> = metrics::with_local_recorder(&recorder, || {
+            let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+            let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+            let idempotence = disabled_idempotence();
+            let accumulator = Arc::new(RecordAccumulator::new(
+                Config::default(),
+                Arc::clone(&idempotence),
+            ));
+            // Construct the sender inside the recorder scope so its cached
+            // metric handles bind to the local recorder.
+            let sender = Sender::new(
+                metadata,
+                accumulator.clone(),
+                1024 * 1024,
+                1000,
+                1,
+                1,
+                idempotence,
+                Arc::new(crate::metrics::WriterMetrics::new()),
+            );
+
+            let (batch, _handle) =
+                build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone())?;
+            let mut inflight = HashMap::new();
+            inflight.insert(1, vec![batch]);
+            sender.add_to_inflight_batches(&inflight);
+            let batch = inflight.remove(&1).unwrap().pop().unwrap();
+            let record_count = batch.write_batch.record_count();
+            assert_eq!(record_count, 1, "single-record batch expected");
+
+            sender.handle_write_batch_error(
+                batch,
+                FlussError::RequestTimeOut,
+                "timeout".to_string(),
+            )?;
+            Ok(())
+        });
+        result.expect("retry handling");
+
+        let entries = snapshotter.snapshot().into_vec();
+        let retry_total = entries.iter().find_map(|(key, _, _, val)| {
+            if key.key().name() == crate::metrics::WRITER_RECORDS_RETRY_TOTAL {
+                match val {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        assert_eq!(retry_total, Some(1));
+    }
+
+    #[test]
+    fn record_request_batch_metrics_emits_per_batch_send_stats() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || -> Result<()> {
+            let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+            let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+            let idempotence = disabled_idempotence();
+            let accumulator = Arc::new(RecordAccumulator::new(
+                Config::default(),
+                Arc::clone(&idempotence),
+            ));
+            // Construct the sender inside the recorder scope so its cached
+            // metric handles bind to the local recorder.
+            let sender = Sender::new(
+                metadata,
+                accumulator.clone(),
+                1024 * 1024,
+                1000,
+                1,
+                1,
+                idempotence,
+                Arc::new(crate::metrics::WriterMetrics::new()),
+            );
+
+            // build_ready_batch drains the batch (sets drained_ms) and appends a
+            // single record, mirroring the state batches are in when
+            // `send_write_request` records their metrics.
+            let (batch, _handle) =
+                build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone())?;
+            assert_eq!(batch.write_batch.record_count(), 1);
+
+            sender.record_request_batch_metrics(std::slice::from_ref(&batch));
+            Ok(())
+        })
+        .expect("record batch metrics");
+
+        let entries = snapshotter.snapshot().into_vec();
+
+        let counter = |name: &str| {
+            entries.iter().find_map(|(key, _, _, val)| {
+                if key.key().name() == name {
+                    match val {
+                        DebugValue::Counter(v) => Some(*v),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        };
+        let histogram = |name: &str| {
+            entries.iter().find_map(|(key, _, _, val)| {
+                if key.key().name() == name {
+                    match val {
+                        DebugValue::Histogram(v) => {
+                            Some(v.iter().map(|f| f.into_inner()).collect::<Vec<f64>>())
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        };
+
+        // One batch with a single record -> records counter is 1, bytes > 0.
+        assert_eq!(counter(crate::metrics::WRITER_RECORDS_SEND_TOTAL), Some(1));
+        let bytes_send =
+            counter(crate::metrics::WRITER_BYTES_SEND_TOTAL).expect("bytes send counter emitted");
+        assert!(
+            bytes_send > 0,
+            "expected non-zero bytes_send, got {bytes_send}"
+        );
+
+        // Each histogram observes exactly one sample for the single batch.
+        assert_eq!(
+            histogram(crate::metrics::WRITER_RECORDS_PER_BATCH),
+            Some(vec![1.0])
+        );
+        let bytes_per_batch =
+            histogram(crate::metrics::WRITER_BYTES_PER_BATCH).expect("bytes_per_batch emitted");
+        assert_eq!(bytes_per_batch.len(), 1);
+        assert!(bytes_per_batch[0] > 0.0);
+        let queue_time =
+            histogram(crate::metrics::WRITER_BATCH_QUEUE_TIME_MS).expect("queue_time emitted");
+        assert_eq!(queue_time.len(), 1);
+        assert!(queue_time[0] >= 0.0);
+    }
+
+    #[test]
+    fn send_write_request_error_still_records_attempted_send_metrics() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || -> Result<()> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+
+            rt.block_on(async {
+                let listener = TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .expect("bind mock server");
+                let port = listener.local_addr().expect("listener addr").port();
+
+                // Handshake-only mock server:
+                // respond to ApiVersions so connection setup succeeds, but do
+                // not advertise ProduceLog. That makes produce request fail
+                // during version resolution in `connection.request(...)`.
+                let server_task = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.expect("accept");
+                    let mut len_buf = [0u8; 4];
+                    if stream.read_exact(&mut len_buf).await.is_err() {
+                        return;
+                    }
+                    let len = i32::from_be_bytes(len_buf) as usize;
+                    let mut payload = vec![0u8; len];
+                    if stream.read_exact(&mut payload).await.is_err() {
+                        return;
+                    }
+
+                    // Header layout: api_key(2) + api_version(2) + request_id(4)
+                    let request_id =
+                        i32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+
+                    let mut body = Vec::new();
+                    ApiVersionsResponse {
+                        api_versions: vec![PbApiVersion {
+                            api_key: 1000, // ApiVersion
+                            min_version: 0,
+                            max_version: 0,
+                        }],
+                        server_type: Some(ServerType::TabletServer.to_type_id()),
+                    }
+                    .encode(&mut body)
+                    .expect("encode ApiVersionsResponse");
+
+                    let mut resp = Vec::with_capacity(5 + body.len());
+                    resp.push(0u8); // success response type
+                    resp.extend_from_slice(&request_id.to_be_bytes());
+                    resp.extend_from_slice(&body);
+                    let resp_len = (resp.len() as i32).to_be_bytes();
+                    let _ = stream.write_all(&resp_len).await;
+                    let _ = stream.write_all(&resp).await;
+                    let _ = stream.flush().await;
+                });
+
+                let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+                let cluster = build_cluster_arc_with_port(table_path.as_ref(), 1, 1, port as u32);
+                let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+                let idempotence = disabled_idempotence();
+                let accumulator = Arc::new(RecordAccumulator::new(
+                    Config::default(),
+                    Arc::clone(&idempotence),
+                ));
+                let sender = Sender::new(
+                    metadata,
+                    accumulator.clone(),
+                    1024 * 1024,
+                    1000,
+                    1,
+                    1,
+                    idempotence,
+                    Arc::new(crate::metrics::WriterMetrics::new()),
+                );
+
+                let (batch, _handle) =
+                    build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+                sender.send_write_request(1, 1, vec![batch]).await?;
+                let _ = server_task.await;
+                Ok(())
+            })
+        })
+        .expect("sender attempted-send metrics");
+
+        let entries = snapshotter.snapshot().into_vec();
+
+        let send_latency_samples = entries.iter().find_map(|(key, _, _, val)| {
+            if key.key().name() == crate::metrics::WRITER_SEND_LATENCY_MS {
+                match val {
+                    DebugValue::Histogram(v) => Some(v.len()),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            send_latency_samples,
+            Some(1),
+            "send latency must be recorded even when request attempt fails"
+        );
+
+        let attempted_records = entries.iter().find_map(|(key, _, _, val)| {
+            if key.key().name() == crate::metrics::WRITER_RECORDS_SEND_TOTAL {
+                match val {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            attempted_records,
+            Some(1),
+            "records_send_total should count attempted sends"
+        );
+    }
+
+    #[test]
+    fn send_write_request_unknown_leader_still_records_attempted_send_metrics() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || -> Result<()> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+
+            rt.block_on(async {
+                let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+                let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+                let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+                let idempotence = disabled_idempotence();
+                let accumulator = Arc::new(RecordAccumulator::new(
+                    Config::default(),
+                    Arc::clone(&idempotence),
+                ));
+                let sender = Sender::new(
+                    metadata,
+                    accumulator.clone(),
+                    1024 * 1024,
+                    1000,
+                    1,
+                    1,
+                    idempotence,
+                    Arc::new(crate::metrics::WriterMetrics::new()),
+                );
+
+                let (batch, _handle) =
+                    build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
+                // Destination 999 is absent from cluster metadata, so the send
+                // bails out with LeaderNotAvailableException before the batch is
+                // serialized or dispatched. Metrics must still be recorded so the
+                // count matches Java, which updates writer metrics over the whole
+                // drained set regardless of send outcome.
+                sender.send_write_request(999, 1, vec![batch]).await?;
+                Ok(())
+            })
+        })
+        .expect("sender attempted-send metrics");
+
+        let entries = snapshotter.snapshot().into_vec();
+
+        let attempted_records = entries.iter().find_map(|(key, _, _, val)| {
+            if key.key().name() == crate::metrics::WRITER_RECORDS_SEND_TOTAL {
+                match val {
+                    DebugValue::Counter(v) => Some(*v),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            attempted_records,
+            Some(1),
+            "records_send_total must count batches dropped before send on unknown leader"
+        );
+    }
+
     #[tokio::test]
     async fn handle_write_batch_error_fails() -> Result<()> {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
@@ -1118,6 +1517,7 @@ mod tests {
             1,
             0,
             idempotence,
+            Arc::new(crate::metrics::WriterMetrics::new()),
         );
 
         let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path)?;
@@ -1154,6 +1554,7 @@ mod tests {
             1,
             0,
             idempotence,
+            Arc::new(crate::metrics::WriterMetrics::new()),
         );
 
         let (batch, handle) = build_ready_batch(accumulator.as_ref(), cluster, table_path)?;
@@ -1198,6 +1599,7 @@ mod tests {
             -1,
             i32::MAX,
             Arc::clone(&idempotence),
+            Arc::new(crate::metrics::WriterMetrics::new()),
         );
 
         // build_ready_batch drains the batch, which assigns seq=0 and adds in-flight
@@ -1244,6 +1646,7 @@ mod tests {
             -1,
             0,
             Arc::clone(&idempotence),
+            Arc::new(crate::metrics::WriterMetrics::new()),
         );
 
         // build_ready_batch drains the batch, which assigns seq=0 and adds in-flight
@@ -1289,6 +1692,7 @@ mod tests {
             -1,
             i32::MAX,
             Arc::clone(&idempotence),
+            Arc::new(crate::metrics::WriterMetrics::new()),
         );
 
         // build_ready_batch drains the batch, which assigns seq=0 and adds in-flight
