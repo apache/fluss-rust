@@ -747,7 +747,7 @@ impl Sender {
     /// batches. Invoked once at the start of `send_write_request`, before the
     /// leader lookup / connection / serialization steps, so every drained
     /// batch is counted exactly once per send attempt regardless of whether
-    /// the send later succeeds. Because this runs before serialization, 
+    /// the send later succeeds. Because this runs before serialization,
     /// `estimated_size_in_bytes` is the pre-serialization estimate rather than  
     /// the final encoded length.
     fn record_request_batch_metrics(&self, request_batches: &[ReadyWriteBatch]) {
