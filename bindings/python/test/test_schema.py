@@ -23,10 +23,12 @@ import fluss
 
 
 def test_get_primary_keys():
-    fields = pa.schema([
-        pa.field("id", pa.int32()),
-        pa.field("name", pa.string()),
-    ])
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("name", pa.string()),
+        ]
+    )
 
     schema_with_pk = fluss.Schema(fields, primary_keys=["id"])
     assert schema_with_pk.get_primary_keys() == ["id"]
@@ -95,3 +97,54 @@ def test_nested_list_nullability():
     assert types[2] == "array<int NOT NULL> NOT NULL"
 
 
+def test_schema_with_map():
+    # PyArrow models a map as Map(entries: struct<key, value>); Arrow map keys
+    # are always non-nullable, while the value is nullable by default.
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("attrs", pa.map_(pa.string(), pa.int32())),
+        ]
+    )
+    schema = fluss.Schema(fields)
+    assert schema.get_column_names() == ["id", "attrs"]
+    assert schema.get_column_types() == ["int", "map<string NOT NULL,int>"]
+
+
+def test_schema_with_row():
+    fields = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field(
+                "nested",
+                pa.struct([("seq", pa.int32()), ("label", pa.string())]),
+            ),
+        ]
+    )
+    schema = fluss.Schema(fields)
+    assert schema.get_column_names() == ["id", "nested"]
+    assert schema.get_column_types() == ["int", "row<seq: int, label: string>"]
+
+
+def test_schema_with_nested_complex_types():
+    fields = pa.schema(
+        [
+            # map<string, row<seq int, label string>>
+            pa.field(
+                "m_of_row",
+                pa.map_(
+                    pa.string(),
+                    pa.struct([("seq", pa.int32()), ("label", pa.string())]),
+                ),
+            ),
+            # array<map<string, int>>
+            pa.field("arr_of_map", pa.list_(pa.map_(pa.string(), pa.int32()))),
+            # row containing an array column
+            pa.field("row_with_arr", pa.struct([("ids", pa.list_(pa.int32()))])),
+        ]
+    )
+    schema = fluss.Schema(fields)
+    types = schema.get_column_types()
+    assert types[0] == "map<string NOT NULL,row<seq: int, label: string>>"
+    assert types[1] == "array<map<string NOT NULL,int>>"
+    assert types[2] == "row<ids: array<int>>"

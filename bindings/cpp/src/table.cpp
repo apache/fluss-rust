@@ -431,6 +431,12 @@ detail::ScanData::~ScanData() {
     }
 }
 
+detail::PrefixData::~PrefixData() {
+    if (raw) {
+        rust::Box<ffi::PrefixLookupResultInner>::from_raw(raw);
+    }
+}
+
 // ============================================================================
 // RowView — zero-copy read-only row view for scan results
 // ============================================================================
@@ -584,6 +590,137 @@ std::string RowView::GetArrayDecimalString(size_t idx, size_t element) const {
 ArrayView RowView::GetArrayView(size_t idx) const {
     CHECK_DATA("RowView");
     auto box = data_->raw->sv_get_array_view(bucket_idx_, rec_idx_, idx);
+    return ArrayView(box.into_raw());
+}
+
+// ============================================================================
+// PrefixLookupResult / PrefixRowView — read path for prefix lookups
+// ============================================================================
+
+size_t PrefixLookupResult::Size() const { return data_ ? data_->raw->plv_row_count() : 0; }
+
+size_t PrefixRowView::FieldCount() const { return data_ ? data_->raw->plv_field_count() : 0; }
+
+TypeId PrefixRowView::GetType(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return static_cast<TypeId>(data_->raw->plv_column_type(idx));
+}
+
+bool PrefixRowView::IsNull(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_is_null(rec_idx_, idx);
+}
+bool PrefixRowView::GetBool(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_bool(rec_idx_, idx);
+}
+int32_t PrefixRowView::GetInt32(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_i32(rec_idx_, idx);
+}
+int64_t PrefixRowView::GetInt64(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_i64(rec_idx_, idx);
+}
+float PrefixRowView::GetFloat32(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_f32(rec_idx_, idx);
+}
+double PrefixRowView::GetFloat64(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_f64(rec_idx_, idx);
+}
+std::string_view PrefixRowView::GetString(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    auto s = data_->raw->plv_get_str(rec_idx_, idx);
+    return std::string_view(s.data(), s.size());
+}
+std::pair<const uint8_t*, size_t> PrefixRowView::GetBytes(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    auto bytes = data_->raw->plv_get_bytes(rec_idx_, idx);
+    return {bytes.data(), bytes.size()};
+}
+Date PrefixRowView::GetDate(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return Date{data_->raw->plv_get_date_days(rec_idx_, idx)};
+}
+Time PrefixRowView::GetTime(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return Time{data_->raw->plv_get_time_millis(rec_idx_, idx)};
+}
+Timestamp PrefixRowView::GetTimestamp(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return Timestamp{data_->raw->plv_get_ts_millis(rec_idx_, idx),
+                     data_->raw->plv_get_ts_nanos(rec_idx_, idx)};
+}
+bool PrefixRowView::IsDecimal(size_t idx) const { return GetType(idx) == TypeId::Decimal; }
+std::string PrefixRowView::GetDecimalString(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return std::string(data_->raw->plv_get_decimal_str(rec_idx_, idx));
+}
+
+size_t PrefixRowView::GetArraySize(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_array_size(rec_idx_, idx);
+}
+TypeId PrefixRowView::GetArrayElementType(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    return static_cast<TypeId>(data_->raw->plv_get_array_element_type(rec_idx_, idx));
+}
+bool PrefixRowView::IsArrayElementNull(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_array_is_null(rec_idx_, idx, element);
+}
+bool PrefixRowView::GetArrayBool(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_array_bool(rec_idx_, idx, element);
+}
+int32_t PrefixRowView::GetArrayInt32(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_array_i32(rec_idx_, idx, element);
+}
+int64_t PrefixRowView::GetArrayInt64(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_array_i64(rec_idx_, idx, element);
+}
+float PrefixRowView::GetArrayFloat32(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_array_f32(rec_idx_, idx, element);
+}
+double PrefixRowView::GetArrayFloat64(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return data_->raw->plv_get_array_f64(rec_idx_, idx, element);
+}
+std::string PrefixRowView::GetArrayString(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return std::string(data_->raw->plv_get_array_str(rec_idx_, idx, element));
+}
+std::vector<uint8_t> PrefixRowView::GetArrayBytes(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    auto rv = data_->raw->plv_get_array_bytes(rec_idx_, idx, element);
+    return {rv.data(), rv.data() + rv.size()};
+}
+fluss::Date PrefixRowView::GetArrayDate(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return fluss::Date{data_->raw->plv_get_array_date_days(rec_idx_, idx, element)};
+}
+fluss::Time PrefixRowView::GetArrayTime(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return fluss::Time{data_->raw->plv_get_array_time_millis(rec_idx_, idx, element)};
+}
+fluss::Timestamp PrefixRowView::GetArrayTimestamp(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    auto millis = data_->raw->plv_get_array_ts_millis(rec_idx_, idx, element);
+    auto nanos = data_->raw->plv_get_array_ts_nanos(rec_idx_, idx, element);
+    return fluss::Timestamp{millis, nanos};
+}
+std::string PrefixRowView::GetArrayDecimalString(size_t idx, size_t element) const {
+    CHECK_DATA("PrefixRowView");
+    return std::string(data_->raw->plv_get_array_decimal_str(rec_idx_, idx, element));
+}
+ArrayView PrefixRowView::GetArrayView(size_t idx) const {
+    CHECK_DATA("PrefixRowView");
+    auto box = data_->raw->plv_get_array_view(rec_idx_, idx);
     return ArrayView(box.into_raw());
 }
 
@@ -913,6 +1050,25 @@ TableUpsert Table::NewUpsert() { return TableUpsert(table_); }
 TableLookup Table::NewLookup() { return TableLookup(table_); }
 
 TableScan Table::NewScan() { return TableScan(table_); }
+
+Result Table::NewPrefixLookup(std::vector<std::string> lookup_columns, PrefixLookuper& out) {
+    if (table_ == nullptr) {
+        return utils::make_client_error("Table not available");
+    }
+
+    rust::Vec<rust::String> cols;
+    cols.reserve(lookup_columns.size());
+    for (const auto& c : lookup_columns) {
+        cols.push_back(rust::String(c));
+    }
+
+    auto ffi_result = table_->new_prefix_lookuper(std::move(cols));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = PrefixLookuper(utils::ptr_from_ffi<ffi::PrefixLookuper>(ffi_result));
+    }
+    return result;
+}
 
 const std::shared_ptr<GenericRow::ColumnMap>& Table::GetColumnMap() const {
     if (!column_map_ && Available()) {
@@ -1402,6 +1558,66 @@ Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) {
 
     out.Destroy();
     out.inner_ = result_box.into_raw();
+    return utils::make_ok();
+}
+
+// ============================================================================
+// PrefixLookuper
+// ============================================================================
+
+PrefixLookuper::PrefixLookuper() noexcept = default;
+
+PrefixLookuper::PrefixLookuper(ffi::PrefixLookuper* lookuper) noexcept : lookuper_(lookuper) {}
+
+PrefixLookuper::~PrefixLookuper() noexcept { Destroy(); }
+
+void PrefixLookuper::Destroy() noexcept {
+    if (lookuper_) {
+        ffi::delete_prefix_lookuper(lookuper_);
+        lookuper_ = nullptr;
+    }
+}
+
+PrefixLookuper::PrefixLookuper(PrefixLookuper&& other) noexcept : lookuper_(other.lookuper_) {
+    other.lookuper_ = nullptr;
+}
+
+PrefixLookuper& PrefixLookuper::operator=(PrefixLookuper&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        lookuper_ = other.lookuper_;
+        other.lookuper_ = nullptr;
+    }
+    return *this;
+}
+
+bool PrefixLookuper::Available() const { return lookuper_ != nullptr; }
+
+Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) {
+    if (!Available()) {
+        return utils::make_client_error("PrefixLookuper not available");
+    }
+    if (!prefix_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+
+    auto result_box = lookuper_->prefix_lookup(*prefix_row.inner_);
+    if (result_box->plv_has_error()) {
+        return utils::make_error(result_box->plv_error_code(),
+                                 std::string(result_box->plv_error_message()));
+    }
+
+    // Take ownership of the FFI box first (~PrefixData calls from_raw), so the
+    // column-map loop below can't leak it if a string/map allocation throws.
+    // The map is built eagerly and shared by all PrefixRowViews.
+    auto data = std::make_shared<detail::PrefixData>(result_box.into_raw(), detail::ColumnMap{});
+    auto col_count = data->raw->plv_field_count();
+    for (size_t i = 0; i < col_count; ++i) {
+        auto name = data->raw->plv_column_name(i);
+        data->columns[std::string(name.data(), name.size())] = {
+            i, static_cast<TypeId>(data->raw->plv_column_type(i))};
+    }
+    out.data_ = std::move(data);
     return utils::make_ok();
 }
 

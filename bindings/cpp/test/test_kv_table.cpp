@@ -410,6 +410,255 @@ TEST_F(KvTableTest, CompositePrimaryKeys) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
+TEST_F(KvTableTest, PrefixLookupByBucketKey) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_prefix_lookup_cpp");
+
+    // Bucket key (a, b) is a strict prefix of the PK (a, b, c), enabling prefix lookup on (a, b).
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("a", fluss::DataType::Int())
+                      .AddColumn("b", fluss::DataType::String())
+                      .AddColumn("c", fluss::DataType::BigInt())
+                      .AddColumn("d", fluss::DataType::String())
+                      .SetPrimaryKeys({"a", "b", "c"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketKeys({"a", "b"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    auto table_upsert = table.NewUpsert();
+    fluss::UpsertWriter upsert_writer;
+    ASSERT_OK(table_upsert.CreateWriter(upsert_writer));
+
+    struct TestData {
+        int32_t a;
+        std::string b;
+        int64_t c;
+        std::string d;
+    };
+    std::vector<TestData> test_data = {
+        {1, "aaaaaaaaa", 1, "value1"},
+        {1, "aaaaaaaaa", 2, "value2"},
+        {1, "aaaaaaaaa", 3, "value3"},
+        {2, "aaaaaaaaa", 4, "value4"},
+    };
+
+    for (const auto& row_data : test_data) {
+        auto row = table.NewRow();
+        row.Set("a", row_data.a);
+        row.Set("b", row_data.b);
+        row.Set("c", row_data.c);
+        row.Set("d", row_data.d);
+        ASSERT_OK(upsert_writer.Upsert(row));
+    }
+    ASSERT_OK(upsert_writer.Flush());
+
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"a", "b"}, prefix_lookuper));
+
+    // Prefix (1, "aaaaaaaaa") matches 3 rows, returned in primary-key order.
+    {
+        auto key = table.NewRow();
+        key.Set("a", 1);
+        key.Set("b", "aaaaaaaaa");
+        fluss::PrefixLookupResult result;
+        ASSERT_OK(prefix_lookuper.PrefixLookup(key, result));
+        ASSERT_EQ(result.Size(), 3u);
+        for (size_t i = 0; i < result.Size(); ++i) {
+            auto row = result.GetRow(i);
+            EXPECT_EQ(row.GetInt32("a"), 1);
+            EXPECT_EQ(row.GetString("b"), "aaaaaaaaa");
+            EXPECT_EQ(row.GetInt64("c"), static_cast<int64_t>(i) + 1);
+            EXPECT_EQ(row.GetString("d"), "value" + std::to_string(i + 1));
+        }
+    }
+
+    // Prefix (2, "aaaaaaaaa") matches a single row.
+    {
+        auto key = table.NewRow();
+        key.Set("a", 2);
+        key.Set("b", "aaaaaaaaa");
+        fluss::PrefixLookupResult result;
+        ASSERT_OK(prefix_lookuper.PrefixLookup(key, result));
+        ASSERT_EQ(result.Size(), 1u);
+        auto row = result.GetRow(0);
+        EXPECT_EQ(row.GetInt64("c"), 4);
+        EXPECT_EQ(row.GetString("d"), "value4");
+    }
+
+    // A prefix with no matching rows yields an empty result.
+    {
+        auto key = table.NewRow();
+        key.Set("a", 3);
+        key.Set("b", "a");
+        fluss::PrefixLookupResult result;
+        ASSERT_OK(prefix_lookuper.PrefixLookup(key, result));
+        EXPECT_TRUE(result.IsEmpty());
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(KvTableTest, PrefixLookupValidationErrors) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_prefix_lookup_validation_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("a", fluss::DataType::Int())
+                      .AddColumn("b", fluss::DataType::String())
+                      .AddColumn("c", fluss::DataType::BigInt())
+                      .SetPrimaryKeys({"a", "b", "c"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketKeys({"a", "b"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    // Lookup columns must list the bucket keys (a, b) in order.
+    {
+        fluss::PrefixLookuper lookuper;
+        auto result = table.NewPrefixLookup({"b", "a"}, lookuper);
+        ASSERT_FALSE(result.Ok());
+        EXPECT_EQ(result.error_code, fluss::ErrorCode::CLIENT_ERROR);
+        EXPECT_NE(result.error_message.find("must contain all bucket keys"), std::string::npos);
+    }
+
+    // Lookup columns must equal the bucket keys, not a longer prefix of the PK.
+    {
+        fluss::PrefixLookuper lookuper;
+        auto result = table.NewPrefixLookup({"a", "b", "c"}, lookuper);
+        ASSERT_FALSE(result.Ok());
+        EXPECT_EQ(result.error_code, fluss::ErrorCode::CLIENT_ERROR);
+        EXPECT_NE(result.error_message.find("must contain all bucket keys"), std::string::npos);
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(KvTableTest, PrefixLookupPartitioned) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_prefix_lookup_partitioned_cpp");
+
+    // Partitioned by region; bucket key (a, b) is a prefix of the PK minus the partition column.
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("region", fluss::DataType::String())
+                      .AddColumn("a", fluss::DataType::Int())
+                      .AddColumn("b", fluss::DataType::String())
+                      .AddColumn("c", fluss::DataType::BigInt())
+                      .AddColumn("d", fluss::DataType::String())
+                      .SetPrimaryKeys({"region", "a", "b", "c"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetPartitionKeys({"region"})
+                                .SetBucketKeys({"a", "b"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+    fluss_test::CreatePartitions(adm, table_path, "region", {"US", "EU"});
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    auto table_upsert = table.NewUpsert();
+    fluss::UpsertWriter upsert_writer;
+    ASSERT_OK(table_upsert.CreateWriter(upsert_writer));
+
+    struct TestData {
+        std::string region;
+        int32_t a;
+        std::string b;
+        int64_t c;
+        std::string d;
+    };
+    std::vector<TestData> test_data = {
+        {"US", 1, "aaaaaaaaa", 1, "us-1"},
+        {"US", 1, "aaaaaaaaa", 2, "us-2"},
+        {"US", 2, "aaaaaaaaa", 3, "us-3"},
+        {"EU", 1, "aaaaaaaaa", 4, "eu-1"},
+        {"EU", 1, "bbbbbbbbb", 5, "eu-2"},
+    };
+
+    for (const auto& row_data : test_data) {
+        auto row = table.NewRow();
+        row.Set("region", row_data.region);
+        row.Set("a", row_data.a);
+        row.Set("b", row_data.b);
+        row.Set("c", row_data.c);
+        row.Set("d", row_data.d);
+        ASSERT_OK(upsert_writer.Upsert(row));
+    }
+    ASSERT_OK(upsert_writer.Flush());
+
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"region", "a", "b"}, prefix_lookuper));
+
+    // (US, 1, "aaaaaaaaa") matches 2 rows.
+    {
+        auto key = table.NewRow();
+        key.Set("region", "US");
+        key.Set("a", 1);
+        key.Set("b", "aaaaaaaaa");
+        fluss::PrefixLookupResult result;
+        ASSERT_OK(prefix_lookuper.PrefixLookup(key, result));
+        ASSERT_EQ(result.Size(), 2u);
+        for (size_t i = 0; i < result.Size(); ++i) {
+            auto row = result.GetRow(i);
+            EXPECT_EQ(row.GetString("region"), "US");
+            EXPECT_EQ(row.GetInt32("a"), 1);
+            EXPECT_EQ(row.GetString("b"), "aaaaaaaaa");
+        }
+    }
+
+    // (EU, 1, "bbbbbbbbb") matches a single row.
+    {
+        auto key = table.NewRow();
+        key.Set("region", "EU");
+        key.Set("a", 1);
+        key.Set("b", "bbbbbbbbb");
+        fluss::PrefixLookupResult result;
+        ASSERT_OK(prefix_lookuper.PrefixLookup(key, result));
+        ASSERT_EQ(result.Size(), 1u);
+        EXPECT_EQ(result.GetRow(0).GetString("d"), "eu-2");
+    }
+
+    // A non-existent partition yields an empty result.
+    {
+        auto key = table.NewRow();
+        key.Set("region", "APAC");
+        key.Set("a", 1);
+        key.Set("b", "aaaaaaaaa");
+        fluss::PrefixLookupResult result;
+        ASSERT_OK(prefix_lookuper.PrefixLookup(key, result));
+        EXPECT_TRUE(result.IsEmpty());
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
 TEST_F(KvTableTest, PartialUpdate) {
     auto& adm = admin();
     auto& conn = connection();

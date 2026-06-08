@@ -321,25 +321,29 @@ impl ColumnWriter {
                     ArrowDataType::Timestamp(arrow_schema::TimeUnit::Second, _) => {
                         TypedWriter::TimestampLtzSecond {
                             precision,
-                            builder: TimestampSecondBuilder::with_capacity(capacity),
+                            builder: TimestampSecondBuilder::with_capacity(capacity)
+                                .with_timezone("UTC"),
                         }
                     }
                     ArrowDataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => {
                         TypedWriter::TimestampLtzMillisecond {
                             precision,
-                            builder: TimestampMillisecondBuilder::with_capacity(capacity),
+                            builder: TimestampMillisecondBuilder::with_capacity(capacity)
+                                .with_timezone("UTC"),
                         }
                     }
                     ArrowDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
                         TypedWriter::TimestampLtzMicrosecond {
                             precision,
-                            builder: TimestampMicrosecondBuilder::with_capacity(capacity),
+                            builder: TimestampMicrosecondBuilder::with_capacity(capacity)
+                                .with_timezone("UTC"),
                         }
                     }
                     ArrowDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
                         TypedWriter::TimestampLtzNanosecond {
                             precision,
-                            builder: TimestampNanosecondBuilder::with_capacity(capacity),
+                            builder: TimestampNanosecondBuilder::with_capacity(capacity)
+                                .with_timezone("UTC"),
                         }
                     }
                     _ => {

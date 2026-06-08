@@ -21,6 +21,10 @@ use arrow::array::RecordBatch as ArrowRecordBatch;
 use arrow::record_batch::RecordBatchReader as _;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_schema::SchemaRef;
+use fcore::metadata::{DataField, DataType, MapType, RowType};
+use fcore::row::binary_array::{FlussArray, FlussArrayWriter};
+use fcore::row::binary_map::{FlussMap, FlussMapWriter};
+use fcore::row::{Datum, F32, F64, GenericRow, InternalRow};
 use fluss::record::to_arrow_schema;
 use indexmap::IndexMap;
 use pyo3::IntoPyObjectExt;
@@ -1196,12 +1200,19 @@ fn python_to_generic_row_inner(
             for (i, &col_idx) in target_indices.iter().enumerate() {
                 let name = target_names[i];
                 let field = &fields[col_idx];
-                let value = dict
-                    .get_item(name)?
-                    .ok_or_else(|| FlussError::new_err(format!("Missing field: {name}")))?;
                 let dest = if sparse { col_idx } else { i };
-                datums[dest] = python_value_to_datum(&value, field.data_type())
-                    .map_err(|e| FlussError::new_err(format!("Field '{name}': {e}")))?;
+                match dict.get_item(name)? {
+                    Some(value) => {
+                        datums[dest] = python_value_to_datum(&value, field.data_type())
+                            .map_err(|e| FlussError::new_err(format!("Field '{name}': {e}")))?;
+                    }
+                    None if field.data_type().is_nullable() => {}
+                    None => {
+                        return Err(FlussError::new_err(format!(
+                            "Missing value for non-nullable field '{name}'"
+                        )));
+                    }
+                }
             }
         }
 
@@ -1230,22 +1241,17 @@ fn python_to_generic_row_inner(
 }
 
 /// Convert Python value to Datum based on data type
-fn python_value_to_datum(
-    value: &Bound<PyAny>,
-    data_type: &fcore::metadata::DataType,
-) -> PyResult<fcore::row::Datum<'static>> {
-    use fcore::row::{Datum, F32, F64};
-
+fn python_value_to_datum(value: &Bound<PyAny>, data_type: &DataType) -> PyResult<Datum<'static>> {
     if value.is_none() {
         return Ok(Datum::Null);
     }
 
     match data_type {
-        fcore::metadata::DataType::Boolean(_) => {
+        DataType::Boolean(_) => {
             let v: bool = value.extract()?;
             Ok(Datum::Bool(v))
         }
-        fcore::metadata::DataType::TinyInt(_) => {
+        DataType::TinyInt(_) => {
             // Strict type checking: reject bool for int columns
             if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
@@ -1255,7 +1261,7 @@ fn python_value_to_datum(
             let v: i8 = value.extract()?;
             Ok(Datum::Int8(v))
         }
-        fcore::metadata::DataType::SmallInt(_) => {
+        DataType::SmallInt(_) => {
             if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
                     "Expected int for SmallInt column, got bool. Use 0 or 1 explicitly."
@@ -1265,7 +1271,7 @@ fn python_value_to_datum(
             let v: i16 = value.extract()?;
             Ok(Datum::Int16(v))
         }
-        fcore::metadata::DataType::Int(_) => {
+        DataType::Int(_) => {
             if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
                     "Expected int for Int column, got bool. Use 0 or 1 explicitly.".to_string(),
@@ -1274,7 +1280,7 @@ fn python_value_to_datum(
             let v: i32 = value.extract()?;
             Ok(Datum::Int32(v))
         }
-        fcore::metadata::DataType::BigInt(_) => {
+        DataType::BigInt(_) => {
             if value.is_instance_of::<PyBool>() {
                 return Err(FlussError::new_err(
                     "Expected int for BigInt column, got bool. Use 0 or 1 explicitly.".to_string(),
@@ -1283,19 +1289,19 @@ fn python_value_to_datum(
             let v: i64 = value.extract()?;
             Ok(Datum::Int64(v))
         }
-        fcore::metadata::DataType::Float(_) => {
+        DataType::Float(_) => {
             let v: f32 = value.extract()?;
             Ok(Datum::Float32(F32::from(v)))
         }
-        fcore::metadata::DataType::Double(_) => {
+        DataType::Double(_) => {
             let v: f64 = value.extract()?;
             Ok(Datum::Float64(F64::from(v)))
         }
-        fcore::metadata::DataType::String(_) | fcore::metadata::DataType::Char(_) => {
+        DataType::String(_) | DataType::Char(_) => {
             let v: String = value.extract()?;
             Ok(v.into())
         }
-        fcore::metadata::DataType::Bytes(_) | fcore::metadata::DataType::Binary(_) => {
+        DataType::Bytes(_) | DataType::Binary(_) => {
             // Efficient extraction: downcast to specific type and use bulk copy.
             // PyBytes::as_bytes() and PyByteArray::to_vec() are O(n) bulk copies of the underlying data.
             if let Ok(bytes) = value.downcast::<PyBytes>() {
@@ -1309,14 +1315,14 @@ fn python_value_to_datum(
                 )))
             }
         }
-        fcore::metadata::DataType::Decimal(decimal_type) => {
+        DataType::Decimal(decimal_type) => {
             python_decimal_to_datum(value, decimal_type.precision(), decimal_type.scale())
         }
-        fcore::metadata::DataType::Date(_) => python_date_to_datum(value),
-        fcore::metadata::DataType::Time(_) => python_time_to_datum(value),
-        fcore::metadata::DataType::Timestamp(_) => python_datetime_to_timestamp_ntz(value),
-        fcore::metadata::DataType::TimestampLTz(_) => python_datetime_to_timestamp_ltz(value),
-        fcore::metadata::DataType::Array(array_type) => {
+        DataType::Date(_) => python_date_to_datum(value),
+        DataType::Time(_) => python_time_to_datum(value),
+        DataType::Timestamp(_) => python_datetime_to_timestamp_ntz(value),
+        DataType::TimestampLTz(_) => python_datetime_to_timestamp_ltz(value),
+        DataType::Array(array_type) => {
             let element_type = array_type.get_element_type();
             if value.is_instance_of::<PyString>() {
                 return Err(FlussError::new_err(format!(
@@ -1332,7 +1338,7 @@ fn python_value_to_datum(
             })?;
 
             let len = seq.len()?;
-            let mut writer = fcore::row::binary_array::FlussArrayWriter::new(len, element_type);
+            let mut writer = FlussArrayWriter::new(len, element_type);
 
             for i in 0..len {
                 let item = seq.get_item(i)?;
@@ -1352,29 +1358,27 @@ fn python_value_to_datum(
                         Datum::String(v) => writer.write_string(i, &v),
                         Datum::Blob(v) => writer.write_binary_bytes(i, v.as_ref()),
                         Datum::Decimal(v) => {
-                            if let fcore::metadata::DataType::Decimal(dt) = element_type {
+                            if let DataType::Decimal(dt) = element_type {
                                 writer.write_decimal(i, &v, dt.precision());
                             }
                         }
                         Datum::Date(v) => writer.write_date(i, v),
                         Datum::Time(v) => writer.write_time(i, v),
                         Datum::TimestampNtz(v) => {
-                            if let fcore::metadata::DataType::Timestamp(dt) = element_type {
+                            if let DataType::Timestamp(dt) = element_type {
                                 writer.write_timestamp_ntz(i, &v, dt.precision());
                             }
                         }
                         Datum::TimestampLtz(v) => {
-                            if let fcore::metadata::DataType::TimestampLTz(dt) = element_type {
+                            if let DataType::TimestampLTz(dt) = element_type {
                                 writer.write_timestamp_ltz(i, &v, dt.precision());
                             }
                         }
                         Datum::Array(v) => writer.write_array(i, &v),
                         Datum::Map(v) => writer.write_map(i, &v),
-                        Datum::Row(_) => {
-                            return Err(FlussError::new_err(
-                                "Row datum is not supported as an array element",
-                            ));
-                        }
+                        Datum::Row(v) => writer
+                            .write_row(i, v.as_ref())
+                            .map_err(|e| FlussError::from_core_error(&e))?,
                     }
                 }
             }
@@ -1384,22 +1388,158 @@ fn python_value_to_datum(
                 .map_err(|e| FlussError::from_core_error(&e))?;
             Ok(Datum::Array(array))
         }
-        _ => Err(FlussError::new_err(format!(
-            "Unsupported data type for row-level operations: {data_type}"
-        ))),
+        DataType::Map(map_type) => {
+            let key_type = map_type.key_type();
+            let value_type = map_type.value_type();
+            let pairs = python_map_pairs(value)?;
+            let mut writer = FlussMapWriter::new(pairs.len(), key_type, value_type);
+            for (k, v) in pairs {
+                let key_datum = python_value_to_datum(&k, key_type)?;
+                let value_datum = python_value_to_datum(&v, value_type)?;
+                writer
+                    .write_entry(key_datum, value_datum)
+                    .map_err(|e| FlussError::from_core_error(&e))?;
+            }
+            let map = writer
+                .complete()
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            Ok(Datum::Map(map))
+        }
+        DataType::Row(row_type) => {
+            let nested = python_value_to_row_datum(value, row_type)?;
+            Ok(Datum::Row(Box::new(nested)))
+        }
     }
+}
+
+/// Extract `(key, value)` pairs from a Python value representing a MAP column.
+/// Accepts a `dict`, or a sequence of `(key, value)` pairs — matching the
+/// shape pyarrow's `MapArray.to_pylist()` produces, so MAP values round-trip.
+fn python_map_pairs<'py>(
+    value: &Bound<'py, PyAny>,
+) -> PyResult<Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> {
+    if let Ok(dict) = value.downcast::<PyDict>() {
+        return Ok(dict.iter().collect());
+    }
+    if value.is_instance_of::<PyString>() {
+        return Err(FlussError::new_err(format!(
+            "Expected dict or sequence of (key, value) pairs for Map column, got {}",
+            get_type_name(value)
+        )));
+    }
+    let seq = value.downcast::<PySequence>().map_err(|_| {
+        FlussError::new_err(format!(
+            "Expected dict or sequence of (key, value) pairs for Map column, got {}",
+            get_type_name(value)
+        ))
+    })?;
+    let len = seq.len()?;
+    let mut pairs = Vec::with_capacity(len);
+    for i in 0..len {
+        let entry = seq.get_item(i)?;
+        let pair = entry.downcast::<PySequence>().map_err(|_| {
+            FlussError::new_err("Map entries must be (key, value) pairs".to_string())
+        })?;
+        if pair.len()? != 2 {
+            return Err(FlussError::new_err(
+                "Map entries must be (key, value) pairs of length 2".to_string(),
+            ));
+        }
+        pairs.push((pair.get_item(0)?, pair.get_item(1)?));
+    }
+    Ok(pairs)
+}
+
+/// Convert a Python value (`dict` by field name, or `list`/`tuple` by position)
+/// into a nested `GenericRow` for a ROW column.
+fn python_value_to_row_datum(
+    value: &Bound<PyAny>,
+    row_type: &RowType,
+) -> PyResult<GenericRow<'static>> {
+    let fields = row_type.fields();
+    let mut datums: Vec<Datum<'static>> = vec![Datum::Null; fields.len()];
+
+    let row_input: RowInput = value.extract().map_err(|_| {
+        FlussError::new_err(format!(
+            "Row column must be a dict, list, or tuple; got {}",
+            get_type_name(value)
+        ))
+    })?;
+
+    match row_input {
+        RowInput::Dict(dict) => {
+            for (k, _) in dict.iter() {
+                let key_str = k.extract::<&str>().map_err(|_| {
+                    FlussError::new_err(format!(
+                        "Row field keys must be strings; got {}",
+                        get_type_name(&k)
+                    ))
+                })?;
+                if !fields.iter().any(|f| f.name() == key_str) {
+                    return Err(FlussError::new_err(format!(
+                        "Unknown row field '{}'. Expected: {}",
+                        key_str,
+                        fields
+                            .iter()
+                            .map(|f| f.name())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+            for (i, field) in fields.iter().enumerate() {
+                match dict.get_item(field.name())? {
+                    Some(v) => {
+                        datums[i] = python_value_to_datum(&v, field.data_type()).map_err(|e| {
+                            FlussError::new_err(format!("Row field '{}': {}", field.name(), e))
+                        })?;
+                    }
+                    None if field.data_type().is_nullable() => {}
+                    None => {
+                        return Err(FlussError::new_err(format!(
+                            "Missing value for non-nullable row field '{}'",
+                            field.name()
+                        )));
+                    }
+                }
+            }
+        }
+        RowInput::List(list) => fill_row_fields(list.as_sequence(), fields, &mut datums)?,
+        RowInput::Tuple(tuple) => fill_row_fields(tuple.as_sequence(), fields, &mut datums)?,
+    }
+
+    Ok(GenericRow { values: datums })
+}
+
+/// Fill ROW field datums from a positional Python sequence.
+fn fill_row_fields(
+    seq: &Bound<PySequence>,
+    fields: &[DataField],
+    datums: &mut [Datum<'static>],
+) -> PyResult<()> {
+    if seq.len()? != fields.len() {
+        return Err(FlussError::new_err(format!(
+            "Expected {} row fields, got {}",
+            fields.len(),
+            seq.len()?
+        )));
+    }
+    for (i, field) in fields.iter().enumerate() {
+        let v = seq.get_item(i)?;
+        datums[i] = python_value_to_datum(&v, field.data_type())
+            .map_err(|e| FlussError::new_err(format!("Row field '{}': {}", field.name(), e)))?;
+    }
+    Ok(())
 }
 
 /// Convert Rust Datum to Python value based on data type.
 /// This is the reverse of python_value_to_datum.
 pub fn datum_to_python_value(
     py: Python,
-    row: &dyn fcore::row::InternalRow,
+    row: &dyn InternalRow,
     pos: usize,
-    data_type: &fcore::metadata::DataType,
+    data_type: &DataType,
 ) -> PyResult<Py<PyAny>> {
-    use fcore::metadata::DataType;
-
     // Check for null first
     if row
         .is_null_at(pos)
@@ -1522,19 +1662,95 @@ pub fn datum_to_python_value(
                 .map_err(|e| FlussError::from_core_error(&e))?
                 .try_into_binary()
                 .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let element_type = array_type.get_element_type();
-            let py_list = pyo3::types::PyList::empty(py);
-
-            for i in 0..array_data.size() {
-                let py_val = datum_to_python_value(py, &array_data, i, element_type)?;
-                py_list.append(py_val)?;
-            }
-            Ok(py_list.into_any().unbind())
+            array_to_pylist(py, &array_data, array_type.get_element_type())
         }
-        _ => Err(FlussError::new_err(format!(
-            "Unsupported data type for conversion to Python: {data_type}"
-        ))),
+        DataType::Map(map_type) => {
+            let map_data = row
+                .get_map(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?
+                .try_into_binary()
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            map_to_pylist(py, &map_data, map_type)
+        }
+        DataType::Row(row_type) => {
+            let nested = row
+                .get_row(pos)
+                .map_err(|e| FlussError::from_core_error(&e))?
+                .try_into_generic(row_type)
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            row_to_pydict(py, &nested, row_type)
+        }
+    }
+}
+
+/// Convert a binary `FlussArray` to a Python list.
+fn array_to_pylist(py: Python, arr: &FlussArray, element_type: &DataType) -> PyResult<Py<PyAny>> {
+    let py_list = pyo3::types::PyList::empty(py);
+    for i in 0..arr.size() {
+        py_list.append(array_elem_to_python(py, arr, i, element_type)?)?;
+    }
+    Ok(py_list.into_any().unbind())
+}
+
+/// Convert a Fluss `MAP` to a Python list of `(key, value)` tuples — matching
+/// pyarrow's default `MapArray.to_pylist()` shape (preserves duplicate keys and
+/// ordering, and allows non-hashable keys).
+fn map_to_pylist(py: Python, map_data: &FlussMap, map_type: &MapType) -> PyResult<Py<PyAny>> {
+    let keys = map_data.key_array();
+    let values = map_data.value_array();
+    let py_list = pyo3::types::PyList::empty(py);
+    for i in 0..map_data.size() {
+        let py_key = array_elem_to_python(py, keys, i, map_type.key_type())?;
+        let py_val = array_elem_to_python(py, values, i, map_type.value_type())?;
+        py_list.append(pyo3::types::PyTuple::new(py, [py_key, py_val])?)?;
+    }
+    Ok(py_list.into_any().unbind())
+}
+
+/// Convert a Fluss `ROW` to a Python dict keyed by field name — matching
+/// pyarrow's `StructArray.to_pylist()` shape.
+fn row_to_pydict(py: Python, row: &dyn InternalRow, row_type: &RowType) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    for (i, field) in row_type.fields().iter().enumerate() {
+        let py_val = datum_to_python_value(py, row, i, field.data_type())?;
+        dict.set_item(field.name(), py_val)?;
+    }
+    Ok(dict.into_any().unbind())
+}
+
+/// Convert element `i` of a binary `FlussArray` to a Python value. A binary
+/// array needs the explicit nested type to decode MAP/ROW elements (the generic
+/// `DataGetters` trait getters cover only scalars and nested arrays), so this
+/// dispatches through `FlussArray`'s inherent typed getters.
+fn array_elem_to_python(
+    py: Python,
+    arr: &FlussArray,
+    i: usize,
+    dt: &DataType,
+) -> PyResult<Py<PyAny>> {
+    if arr.is_null_at(i) {
+        return Ok(py.None());
+    }
+    match dt {
+        DataType::Array(array_type) => {
+            let nested = arr
+                .get_array(i)
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            array_to_pylist(py, &nested, array_type.get_element_type())
+        }
+        DataType::Map(map_type) => {
+            let nested = arr
+                .get_map(i, map_type.key_type(), map_type.value_type())
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            map_to_pylist(py, &nested, map_type)
+        }
+        DataType::Row(row_type) => {
+            let nested = arr
+                .get_row(i, row_type)
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            row_to_pydict(py, &nested, row_type)
+        }
+        _ => datum_to_python_value(py, arr, i, dt),
     }
 }
 

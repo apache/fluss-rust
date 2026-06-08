@@ -25,6 +25,15 @@ import time
 
 import pyarrow as pa
 import pytest
+from conftest import (
+    assert_complex_edge,
+    assert_complex_full,
+    complex_column_names,
+    complex_edge_row,
+    complex_full_row,
+    complex_null_row,
+    complex_schema,
+)
 
 import fluss
 
@@ -37,9 +46,7 @@ async def test_append_and_scan(connection, admin):
     schema = fluss.Schema(
         pa.schema([pa.field("c1", pa.int32()), pa.field("c2", pa.string())])
     )
-    table_descriptor = fluss.TableDescriptor(
-        schema, bucket_count=3, bucket_keys=["c1"]
-    )
+    table_descriptor = fluss.TableDescriptor(schema, bucket_count=3, bucket_keys=["c1"])
     await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
 
     table = await connection.get_table(table_path)
@@ -266,6 +273,58 @@ async def test_project(connection, admin):
     await admin.drop_table(table_path, ignore_if_not_exists=False)
 
 
+async def test_project_compound_types(connection, admin):
+    """Projection selects and reorders ROW/MAP/ARRAY columns and drops others
+    (mirrors the Rust projection_with_compound_types IT)."""
+    table_path = fluss.TablePath("fluss", "py_test_project_compound")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = fluss.Schema(
+        pa.schema(
+            [
+                pa.field("id", pa.int32()),
+                pa.field(
+                    "nested", pa.struct([("seq", pa.int32()), ("label", pa.string())])
+                ),
+                pa.field("attrs", pa.map_(pa.string(), pa.int32())),
+                pa.field("tags", pa.list_(pa.string())),
+                pa.field("extra", pa.string()),
+            ]
+        )
+    )
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
+    table = await connection.get_table(table_path)
+
+    aw = table.new_append().create_writer()
+    aw.append(
+        {
+            "id": 7,
+            "nested": {"seq": 42, "label": "hello"},
+            "attrs": {"x": 1, "y": 2},
+            "tags": ["alpha", "beta"],
+            "extra": "ignore-me",
+        }
+    )
+    await aw.flush()
+
+    # Reorder and drop `extra`.
+    scan = table.new_scan().project_by_name(["nested", "attrs", "tags", "id"])
+    scanner = await scan.create_log_scanner()
+    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    records = await _poll_records(scanner, expected_count=1)
+    assert len(records) == 1
+    row = records[0].row
+    assert row["nested"] == {"seq": 42, "label": "hello"}
+    assert dict(row["attrs"]) == {"x": 1, "y": 2}
+    assert row["tags"] == ["alpha", "beta"]
+    assert row["id"] == 7
+    assert "extra" not in row
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
 async def test_poll_batches(connection, admin, wait_for_table_ready):
     """Test batch-based scanning with poll_arrow and poll_record_batch."""
     table_path = fluss.TablePath("fluss", "py_test_poll_batches")
@@ -334,9 +393,7 @@ async def test_poll_batches(connection, admin, wait_for_table_ready):
 
     # Projection with batch scanner
     proj_scanner = (
-        await table.new_scan()
-        .project_by_name(["id"])
-        .create_record_batch_log_scanner()
+        await table.new_scan().project_by_name(["id"]).create_record_batch_log_scanner()
     )
     proj_scanner.subscribe(bucket_id=0, start_offset=0)
     batches = await proj_scanner.poll_record_batch(10000)
@@ -623,7 +680,9 @@ async def test_partitioned_table_append_scan(connection, admin, wait_for_table_r
     while len(all_records) < 8 and time.monotonic() < deadline:
         scan_records = await scanner.poll(5000)
         for bucket, bucket_records in scan_records.items():
-            assert bucket.partition_id is not None, "Partitioned table should have partition_id"
+            assert bucket.partition_id is not None, (
+                "Partitioned table should have partition_id"
+            )
             # All records in a bucket should belong to the same partition
             regions = {r.row["region"] for r in bucket_records}
             assert len(regions) == 1, f"Bucket has mixed regions: {regions}"
@@ -801,9 +860,13 @@ async def test_scan_records_indexing_and_slicing(connection, admin):
     writer = table.new_append().create_writer()
     writer.write_arrow_batch(
         pa.RecordBatch.from_arrays(
-            [pa.array(list(range(1, 9)), type=pa.int32()),
-             pa.array([f"v{i}" for i in range(1, 9)])],
-            schema=pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())]),
+            [
+                pa.array(list(range(1, 9)), type=pa.int32()),
+                pa.array([f"v{i}" for i in range(1, 9)]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("val", pa.string())]
+            ),
         )
     )
     await writer.flush()
@@ -832,13 +895,13 @@ async def test_scan_records_indexing_and_slicing(connection, admin):
 
     # Verify slices match the same operation on the offsets reference list
     test_slices = [
-        slice(1, n - 1),          # forward subrange
-        slice(None, None, -1),    # [::-1] full reverse
-        slice(n - 2, 0, -1),      # reverse with bounds
-        slice(n - 1, 0, -2),      # reverse with step
-        slice(None, None, 2),     # [::2]
-        slice(1, None, 3),        # [1::3]
-        slice(2, 2),              # empty
+        slice(1, n - 1),  # forward subrange
+        slice(None, None, -1),  # [::-1] full reverse
+        slice(n - 2, 0, -1),  # reverse with bounds
+        slice(n - 1, 0, -2),  # reverse with step
+        slice(None, None, 2),  # [::2]
+        slice(1, None, 3),  # [1::3]
+        slice(2, 2),  # empty
     ]
     for s in test_slices:
         result = [r.offset for r in sr[s]]
@@ -863,13 +926,17 @@ async def test_async_iterator(connection, admin):
 
     table = await connection.get_table(table_path)
     writer = table.new_append().create_writer()
-    
+
     # Write 5 records
     writer.write_arrow_batch(
         pa.RecordBatch.from_arrays(
-            [pa.array(list(range(1, 6)), type=pa.int32()),
-             pa.array([f"async{i}" for i in range(1, 6)])],
-            schema=pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())]),
+            [
+                pa.array(list(range(1, 6)), type=pa.int32()),
+                pa.array([f"async{i}" for i in range(1, 6)]),
+            ],
+            schema=pa.schema(
+                [pa.field("id", pa.int32()), pa.field("val", pa.string())]
+            ),
         )
     )
     await writer.flush()
@@ -879,18 +946,18 @@ async def test_async_iterator(connection, admin):
     scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
     collected = []
-    
+
     # Here is the magical Issue #424 async iterator logic at work:
     async def consume_scanner():
         async for record in scanner:
             collected.append(record)
             if len(collected) == 5:
                 break
-                
+
     await consume_scanner()
-    
+
     assert len(collected) == 5, f"Expected 5 records, got {len(collected)}"
-    
+
     collected.sort(key=lambda r: r.row["id"])
     for i, record in enumerate(collected):
         assert record.row["id"] == i + 1
@@ -932,9 +999,7 @@ async def test_async_iterator_break_no_leak(connection, admin):
 
     scanner = await table.new_scan().create_log_scanner()
     num_buckets = (await admin.get_table_info(table_path)).num_buckets
-    scanner.subscribe_buckets(
-        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
-    )
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
     # Phase 1: async for with early break (collect only 3 of 10)
     collected_async = []
@@ -987,12 +1052,8 @@ async def test_async_iterator_multiple_batches(connection, admin):
     schema = fluss.Schema(
         pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
     )
-    table_descriptor = fluss.TableDescriptor(
-        schema, bucket_count=3, bucket_keys=["id"]
-    )
-    await admin.create_table(
-        table_path, table_descriptor, ignore_if_exists=False
-    )
+    table_descriptor = fluss.TableDescriptor(schema, bucket_count=3, bucket_keys=["id"])
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
 
     table = await connection.get_table(table_path)
     writer = table.new_append().create_writer()
@@ -1013,9 +1074,7 @@ async def test_async_iterator_multiple_batches(connection, admin):
 
     scanner = await table.new_scan().create_log_scanner()
     num_buckets = (await admin.get_table_info(table_path)).num_buckets
-    scanner.subscribe_buckets(
-        {i: fluss.EARLIEST_OFFSET for i in range(num_buckets)}
-    )
+    scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
 
     collected = []
 
@@ -1179,12 +1238,8 @@ async def test_batch_async_iterator_multiple_batches(connection, admin):
     schema = fluss.Schema(
         pa.schema([pa.field("id", pa.int32()), pa.field("val", pa.string())])
     )
-    table_descriptor = fluss.TableDescriptor(
-        schema, bucket_count=3, bucket_keys=["id"]
-    )
-    await admin.create_table(
-        table_path, table_descriptor, ignore_if_exists=False
-    )
+    table_descriptor = fluss.TableDescriptor(schema, bucket_count=3, bucket_keys=["id"])
+    await admin.create_table(table_path, table_descriptor, ignore_if_exists=False)
 
     table = await connection.get_table(table_path)
     writer = table.new_append().create_writer()
@@ -1342,8 +1397,6 @@ async def test_append_and_scan_with_array(connection, admin):
     ]
 
 
-
-
 async def test_append_rows_with_array(connection, admin):
     """Test appending rows with array data as Python lists and scanning."""
     table_path = fluss.TablePath("fluss", "py_test_append_rows_with_array")
@@ -1368,7 +1421,7 @@ async def test_append_rows_with_array(connection, admin):
     append_writer.append({"id": 2, "tags": ["c"], "scores": [30]})
     # Append row using list with nested list (null handling)
     append_writer.append([3, None, [40, None, 60]])
-    
+
     await append_writer.flush()
 
     scanner = await table.new_scan().create_log_scanner()
@@ -1394,12 +1447,16 @@ async def test_append_rows_with_nested_array(connection, admin):
     table_path = fluss.TablePath("fluss", "py_test_append_rows_with_nested_array")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
 
-    pa_schema = pa.schema([
-        pa.field("id", pa.int32()),
-        pa.field("matrix", pa.list_(pa.list_(pa.int32()))),
-    ])
+    pa_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("matrix", pa.list_(pa.list_(pa.int32()))),
+        ]
+    )
     schema = fluss.Schema(pa_schema)
-    await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=False)
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
 
     table = await connection.get_table(table_path)
     append_writer = table.new_append().create_writer()
@@ -1410,7 +1467,7 @@ async def test_append_rows_with_nested_array(connection, admin):
     append_writer.append({"id": 3, "matrix": None})
     append_writer.append({"id": 4, "matrix": [[1, None], None, []]})
     append_writer.append({"id": 5, "matrix": [[None, None]]})
-    
+
     await append_writer.flush()
 
     scanner = await table.new_scan().create_log_scanner()
@@ -1435,12 +1492,16 @@ async def test_append_rows_with_invalid_array(connection, admin):
     table_path = fluss.TablePath("fluss", "py_test_append_rows_with_invalid_array")
     await admin.drop_table(table_path, ignore_if_not_exists=True)
 
-    pa_schema = pa.schema([
-        pa.field("id", pa.int32()),
-        pa.field("tags", pa.list_(pa.string())),
-    ])
+    pa_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("tags", pa.list_(pa.string())),
+        ]
+    )
     schema = fluss.Schema(pa_schema)
-    await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_exists=False)
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
 
     table = await connection.get_table(table_path)
     append_writer = table.new_append().create_writer()
@@ -1448,5 +1509,119 @@ async def test_append_rows_with_invalid_array(connection, admin):
     # Appending a string instead of a list should raise an error
     with pytest.raises(Exception, match="Expected sequence for Array column"):
         append_writer.append({"id": 4, "tags": "not_a_list"})
-    
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_all_complex_datatypes(connection, admin):
+    """Comprehensive ARRAY/MAP/ROW coverage on a log table.
+
+    Appends fully-populated, edge-case, and all-null rows (see complex_types.py)
+    and verifies them through both the record (dict) scan path and the Arrow
+    scan path -- the two paths must agree. Mirrors the section-based
+    ``all_supported_datatypes`` structure of the Rust integration tests.
+    """
+    table_path = fluss.TablePath("fluss", "py_test_log_all_complex")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    schema = complex_schema()
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    append_writer = table.new_append().create_writer()
+    append_writer.append(complex_full_row(1))
+    append_writer.append(complex_edge_row(2))
+    append_writer.append(complex_null_row(3))
+    await append_writer.flush()
+
+    # Record (dict) scan path.
+    scanner = await table.new_scan().create_log_scanner()
+    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    records = await _poll_records(scanner, expected_count=3)
+    assert len(records) == 3
+    poll_rows = sorted([r.row for r in records], key=lambda r: r["id"])
+    assert_complex_full(poll_rows[0])
+    assert_complex_edge(poll_rows[1])
+    for col in complex_column_names():
+        assert poll_rows[2][col] is None
+
+    # Arrow scan path: to_pylist() agrees with the dict path column-for-column,
+    # except NaN-bearing float columns (NaN != NaN), which are checked elsewhere.
+    scanner2 = await table.new_scan().create_record_batch_log_scanner()
+    scanner2.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    result_table = await scanner2.to_arrow()
+    assert result_table.num_rows == 3
+    arrow_rows = result_table.sort_by("id").to_pylist()
+    float_cols = {"arr_float", "arr_double", "map_float", "map_double"}
+    for i in range(3):
+        for col in complex_column_names():
+            if col in float_cols:
+                continue
+            assert arrow_rows[i][col] == poll_rows[i][col], (
+                f"scan-path mismatch at row {i}, column {col}"
+            )
+
+    await admin.drop_table(table_path, ignore_if_not_exists=False)
+
+
+async def test_append_arrow_batch_complex_types(connection, admin):
+    """Arrow write path: write MAP and ROW columns via write_arrow_batch and
+    verify through both the record and Arrow scan paths."""
+    table_path = fluss.TablePath("fluss", "py_test_arrow_batch_complex")
+    await admin.drop_table(table_path, ignore_if_not_exists=True)
+
+    row_type = pa.struct([("seq", pa.int32()), ("label", pa.string())])
+    map_type = pa.map_(pa.string(), pa.int32())
+    pa_schema = pa.schema(
+        [
+            pa.field("id", pa.int32()),
+            pa.field("attrs", map_type),
+            pa.field("nested", row_type),
+        ]
+    )
+    schema = fluss.Schema(pa_schema)
+    await admin.create_table(
+        table_path, fluss.TableDescriptor(schema), ignore_if_exists=False
+    )
+
+    table = await connection.get_table(table_path)
+    append_writer = table.new_append().create_writer()
+    batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array([1, 2], type=pa.int32()),
+            pa.array([[("a", 1), ("b", 2)], []], type=map_type),
+            pa.array(
+                [{"seq": 10, "label": "open"}, {"seq": 20, "label": None}],
+                type=row_type,
+            ),
+        ],
+        schema=pa_schema,
+    )
+    append_writer.write_arrow_batch(batch)
+    await append_writer.flush()
+
+    # Record scan path.
+    scanner = await table.new_scan().create_log_scanner()
+    scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    records = await _poll_records(scanner, expected_count=2)
+    assert len(records) == 2
+    rows = sorted([r.row for r in records], key=lambda r: r["id"])
+    assert dict(rows[0]["attrs"]) == {"a": 1, "b": 2}
+    assert rows[0]["nested"] == {"seq": 10, "label": "open"}
+    assert rows[1]["attrs"] == []
+    assert rows[1]["nested"] == {"seq": 20, "label": None}
+
+    # Arrow scan path.
+    scanner2 = await table.new_scan().create_record_batch_log_scanner()
+    scanner2.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+    result_table = await scanner2.to_arrow()
+    assert result_table.column("id").to_pylist() == [1, 2]
+    assert result_table.column("attrs").to_pylist() == [[("a", 1), ("b", 2)], []]
+    assert result_table.column("nested").to_pylist() == [
+        {"seq": 10, "label": "open"},
+        {"seq": 20, "label": None},
+    ]
+
     await admin.drop_table(table_path, ignore_if_not_exists=False)

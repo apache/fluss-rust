@@ -116,6 +116,7 @@ Complete API reference for the Fluss C++ client.
 | `NewAppend() -> TableAppend`  | Create an append builder for log tables  |
 | `NewUpsert() -> TableUpsert`  | Create an upsert builder for PK tables   |
 | `NewLookup() -> TableLookup`  | Create a lookup builder for PK tables    |
+| `NewPrefixLookup(std::vector<std::string> cols, PrefixLookuper& out) -> Result` | Create a prefix (bucket-key) lookuper |
 | `NewScan() -> TableScan`      | Create a scan builder                    |
 | `GetTableInfo() -> TableInfo` | Get table metadata                       |
 | `GetTablePath() -> TablePath` | Get the table path                       |
@@ -179,6 +180,14 @@ Complete API reference for the Fluss C++ client.
 | Method                                                        |  Description                |
 |---------------------------------------------------------------|-----------------------------|
 | `Lookup(const GenericRow& pk_row, LookupResult& out) -> Result` | Lookup a row by primary key |
+
+## `PrefixLookuper`
+
+Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. See the [Prefix Lookup example](./example/prefix-lookup.md).
+
+| Method                                                                          |  Description                                  |
+|---------------------------------------------------------------------------------|-----------------------------------------------|
+| `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) -> Result` | Look up all rows matching the prefix columns  |
 
 ## `LogScanner`
 
@@ -409,6 +418,16 @@ Same array getters as [`RowView`](#array-getters-index-based) — `GetArraySize`
 | `GetTime(const std::string& name) -> Time`              | Get time by column name            |
 | `GetTimestamp(const std::string& name) -> Timestamp`    | Get timestamp by column name       |
 | `GetDecimalString(const std::string& name) -> std::string` | Get decimal as string by column name |
+
+## `PrefixLookupResult`
+
+Read-only result of a prefix lookup — zero or more matched rows. Each row is a `PrefixRowView` exposing the same getters as [`RowView`](#rowview) (index- and name-based, including arrays).
+
+| Method                                  | Description                                       |
+|-----------------------------------------|---------------------------------------------------|
+| `Size() -> size_t`                      | Number of matched rows                            |
+| `IsEmpty() -> bool`                     | Whether the result has no rows                    |
+| `GetRow(size_t index) -> PrefixRowView` | Get the row at `index` (throws if out of range)   |
 
 ## `ArrowRecordBatch`
 
