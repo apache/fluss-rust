@@ -37,7 +37,6 @@ use crate::rpc::RpcClient;
 use crate::rpc::message::LimitScanRequest;
 use arrow::array::RecordBatch;
 use arrow::compute::concat_batches;
-use arrow_schema::SchemaRef;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -177,25 +176,17 @@ fn decode_log_batch(
 ) -> Result<(RecordBatch, i64)> {
     let row_type = Arc::new(table_info.get_row_type().clone());
     let full_schema = to_arrow_schema(table_info.get_row_type())?;
-    let read_context = match projected_fields {
-        None => ArrowReadContext::new(full_schema.clone(), row_type.clone(), false),
-        Some(fields) => ArrowReadContext::with_projection_pushdown(
-            full_schema.clone(),
-            row_type.clone(),
-            fields.to_vec(),
-            false,
-        )?,
-    };
-
-    let target_schema: SchemaRef = match projected_fields {
-        None => full_schema,
-        Some(fields) => {
-            ArrowReadContext::project_schema(to_arrow_schema(table_info.get_row_type())?, fields)?
-        }
-    };
+    // A limit scan returns every column (never projected server-side); decode
+    // the full batch and project after, like the KV path. Pushdown here would
+    // misparse the full-column body and corrupt the buffers.
+    let read_context = ArrowReadContext::new(full_schema.clone(), row_type.clone(), false);
 
     if raw.is_empty() {
-        return Ok((RecordBatch::new_empty(target_schema), 0));
+        let empty = RecordBatch::new_empty(full_schema);
+        return Ok((
+            project_batch(empty, table_info.get_row_type(), projected_fields)?,
+            0,
+        ));
     }
 
     let mut batches: Vec<RecordBatch> = Vec::new();
@@ -211,17 +202,21 @@ fn decode_log_batch(
 
     let base_offset = base_offset.unwrap_or(0);
     let merged = if batches.is_empty() {
-        RecordBatch::new_empty(target_schema)
+        RecordBatch::new_empty(full_schema)
     } else if batches.len() == 1 {
         batches.into_iter().next().unwrap()
     } else {
-        concat_batches(&target_schema, batches.iter()).map_err(|e| Error::UnexpectedError {
+        concat_batches(&full_schema, batches.iter()).map_err(|e| Error::UnexpectedError {
             message: format!("Failed to concatenate log record batches: {e}"),
             source: None,
         })?
     };
 
-    Ok(take_last_rows(merged, base_offset, limit))
+    let (trimmed, base_offset) = take_last_rows(merged, base_offset, limit);
+    Ok((
+        project_batch(trimmed, table_info.get_row_type(), projected_fields)?,
+        base_offset,
+    ))
 }
 
 /// Decode a KV limit-scan [`ValueRecordBatch`] into a single Arrow
@@ -408,51 +403,36 @@ mod tests {
         DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{
-        Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableDescriptor,
-        TableInfo, TablePath,
+        Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath,
     };
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::row::GenericRow;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
+    use crate::test_utils::build_table_info_with_columns;
     use arrow::array::{Array, Int32Array, Int64Array};
 
     fn build_two_col_table_info() -> TableInfo {
-        let row_type = DataTypes::row(vec![
-            DataField::new("id", DataTypes::int(), None),
-            DataField::new("name", DataTypes::string(), None),
-        ]);
-        let schema = Schema::builder()
-            .with_row_type(&row_type)
-            .build()
-            .expect("schema build");
-        let descriptor = TableDescriptor::builder()
-            .schema(schema)
-            .distributed_by(Some(1), vec![])
-            .build()
-            .expect("descriptor build");
-        TableInfo::of(
+        build_table_info_with_columns(
             TablePath::new("db".to_string(), "tbl".to_string()),
             42,
             1,
-            descriptor,
-            0,
-            0,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+            ],
         )
     }
 
-    fn build_log_records(
-        table_info: &TableInfo,
-        base_offset: i64,
-        rows: &[(i32, &str)],
-    ) -> Vec<u8> {
-        let row_type = table_info.get_row_type();
-        let table_path = table_info.table_path.clone();
+    /// Encode `rows` (built against `table_info`'s row type) as one Arrow log batch.
+    fn build_log_batch(table_info: &TableInfo, rows: &[GenericRow]) -> Vec<u8> {
         let table_info_arc = Arc::new(table_info.clone());
-        let physical = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+        let physical = Arc::new(PhysicalTablePath::of(Arc::new(
+            table_info.table_path.clone(),
+        )));
         let mut builder = MemoryLogRecordsArrowBuilder::new(
             1,
-            row_type,
+            table_info.get_row_type(),
             false,
             ArrowCompressionInfo {
                 compression_type: ArrowCompressionType::None,
@@ -462,20 +442,33 @@ mod tests {
             Arc::new(ArrowCompressionRatioEstimator::default()),
         )
         .expect("builder");
-
-        for (i, (id, name)) in rows.iter().enumerate() {
-            let mut row = GenericRow::new(2);
-            row.set_field(0, *id);
-            row.set_field(1, *name);
+        for (i, row) in rows.iter().enumerate() {
             let record = WriteRecord::for_append(
                 Arc::clone(&table_info_arc),
                 physical.clone(),
                 (i + 1) as i32,
-                &row,
+                row,
             );
             builder.append(&record).expect("append");
         }
-        let mut data = builder.build().expect("build log batch");
+        builder.build().expect("build log batch")
+    }
+
+    fn build_log_records(
+        table_info: &TableInfo,
+        base_offset: i64,
+        rows: &[(i32, &str)],
+    ) -> Vec<u8> {
+        let rows: Vec<GenericRow> = rows
+            .iter()
+            .map(|(id, name)| {
+                let mut row = GenericRow::new(2);
+                row.set_field(0, *id);
+                row.set_field(1, *name);
+                row
+            })
+            .collect();
+        let mut data = build_log_batch(table_info, &rows);
         // Builder always writes base_log_offset=0; patch it so tests can verify
         // BatchScanner faithfully propagates whatever offset the server returned.
         let bytes = base_offset.to_le_bytes();
@@ -529,6 +522,52 @@ mod tests {
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(batch.schema().field(0).name(), "id");
+    }
+
+    /// Projection skipping a middle variable-length column — catches a
+    /// full-column body being misparsed as the projected schema.
+    #[test]
+    fn decode_log_batch_projection_skips_middle_variable_length_column() {
+        let table_info = build_table_info_with_columns(
+            TablePath::new("db".to_string(), "tbl".to_string()),
+            43,
+            1,
+            vec![
+                DataField::new("c1", DataTypes::int(), None),
+                DataField::new("c2", DataTypes::string(), None),
+                DataField::new("c3", DataTypes::bigint(), None),
+            ],
+        );
+        let rows: Vec<GenericRow> = [(1, "alice", 100i64), (2, "bob", 200i64)]
+            .iter()
+            .map(|(c1, c2, c3)| {
+                let mut row = GenericRow::new(3);
+                row.set_field(0, *c1);
+                row.set_field(1, *c2);
+                row.set_field(2, *c3);
+                row
+            })
+            .collect();
+        let raw = build_log_batch(&table_info, &rows);
+
+        let (batch, _) = decode_log_batch(&table_info, Some(&[0usize, 2usize]), raw, usize::MAX)
+            .expect("decode projected");
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.schema().field(0).name(), "c1");
+        assert_eq!(batch.schema().field(1).name(), "c3");
+        let c1 = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let c3 = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!((c1.value(0), c1.value(1)), (1, 2));
+        assert_eq!((c3.value(0), c3.value(1)), (100, 200));
     }
 
     #[test]

@@ -21,6 +21,7 @@ use arrow::array::RecordBatch as ArrowRecordBatch;
 use arrow::record_batch::RecordBatchReader as _;
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_schema::SchemaRef;
+use fcore::client::LimitBatchScanner;
 use fcore::metadata::{DataField, DataType, MapType, RowType};
 use fcore::row::binary_array::{FlussArray, FlussArrayWriter};
 use fcore::row::binary_map::{FlussMap, FlussMapWriter};
@@ -39,6 +40,7 @@ use pyo3_async_runtimes::tokio::future_into_py;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 // Time conversion constants
 const MILLIS_PER_SECOND: i64 = 1_000;
@@ -427,6 +429,7 @@ pub struct TableScan {
     metadata: Arc<fcore::client::Metadata>,
     table_info: fcore::metadata::TableInfo,
     projection: Option<ProjectionType>,
+    limit: Option<i32>,
 }
 
 /// Scanner type for internal use
@@ -459,6 +462,57 @@ impl TableScan {
     pub fn project_by_name(mut slf: PyRefMut<'_, Self>, names: Vec<String>) -> PyRefMut<'_, Self> {
         slf.projection = Some(ProjectionType::Names(names));
         slf
+    }
+
+    /// Set a positive row limit, enabling `create_bucket_batch_scanner()`.
+    ///
+    /// Args:
+    ///     n: Maximum number of rows to scan. Must be positive.
+    ///
+    /// Returns:
+    ///     Self for method chaining.
+    pub fn limit(mut slf: PyRefMut<'_, Self>, n: i32) -> PyResult<PyRefMut<'_, Self>> {
+        if n <= 0 {
+            return Err(FlussError::new_err(format!(
+                "Scan limit must be positive, got {n}"
+            )));
+        }
+        slf.limit = Some(n);
+        Ok(slf)
+    }
+
+    /// Create a one-shot bounded scanner over a single bucket.
+    ///
+    /// Requires a limit set via `limit()`; the scan runs on the first
+    /// `next_batch()`.
+    ///
+    /// Args:
+    ///     bucket: Bucket to scan; must belong to this table.
+    ///
+    /// Returns:
+    ///     A BatchScanner for `bucket`.
+    pub fn create_bucket_batch_scanner(&self, bucket: &TableBucket) -> PyResult<BatchScanner> {
+        let limit = self.limit.ok_or_else(|| {
+            FlussError::new_err("create_bucket_batch_scanner requires a limit set via .limit(n)")
+        })?;
+
+        let conn = self.connection.clone();
+        let _guard = TOKIO_RUNTIME.enter();
+        let table =
+            fcore::client::FlussTable::new(&conn, self.metadata.clone(), self.table_info.clone());
+
+        let projection = self.projection.clone();
+        let projection_indices = resolve_projection_indices(&projection, &self.table_info)?;
+        let scan = apply_projection(table.new_scan(), projection)?
+            .limit(limit)
+            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scanner = scan
+            .create_bucket_batch_scanner(bucket.to_core())
+            .map_err(|e| FlussError::from_core_error(&e))?;
+
+        let (projected_schema, _) =
+            calculate_projected_types(&self.table_info, projection_indices)?;
+        Ok(BatchScanner::new(scanner, bucket.clone(), projected_schema))
     }
 
     /// Create a record-based log scanner.
@@ -501,6 +555,13 @@ impl TableScan {
         py: Python<'py>,
         scanner_type: ScannerType,
     ) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(limit) = self.limit {
+            return Err(FlussError::new_err(format!(
+                "Log scanners don't support limit pushdown (requested limit: {limit}). \
+                 Use create_bucket_batch_scanner() for a bounded scan."
+            )));
+        }
+
         let conn = self.connection.clone();
         let metadata = self.metadata.clone();
         let table_info = self.table_info.clone();
@@ -638,6 +699,7 @@ impl FlussTable {
             metadata: self.metadata.clone(),
             table_info: self.table_info.clone(),
             projection: None,
+            limit: None,
         }
     }
 
@@ -2630,32 +2692,14 @@ impl LogScanner {
     /// Returns:
     ///     PyArrow Table containing all data from subscribed buckets
     fn to_arrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let kind = Arc::clone(&self.kind);
-        let admin = Arc::clone(&self.admin);
-        let projected_schema = self.projected_schema.clone();
-
-        future_into_py(py, async move {
-            let scanner = kind.as_batch()?;
-
-            let mut reader = fcore::client::RecordBatchLogReader::new_until_latest(
-                scanner.new_shared_handle(),
-                &admin,
-            )
-            .await
-            .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let scan_batches = reader
-                .collect_all_batches()
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let batches: Vec<Arc<ArrowRecordBatch>> = scan_batches
-                .into_iter()
-                .map(|sb| Arc::new(sb.into_batch()))
-                .collect();
-
-            Python::attach(|py| Self::batches_to_arrow_table(py, batches, &projected_schema))
-        })
+        future_into_py(
+            py,
+            Self::scan_to_arrow_table(
+                Arc::clone(&self.kind),
+                Arc::clone(&self.admin),
+                self.projected_schema.clone(),
+            ),
+        )
     }
 
     /// Convert all data to Pandas DataFrame.
@@ -2671,31 +2715,9 @@ impl LogScanner {
         let kind = Arc::clone(&self.kind);
         let admin = Arc::clone(&self.admin);
         let projected_schema = self.projected_schema.clone();
-
         future_into_py(py, async move {
-            let scanner = kind.as_batch()?;
-
-            let mut reader = fcore::client::RecordBatchLogReader::new_until_latest(
-                scanner.new_shared_handle(),
-                &admin,
-            )
-            .await
-            .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let scan_batches = reader
-                .collect_all_batches()
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
-
-            let batches: Vec<Arc<ArrowRecordBatch>> = scan_batches
-                .into_iter()
-                .map(|sb| Arc::new(sb.into_batch()))
-                .collect();
-
-            Python::attach(|py| {
-                let arrow_table = Self::batches_to_arrow_table(py, batches, &projected_schema)?;
-                arrow_table.call_method0(py, "to_pandas")
-            })
+            let table = Self::scan_to_arrow_table(kind, admin, projected_schema).await?;
+            Python::attach(|py| table.call_method0(py, "to_pandas"))
         })
     }
 
@@ -2758,6 +2780,29 @@ impl LogScanner {
         }
     }
 
+    /// Read until the latest offsets and build one PyArrow Table.
+    async fn scan_to_arrow_table(
+        kind: Arc<ScannerKind>,
+        admin: Arc<fcore::client::FlussAdmin>,
+        projected_schema: SchemaRef,
+    ) -> PyResult<Py<PyAny>> {
+        let scanner = kind.as_batch()?;
+        let mut reader = fcore::client::RecordBatchLogReader::new_until_latest(
+            scanner.new_shared_handle(),
+            &admin,
+        )
+        .await
+        .map_err(|e| FlussError::from_core_error(&e))?;
+        let batches: Vec<Arc<ArrowRecordBatch>> = reader
+            .collect_all_batches()
+            .await
+            .map_err(|e| FlussError::from_core_error(&e))?
+            .into_iter()
+            .map(|sb| Arc::new(sb.into_batch()))
+            .collect();
+        Python::attach(|py| Self::batches_to_arrow_table(py, batches, &projected_schema))
+    }
+
     /// Convert Arrow record batches to a PyArrow Table (or empty table if no batches).
     fn batches_to_arrow_table(
         py: Python<'_>,
@@ -2777,6 +2822,113 @@ impl LogScanner {
         } else {
             Utils::combine_batches_to_table(py, batches)
         }
+    }
+}
+
+/// One-shot bounded scanner over a single bucket.
+///
+/// Obtained via `table.new_scan().limit(n).create_bucket_batch_scanner(bucket)`.
+/// The scan runs on the first `next_batch()` and yields its single batch once,
+/// then is spent. Honors the configured limit and any projection.
+#[pyclass]
+pub struct BatchScanner {
+    inner: Arc<Mutex<LimitBatchScanner>>,
+    bucket: TableBucket,
+    projected_schema: SchemaRef,
+}
+
+#[pymethods]
+impl BatchScanner {
+    /// The bucket scanned by this batch scanner.
+    #[getter]
+    fn bucket(&self) -> TableBucket {
+        self.bucket.clone()
+    }
+
+    /// Run the scan and return its batch, or `None` once the scanner is spent.
+    ///
+    /// The scan runs on the first call and is not retried; on error, create a
+    /// new scanner.
+    fn next_batch<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        future_into_py(py, async move {
+            let mut scanner = inner.lock().await;
+            let batch = scanner
+                .next_batch()
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            Python::attach(|py| match batch {
+                Some(sb) => Ok(Some(Py::new(py, RecordBatch::from_scan_batch(sb))?)),
+                None => Ok(None),
+            })
+        })
+    }
+
+    /// Drain the scanner into all of its batches.
+    fn collect_all_batches<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        future_into_py(py, async move {
+            let mut scanner = inner.lock().await;
+            let batches = scanner
+                .collect_all_batches()
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
+            Python::attach(|py| {
+                batches
+                    .into_iter()
+                    .map(|sb| Py::new(py, RecordBatch::from_scan_batch(sb)))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })
+    }
+
+    /// Drain the scanner into a PyArrow Table (empty, with the projected schema,
+    /// when the scan yields nothing).
+    fn to_arrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        future_into_py(
+            py,
+            Self::scan_to_arrow_table(Arc::clone(&self.inner), self.projected_schema.clone()),
+        )
+    }
+
+    /// Drain the scanner into a Pandas DataFrame.
+    fn to_pandas<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let projected_schema = self.projected_schema.clone();
+        future_into_py(py, async move {
+            let table = Self::scan_to_arrow_table(inner, projected_schema).await?;
+            Python::attach(|py| table.call_method0(py, "to_pandas"))
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("BatchScanner(bucket={})", self.bucket.__str__())
+    }
+}
+
+impl BatchScanner {
+    fn new(scanner: LimitBatchScanner, bucket: TableBucket, projected_schema: SchemaRef) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(scanner)),
+            bucket,
+            projected_schema,
+        }
+    }
+
+    /// Drain the scanner into one PyArrow Table.
+    async fn scan_to_arrow_table(
+        inner: Arc<Mutex<LimitBatchScanner>>,
+        projected_schema: SchemaRef,
+    ) -> PyResult<Py<PyAny>> {
+        let mut scanner = inner.lock().await;
+        let batches = scanner
+            .collect_all_batches()
+            .await
+            .map_err(|e| FlussError::from_core_error(&e))?
+            .into_iter()
+            .map(|sb| Arc::new(sb.into_batch()))
+            .collect();
+        Python::attach(|py| LogScanner::batches_to_arrow_table(py, batches, &projected_schema))
     }
 }
 

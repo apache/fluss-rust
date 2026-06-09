@@ -86,6 +86,7 @@ async def _run(conn):
     await _lookup(table)
     await _delete(table)
     await _partial_update(table)
+    await _limit_scan(table)
 
     await admin.drop_table(table_path, ignore_if_not_exists=True)
     print(f"\nDropped PK table: {table_path}")
@@ -219,6 +220,20 @@ async def _partial_update(table):
         f"By index: name={result['name']} (updated), "
         f"balance={result['balance']} (unchanged)"
     )
+
+
+async def _limit_scan(table):
+    print("\n--- Limit scan: bounded BatchScanner over current rows (per bucket) ---")
+    table_info = table.get_table_info()
+    total = 0
+    for bucket_id in range(table_info.num_buckets):
+        bucket = fluss.TableBucket(table_info.table_id, bucket_id)
+        scanner = table.new_scan().limit(100).create_bucket_batch_scanner(bucket)
+        arrow_table = await scanner.to_arrow()
+        total += arrow_table.num_rows
+    # Users 1 and 2 remain (user 3 was deleted; user 1 was updated in place).
+    assert total == 2, f"Limit scan returned {total} current rows, expected 2"
+    print(f"Limit scan across {table_info.num_buckets} bucket(s) returned {total} rows")
 
 
 if __name__ == "__main__":

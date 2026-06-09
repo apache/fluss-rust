@@ -127,3 +127,17 @@ scanner = await table.new_scan().project([0, 2]).create_record_batch_log_scanner
 # or by name
 scanner = await table.new_scan().project_by_name(["id", "score"]).create_record_batch_log_scanner()
 ```
+
+## Limit Scan
+
+For a bounded read of up to `n` rows from a single bucket, use a batch scanner instead of subscribing. It issues one request; poll it with `next_batch()` until it returns `None`.
+
+```python
+bucket = fluss.TableBucket(table.get_table_info().table_id, 0)
+scanner = table.new_scan().limit(10).create_bucket_batch_scanner(bucket)
+
+while (batch := await scanner.next_batch()) is not None:
+    print(f"rows: {batch.batch.num_rows}")
+```
+
+`to_arrow()`, `to_pandas()`, and `collect_all_batches()` drain the scan in one call instead. Limit applies per bucket; scan each bucket to cover a multi-bucket table.

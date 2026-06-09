@@ -25,9 +25,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) fn build_table_info(table_path: TablePath, table_id: i64, buckets: i32) -> TableInfo {
-    let row_type = DataTypes::row(vec![DataField::new("id", DataTypes::int(), None)]);
-    let schema_builder = Schema::builder().with_row_type(&row_type);
-    let schema = schema_builder.build().expect("schema build");
+    build_table_info_with_columns(
+        table_path,
+        table_id,
+        buckets,
+        vec![DataField::new("id", DataTypes::int(), None)],
+    )
+}
+
+pub(crate) fn build_table_info_with_columns(
+    table_path: TablePath,
+    table_id: i64,
+    buckets: i32,
+    columns: Vec<DataField>,
+) -> TableInfo {
+    let row_type = DataTypes::row(columns);
+    let schema = Schema::builder()
+        .with_row_type(&row_type)
+        .build()
+        .expect("schema build");
     let table_descriptor = TableDescriptor::builder()
         .schema(schema)
         .distributed_by(Some(buckets), vec![])

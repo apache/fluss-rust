@@ -503,6 +503,34 @@ class TableScan:
             Self for method chaining.
         """
         ...
+    def limit(self, n: int) -> "TableScan":
+        """Set a positive row limit for the scan.
+
+        A limit enables ``create_bucket_batch_scanner()`` for a one-shot
+        bounded scan. The log scanners do not support limit pushdown and reject
+        a configured limit.
+
+        Args:
+            n: The maximum number of rows to scan. Must be positive.
+
+        Returns:
+            Self for method chaining.
+        """
+        ...
+    def create_bucket_batch_scanner(self, bucket: TableBucket) -> BatchScanner:
+        """Create a one-shot bounded scanner over a single bucket.
+
+        Requires a limit configured via ``limit()``. Creation is cheap; the
+        scan RPC runs lazily on the first ``next_batch()``.
+
+        Args:
+            bucket: The bucket to scan. Its ``table_id`` must match this table
+                and its ``bucket_id`` must be in range.
+
+        Returns:
+            BatchScanner for a single bounded scan of ``bucket``.
+        """
+        ...
     async def create_log_scanner(self) -> LogScanner:
         """Create a record-based log scanner.
 
@@ -975,6 +1003,60 @@ class LogScanner:
 
     def __repr__(self) -> str: ...
     def __aiter__(self) -> AsyncIterator[Union[ScanRecord, RecordBatch]]: ...
+
+@final
+class BatchScanner:
+    """One-shot bounded scanner over a single bucket.
+
+    Obtain via ``table.new_scan().limit(n).create_bucket_batch_scanner(bucket)``.
+    The scan runs lazily on the first ``next_batch()`` (or ``collect_all_batches()``
+    / ``to_arrow()`` / ``to_pandas()``), yields its single batch once, then is
+    spent. Honors the configured limit and any projection.
+
+    Example:
+        ```python
+        table_id = table.get_table_info().table_id
+        scanner = table.new_scan().limit(100).create_bucket_batch_scanner(
+            fluss.TableBucket(table_id, 0)
+        )
+        table_data = await scanner.to_arrow()
+        ```
+    """
+
+    @property
+    def bucket(self) -> TableBucket:
+        """The bucket scanned by this batch scanner."""
+        ...
+    async def next_batch(self) -> Optional[RecordBatch]:
+        """Run the scan and return its batch, or ``None`` once the scanner is spent.
+
+        The scan RPC runs on the first call; subsequent calls return ``None``.
+        The scan is not retried — an error leaves the scanner spent, so create a
+        new one to retry.
+
+        Returns:
+            A RecordBatch on the first call, then ``None``.
+        """
+        ...
+    async def collect_all_batches(self) -> List[RecordBatch]:
+        """Drain the scanner into all of its batches.
+
+        Returns:
+            List of RecordBatch objects (a single element for a limit scan).
+        """
+        ...
+    async def to_arrow(self) -> pa.Table:
+        """Drain the scanner into a single PyArrow Table.
+
+        Returns:
+            PyArrow Table with the scanned rows, or an empty table with the
+            projected schema when the scan yields nothing.
+        """
+        ...
+    async def to_pandas(self) -> pd.DataFrame:
+        """Drain the scanner into a Pandas DataFrame."""
+        ...
+    def __repr__(self) -> str: ...
 
 @final
 class Schema:
