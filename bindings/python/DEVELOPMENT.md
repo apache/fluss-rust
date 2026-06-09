@@ -46,9 +46,24 @@ uv run mypy python/
 
 ## Run Examples
 
+Each example is standalone and runnable on its own. They default to a local
+cluster at `127.0.0.1:9123`; override with `FLUSS_BOOTSTRAP_SERVERS`.
+
 ```bash
-uv run python example/example.py
+uv run python example/log_table.py
+uv run python example/pk_table.py
+uv run python example/complex_types.py
+uv run python example/partitioned_table.py
+uv run python example/partitioned_kv_table.py
+
+# Point at a specific cluster:
+FLUSS_BOOTSTRAP_SERVERS=host:port uv run python example/log_table.py
 ```
+
+CI runs every example against an ephemeral test cluster via
+`test/test_examples.py`, which auto-discovers any `example/*.py` exposing a
+callable `main(bootstrap_servers)`. New examples are checked automatically with
+no test changes.
 
 ## Build API Docs
 
@@ -86,8 +101,14 @@ bindings/python/
 │   ├── __init__.py
 │   ├── __init__.pyi       # Type stubs
 │   └── py.typed
-└── example/
-    └── example.py
+├── example/                       # Standalone, CI-checked examples
+│   ├── log_table.py
+│   ├── pk_table.py
+│   ├── complex_types.py
+│   ├── partitioned_table.py
+│   └── partitioned_kv_table.py
+└── test/
+    └── test_examples.py           # Runs every example against the cluster
 ```
 
 ## License
