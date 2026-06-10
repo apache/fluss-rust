@@ -52,6 +52,7 @@ two can drift apart. `stubtest` (shipped with `mypy`) compares them and is run
 in CI. After changing the binding's public surface, rebuild the module and run:
 
 ```bash
+uv sync --extra dev --no-install-project
 uv run --no-sync maturin develop --uv
 uv run --no-sync python -m mypy.stubtest fluss \
   --mypy-config-file pyproject.toml \
