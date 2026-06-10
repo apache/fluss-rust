@@ -1267,6 +1267,10 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
     }
+    if (limit_.has_value()) {
+        return utils::make_client_error(
+            "Log scanners don't support limit pushdown; use CreateBucketBatchScanner()");
+    }
 
     try {
         auto resolved_indices = !name_projection_.empty() ? ResolveNameProjection() : projection_;
@@ -1278,6 +1282,41 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
             out.scanner_ = utils::ptr_from_ffi<ffi::LogScanner>(ffi_result);
+        }
+        return result;
+    } catch (const std::exception& e) {
+        // ResolveNameProjection() may throw
+        return utils::make_client_error(e.what());
+    }
+}
+
+TableScan& TableScan::Limit(int32_t row_number) {
+    limit_ = row_number;
+    return *this;
+}
+
+Result TableScan::CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out) {
+    if (table_ == nullptr) {
+        return utils::make_client_error("Table not available");
+    }
+    if (!limit_.has_value()) {
+        return utils::make_client_error(
+            "CreateBucketBatchScanner requires a limit set via Limit()");
+    }
+
+    try {
+        auto resolved_indices = !name_projection_.empty() ? ResolveNameProjection() : projection_;
+        rust::Vec<size_t> rust_indices;
+        for (size_t idx : resolved_indices) {
+            rust_indices.push_back(idx);
+        }
+        int64_t partition_id = bucket.partition_id.value_or(-1);
+        auto ffi_result = table_->create_bucket_batch_scanner(
+            std::move(rust_indices), *limit_, bucket.table_id, partition_id, bucket.bucket_id);
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (result.Ok()) {
+            out.scanner_ = utils::ptr_from_ffi<ffi::BatchScanner>(ffi_result);
+            out.bucket_ = bucket;
         }
         return result;
     } catch (const std::exception& e) {
@@ -1791,6 +1830,34 @@ int64_t ArrowRecordBatch::GetLastOffset() const {
     return this->base_offset_ + this->NumRows() - 1;
 }
 
+namespace detail {
+// Imports FFI Arrow batches (C Data Interface) into C++ ArrowRecordBatch
+// wrappers. A friend of ArrowRecordBatch so it can build the wrapper's private
+// ctor; shared by LogScanner::PollRecordBatch and BatchScanner.
+struct ArrowBatchImporter {
+    static Result Import(ffi::FfiArrowRecordBatches& src, ArrowRecordBatches& out) {
+        out.batches.clear();
+        for (const auto& ffi_batch : src.batches) {
+            auto* c_array = reinterpret_cast<struct ArrowArray*>(ffi_batch.array_ptr);
+            auto* c_schema = reinterpret_cast<struct ArrowSchema*>(ffi_batch.schema_ptr);
+
+            auto import_result = arrow::ImportRecordBatch(c_array, c_schema);
+            // Free the Rust-allocated container structures whether or not the
+            // import succeeded, to avoid leaks.
+            ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
+            if (!import_result.ok()) {
+                return utils::make_client_error("Failed to import Arrow record batch: " +
+                                                import_result.status().ToString());
+            }
+            out.batches.push_back(std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
+                import_result.ValueOrDie(), ffi_batch.table_id, ffi_batch.partition_id,
+                ffi_batch.bucket_id, ffi_batch.base_offset)));
+        }
+        return utils::make_ok();
+    }
+};
+}  // namespace detail
+
 Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) {
     if (!Available()) {
         return utils::make_client_error("LogScanner not available");
@@ -1801,35 +1868,65 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
     if (!result.Ok()) {
         return result;
     }
+    return detail::ArrowBatchImporter::Import(ffi_result.arrow_batches, out);
+}
 
-    // Convert the FFI Arrow record batches to C++ ArrowRecordBatch objects
-    out.batches.clear();
-    for (const auto& ffi_batch : ffi_result.arrow_batches.batches) {
-        auto* c_array = reinterpret_cast<struct ArrowArray*>(ffi_batch.array_ptr);
-        auto* c_schema = reinterpret_cast<struct ArrowSchema*>(ffi_batch.schema_ptr);
+// ============================================================================
+// BatchScanner
+// ============================================================================
 
-        auto import_result = arrow::ImportRecordBatch(c_array, c_schema);
-        if (import_result.ok()) {
-            auto batch_ptr = import_result.ValueOrDie();
-            auto batch_wrapper = std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
-                std::move(batch_ptr), ffi_batch.table_id, ffi_batch.partition_id,
-                ffi_batch.bucket_id, ffi_batch.base_offset));
-            out.batches.push_back(std::move(batch_wrapper));
+BatchScanner::BatchScanner() noexcept = default;
 
-            // Free the container structures that were allocated in Rust after successful import
-            ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
-        } else {
-            // Import failed, free the container structures to avoid leaks and return error
-            ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
+BatchScanner::BatchScanner(ffi::BatchScanner* scanner) noexcept : scanner_(scanner) {}
 
-            // Return an error indicating that the import failed
-            std::string error_msg =
-                "Failed to import Arrow record batch: " + import_result.status().ToString();
-            return utils::make_client_error(error_msg);
-        }
+BatchScanner::~BatchScanner() noexcept { Destroy(); }
+
+void BatchScanner::Destroy() noexcept {
+    if (scanner_) {
+        ffi::delete_batch_scanner(scanner_);
+        scanner_ = nullptr;
     }
+}
 
-    return utils::make_ok();
+BatchScanner::BatchScanner(BatchScanner&& other) noexcept
+    : scanner_(other.scanner_), bucket_(other.bucket_) {
+    other.scanner_ = nullptr;
+}
+
+BatchScanner& BatchScanner::operator=(BatchScanner&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        scanner_ = other.scanner_;
+        bucket_ = other.bucket_;
+        other.scanner_ = nullptr;
+    }
+    return *this;
+}
+
+bool BatchScanner::Available() const { return scanner_ != nullptr; }
+
+Result BatchScanner::NextBatch(ArrowRecordBatches& out) {
+    if (!Available()) {
+        return utils::make_client_error("BatchScanner not available");
+    }
+    auto ffi_result = scanner_->next_batch();
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
+    }
+    return detail::ArrowBatchImporter::Import(ffi_result.arrow_batches, out);
+}
+
+Result BatchScanner::CollectAllBatches(ArrowRecordBatches& out) {
+    if (!Available()) {
+        return utils::make_client_error("BatchScanner not available");
+    }
+    auto ffi_result = scanner_->collect_all_batches();
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
+    }
+    return detail::ArrowBatchImporter::Import(ffi_result.arrow_batches, out);
 }
 
 }  // namespace fluss

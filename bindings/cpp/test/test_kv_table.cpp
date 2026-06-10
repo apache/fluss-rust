@@ -155,6 +155,76 @@ TEST_F(KvTableTest, UpsertDeleteAndLookup) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
+TEST_F(KvTableTest, LimitScan) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_limit_scan_pk_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("name", fluss::DataType::String())
+                      .SetPrimaryKeys({"id"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    auto table_upsert = table.NewUpsert();
+    fluss::UpsertWriter upsert_writer;
+    ASSERT_OK(table_upsert.CreateWriter(upsert_writer));
+    std::vector<std::pair<int32_t, std::string>> rows = {
+        {1, "Verso"}, {2, "Noco"}, {3, "Esquie"}, {4, "Aline"}, {5, "Gustave"}};
+    for (const auto& [id, name] : rows) {
+        fluss::GenericRow row(2);
+        row.SetInt32(0, id);
+        row.SetString(1, name);
+        ASSERT_OK(upsert_writer.Upsert(row));
+    }
+    ASSERT_OK(upsert_writer.Flush());
+
+    int64_t table_id = table.GetTableInfo().table_id;
+    fluss::TableBucket bucket{table_id, 0};
+
+    fluss::BatchScanner scanner;
+    ASSERT_OK(table.NewScan().Limit(3).CreateBucketBatchScanner(bucket, scanner));
+    EXPECT_TRUE(scanner.Bucket() == bucket);
+    fluss::ArrowRecordBatches first;
+    ASSERT_OK(scanner.NextBatch(first));
+    ASSERT_FALSE(first.Empty()) << "first NextBatch should return a batch";
+    int64_t scanned = 0;
+    for (const auto& b : first) {
+        EXPECT_EQ(b->GetBucketId(), 0);
+        scanned += b->NumRows();
+    }
+    EXPECT_GT(scanned, 0);
+    EXPECT_LE(scanned, 3);
+
+    fluss::ArrowRecordBatches spent;
+    ASSERT_OK(scanner.NextBatch(spent));
+    EXPECT_TRUE(spent.Empty()) << "scanner must be spent after one batch";
+
+    fluss::BatchScanner scanner2;
+    ASSERT_OK(table.NewScan().Limit(100).CreateBucketBatchScanner(bucket, scanner2));
+    fluss::ArrowRecordBatches all;
+    ASSERT_OK(scanner2.CollectAllBatches(all));
+    int64_t total = 0;
+    for (const auto& b : all) {
+        total += b->NumRows();
+    }
+    EXPECT_EQ(total, 5);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
 TEST_F(KvTableTest, LookupWithNestedArrayArrayView) {
     auto& adm = admin();
     auto& conn = connection();

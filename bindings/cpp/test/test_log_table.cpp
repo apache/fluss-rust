@@ -171,6 +171,212 @@ TEST_F(LogTableTest, AppendRecordBatchAndScan) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
+TEST_F(LogTableTest, LimitScan) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_limit_scan_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("c1", fluss::DataType::Int())
+                      .AddColumn("c2", fluss::DataType::String())
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"c1"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    auto table_append = table.NewAppend();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table_append.CreateWriter(append_writer));
+    {
+        auto c1 = arrow::Int32Builder();
+        c1.AppendValues({1, 2, 3, 4, 5}).ok();
+        auto c2 = arrow::StringBuilder();
+        c2.AppendValues({"a", "b", "c", "d", "e"}).ok();
+        auto batch = arrow::RecordBatch::Make(
+            arrow::schema({arrow::field("c1", arrow::int32()), arrow::field("c2", arrow::utf8())}),
+            5, {c1.Finish().ValueOrDie(), c2.Finish().ValueOrDie()});
+        ASSERT_OK(append_writer.AppendArrowBatch(batch));
+    }
+    ASSERT_OK(append_writer.Flush());
+
+    int64_t table_id = table.GetTableInfo().table_id;
+    fluss::TableBucket bucket{table_id, 0};
+
+    fluss::BatchScanner scanner;
+    ASSERT_OK(table.NewScan().Limit(3).CreateBucketBatchScanner(bucket, scanner));
+    EXPECT_TRUE(scanner.Bucket() == bucket);
+
+    fluss::ArrowRecordBatches first;
+    ASSERT_OK(scanner.NextBatch(first));
+    ASSERT_FALSE(first.Empty()) << "first NextBatch should return a batch";
+    int64_t rows = 0;
+    for (const auto& b : first) {
+        EXPECT_EQ(b->GetTableId(), table_id);
+        EXPECT_EQ(b->GetBucketId(), 0);
+        rows += b->NumRows();
+    }
+    // The server may return fewer rows than the limit, but never more.
+    EXPECT_GT(rows, 0);
+    EXPECT_LE(rows, 3);
+
+    fluss::ArrowRecordBatches spent;
+    ASSERT_OK(scanner.NextBatch(spent));
+    EXPECT_TRUE(spent.Empty()) << "scanner must be spent after one batch";
+
+    fluss::BatchScanner scanner2;
+    ASSERT_OK(table.NewScan().Limit(10).CreateBucketBatchScanner(bucket, scanner2));
+    fluss::ArrowRecordBatches all;
+    ASSERT_OK(scanner2.CollectAllBatches(all));
+    int64_t total = 0;
+    for (const auto& b : all) {
+        total += b->NumRows();
+    }
+    EXPECT_EQ(total, 5) << "limit 10 over a 5-row bucket returns all rows";
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, LimitScanProjection) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_limit_scan_projection_cpp");
+
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("c1", fluss::DataType::Int())
+                      .AddColumn("c2", fluss::DataType::String())
+                      .AddColumn("c3", fluss::DataType::BigInt())
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"c1"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    auto table_append = table.NewAppend();
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table_append.CreateWriter(append_writer));
+    {
+        auto c1 = arrow::Int32Builder();
+        c1.AppendValues({1, 2}).ok();
+        auto c2 = arrow::StringBuilder();
+        c2.AppendValues({"a", "b"}).ok();
+        auto c3 = arrow::Int64Builder();
+        c3.AppendValues({100, 200}).ok();
+        auto batch = arrow::RecordBatch::Make(
+            arrow::schema({arrow::field("c1", arrow::int32()), arrow::field("c2", arrow::utf8()),
+                           arrow::field("c3", arrow::int64())}),
+            2, {c1.Finish().ValueOrDie(), c2.Finish().ValueOrDie(), c3.Finish().ValueOrDie()});
+        ASSERT_OK(append_writer.AppendArrowBatch(batch));
+    }
+    ASSERT_OK(append_writer.Flush());
+
+    fluss::TableBucket bucket{table.GetTableInfo().table_id, 0};
+
+    // Projecting [c1, c3] skips the middle c2 string column.
+    fluss::BatchScanner scanner;
+    ASSERT_OK(
+        table.NewScan().ProjectByIndex({0, 2}).Limit(10).CreateBucketBatchScanner(bucket, scanner));
+    fluss::ArrowRecordBatches all;
+    ASSERT_OK(scanner.CollectAllBatches(all));
+    ASSERT_EQ(all.Size(), 1u);
+
+    auto rb = all[0]->GetArrowRecordBatch();
+    ASSERT_EQ(rb->num_columns(), 2);
+    EXPECT_EQ(rb->schema()->field(0)->name(), "c1");
+    EXPECT_EQ(rb->schema()->field(1)->name(), "c3");
+    ASSERT_EQ(rb->num_rows(), 2);
+    auto c1a = std::static_pointer_cast<arrow::Int32Array>(rb->column(0));
+    auto c3a = std::static_pointer_cast<arrow::Int64Array>(rb->column(1));
+    EXPECT_EQ(c1a->Value(0), 1);
+    EXPECT_EQ(c1a->Value(1), 2);
+    EXPECT_EQ(c3a->Value(0), 100);
+    EXPECT_EQ(c3a->Value(1), 200);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, LimitScanErrors) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_limit_scan_errors_cpp");
+
+    auto schema = fluss::Schema::NewBuilder().AddColumn("c1", fluss::DataType::Int()).Build();
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetBucketKeys({"c1"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    int64_t table_id = table.GetTableInfo().table_id;
+
+    {
+        fluss::BatchScanner s;
+        EXPECT_FALSE(
+            table.NewScan().CreateBucketBatchScanner(fluss::TableBucket{table_id, 0}, s).Ok());
+    }
+    for (int32_t bad : {0, -5}) {
+        fluss::BatchScanner s;
+        EXPECT_FALSE(table.NewScan()
+                         .Limit(bad)
+                         .CreateBucketBatchScanner(fluss::TableBucket{table_id, 0}, s)
+                         .Ok());
+    }
+    for (const auto& bad :
+         {fluss::TableBucket{table_id + 9999, 0}, fluss::TableBucket{table_id, 99}}) {
+        fluss::BatchScanner s;
+        EXPECT_FALSE(table.NewScan().Limit(1).CreateBucketBatchScanner(bad, s).Ok());
+    }
+    {
+        fluss::LogScanner s;
+        EXPECT_FALSE(table.NewScan().Limit(5).CreateLogScanner(s).Ok());
+        fluss::LogScanner s2;
+        EXPECT_FALSE(table.NewScan().Limit(5).CreateRecordBatchLogScanner(s2).Ok());
+    }
+    ASSERT_OK(adm.DropTable(table_path, false));
+
+    // A non-ARROW (INDEXED) log table rejects a limit scan.
+    fluss::TablePath indexed_path("fluss", "test_limit_scan_indexed_cpp");
+    auto indexed_descriptor = fluss::TableDescriptor::NewBuilder()
+                                  .SetSchema(schema)
+                                  .SetBucketCount(1)
+                                  .SetBucketKeys({"c1"})
+                                  .SetLogFormat("INDEXED")
+                                  .SetProperty("table.replication.factor", "1")
+                                  .Build();
+    fluss_test::CreateTable(adm, indexed_path, indexed_descriptor);
+    fluss::Table indexed_table;
+    ASSERT_OK(conn.GetTable(indexed_path, indexed_table));
+    {
+        fluss::BatchScanner s;
+        fluss::TableBucket b{indexed_table.GetTableInfo().table_id, 0};
+        EXPECT_FALSE(indexed_table.NewScan().Limit(1).CreateBucketBatchScanner(b, s).Ok());
+    }
+    ASSERT_OK(adm.DropTable(indexed_path, false));
+}
+
 TEST_F(LogTableTest, ListOffsets) {
     auto& adm = admin();
     auto& conn = connection();

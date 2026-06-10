@@ -130,3 +130,20 @@ if (result.Found()) {
     std::cout << "Not found" << std::endl;
 }
 ```
+
+## Limit Scan
+
+To read up to `n` rows of a bucket's current state without supplying keys, use a batch scanner. The server returns the deduplicated current rows as Arrow batches, convenient for previews or analytics.
+
+```cpp
+int64_t table_id = table.GetTableInfo().table_id;
+fluss::TableBucket bucket{table_id, 0};
+
+fluss::BatchScanner scanner;
+table.NewScan().Limit(10).CreateBucketBatchScanner(bucket, scanner);
+
+fluss::ArrowRecordBatches batches;
+scanner.CollectAllBatches(batches);
+```
+
+The limit applies per bucket; scan each bucket to cover a multi-bucket table.

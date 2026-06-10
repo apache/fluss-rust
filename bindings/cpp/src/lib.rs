@@ -18,7 +18,7 @@
 mod types;
 
 use std::str::FromStr;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use fluss as fcore;
@@ -286,6 +286,7 @@ mod ffi {
         type AppendWriter;
         type WriteResult;
         type LogScanner;
+        type BatchScanner;
         type UpsertWriter;
         type Lookuper;
         type PrefixLookuper;
@@ -379,6 +380,14 @@ mod ffi {
         unsafe fn delete_table(table: *mut Table);
         fn new_append_writer(self: &Table) -> FfiPtrResult;
         fn create_scanner(self: &Table, column_indices: Vec<usize>, batch: bool) -> FfiPtrResult;
+        fn create_bucket_batch_scanner(
+            self: &Table,
+            column_indices: Vec<usize>,
+            limit: i32,
+            table_id: i64,
+            partition_id: i64,
+            bucket_id: i32,
+        ) -> FfiPtrResult;
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
@@ -735,6 +744,11 @@ mod ffi {
         fn poll_record_batch(self: &LogScanner, timeout_ms: i64) -> FfiArrowRecordBatchesResult;
         fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize);
 
+        // BatchScanner
+        unsafe fn delete_batch_scanner(scanner: *mut BatchScanner);
+        fn next_batch(self: &BatchScanner) -> FfiArrowRecordBatchesResult;
+        fn collect_all_batches(self: &BatchScanner) -> FfiArrowRecordBatchesResult;
+
         // ScanResultInner accessors
         fn sv_has_error(self: &ScanResultInner) -> bool;
         fn sv_error_code(self: &ScanResultInner) -> i32;
@@ -978,6 +992,10 @@ pub struct LogScanner {
     projected_columns: Vec<fcore::metadata::Column>,
 }
 
+pub struct BatchScanner {
+    inner: Mutex<fcore::client::LimitBatchScanner>,
+}
+
 pub struct UpsertWriter {
     inner: fcore::client::UpsertWriter,
     table_info: fcore::metadata::TableInfo,
@@ -1050,6 +1068,26 @@ fn err_ptr_from_core(e: &fcore::error::Error) -> ffi::FfiPtrResult {
     ffi::FfiPtrResult {
         result: err_from_core_error(e),
         ptr: 0usize,
+    }
+}
+
+fn empty_arrow_batches_result(result: ffi::FfiResult) -> ffi::FfiArrowRecordBatchesResult {
+    ffi::FfiArrowRecordBatchesResult {
+        result,
+        arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+    }
+}
+
+/// Wrap the result of `core_scan_batches_to_ffi` in an `FfiArrowRecordBatchesResult`.
+fn arrow_batches_result(
+    converted: Result<ffi::FfiArrowRecordBatches, String>,
+) -> ffi::FfiArrowRecordBatchesResult {
+    match converted {
+        Ok(arrow_batches) => ffi::FfiArrowRecordBatchesResult {
+            result: ok_result(),
+            arrow_batches,
+        },
+        Err(e) => empty_arrow_batches_result(client_err(e)),
     }
 }
 
@@ -1691,6 +1729,49 @@ impl Table {
         })
     }
 
+    fn create_bucket_batch_scanner(
+        &self,
+        column_indices: Vec<usize>,
+        limit: i32,
+        table_id: i64,
+        partition_id: i64,
+        bucket_id: i32,
+    ) -> ffi::FfiPtrResult {
+        RUNTIME.block_on(async {
+            let fluss_table = self.fluss_table();
+            let scan = fluss_table.new_scan();
+
+            let scan = if column_indices.is_empty() {
+                scan
+            } else {
+                match scan.project(&column_indices) {
+                    Ok(s) => s,
+                    Err(e) => return err_ptr_from_core(&e),
+                }
+            };
+
+            let scan = match scan.limit(limit) {
+                Ok(s) => s,
+                Err(e) => return err_ptr_from_core(&e),
+            };
+
+            // A negative partition id encodes "no partition" across the FFI boundary.
+            let partition = (partition_id >= 0).then_some(partition_id);
+            let bucket =
+                fcore::metadata::TableBucket::new_with_partition(table_id, partition, bucket_id);
+
+            let scanner = match scan.create_bucket_batch_scanner(bucket) {
+                Ok(s) => s,
+                Err(e) => return err_ptr_from_core(&e),
+            };
+
+            let ptr = Box::into_raw(Box::new(BatchScanner {
+                inner: Mutex::new(scanner),
+            }));
+            ok_ptr(ptr as usize)
+        })
+    }
+
     fn get_table_info_from_table(&self) -> ffi::FfiTableInfo {
         types::core_table_info_to_ffi(&self.table_info)
     }
@@ -2248,20 +2329,38 @@ impl LogScanner {
         let result = RUNTIME.block_on(async { inner_batch.poll(timeout).await });
 
         match result {
-            Ok(batches) => match types::core_scan_batches_to_ffi(&batches) {
-                Ok(arrow_batches) => ffi::FfiArrowRecordBatchesResult {
-                    result: ok_result(),
-                    arrow_batches,
-                },
-                Err(e) => ffi::FfiArrowRecordBatchesResult {
-                    result: client_err(e),
-                    arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
-                },
-            },
-            Err(e) => ffi::FfiArrowRecordBatchesResult {
-                result: err_from_core_error(&e),
-                arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
-            },
+            Ok(batches) => arrow_batches_result(types::core_scan_batches_to_ffi(&batches)),
+            Err(e) => empty_arrow_batches_result(err_from_core_error(&e)),
+        }
+    }
+}
+
+// BatchScanner implementation
+unsafe fn delete_batch_scanner(scanner: *mut BatchScanner) {
+    if !scanner.is_null() {
+        unsafe {
+            drop(Box::from_raw(scanner));
+        }
+    }
+}
+
+impl BatchScanner {
+    fn next_batch(&self) -> ffi::FfiArrowRecordBatchesResult {
+        let mut scanner = self.inner.lock().unwrap();
+        match RUNTIME.block_on(scanner.next_batch()) {
+            Ok(Some(batch)) => arrow_batches_result(types::core_scan_batches_to_ffi(
+                std::slice::from_ref(&batch),
+            )),
+            Ok(None) => empty_arrow_batches_result(ok_result()),
+            Err(e) => empty_arrow_batches_result(err_from_core_error(&e)),
+        }
+    }
+
+    fn collect_all_batches(&self) -> ffi::FfiArrowRecordBatchesResult {
+        let mut scanner = self.inner.lock().unwrap();
+        match RUNTIME.block_on(scanner.collect_all_batches()) {
+            Ok(batches) => arrow_batches_result(types::core_scan_batches_to_ffi(&batches)),
+            Err(e) => empty_arrow_batches_result(err_from_core_error(&e)),
         }
     }
 }

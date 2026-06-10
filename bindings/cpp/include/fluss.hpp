@@ -45,6 +45,7 @@ struct Table;
 struct AppendWriter;
 struct WriteResult;
 struct LogScanner;
+struct BatchScanner;
 struct UpsertWriter;
 struct Lookuper;
 struct PrefixLookuper;
@@ -1155,6 +1156,11 @@ class ScanRecords {
     std::shared_ptr<const detail::ScanData> data_;
 };
 
+namespace detail {
+// Defined in table.cpp; builds ArrowRecordBatch wrappers from FFI Arrow batches.
+struct ArrowBatchImporter;
+}  // namespace detail
+
 class ArrowRecordBatch {
    public:
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
@@ -1173,6 +1179,7 @@ class ArrowRecordBatch {
 
    private:
     friend class LogScanner;
+    friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
                               int64_t base_offset) noexcept;
@@ -1346,6 +1353,7 @@ class Lookuper;
 class PrefixLookuper;
 class WriteResult;
 class LogScanner;
+class BatchScanner;
 class Admin;
 class Table;
 class TableAppend;
@@ -1619,8 +1627,12 @@ class TableScan {
     TableScan& ProjectByIndex(std::vector<size_t> column_indices);
     TableScan& ProjectByName(std::vector<std::string> column_names);
 
+    TableScan& Limit(int32_t row_number);
+
     Result CreateLogScanner(LogScanner& out);
     Result CreateRecordBatchLogScanner(LogScanner& out);
+
+    Result CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out);
 
    private:
     friend class Table;
@@ -1632,6 +1644,7 @@ class TableScan {
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;
     std::vector<std::string> name_projection_;
+    std::optional<int32_t> limit_;
 };
 
 class WriteResult {
@@ -1785,6 +1798,32 @@ class LogScanner {
 
     void Destroy() noexcept;
     ffi::LogScanner* scanner_{nullptr};
+};
+
+// One-shot bounded scan of a single bucket, from TableScan::CreateBucketBatchScanner.
+class BatchScanner {
+   public:
+    BatchScanner() noexcept;
+    ~BatchScanner() noexcept;
+
+    BatchScanner(const BatchScanner&) = delete;
+    BatchScanner& operator=(const BatchScanner&) = delete;
+    BatchScanner(BatchScanner&& other) noexcept;
+    BatchScanner& operator=(BatchScanner&& other) noexcept;
+
+    bool Available() const;
+    const TableBucket& Bucket() const { return bucket_; }
+
+    Result NextBatch(ArrowRecordBatches& out);
+    Result CollectAllBatches(ArrowRecordBatches& out);
+
+   private:
+    friend class TableScan;
+    explicit BatchScanner(ffi::BatchScanner* scanner) noexcept;
+
+    void Destroy() noexcept;
+    ffi::BatchScanner* scanner_{nullptr};
+    TableBucket bucket_{};
 };
 
 }  // namespace fluss
