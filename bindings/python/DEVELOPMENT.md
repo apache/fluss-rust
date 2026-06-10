@@ -44,6 +44,25 @@ uv run ruff check python/
 uv run mypy python/
 ```
 
+## Stub Drift Check
+
+The public API is typed in `fluss/__init__.pyi`. Because that stub is
+hand-written while the runtime classes come from the compiled PyO3 module, the
+two can drift apart. `stubtest` (shipped with `mypy`) compares them and is run
+in CI. After changing the binding's public surface, rebuild the module and run:
+
+```bash
+uv sync --extra dev --no-install-project
+uv run --no-sync maturin develop --uv
+uv run --no-sync python -m mypy.stubtest fluss \
+  --mypy-config-file pyproject.toml \
+  --allowlist stubtest-allowlist.txt
+```
+
+`stubtest-allowlist.txt` holds the few differences that are inherent to PyO3 and
+cannot be expressed in the stub. Keep it minimal — stubtest treats an unused
+allowlist entry as an error, so stale lines must be removed.
+
 ## Run Examples
 
 Each example is standalone and runnable on its own. They default to a local

@@ -98,3 +98,40 @@ jobs:
           path: cluster-logs/
           if-no-files-found: ignore
           retention-days: 3
+
+  stubtest:
+    # For stub tests, we only needs the module importable, so no
+    # test cluster is started and a single Python version should be sufficient.
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Build Python bindings
+        working-directory: bindings/python
+        run: |
+          uv sync --extra dev --no-install-project
+          uv run --no-sync maturin develop --uv
+
+      - name: Check stub drift (stubtest)
+        working-directory: bindings/python
+        run: |
+          uv run --no-sync python -m mypy.stubtest fluss \
+            --mypy-config-file pyproject.toml \
+            --allowlist stubtest-allowlist.txt
