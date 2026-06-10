@@ -19,7 +19,7 @@
 #[cfg(test)]
 mod batch_scanner_test {
     use crate::integration::utils::{create_table, get_shared_cluster};
-    use arrow::array::{Int32Array, StringArray, record_batch};
+    use arrow::array::{Int32Array, Int64Array, StringArray, record_batch};
     use fluss::metadata::{DataTypes, LogFormat, Schema, TableBucket, TableDescriptor, TablePath};
     use fluss::row::GenericRow;
     use std::collections::HashMap;
@@ -91,6 +91,91 @@ mod batch_scanner_test {
             scanner.next_batch().await.expect("poll").is_none(),
             "scanner must end after one batch"
         );
+    }
+
+    /// End-to-end projection skipping the middle `c2` string column.
+    #[tokio::test]
+    async fn batch_scanner_projects_non_contiguous_columns() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_scanner_projection");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .column("c3", DataTypes::bigint())
+                    .build()
+                    .expect("schema"),
+            )
+            // Single bucket so a single BatchScanner sees every row.
+            .distributed_by(Some(1), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let batch = record_batch!(
+            ("c1", Int32, [1, 2, 3]),
+            ("c2", Utf8, ["a", "b", "c"]),
+            ("c3", Int64, [100, 200, 300])
+        )
+        .unwrap();
+        writer.append_arrow_batch(batch).expect("append batch");
+        writer.flush().await.expect("flush");
+
+        let table_info = table.get_table_info();
+        let bucket = TableBucket::new(table_info.table_id, 0);
+
+        let mut scanner = table
+            .new_scan()
+            .project(&[0, 2])
+            .expect("project")
+            .limit(10)
+            .expect("limit")
+            .create_bucket_batch_scanner(bucket.clone())
+            .expect("create batch scanner");
+
+        let first = scanner
+            .next_batch()
+            .await
+            .expect("poll")
+            .expect("first batch should be Some");
+
+        let rows = first.batch();
+        assert_eq!(rows.num_columns(), 2, "projected to c1 + c3");
+        assert_eq!(rows.schema().field(0).name(), "c1");
+        assert_eq!(rows.schema().field(1).name(), "c3");
+
+        let c1 = rows
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("c1 Int32");
+        let c3 = rows
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("c3 Int64");
+        // Every (c1, c3) pair must match what we appended (c2 is dropped).
+        let expected: HashMap<i32, i64> = [(1, 100), (2, 200), (3, 300)].into();
+        for i in 0..rows.num_rows() {
+            assert_eq!(
+                expected.get(&c1.value(i)),
+                Some(&c3.value(i)),
+                "projected row ({}, {}) does not match appended data",
+                c1.value(i),
+                c3.value(i)
+            );
+        }
     }
 
     /// Limit scan on a primary-key table: decodes the value-record batch and

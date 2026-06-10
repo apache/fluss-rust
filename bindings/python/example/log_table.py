@@ -94,6 +94,9 @@ async def _run(conn):
     await admin.create_table(table_path, table_descriptor, ignore_if_exists=True)
     print(f"Created table: {table_path}")
 
+    # A fresh table briefly reports "not leader" until bucket leaders are elected.
+    await _await_bucket_leader(admin, table_path)
+
     table_info = await admin.get_table_info(table_path)
     print(f"Table info: {table_info}")
     print(f"Table ID: {table_info.table_id}")
@@ -242,10 +245,28 @@ async def _run(conn):
     await _scan_batch(table, num_buckets)
     await _scan_records(table, num_buckets)
     await _projection(table, num_buckets)
+    await _limit_scan(table, num_buckets)
     await _context_manager_demo(conn, table_path)
 
     await admin.drop_table(table_path, ignore_if_not_exists=True)
     print(f"\nDropped table: {table_path}")
+
+
+async def _await_bucket_leader(admin, table_path, *, attempts=60, delay_s=0.5):
+    """Poll until the bucket leader is elected, so bucket-level requests on a
+    just-created table don't fail with "not leader or follower"."""
+    for _ in range(attempts):
+        try:
+            await admin.list_offsets(
+                table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.earliest()
+            )
+            return
+        except fluss.FlussError:
+            await asyncio.sleep(delay_s)
+    # Final attempt (outside the guard) surfaces the real error, not a timeout.
+    await admin.list_offsets(
+        table_path, bucket_ids=[0], offset_spec=fluss.OffsetSpec.earliest()
+    )
 
 
 async def _scan_batch(table, num_buckets):
@@ -361,6 +382,27 @@ async def _projection(table, num_buckets):
     )
     assert len(df_named) == EXPECTED_ROWS
     print(f"Projected columns: {list(df_named.columns)}")
+
+
+async def _limit_scan(table, num_buckets):
+    print("\n--- Limit scan: one-shot bounded BatchScanner (per bucket) ---")
+    table_id = table.get_table_info().table_id
+    total = 0
+    for bucket_id in range(num_buckets):
+        bucket = fluss.TableBucket(table_id, bucket_id)
+        scanner = (
+            table.new_scan().limit(EXPECTED_ROWS).create_bucket_batch_scanner(bucket)
+        )
+        batch = await scanner.next_batch()
+        if batch is not None:
+            assert batch.bucket == bucket
+            total += batch.batch.num_rows
+        # One-shot: the scanner is spent after the first batch.
+        assert await scanner.next_batch() is None
+    assert total == EXPECTED_ROWS, (
+        f"Limit scan across buckets returned {total} rows, expected {EXPECTED_ROWS}"
+    )
+    print(f"Limit scan across {num_buckets} bucket(s) returned {total} rows")
 
 
 async def _context_manager_demo(conn, table_path):

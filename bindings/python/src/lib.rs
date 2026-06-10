@@ -120,6 +120,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PrefixLookuper>()?;
     m.add_class::<Schema>()?;
     m.add_class::<LogScanner>()?;
+    m.add_class::<BatchScanner>()?;
     m.add_class::<LakeSnapshot>()?;
     m.add_class::<TableBucket>()?;
     m.add_class::<ChangeType>()?;

@@ -59,3 +59,15 @@ partial_writer = table.new_upsert().partial_update_by_name(["id", "age"]).create
 partial_writer.upsert({"id": 1, "age": 27})  # only updates age
 await partial_writer.flush()
 ```
+
+## Limit Scan
+
+To read up to `n` rows of a bucket's current state without supplying keys, use a batch scanner. The server returns the deduplicated current rows as Arrow batches — convenient for previews or DataFusion sources.
+
+```python
+bucket = fluss.TableBucket(table.get_table_info().table_id, 0)
+scanner = table.new_scan().limit(10).create_bucket_batch_scanner(bucket)
+arrow_table = await scanner.to_arrow()
+```
+
+Limit applies per bucket; scan each bucket to cover a multi-bucket table.

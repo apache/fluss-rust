@@ -94,8 +94,10 @@ Supports `async with` statement (async context manager).
 |----------------------------------------------------------|---------------------------------------------------------------------|
 | `.project(indices) -> TableScan`                         | Project columns by index                                            |
 | `.project_by_name(names) -> TableScan`                   | Project columns by name                                             |
+| `.limit(n) -> TableScan`                                 | Set a positive row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
 | `await .create_log_scanner() -> LogScanner`              | Create record-based scanner (for `poll()`)                          |
 | `await .create_record_batch_log_scanner() -> LogScanner` | Create batch-based scanner (for `poll_arrow()`, `to_arrow()`, etc.) |
+| `.create_bucket_batch_scanner(bucket) -> BatchScanner`   | Bounded scan of one bucket (requires `limit`; runs on first `next_batch()`) |
 
 ## `TableAppend`
 
@@ -186,6 +188,18 @@ Builder for creating a `PrefixLookuper`. Obtain via `TableLookup.lookup_by(colum
 | `await .to_pandas() -> pd.DataFrame`                          | Read all subscribed data as DataFrame (batch scanner only)                       |
 
 > **Note:** Overlapping `poll_*` / `to_arrow*` / `to_arrow_batch_reader` calls on the same underlying scanner are not supported. Use only one active polling/consumption path at a time.
+
+## `BatchScanner`
+
+One-shot bounded scan of a single bucket. Obtain via `table.new_scan().limit(n).create_bucket_batch_scanner(bucket)`. The scan runs on the first call below, yields its single batch once, then is spent (create a new scanner to scan again).
+
+| Method                                              |  Description                                       |
+|-----------------------------------------------------|-----------------------------------------------------|
+| `.bucket -> TableBucket`                            | The bucket being scanned (property)                 |
+| `await .next_batch() -> RecordBatch \| None`        | Run the scan; returns the batch once, then `None`   |
+| `await .collect_all_batches() -> list[RecordBatch]` | Drain into a list of batches                        |
+| `await .to_arrow() -> pa.Table`                     | Drain into a single Arrow Table                     |
+| `await .to_pandas() -> pd.DataFrame`                | Drain into a Pandas DataFrame                        |
 
 ## `ScanRecords`
 
