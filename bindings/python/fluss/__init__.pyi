@@ -20,7 +20,6 @@
 from enum import IntEnum
 from types import TracebackType
 from typing import (
-    Any,
     AsyncIterator,
     Dict,
     Iterator,
@@ -28,12 +27,14 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    final,
     overload,
 )
 
 import pandas as pd
 import pyarrow as pa
 
+@final
 class ChangeType(IntEnum):
     """Represents the type of change for a record in a log."""
 
@@ -52,6 +53,7 @@ class ChangeType(IntEnum):
         """Returns a short string representation (+A, +I, -U, +U, -D)."""
         ...
 
+@final
 class ScanRecord:
     """Represents a single scan record with metadata.
 
@@ -78,6 +80,7 @@ class ScanRecord:
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
+@final
 class RecordBatch:
     """Represents a batch of records with metadata."""
 
@@ -100,6 +103,7 @@ class RecordBatch:
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
+@final
 class ScanRecords:
     """A collection of scan records grouped by bucket.
 
@@ -130,18 +134,19 @@ class ScanRecords:
         ...
     def __len__(self) -> int: ...
     @overload
-    def __getitem__(self, index: int) -> ScanRecord: ...
+    def __getitem__(self, index: int, /) -> ScanRecord: ...
     @overload
-    def __getitem__(self, index: slice) -> List[ScanRecord]: ...
+    def __getitem__(self, index: slice, /) -> List[ScanRecord]: ...
     @overload
-    def __getitem__(self, bucket: TableBucket) -> List[ScanRecord]: ...
-    def __contains__(self, bucket: TableBucket) -> bool: ...
+    def __getitem__(self, bucket: TableBucket, /) -> List[ScanRecord]: ...
+    def __contains__(self, bucket: TableBucket, /) -> bool: ...
     def __iter__(self) -> Iterator[ScanRecord]: ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
+@final
 class Config:
-    def __init__(self, properties: Optional[Dict[str, str]] = None) -> None: ...
+    def __new__(cls, properties: Optional[Dict[str, str]] = None) -> Config: ...
     @property
     def bootstrap_servers(self) -> str: ...
     @bootstrap_servers.setter
@@ -247,6 +252,7 @@ class Config:
     @security_sasl_password.setter
     def security_sasl_password(self, password: str) -> None: ...
 
+@final
 class FlussConnection:
     @staticmethod
     async def create(config: Config) -> FlussConnection: ...
@@ -256,19 +262,20 @@ class FlussConnection:
     def __enter__(self) -> FlussConnection: ...
     def __exit__(
         self,
-        exc_type: Optional[type],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: Optional[type] = None,
+        exc_value: Optional[BaseException] = None,
+        traceback: Optional[TracebackType] = None,
     ) -> bool: ...
     async def __aenter__(self) -> FlussConnection: ...
     async def __aexit__(
         self,
-        exc_type: Optional[type],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: Optional[type] = None,
+        exc_value: Optional[BaseException] = None,
+        traceback: Optional[TracebackType] = None,
     ) -> bool: ...
     def __repr__(self) -> str: ...
 
+@final
 class ServerNode:
     """Information about a server node in the Fluss cluster."""
 
@@ -294,6 +301,7 @@ class ServerNode:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class FlussAdmin:
     async def create_database(
         self,
@@ -426,20 +434,22 @@ class FlussAdmin:
     def __repr__(self) -> str: ...
 
 
+@final
 class DatabaseDescriptor:
     """Descriptor for a Fluss database (comment and custom properties)."""
 
-    def __init__(
-        self,
+    def __new__(
+        cls,
         comment: Optional[str] = None,
         custom_properties: Optional[Dict[str, str]] = None,
-    ) -> None: ...
+    ) -> DatabaseDescriptor: ...
     @property
     def comment(self) -> Optional[str]: ...
     def get_custom_properties(self) -> Dict[str, str]: ...
     def __repr__(self) -> str: ...
 
 
+@final
 class DatabaseInfo:
     """Information about a Fluss database."""
 
@@ -452,6 +462,7 @@ class DatabaseInfo:
     def modified_time(self) -> int: ...
     def __repr__(self) -> str: ...
 
+@final
 class TableScan:
     """Builder for creating log scanners with flexible configuration.
 
@@ -514,6 +525,7 @@ class TableScan:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class FlussTable:
     def new_scan(self) -> TableScan:
         """Create a new table scan builder for configuring and creating log scanners.
@@ -545,6 +557,7 @@ class FlussTable:
     def has_primary_key(self) -> bool: ...
     def __repr__(self) -> str: ...
 
+@final
 class TableAppend:
     """Builder for creating an AppendWriter.
 
@@ -557,6 +570,7 @@ class TableAppend:
     def create_writer(self) -> AppendWriter: ...
     def __repr__(self) -> str: ...
 
+@final
 class TableUpsert:
     """Builder for creating an UpsertWriter, with optional partial update.
 
@@ -580,6 +594,7 @@ class TableUpsert:
     def create_writer(self) -> UpsertWriter: ...
     def __repr__(self) -> str: ...
 
+@final
 class TableLookup:
     """Builder for creating a Lookuper or PrefixLookuper.
 
@@ -608,6 +623,7 @@ class TableLookup:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class TablePrefixLookup:
     """Builder for creating a PrefixLookuper.
 
@@ -620,6 +636,7 @@ class TablePrefixLookup:
     def create_lookuper(self) -> "PrefixLookuper": ...
     def __repr__(self) -> str: ...
 
+@final
 class AppendWriter:
     def append(self, row: dict | list | tuple) -> WriteResultHandle:
         """Append a single row to the table.
@@ -674,9 +691,9 @@ class AppendWriter:
         ...
     async def __aexit__(
         self,
-        exc_type: Optional[type],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: Optional[type] = None,
+        exc_value: Optional[BaseException] = None,
+        traceback: Optional[TracebackType] = None,
     ) -> bool:
         """
         Exit the async context manager.
@@ -687,6 +704,7 @@ class AppendWriter:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class UpsertWriter:
     """Writer for upserting and deleting data in a Fluss primary key table."""
 
@@ -728,9 +746,9 @@ class UpsertWriter:
         ...
     async def __aexit__(
         self,
-        exc_type: Optional[type],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: Optional[type] = None,
+        exc_value: Optional[BaseException] = None,
+        traceback: Optional[TracebackType] = None,
     ) -> bool:
         """
         Exit the async context manager.
@@ -742,6 +760,7 @@ class UpsertWriter:
     def __repr__(self) -> str: ...
 
 
+@final
 class WriteResultHandle:
     """Handle for a pending write (append/upsert/delete). Ignore for fire-and-forget, or await handle.wait() for ack."""
 
@@ -751,6 +770,7 @@ class WriteResultHandle:
     def __repr__(self) -> str: ...
 
 
+@final
 class Lookuper:
     """Lookuper for performing primary key lookups on a Fluss table."""
 
@@ -767,6 +787,7 @@ class Lookuper:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class PrefixLookuper:
     """Lookuper for performing prefix key lookups on a Fluss table.
 
@@ -790,6 +811,7 @@ class PrefixLookuper:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class LogScanner:
     """Scanner for reading log data from a Fluss table.
 
@@ -954,19 +976,23 @@ class LogScanner:
     def __repr__(self) -> str: ...
     def __aiter__(self) -> AsyncIterator[Union[ScanRecord, RecordBatch]]: ...
 
+@final
 class Schema:
-    def __init__(
-        self, schema: pa.Schema, primary_keys: Optional[List[str]] = None
-    ) -> None: ...
+    def __new__(
+        cls, schema: pa.Schema, primary_keys: Optional[List[str]] = None
+    ) -> Schema: ...
     def get_column_names(self) -> List[str]: ...
     def get_column_types(self) -> List[str]: ...
     def get_columns(self) -> List[Tuple[str, str]]: ...
     def get_primary_keys(self) -> List[str]: ...
     def __str__(self) -> str: ...
 
+@final
 class TableDescriptor:
-    def __init__(
-        self,
+    # Runtime accepts ``schema`` plus ``**kwargs``; the keyword-only parameters
+    # below document the supported options for type checkers and IDEs.
+    def __new__(
+        cls,
         schema: Schema,
         *,
         partition_keys: Optional[List[str]] = None,
@@ -977,11 +1003,12 @@ class TableDescriptor:
         kv_format: Optional[str] = None,
         properties: Optional[Dict[str, str]] = None,
         custom_properties: Optional[Dict[str, str]] = None,
-    ) -> None: ...
+    ) -> TableDescriptor: ...
     def get_schema(self) -> Schema: ...
 
+@final
 class TablePath:
-    def __init__(self, database: str, table: str) -> None: ...
+    def __new__(cls, database_name: str, table_name: str) -> TablePath: ...
     @property
     def database_name(self) -> str: ...
     @property
@@ -990,8 +1017,9 @@ class TablePath:
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
     def __hash__(self) -> int: ...
-    def __eq__(self, other: object) -> bool: ...
+    def __eq__(self, other: object, /) -> bool: ...
 
+@final
 class TableInfo:
     @property
     def table_id(self) -> int: ...
@@ -1018,16 +1046,18 @@ class TableInfo:
     def get_column_names(self) -> List[str]: ...
     def get_column_count(self) -> int: ...
 
+@final
 class FlussError(Exception):
     message: str
     error_code: int
-    def __init__(self, message: str, error_code: int = -2) -> None: ...
+    def __new__(cls, message: str, error_code: int = -2) -> FlussError: ...
     def __str__(self) -> str: ...
     @property
     def is_retriable(self) -> bool: ...
 
+@final
 class LakeSnapshot:
-    def __init__(self, snapshot_id: int) -> None: ...
+    def __new__(cls, snapshot_id: int) -> LakeSnapshot: ...
     @property
     def snapshot_id(self) -> int: ...
     @property
@@ -1037,8 +1067,9 @@ class LakeSnapshot:
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
+@final
 class TableBucket:
-    def __init__(self, table_id: int, bucket: int) -> None: ...
+    def __new__(cls, table_id: int, bucket: int) -> TableBucket: ...
     @staticmethod
     def with_partition(
         table_id: int, partition_id: int, bucket: int
@@ -1050,10 +1081,11 @@ class TableBucket:
     @property
     def partition_id(self) -> Optional[int]: ...
     def __hash__(self) -> int: ...
-    def __eq__(self, other: object) -> bool: ...
+    def __eq__(self, other: object, /) -> bool: ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
+@final
 class PartitionInfo:
     """Information about a partition."""
 
@@ -1067,6 +1099,7 @@ class PartitionInfo:
         ...
     def __repr__(self) -> str: ...
 
+@final
 class ErrorCode:
     """Named constants for Fluss API error codes.
 
@@ -1137,6 +1170,7 @@ class ErrorCode:
     INVALID_ALTER_TABLE_EXCEPTION: int
     DELETION_DISABLED_EXCEPTION: int
 
+@final
 class OffsetSpec:
     """Offset specification for list_offsets(), matching Java's OffsetSpec.
 
