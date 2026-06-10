@@ -91,6 +91,34 @@ defmodule Fluss.Integration.AdminTest do
     end
   end
 
+  describe "create_database/4 with a descriptor" do
+    test "accepts a descriptor and returns :ok if the database exists when ignore_if_exists is true",
+         %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+      descriptor = %Fluss.DatabaseDescriptor{comment: "direct", custom_properties: %{"k" => "v"}}
+      :ok = Fluss.Admin.create_database(admin, db, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
+
+      descriptor = %Fluss.DatabaseDescriptor{comment: "updated", custom_properties: %{}}
+
+      :ok = Fluss.Admin.create_database(admin, db, descriptor)
+      assert {:ok, info} = Fluss.Admin.get_database_info(admin, db)
+
+      # the 2nd create was skipped due to `ignore_if_exists: true`
+      assert info.descriptor.comment == "direct"
+      assert info.descriptor.custom_properties == %{"k" => "v"}
+    end
+
+    test "fails if the database exists and ignore_if_exists is false", %{admin: admin} do
+      db = "fluss_data_sources_#{:rand.uniform(100_000)}"
+      descriptor = %Fluss.DatabaseDescriptor{comment: "direct", custom_properties: %{"k" => "v"}}
+      :ok = Fluss.Admin.create_database(admin, db, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_database(admin, db, true) end)
+
+      assert {:error, %Fluss.Error{}} = Fluss.Admin.create_database(admin, db, descriptor, false)
+    end
+  end
+
   describe "get_database_info/2" do
     test "returns DatabaseInfo with the descriptor used at creation", %{admin: admin} do
       db = "fluss_data_sources_#{:rand.uniform(100_000)}"
