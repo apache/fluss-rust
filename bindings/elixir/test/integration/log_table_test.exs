@@ -213,7 +213,7 @@ defmodule Fluss.Integration.LogTableTest do
   describe "admin operations" do
     test "create and drop database", %{admin: admin} do
       db_name = "ex_test_db_#{:rand.uniform(100_000)}"
-      :ok = Fluss.Admin.create_database(admin, db_name, true)
+      :ok = Fluss.Admin.create_database(admin, db_name)
 
       {:ok, databases} = Fluss.Admin.list_databases(admin)
       assert db_name in databases
