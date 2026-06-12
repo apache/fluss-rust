@@ -253,18 +253,6 @@ inline ffi::FfiTableDescriptor to_ffi_table_descriptor(const TableDescriptor& de
 inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
     auto type_id = static_cast<TypeId>(ffi_col.data_type);
     if (type_id == TypeId::Array) {
-        if (ffi_col.element_data_type == 0) {
-            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
-                                     "': missing element_data_type");
-        }
-        if (ffi_col.array_nesting < 0) {
-            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
-                                     "': array_nesting must be non-negative");
-        }
-        if (ffi_col.element_data_type == static_cast<int32_t>(TypeId::Array)) {
-            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
-                                     "': leaf element_data_type cannot be ARRAY");
-        }
         auto is_supported_leaf_type = [](int32_t leaf_type) {
             switch (static_cast<TypeId>(leaf_type)) {
                 case TypeId::Boolean:
@@ -288,6 +276,25 @@ inline Column from_ffi_column(const ffi::FfiColumn& ffi_col) {
                     return false;
             }
         };
+        // ROW/MAP element schema can't pass through the flat FFI column; give the
+        // array a non-null element of the right kind so element_type() is safe to deref.
+        auto element_id = static_cast<TypeId>(ffi_col.element_data_type);
+        if (element_id == TypeId::Map || element_id == TypeId::Row) {
+            return Column{std::string(ffi_col.name), DataType::Array(DataType(element_id)),
+                          std::string(ffi_col.comment)};
+        }
+        if (ffi_col.element_data_type == 0) {
+            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
+                                     "': missing element_data_type");
+        }
+        if (ffi_col.array_nesting < 0) {
+            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
+                                     "': array_nesting must be non-negative");
+        }
+        if (ffi_col.element_data_type == static_cast<int32_t>(TypeId::Array)) {
+            throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
+                                     "': leaf element_data_type cannot be ARRAY");
+        }
         if (!is_supported_leaf_type(ffi_col.element_data_type)) {
             throw std::runtime_error("Malformed ARRAY column '" + std::string(ffi_col.name) +
                                      "': unsupported leaf element_data_type " +
