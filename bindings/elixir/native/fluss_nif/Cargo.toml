@@ -30,5 +30,5 @@ crate-type = ["cdylib"]
 [dependencies]
 bigdecimal = { workspace = true }
 fluss = { workspace = true }
-rustler = "0.37"
+rustler = "0.38"
 tokio = { workspace = true }
