@@ -148,8 +148,10 @@ Complete API reference for the Fluss C++ client.
 |----------------------------------------------------------------------|-----------------------------------------------|
 | `ProjectByIndex(std::vector<size_t> column_indices) -> TableScan&`   | Project columns by index                      |
 | `ProjectByName(std::vector<std::string> column_names) -> TableScan&` | Project columns by name                       |
+| `Limit(int32_t row_number) -> TableScan&`                            | Set a positive row limit (enables `CreateBucketBatchScanner`; rejected by log scanners) |
 | `CreateLogScanner(LogScanner& out) -> Result`                        | Create a record-based log scanner             |
 | `CreateRecordBatchLogScanner(LogScanner& out) -> Result`             | Create an Arrow RecordBatch-based log scanner |
+| `CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out) -> Result` | Bounded scan of one bucket (requires `Limit`) |
 
 ## `AppendWriter`
 
@@ -201,6 +203,15 @@ Performs prefix (bucket-key) lookups, returning all rows whose primary key start
 | `UnsubscribePartition(int64_t partition_id, int32_t bucket_id) -> Result`                            | Unsubscribe from a partition bucket       |
 | `Poll(int64_t timeout_ms, ScanRecords& out) -> Result`                                               | Poll individual records                   |
 | `PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) -> Result`                             | Poll Arrow RecordBatches                  |
+
+## `BatchScanner`
+
+One-shot bounded scan of a single bucket. Obtained from `TableScan::CreateBucketBatchScanner()`. The scan runs on the first call below, yields its single batch once, then is spent.
+
+| Method                                                       |  Description                                        |
+|--------------------------------------------------------------|-----------------------------------------------------|
+| `NextBatch(ArrowRecordBatches& out) -> Result`               | Run the scan; returns the batch once, then empty    |
+| `CollectAllBatches(ArrowRecordBatches& out) -> Result`       | Drain the scanner into all of its batches           |
 
 ## `GenericRow`
 

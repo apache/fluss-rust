@@ -159,3 +159,23 @@ table.NewScan().ProjectByName({"event_id", "timestamp"}).CreateLogScanner(name_p
 fluss::LogScanner projected_arrow_scanner;
 table.NewScan().ProjectByIndex({0, 2}).CreateRecordBatchLogScanner(projected_arrow_scanner);
 ```
+
+## Limit Scan
+
+For a bounded read of up to `n` rows from a single bucket, use a batch scanner instead of subscribing. It issues one request; `NextBatch` yields the batch once, then reports empty.
+
+```cpp
+int64_t table_id = table.GetTableInfo().table_id;
+fluss::TableBucket bucket{table_id, 0};
+
+fluss::BatchScanner scanner;
+table.NewScan().Limit(10).CreateBucketBatchScanner(bucket, scanner);
+
+fluss::ArrowRecordBatches batches;
+scanner.NextBatch(batches);  // or CollectAllBatches(batches)
+for (const auto& batch : batches) {
+    std::cout << "rows: " << batch->NumRows() << std::endl;
+}
+```
+
+The limit applies per bucket; scan each bucket to cover a multi-bucket table.
