@@ -738,9 +738,12 @@ impl Sender {
         // reset all writer state internally (matching Java).
         // For other errors, only adjust sequences if the batch didn't exhaust its retries.
         let can_adjust = ready_write_batch.write_batch.attempts() < self.retries;
-        // Reaching the terminal path with a retriable error means retries were
-        // exhausted; otherwise the error was non-retriable from the start.
-        let error_kind = if Self::is_retriable_error(error) {
+        // `max_retries_exceeded` means retryable-in-principle AND exhausted retry
+        // budget. Retryable-in-principle includes idempotence-specific cases
+        // (`can_retry_for_error`), not only `is_retriable_error`.
+        let retriable_in_principle = self.is_retriable_in_principle(&ready_write_batch, error);
+        let exhausted_retries = ready_write_batch.write_batch.attempts() >= self.retries;
+        let error_kind = if exhausted_retries && retriable_in_principle {
             WRITER_ERROR_KIND_MAX_RETRIES_EXCEEDED
         } else {
             WRITER_ERROR_KIND_NON_RETRIABLE
@@ -814,6 +817,25 @@ impl Sender {
             );
         }
         false
+    }
+
+    fn is_retriable_in_principle(
+        &self,
+        ready_write_batch: &ReadyWriteBatch,
+        error: FlussError,
+    ) -> bool {
+        if Self::is_retriable_error(error) {
+            return true;
+        }
+        let seq = ready_write_batch.write_batch.batch_sequence();
+        self.idempotence_manager.is_enabled()
+            && seq != NO_BATCH_SEQUENCE
+            && self.idempotence_manager.can_retry_for_error(
+                &ready_write_batch.table_bucket,
+                seq,
+                ready_write_batch.write_batch.batch_id(),
+                error,
+            )
     }
 
     async fn update_metadata_if_needed(
@@ -1229,6 +1251,69 @@ mod tests {
             }
         });
         assert_eq!(retry_total, Some(1));
+    }
+
+    #[test]
+    fn exhausted_idempotence_retriable_error_is_classified_as_max_retries_exceeded() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        let result: Result<()> = metrics::with_local_recorder(&recorder, || {
+            let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
+            let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
+            let idempotence = enabled_idempotence();
+            idempotence.set_writer_id(42);
+            let accumulator = Arc::new(RecordAccumulator::new(
+                Config::default(),
+                Arc::clone(&idempotence),
+            ));
+            // retries=0 forces the terminal path while this error remains
+            // retryable-in-principle through idempotence_manager.can_retry_for_error.
+            let sender = Sender::new(
+                metadata,
+                accumulator.clone(),
+                1024 * 1024,
+                1000,
+                -1,
+                0,
+                idempotence,
+                Arc::new(crate::metrics::WriterMetrics::new()),
+            );
+
+            let (mut batch, _handle) =
+                build_ready_batch(accumulator.as_ref(), cluster.clone(), table_path.clone())?;
+            // OOS is idempotence-retriable when the sequence is not the next expected.
+            batch.write_batch.set_writer_state(42, 1);
+            sender.handle_write_batch_error(
+                batch,
+                FlussError::OutOfOrderSequenceException,
+                "out of order".to_string(),
+            )?;
+            Ok(())
+        });
+        result.expect("error-kind classification");
+
+        let entries = snapshotter.snapshot().into_vec();
+        let max_retries = entries.iter().find_map(|(key, _, _, val)| {
+            if key.key().name() != crate::metrics::WRITER_ERRORS_TOTAL {
+                return None;
+            }
+            let is_max_retries = key.key().labels().any(|l| {
+                l.key() == crate::metrics::LABEL_ERROR_KIND
+                    && l.value() == crate::metrics::WRITER_ERROR_KIND_MAX_RETRIES_EXCEEDED
+            });
+            if !is_max_retries {
+                return None;
+            }
+            match val {
+                DebugValue::Counter(v) => Some(*v),
+                _ => None,
+            }
+        });
+        assert_eq!(max_retries, Some(1));
     }
 
     #[test]
