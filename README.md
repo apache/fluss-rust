@@ -59,6 +59,7 @@ Key concepts:
 | **Data Types**  | Int, BigInt, String, Float, Double, Boolean, Bytes, Decimal, Date, Time, Timestamp, TimestampLTZ, Char, Binary |
 | **Config**      | Batch sizing, buffering, retries, compression, timeouts, prefetch, concurrency |
 | **Storage**     | Memory, Filesystem, S3, OSS (via [OpenDAL](https://opendal.apache.org/)) |
+| **Observability** | Connection, writer, and scanner [metrics](https://clients.fluss.apache.org/docs/user-guide/rust/metrics/) via the [`metrics`](https://docs.rs/metrics) facade (Prometheus, StatsD, etc.) |
 | **WASM**        | Compiles for `wasm32` target                                             |
 
 ### Language Bindings
@@ -83,7 +84,7 @@ fluss-rust/
 │   │   ├── src/row/          #   GenericRow, InternalRow, Arrow integration
 │   │   ├── src/rpc/          #   gRPC transport layer
 │   │   └── src/config.rs     #   Client configuration
-│   ├── examples/             # 5 runnable examples (log, KV, partitioned, prefix lookup)
+│   ├── examples/             # runnable examples (log, KV, partitioned, prefix lookup, metrics)
 │   └── fluss-test-cluster/   # Test harness for integration tests
 ├── bindings/
 │   ├── python/               # Python binding (PyO3)
@@ -236,6 +237,7 @@ async fn main() -> Result<()> {
 | `example-partitioned-upsert-lookup`      | KV table with partitions                       |
 | `example-prefix-lookup`                  | Prefix lookup on bucket keys                   |
 | `example-partitioned-prefix-lookup`      | Prefix lookup on partitioned tables            |
+| `example-prometheus-metrics`             | Expose client metrics on a Prometheus endpoint |
 
 Build and run any example:
 
