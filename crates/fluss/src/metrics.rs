@@ -35,6 +35,11 @@ pub const LABEL_API_KEY: &str = "api_key";
 pub const LABEL_DATABASE: &str = "database";
 pub const LABEL_TABLE: &str = "table";
 
+/// Classifies an error counter sample. See the per-metric docs below for the
+/// value set each counter uses (writer terminal failures vs scanner fetch
+/// errors).
+pub const LABEL_ERROR_KIND: &str = "error_kind";
+
 // ---------------------------------------------------------------------------
 // Connection / RPC metrics
 //
@@ -53,6 +58,30 @@ pub const CLIENT_BYTES_SENT_TOTAL: &str = "fluss.client.bytes_sent.total";
 pub const CLIENT_BYTES_RECEIVED_TOTAL: &str = "fluss.client.bytes_received.total";
 pub const CLIENT_REQUEST_LATENCY_MS: &str = "fluss.client.request_latency_ms";
 pub const CLIENT_REQUESTS_IN_FLIGHT: &str = "fluss.client.requests_in_flight";
+
+// ---------------------------------------------------------------------------
+// Client-level error / refresh tracking metrics
+//
+// Java tracks request failures on the
+// server (`TableMetricGroup.failed*RequestsPerSecond`, `RequestsMetrics`),
+// which a client cannot observe. Those added here give
+// operators a client-side error rate for alerting (e.g.
+// `rate(fluss_client_connections_poisoned_total)`).
+//
+// All three are unlabeled global-per-process counters, matching the unlabeled
+// convention already used by the connection metrics above.
+// ---------------------------------------------------------------------------
+
+/// Counter: total client connections that transitioned to the poisoned state
+/// (one increment per connection death, not per failed in-flight request).
+pub const CLIENT_CONNECTIONS_POISONED_TOTAL: &str = "fluss.client.connections_poisoned.total";
+
+/// Counter: total metadata refresh attempts (one per `update_tables_metadata`
+/// call). `refreshes_total - errors_total` is the success count.
+pub const CLIENT_METADATA_REFRESHES_TOTAL: &str = "fluss.client.metadata_refreshes.total";
+
+/// Counter: total metadata refresh failures.
+pub const CLIENT_METADATA_ERRORS_TOTAL: &str = "fluss.client.metadata_errors.total";
 
 // ---------------------------------------------------------------------------
 // Scanner poll-timing metrics
@@ -129,6 +158,22 @@ pub const SCANNER_REMOTE_FETCH_BYTES_TOTAL: &str = "fluss.client.scanner.remote_
 pub const SCANNER_REMOTE_FETCH_ERRORS_TOTAL: &str =
     "fluss.client.scanner.remote_fetch_errors.total";
 
+/// Counter: total FetchLog errors, labeled by `error_kind`:
+///   * `rpc` — the FetchLog RPC itself returned an error (transport / leader
+///     lookup failure), counted once per failed request.
+///   * `bucket` — the FetchLog response succeeded but carried a per-bucket
+///     error code, counted once per erroring bucket.
+///
+/// Java's `LogFetcher` only logs fetch errors and invalidates metadata.
+/// Distinct from `SCANNER_REMOTE_FETCH_ERRORS_TOTAL`,
+/// which counts remote-storage download failures.
+pub const SCANNER_ERRORS_TOTAL: &str = "fluss.client.scanner.errors.total";
+
+/// `error_kind` value for a failed FetchLog RPC (transport / leader lookup).
+pub(crate) const SCANNER_ERROR_KIND_RPC: &str = "rpc";
+/// `error_kind` value for a per-bucket error code in a successful response.
+pub(crate) const SCANNER_ERROR_KIND_BUCKET: &str = "bucket";
+
 // ---------------------------------------------------------------------------
 // Per-table scanner metric handles
 // ---------------------------------------------------------------------------
@@ -151,6 +196,13 @@ pub const SCANNER_REMOTE_FETCH_ERRORS_TOTAL: &str =
 /// the `metrics::with_local_recorder(...)` closure. With no recorder
 /// installed, all `record_*` calls are zero-overhead no-ops.
 pub(crate) struct ScannerMetrics {
+    // Owned label values for metrics whose label set varies per call (the
+    // `errors_total` counter, keyed additionally by `error_kind`). The cached
+    // handles below already bake `(database, table)` in, but a varying
+    // `error_kind` would need one field per kind; instead `record_error`
+    // resolves the handle at its (cold) callsite using these.
+    database: String,
+    table: String,
     time_between_poll_ms: metrics::Gauge,
     poll_idle_ratio: metrics::Gauge,
     last_poll_seconds_ago: metrics::Gauge,
@@ -169,6 +221,8 @@ impl ScannerMetrics {
         let database = table_path.database();
         let table = table_path.table();
         Self {
+            database: database.to_string(),
+            table: table.to_string(),
             time_between_poll_ms: scanner_gauge(SCANNER_TIME_BETWEEN_POLL_MS, database, table),
             poll_idle_ratio: scanner_gauge(SCANNER_POLL_IDLE_RATIO, database, table),
             last_poll_seconds_ago: scanner_gauge(SCANNER_LAST_POLL_SECONDS_AGO, database, table),
@@ -227,6 +281,20 @@ impl ScannerMetrics {
 
     pub(crate) fn record_remote_fetch_error(&self) {
         self.remote_fetch_errors_total.increment(1);
+    }
+
+    /// Record one FetchLog error. `error_kind` is one of
+    /// [`SCANNER_ERROR_KIND_RPC`] / [`SCANNER_ERROR_KIND_BUCKET`]. Resolved at
+    /// the callsite (cold path) rather than cached, to avoid one struct field
+    /// per kind.
+    pub(crate) fn record_error(&self, error_kind: &'static str) {
+        metrics::counter!(
+            SCANNER_ERRORS_TOTAL,
+            LABEL_DATABASE => self.database.clone(),
+            LABEL_TABLE => self.table.clone(),
+            LABEL_ERROR_KIND => error_kind,
+        )
+        .increment(1);
     }
 }
 
@@ -294,6 +362,27 @@ pub const WRITER_BYTES_SEND_TOTAL: &str = "fluss.client.writer.bytes_send.total"
 
 /// Counter: total records re-enqueued for retry.
 pub const WRITER_RECORDS_RETRY_TOTAL: &str = "fluss.client.writer.records_retry.total";
+
+/// Counter: total batches that terminally failed, labeled by `error_kind`:
+///   * `non_retriable` — server returned a non-retriable error.
+///   * `max_retries_exceeded` — a retriable error that exhausted its retries.
+///   * `writer_id_changed` — idempotent retry abandoned after a writer-id reset.
+///   * `local_build` — batch failed to build locally (never sent).
+///
+/// Counts terminal failures only; retries are tracked by
+/// `WRITER_RECORDS_RETRY_TOTAL`, so there is no double counting.
+/// Carries only `error_kind` (no table label), matching the
+/// unlabeled writer-metric convention.
+pub const WRITER_ERRORS_TOTAL: &str = "fluss.client.writer.errors.total";
+
+/// `error_kind` value for a non-retriable server error.
+pub(crate) const WRITER_ERROR_KIND_NON_RETRIABLE: &str = "non_retriable";
+/// `error_kind` value for a retriable error that exhausted its retries.
+pub(crate) const WRITER_ERROR_KIND_MAX_RETRIES_EXCEEDED: &str = "max_retries_exceeded";
+/// `error_kind` value for an idempotent retry abandoned after a writer-id reset.
+pub(crate) const WRITER_ERROR_KIND_WRITER_ID_CHANGED: &str = "writer_id_changed";
+/// `error_kind` value for a batch that failed to build locally (never sent).
+pub(crate) const WRITER_ERROR_KIND_LOCAL_BUILD: &str = "local_build";
 
 /// Histogram: records per sent batch.
 pub const WRITER_RECORDS_PER_BATCH: &str = "fluss.client.writer.records_per_batch";
@@ -388,6 +477,13 @@ impl WriterMetrics {
         self.buffer_total_bytes.set(total_bytes as f64);
         self.buffer_available_bytes.set(available_bytes as f64);
         self.buffer_waiting_threads.set(waiting_threads as f64);
+    }
+
+    /// Record one terminal batch failure. `error_kind` is one of the
+    /// `WRITER_ERROR_KIND_*` values. Resolved at the callsite (cold path)
+    /// rather than cached, to avoid one struct field per kind.
+    pub(crate) fn record_error(&self, error_kind: &'static str) {
+        metrics::counter!(WRITER_ERRORS_TOTAL, LABEL_ERROR_KIND => error_kind).increment(1);
     }
 }
 
@@ -839,6 +935,121 @@ mod tests {
             find_gauge!(entries, WRITER_BUFFER_WAITING_THREADS),
             Some(2.0)
         );
+    }
+
+    #[test]
+    fn error_retry_metric_names_follow_convention() {
+        for name in [
+            CLIENT_CONNECTIONS_POISONED_TOTAL,
+            CLIENT_METADATA_REFRESHES_TOTAL,
+            CLIENT_METADATA_ERRORS_TOTAL,
+            WRITER_ERRORS_TOTAL,
+            SCANNER_ERRORS_TOTAL,
+        ] {
+            assert!(!name.is_empty());
+            assert!(
+                name.starts_with("fluss.client."),
+                "{name} must use the fluss.client. prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn writer_error_metrics_classify_by_kind() {
+        use std::collections::HashMap;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            let m = WriterMetrics::new();
+            m.record_error(WRITER_ERROR_KIND_NON_RETRIABLE);
+            m.record_error(WRITER_ERROR_KIND_NON_RETRIABLE);
+            m.record_error(WRITER_ERROR_KIND_MAX_RETRIES_EXCEEDED);
+            m.record_error(WRITER_ERROR_KIND_WRITER_ID_CHANGED);
+            m.record_error(WRITER_ERROR_KIND_LOCAL_BUILD);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        let mut by_kind: HashMap<String, u64> = HashMap::new();
+        for (key, _, _, val) in &entries {
+            if key.key().name() != WRITER_ERRORS_TOTAL {
+                continue;
+            }
+            // Writer errors carry only the error_kind label (no table label).
+            assert_eq!(
+                key.key().labels().count(),
+                1,
+                "writer error metric must carry exactly the error_kind label"
+            );
+            let kind = key
+                .key()
+                .labels()
+                .find(|l| l.key() == LABEL_ERROR_KIND)
+                .map(|l| l.value().to_string())
+                .expect("writer error metric must carry error_kind");
+            if let metrics_util::debugging::DebugValue::Counter(v) = val {
+                by_kind.insert(kind, *v);
+            }
+        }
+
+        assert_eq!(by_kind.get("non_retriable"), Some(&2));
+        assert_eq!(by_kind.get("max_retries_exceeded"), Some(&1));
+        assert_eq!(by_kind.get("writer_id_changed"), Some(&1));
+        assert_eq!(by_kind.get("local_build"), Some(&1));
+    }
+
+    #[test]
+    fn scanner_error_metrics_separate_rpc_and_bucket() {
+        use std::collections::HashMap;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            let table_path = TablePath::new("db", "tbl");
+            let m = ScannerMetrics::new(&table_path);
+            m.record_error(SCANNER_ERROR_KIND_RPC);
+            m.record_error(SCANNER_ERROR_KIND_BUCKET);
+            m.record_error(SCANNER_ERROR_KIND_BUCKET);
+        });
+
+        let snapshot = snapshotter.snapshot();
+        let entries: Vec<_> = snapshot.into_vec();
+
+        let mut by_kind: HashMap<String, u64> = HashMap::new();
+        for (key, _, _, val) in &entries {
+            if key.key().name() != SCANNER_ERRORS_TOTAL {
+                continue;
+            }
+            // Scanner errors stay table-labeled, plus error_kind.
+            let has_db = key
+                .key()
+                .labels()
+                .any(|l| l.key() == LABEL_DATABASE && l.value() == "db");
+            let has_table = key
+                .key()
+                .labels()
+                .any(|l| l.key() == LABEL_TABLE && l.value() == "tbl");
+            assert!(
+                has_db && has_table,
+                "scanner error metric must carry database + table labels"
+            );
+            let kind = key
+                .key()
+                .labels()
+                .find(|l| l.key() == LABEL_ERROR_KIND)
+                .map(|l| l.value().to_string())
+                .expect("scanner error metric must carry error_kind");
+            if let metrics_util::debugging::DebugValue::Counter(v) = val {
+                by_kind.insert(kind, *v);
+            }
+        }
+
+        assert_eq!(by_kind.get("rpc"), Some(&1));
+        assert_eq!(by_kind.get("bucket"), Some(&2));
     }
 
     /// Writer metrics carry no labels.

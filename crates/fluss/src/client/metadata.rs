@@ -19,6 +19,7 @@ use crate::PartitionId;
 use crate::cluster::{Cluster, ServerNode, ServerType};
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
+use crate::metrics::{CLIENT_METADATA_ERRORS_TOTAL, CLIENT_METADATA_REFRESHES_TOTAL};
 use crate::proto::MetadataResponse;
 use crate::rpc::message::UpdateMetadataRequest;
 use crate::rpc::{RpcClient, ServerConnection};
@@ -149,33 +150,43 @@ impl Metadata {
         physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
         partition_ids: Vec<i64>,
     ) -> Result<()> {
-        let maybe_server = {
-            let guard = self.cluster.read();
-            guard.get_one_available_server().cloned()
-        };
+        metrics::counter!(CLIENT_METADATA_REFRESHES_TOTAL).increment(1);
+        // Run the refresh in an inner block so every failure path (no-server
+        // reinit, connection, RPC, apply) increments the error counter once.
+        let result: Result<()> = async {
+            let maybe_server = {
+                let guard = self.cluster.read();
+                guard.get_one_available_server().cloned()
+            };
 
-        let server = match maybe_server {
-            Some(s) => s,
-            None => {
-                info!(
-                    "No available tablet server to update metadata, attempting to re-initialize cluster using bootstrap server."
-                );
-                self.reinit_cluster().await?;
-                return Ok(());
-            }
-        };
+            let server = match maybe_server {
+                Some(s) => s,
+                None => {
+                    info!(
+                        "No available tablet server to update metadata, attempting to re-initialize cluster using bootstrap server."
+                    );
+                    self.reinit_cluster().await?;
+                    return Ok(());
+                }
+            };
 
-        let conn = self.connections.get_connection(&server).await?;
+            let conn = self.connections.get_connection(&server).await?;
 
-        let response = conn
-            .request(UpdateMetadataRequest::new(
-                table_paths,
-                physical_table_paths,
-                partition_ids,
-            ))
-            .await?;
-        self.update(response).await?;
-        Ok(())
+            let response = conn
+                .request(UpdateMetadataRequest::new(
+                    table_paths,
+                    physical_table_paths,
+                    partition_ids,
+                ))
+                .await?;
+            self.update(response).await?;
+            Ok(())
+        }
+        .await;
+        if result.is_err() {
+            metrics::counter!(CLIENT_METADATA_ERRORS_TOTAL).increment(1);
+        }
+        result
     }
 
     pub async fn update_table_metadata(&self, table_path: &TablePath) -> Result<()> {
@@ -336,6 +347,63 @@ mod tests {
         metadata.invalidate_server(&1, vec![1]);
         let cluster = metadata.get_cluster();
         assert!(cluster.get_tablet_server(1).is_none());
+    }
+
+    #[test]
+    fn metadata_refresh_and_error_counters_increment() {
+        use crate::cluster::Cluster;
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        // An empty cluster has no available server, so the refresh falls back to
+        // `reinit_cluster`, which fails fast in `parse_bootstrap` against the
+        // empty test bootstrap — no network, fully deterministic.
+        let metadata = Metadata::new_for_test(Arc::new(Cluster::default()));
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        // `block_on` keeps all `counter!` calls on this thread so the
+        // thread-local recorder installed by `with_local_recorder` sees them.
+        metrics::with_local_recorder(&recorder, || {
+            rt.block_on(async {
+                let result = metadata.update_table_metadata(&table_path).await;
+                assert!(result.is_err(), "refresh with empty bootstrap must fail");
+            });
+        });
+
+        let entries: Vec<_> = snapshotter.snapshot().into_vec();
+        let counter = |name: &str| -> u64 {
+            entries
+                .iter()
+                .find_map(|(key, _, _, val)| {
+                    if key.key().name() == name {
+                        match val {
+                            DebugValue::Counter(v) => Some(*v),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0)
+        };
+
+        assert_eq!(
+            counter(CLIENT_METADATA_REFRESHES_TOTAL),
+            1,
+            "one refresh attempt should be counted"
+        );
+        assert_eq!(
+            counter(CLIENT_METADATA_ERRORS_TOTAL),
+            1,
+            "the failed refresh should be counted as an error"
+        );
     }
 
     #[test]
