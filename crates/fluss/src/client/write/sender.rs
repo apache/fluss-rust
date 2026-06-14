@@ -803,20 +803,7 @@ impl Sender {
         {
             return false;
         }
-        if Self::is_retriable_error(error) {
-            return true;
-        }
-        // Idempotent-specific retry logic
-        let seq = ready_write_batch.write_batch.batch_sequence();
-        if self.idempotence_manager.is_enabled() && seq != NO_BATCH_SEQUENCE {
-            return self.idempotence_manager.can_retry_for_error(
-                &ready_write_batch.table_bucket,
-                seq,
-                ready_write_batch.write_batch.batch_id(),
-                error,
-            );
-        }
-        false
+        self.is_retriable_in_principle(ready_write_batch, error)
     }
 
     fn is_retriable_in_principle(
