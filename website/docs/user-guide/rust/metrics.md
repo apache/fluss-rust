@@ -153,11 +153,19 @@ unlabeled, so neither contributes meaningfully to cardinality.
 
 ## Grafana / PromQL tips
 
+By default, `metrics-exporter-prometheus` emits histogram metrics as Prometheus
+**summaries** (no `_bucket` series). The `_bucket`-based `histogram_quantile`
+query only works if you enabled bucket mode via `set_buckets(...)` or
+`set_buckets_for_metric(...)` in the previous section.
+
 ```promql
 # Write throughput (records/sec), Java-style rate from the raw counter
 rate(fluss_client_writer_records_send_total[1m])
 
-# p99 send latency
+# p99 send latency (default summary mode)
+fluss_client_writer_send_latency_ms{quantile="0.99"}
+
+# p99 send latency (bucket mode enabled)
 histogram_quantile(0.99, sum(rate(fluss_client_writer_send_latency_ms_bucket[5m])) by (le))
 
 # Backpressure: producers blocked waiting for buffer memory
