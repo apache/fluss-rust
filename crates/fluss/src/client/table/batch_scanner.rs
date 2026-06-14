@@ -410,7 +410,7 @@ mod tests {
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
     use crate::test_utils::build_table_info_with_columns;
-    use arrow::array::{Array, Int32Array, Int64Array};
+    use arrow::array::{Array, Int32Array, Int64Array, StringArray};
 
     fn build_two_col_table_info() -> TableInfo {
         build_table_info_with_columns(
@@ -568,6 +568,36 @@ mod tests {
             .unwrap();
         assert_eq!((c1.value(0), c1.value(1)), (1, 2));
         assert_eq!((c3.value(0), c3.value(1)), (100, 200));
+    }
+
+    #[test]
+    fn decode_log_batch_non_prefix_projection_reorders_columns() {
+        let table_info = build_two_col_table_info();
+        let raw = build_log_records(&table_info, 0, &[(1, "alice"), (2, "bob")]);
+
+        // `[name, id]`: reversed, so neither a leading prefix nor in source order.
+        let (batch, _) = decode_log_batch(&table_info, Some(&[1usize, 0usize]), raw, usize::MAX)
+            .expect("decode reordered projection");
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.schema().field(0).name(), "name");
+        assert_eq!(batch.schema().field(1).name(), "id");
+
+        let names = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(names.value(0), "alice");
+        assert_eq!(names.value(1), "bob");
+
+        let ids = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(ids.value(0), 1);
+        assert_eq!(ids.value(1), 2);
     }
 
     #[test]
