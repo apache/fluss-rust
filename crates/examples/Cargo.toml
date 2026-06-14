@@ -27,6 +27,8 @@ version = { workspace = true }
 fluss = { workspace = true, features = ["storage-all"] }
 tokio = { workspace = true }
 clap = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["http-listener"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
@@ -50,3 +52,7 @@ path = "src/example_prefix_lookup.rs"
 [[example]]
 name = "example-partitioned-prefix-lookup"
 path = "src/example_partitioned_prefix_lookup.rs"
+
+[[example]]
+name = "example-prometheus-metrics"
+path = "src/example_prometheus_metrics.rs"
