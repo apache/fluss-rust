@@ -23,7 +23,10 @@ use crate::client::{ReadyWriteBatch, RecordAccumulator};
 use crate::error::Error::UnexpectedError;
 use crate::error::{FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
-use crate::metrics::WriterMetrics;
+use crate::metrics::{
+    WRITER_ERROR_KIND_LOCAL_BUILD, WRITER_ERROR_KIND_MAX_RETRIES_EXCEEDED,
+    WRITER_ERROR_KIND_NON_RETRIABLE, WRITER_ERROR_KIND_WRITER_ID_CHANGED, WriterMetrics,
+};
 use crate::proto::{
     PbProduceLogRespForBucket, PbPutKvRespForBucket, PbTablePath, ProduceLogResponse, PutKvResponse,
 };
@@ -581,7 +584,9 @@ impl Sender {
         error: broadcast::Error,
         fluss_error: Option<FlussError>,
         adjust_sequences: bool,
+        error_kind: &'static str,
     ) {
+        self.metrics.record_error(error_kind);
         if self.idempotence_manager.is_enabled()
             && ready_write_batch.write_batch.batch_sequence() != NO_BATCH_SEQUENCE
         {
@@ -642,6 +647,7 @@ impl Sender {
                 },
                 None,
                 true,
+                WRITER_ERROR_KIND_LOCAL_BUILD,
             );
         }
         Ok(())
@@ -715,6 +721,7 @@ impl Sender {
                         },
                         Some(FlussError::UnknownWriterIdException),
                         false,
+                        WRITER_ERROR_KIND_WRITER_ID_CHANGED,
                     );
                     return Ok(
                         Self::is_invalid_metadata_error(error).then_some(physical_table_path)
@@ -731,6 +738,13 @@ impl Sender {
         // reset all writer state internally (matching Java).
         // For other errors, only adjust sequences if the batch didn't exhaust its retries.
         let can_adjust = ready_write_batch.write_batch.attempts() < self.retries;
+        // Reaching the terminal path with a retriable error means retries were
+        // exhausted; otherwise the error was non-retriable from the start.
+        let error_kind = if Self::is_retriable_error(error) {
+            WRITER_ERROR_KIND_MAX_RETRIES_EXCEEDED
+        } else {
+            WRITER_ERROR_KIND_NON_RETRIABLE
+        };
         self.fail_batch(
             ready_write_batch,
             broadcast::Error::WriteFailed {
@@ -739,6 +753,7 @@ impl Sender {
             },
             Some(error),
             can_adjust,
+            error_kind,
         );
         Ok(Self::is_invalid_metadata_error(error).then_some(physical_table_path))
     }
