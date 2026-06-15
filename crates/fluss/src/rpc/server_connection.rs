@@ -156,6 +156,10 @@ fn validate_server_type(
     expected: &ServerType,
     response_server_type: Option<i32>,
 ) -> Result<(), Error> {
+    if *expected == ServerType::Unknown {
+        return Ok(());
+    }
+
     // For forward-compat with servers that do not populate `server_type`, validation is skipped.
     let Some(type_id) = response_server_type else {
         return Ok(());
@@ -1268,6 +1272,21 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            validate_server_type(
+                &ServerType::Unknown,
+                Some(ServerType::CoordinatorServer.to_type_id()),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_server_type(
+                &ServerType::Unknown,
+                Some(ServerType::TabletServer.to_type_id()),
+            )
+            .is_ok()
+        );
+        assert!(validate_server_type(&ServerType::Unknown, Some(99),).is_ok());
 
         // Mismatch: connected to a coordinator while expecting a tablet server
         // (and vice versa).

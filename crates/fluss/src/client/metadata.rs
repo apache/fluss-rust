@@ -88,7 +88,7 @@ impl Metadata {
             -1,
             socket_address.ip().to_string(),
             socket_address.port() as u32,
-            ServerType::CoordinatorServer,
+            ServerType::Unknown,
         );
         let con = connections.get_connection(&server_node).await?;
 

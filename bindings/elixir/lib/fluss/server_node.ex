@@ -29,7 +29,7 @@ defmodule Fluss.ServerNode do
           uid: String.t(),
           host: String.t(),
           port: non_neg_integer(),
-          server_type: :tablet_server | :coordinator_server
+          server_type: :tablet_server | :coordinator_server | :unknown
         }
 
   @spec url(t()) :: String.t()
