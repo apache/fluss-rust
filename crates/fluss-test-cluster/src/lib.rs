@@ -165,6 +165,18 @@ impl FlussTestingClusterBuilder {
         }
     }
 
+    fn plaintext_tablet_bootstrap_servers(&self) -> HashMap<u16, String> {
+        let base_port = self.plain_client_port.unwrap_or(self.coordinator_host_port);
+        (0..self.number_of_tablet_servers)
+            .map(|server_id| {
+                (
+                    server_id,
+                    format!("127.0.0.1:{}", base_port + 1 + server_id),
+                )
+            })
+            .collect()
+    }
+
     fn all_containers_exist(&self) -> bool {
         self.container_names().iter().all(|name| {
             std::process::Command::new("docker")
@@ -206,12 +218,14 @@ impl FlussTestingClusterBuilder {
         }
 
         let (bootstrap_servers, sasl_bootstrap_servers) = self.bootstrap_addresses();
+        let plaintext_tablet_bootstrap_servers = self.plaintext_tablet_bootstrap_servers();
 
         FlussTestingCluster {
             zookeeper,
             coordinator_server,
             tablet_servers,
             bootstrap_servers,
+            plaintext_tablet_bootstrap_servers,
             sasl_bootstrap_servers,
             remote_data_dir: self.remote_data_dir.clone(),
             sasl_users: self.sasl_users.clone(),
@@ -388,6 +402,7 @@ pub struct FlussTestingCluster {
     coordinator_server: Arc<ContainerAsync<GenericImage>>,
     tablet_servers: HashMap<u16, Arc<ContainerAsync<GenericImage>>>,
     bootstrap_servers: String,
+    plaintext_tablet_bootstrap_servers: HashMap<u16, String>,
     sasl_bootstrap_servers: Option<String>,
     remote_data_dir: Option<std::path::PathBuf>,
     sasl_users: Vec<(String, String)>,
@@ -412,6 +427,12 @@ impl FlussTestingCluster {
 
     pub fn plaintext_bootstrap_servers(&self) -> &str {
         &self.bootstrap_servers
+    }
+
+    pub fn plaintext_tablet_bootstrap_server(&self, server_id: u16) -> Option<&str> {
+        self.plaintext_tablet_bootstrap_servers
+            .get(&server_id)
+            .map(String::as_str)
     }
 
     pub async fn get_fluss_connection(&self) -> FlussConnection {

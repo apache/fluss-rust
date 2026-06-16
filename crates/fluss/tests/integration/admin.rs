@@ -18,6 +18,8 @@
 #[cfg(test)]
 mod admin_test {
     use crate::integration::utils::get_shared_cluster;
+    use fluss::client::FlussConnection;
+    use fluss::config::Config;
     use fluss::error::FlussError;
     use fluss::metadata::{
         DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat, PartitionSpec, Schema,
@@ -519,6 +521,39 @@ mod admin_test {
                 "Server node uid should not be empty"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_bootstrap_from_tablet_server() {
+        let cluster = get_shared_cluster();
+        let bootstrap_servers = cluster
+            .plaintext_tablet_bootstrap_server(0)
+            .expect("shared cluster should expose tablet server bootstrap")
+            .to_string();
+
+        let connection = FlussConnection::new(Config {
+            writer_acks: "all".to_string(),
+            bootstrap_servers,
+            ..Default::default()
+        })
+        .await
+        .expect("should bootstrap from tablet server");
+        let admin = connection.get_admin().expect("should get admin");
+
+        let nodes = admin
+            .get_server_nodes()
+            .await
+            .expect("should get server nodes");
+
+        let has_coordinator = nodes
+            .iter()
+            .any(|n| *n.server_type() == fluss::ServerType::CoordinatorServer);
+        assert!(has_coordinator, "Expected a coordinator server node");
+
+        let has_tablet = nodes
+            .iter()
+            .any(|n| *n.server_type() == fluss::ServerType::TabletServer);
+        assert!(has_tablet, "Expected a tablet server node");
     }
 
     #[tokio::test]
