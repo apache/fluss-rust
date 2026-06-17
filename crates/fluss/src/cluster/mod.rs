@@ -91,12 +91,11 @@ impl ServerType {
         }
     }
 
-    pub fn from_type_id(type_id: i32) -> Option<ServerType> {
+    pub fn from_type_id(type_id: i32) -> ServerType {
         match type_id {
-            1 => Some(ServerType::CoordinatorServer),
-            2 => Some(ServerType::TabletServer),
-            -1 => Some(ServerType::Unknown),
-            _ => None,
+            1 => ServerType::CoordinatorServer,
+            2 => ServerType::TabletServer,
+            _ => ServerType::Unknown,
         }
     }
 }

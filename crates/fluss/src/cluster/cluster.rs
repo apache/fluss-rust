@@ -484,6 +484,14 @@ mod tests {
     }
 
     #[test]
+    fn test_server_type_from_type_id() {
+        assert_eq!(ServerType::from_type_id(1), ServerType::CoordinatorServer);
+        assert_eq!(ServerType::from_type_id(2), ServerType::TabletServer);
+        assert_eq!(ServerType::from_type_id(-1), ServerType::Unknown);
+        assert_eq!(ServerType::from_type_id(99), ServerType::Unknown);
+    }
+
+    #[test]
     fn test_get_server_nodes_with_coordinator_and_tablets() {
         let cluster = Cluster::new(
             Some(make_coordinator()),
