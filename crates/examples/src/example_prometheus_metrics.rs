@@ -23,7 +23,8 @@
 //! curl http://localhost:9000/metrics
 //! ```
 //! The endpoint exposes `fluss_client_writer_*`, `fluss_client_scanner_*`, and
-//! `fluss_client_requests_*` series produced by the workload below.
+//! `fluss_client_requests_*` series produced by the workload below. The example
+//! runs until interrupted with Ctrl-C so the endpoint stays scrapeable.
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -34,7 +35,7 @@ use fluss::client::FlussConnection;
 use fluss::config::Config;
 use fluss::error::Result;
 use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-use fluss::row::{DataGetters, GenericRow};
+use fluss::row::GenericRow;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use std::time::Duration;
 
@@ -80,8 +81,10 @@ pub async fn main() -> Result<()> {
     let log_scanner = table.new_scan().create_log_scanner()?;
     log_scanner.subscribe(0, 0).await?;
 
-    // Continuously write and read so the metrics keep updating and can be
-    // observed over multiple Prometheus scrapes.
+    // The loop runs forever on purpose: a Prometheus exporter is a long-running
+    // scrape target, so the process must stay alive -- and keep producing fresh
+    // samples -- for `curl /metrics` to return data across repeated scrapes.
+    // Breaking out would shut the HTTP endpoint down. Stop it with Ctrl-C.
     let rows_per_iter = 100;
     let mut id = 0i32;
     let mut verified = false;
@@ -95,20 +98,19 @@ pub async fn main() -> Result<()> {
         }
         append_writer.flush().await?;
 
-        let scan_records = log_scanner.poll(Duration::from_secs(1)).await?;
-        let mut count = 0;
-        for record in scan_records {
-            let row = record.row();
-            let _ = (row.get_int(0)?, row.get_string(1)?, record.offset());
-            count += 1;
-        }
+        // Calling `poll` is what produces the `fluss_client_scanner_*` series,
+        // so we do it every iteration. The returned records aren't needed for a
+        // metrics demo, so we just count them for the log line.
+        let polled = log_scanner.poll(Duration::from_secs(1)).await?.count();
         println!(
-            "appended {rows_per_iter} rows, polled {count} rows; scrape /metrics to see counters"
+            "appended {rows_per_iter} rows, polled {polled} rows; scrape /metrics to see counters"
         );
 
-        // After the first flush every appended row has been acknowledged, so the
-        // writer counter must have advanced by at least the rows we sent (retries
-        // can push it higher). This proves the recorder is wired up correctly.
+        // One-off sanity check, run only on the first iteration: after the first
+        // flush every appended row has been acknowledged, so the writer counter
+        // must have advanced by at least the rows we sent (retries can push it
+        // higher). This only proves the recorder is wired up correctly -- it is
+        // not a stop condition, so the loop keeps running afterwards.
         if !verified {
             let rendered = metrics_handle.render();
             let sent = counter_value(&rendered, "fluss_client_writer_records_send_total");
