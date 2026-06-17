@@ -15,42 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::{PartitionSpec, TablePath};
-use crate::proto::CreatePartitionResponse;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
 use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
-#[derive(Debug)]
-pub struct CreatePartitionRequest {
-    pub inner_request: proto::CreatePartitionRequest,
+#[derive(Debug, Default)]
+pub struct AcquireKvSnapshotLeaseRequest {
+    pub inner_request: proto::AcquireKvSnapshotLeaseRequest,
 }
 
-impl CreatePartitionRequest {
+impl AcquireKvSnapshotLeaseRequest {
     pub fn new(
-        table_path: &TablePath,
-        partition_spec: &PartitionSpec,
-        ignore_if_exists: bool,
+        lease_id: &str,
+        lease_duration_ms: i64,
+        snapshots_to_lease: Vec<proto::PbKvSnapshotLeaseForTable>,
     ) -> Self {
-        CreatePartitionRequest {
-            inner_request: proto::CreatePartitionRequest {
-                table_path: to_table_path(table_path),
-                partition_spec: partition_spec.to_pb(),
-                ignore_if_not_exists: ignore_if_exists,
+        AcquireKvSnapshotLeaseRequest {
+            inner_request: proto::AcquireKvSnapshotLeaseRequest {
+                lease_id: lease_id.to_string(),
+                lease_duration_ms,
+                snapshots_to_lease,
             },
         }
     }
 }
 
-impl RequestBody for CreatePartitionRequest {
-    type ResponseBody = CreatePartitionResponse;
-
-    const API_KEY: ApiKey = ApiKey::CreatePartition;
+impl RequestBody for AcquireKvSnapshotLeaseRequest {
+    type ResponseBody = proto::AcquireKvSnapshotLeaseResponse;
+    const API_KEY: ApiKey = ApiKey::AcquireKvSnapshotLease;
 }
 
-impl_write_type!(CreatePartitionRequest);
-impl_read_type!(CreatePartitionResponse);
+impl_write_type!(AcquireKvSnapshotLeaseRequest);
+impl_read_type!(proto::AcquireKvSnapshotLeaseResponse);

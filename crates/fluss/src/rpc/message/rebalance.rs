@@ -15,42 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::{PartitionSpec, TablePath};
-use crate::proto::CreatePartitionResponse;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
 use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
-#[derive(Debug)]
-pub struct CreatePartitionRequest {
-    pub inner_request: proto::CreatePartitionRequest,
+#[derive(Debug, Default)]
+pub struct RebalanceRequest {
+    pub inner_request: proto::RebalanceRequest,
 }
 
-impl CreatePartitionRequest {
-    pub fn new(
-        table_path: &TablePath,
-        partition_spec: &PartitionSpec,
-        ignore_if_exists: bool,
-    ) -> Self {
-        CreatePartitionRequest {
-            inner_request: proto::CreatePartitionRequest {
-                table_path: to_table_path(table_path),
-                partition_spec: partition_spec.to_pb(),
-                ignore_if_not_exists: ignore_if_exists,
-            },
+impl RebalanceRequest {
+    pub fn new(goals: Vec<i32>) -> Self {
+        RebalanceRequest {
+            inner_request: proto::RebalanceRequest { goals },
         }
     }
 }
 
-impl RequestBody for CreatePartitionRequest {
-    type ResponseBody = CreatePartitionResponse;
-
-    const API_KEY: ApiKey = ApiKey::CreatePartition;
+impl RequestBody for RebalanceRequest {
+    type ResponseBody = proto::RebalanceResponse;
+    const API_KEY: ApiKey = ApiKey::Rebalance;
 }
 
-impl_write_type!(CreatePartitionRequest);
-impl_read_type!(CreatePartitionResponse);
+impl_write_type!(RebalanceRequest);
+impl_read_type!(proto::RebalanceResponse);

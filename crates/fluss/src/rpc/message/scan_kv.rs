@@ -15,42 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::{PartitionSpec, TablePath};
-use crate::proto::CreatePartitionResponse;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::convert::to_table_path;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
 use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
-#[derive(Debug)]
-pub struct CreatePartitionRequest {
-    pub inner_request: proto::CreatePartitionRequest,
+#[derive(Debug, Default)]
+pub struct ScanKvRequest {
+    pub inner_request: proto::ScanKvRequest,
 }
 
-impl CreatePartitionRequest {
+impl ScanKvRequest {
     pub fn new(
-        table_path: &TablePath,
-        partition_spec: &PartitionSpec,
-        ignore_if_exists: bool,
+        scanner_id: Option<Vec<u8>>,
+        bucket_scan_req: Option<proto::PbScanReqForBucket>,
+        call_seq_id: Option<i32>,
+        batch_size_bytes: Option<i32>,
+        close_scanner: Option<bool>,
     ) -> Self {
-        CreatePartitionRequest {
-            inner_request: proto::CreatePartitionRequest {
-                table_path: to_table_path(table_path),
-                partition_spec: partition_spec.to_pb(),
-                ignore_if_not_exists: ignore_if_exists,
+        ScanKvRequest {
+            inner_request: proto::ScanKvRequest {
+                scanner_id,
+                bucket_scan_req,
+                call_seq_id,
+                batch_size_bytes,
+                close_scanner,
             },
         }
     }
 }
 
-impl RequestBody for CreatePartitionRequest {
-    type ResponseBody = CreatePartitionResponse;
-
-    const API_KEY: ApiKey = ApiKey::CreatePartition;
+impl RequestBody for ScanKvRequest {
+    type ResponseBody = proto::ScanKvResponse;
+    const API_KEY: ApiKey = ApiKey::ScanKv;
 }
 
-impl_write_type!(CreatePartitionRequest);
-impl_read_type!(CreatePartitionResponse);
+impl_write_type!(ScanKvRequest);
+impl_read_type!(proto::ScanKvResponse);

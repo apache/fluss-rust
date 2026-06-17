@@ -15,35 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::rpc::frame::ReadError;
-
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{impl_read_type, impl_write_type, proto};
-use bytes::{Buf, BufMut};
+use crate::rpc::message::{RequestBody, WriteType};
+use crate::{impl_write_type, proto};
+use bytes::BufMut;
 use prost::Message;
 
 #[derive(Debug, Default)]
-pub struct ListDatabasesRequest {
+pub struct ListDatabaseSummariesRequest {
     pub inner_request: proto::ListDatabasesRequest,
 }
 
-impl ListDatabasesRequest {
+impl ListDatabaseSummariesRequest {
     pub fn new() -> Self {
-        ListDatabasesRequest {
+        ListDatabaseSummariesRequest {
             inner_request: proto::ListDatabasesRequest {
-                include_summary: None,
+                include_summary: Some(true),
             },
         }
     }
 }
 
-impl RequestBody for ListDatabasesRequest {
+impl RequestBody for ListDatabaseSummariesRequest {
     type ResponseBody = proto::ListDatabasesResponse;
-
     const API_KEY: ApiKey = ApiKey::ListDatabases;
 }
 
-impl_write_type!(ListDatabasesRequest);
-impl_read_type!(proto::ListDatabasesResponse);
+impl_write_type!(ListDatabaseSummariesRequest);

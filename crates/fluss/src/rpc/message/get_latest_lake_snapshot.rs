@@ -48,7 +48,7 @@ impl GetLatestLakeSnapshotRequest {
 
 impl RequestBody for GetLatestLakeSnapshotRequest {
     type ResponseBody = proto::GetLatestLakeSnapshotResponse;
-    const API_KEY: ApiKey = ApiKey::GetLatestLakeSnapshot;
+    const API_KEY: ApiKey = ApiKey::GetLakeSnapshot;
 }
 
 impl_write_type!(GetLatestLakeSnapshotRequest);
