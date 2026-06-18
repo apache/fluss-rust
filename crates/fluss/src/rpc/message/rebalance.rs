@@ -15,30 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod acl;
-mod config;
-mod data_lake_format;
-mod database;
-mod datatype;
-mod json_serde;
-mod kv_snapshot_lease;
-mod partition;
-mod producer_offsets;
-mod schema_util;
-mod table;
-mod table_change;
-mod table_stats;
+use crate::rpc::api_key::ApiKey;
+use crate::rpc::frame::{ReadError, WriteError};
+use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::{impl_read_type, impl_write_type, proto};
+use bytes::{Buf, BufMut};
+use prost::Message;
 
-pub use acl::*;
-pub use config::*;
-pub use data_lake_format::*;
-pub use database::*;
-pub use datatype::*;
-pub use json_serde::*;
-pub use kv_snapshot_lease::*;
-pub use partition::*;
-pub use producer_offsets::*;
-pub(crate) use schema_util::{UNEXIST_MAPPING, index_mapping};
-pub use table::*;
-pub use table_change::*;
-pub use table_stats::*;
+#[derive(Debug)]
+pub struct RebalanceRequest {
+    pub(crate) inner_request: proto::RebalanceRequest,
+}
+
+impl RebalanceRequest {
+    pub fn new(goals: Vec<i32>) -> Self {
+        RebalanceRequest {
+            inner_request: proto::RebalanceRequest { goals },
+        }
+    }
+}
+
+impl RequestBody for RebalanceRequest {
+    type ResponseBody = proto::RebalanceResponse;
+    const API_KEY: ApiKey = ApiKey::Rebalance;
+}
+
+impl_write_type!(RebalanceRequest);
+impl_read_type!(proto::RebalanceResponse);
