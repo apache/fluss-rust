@@ -150,6 +150,7 @@ impl FlussAdmin {
             table_json,
             created_time,
             modified_time,
+            ..
         } = response;
         let v: &[u8] = &table_json[..];
         let table_descriptor =

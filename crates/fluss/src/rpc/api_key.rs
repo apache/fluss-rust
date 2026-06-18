@@ -38,15 +38,40 @@ pub enum ApiKey {
     PutKv,                      // 1016
     Lookup,                     // 1017
     ListOffsets,                // 1021
+    GetLatestKvSnapshots,       // 1023
+    GetKvSnapshotMetadata,      // 1024
     GetFileSystemSecurityToken, // 1025
     InitWriter,                 // 1026
-    GetLatestLakeSnapshot,      // 1032
+    GetLakeSnapshot,            // 1032
     LimitScan,                  // 1033
     PrefixLookup,               // 1034
     GetDatabaseInfo,            // 1035
     CreatePartition,            // 1036
     DropPartition,              // 1037
     Authenticate,               // 1038
+    CreateAcls,                 // 1039
+    ListAcls,                   // 1040
+    DropAcls,                   // 1041
+    AlterTable,                 // 1044
+    DescribeClusterConfigs,     // 1045
+    AlterClusterConfigs,        // 1046
+    AddServerTag,               // 1047
+    RemoveServerTag,            // 1048
+    Rebalance,                  // 1049
+    ListRebalanceProgress,      // 1050
+    CancelRebalance,            // 1051
+    RegisterProducerOffsets,    // 1053
+    GetProducerOffsets,         // 1054
+    DeleteProducerOffsets,      // 1055
+    AcquireKvSnapshotLease,     // 1056
+    ReleaseKvSnapshotLease,     // 1057
+    DropKvSnapshotLease,        // 1058
+    GetTableStats,              // 1059
+    AlterDatabase,              // 1060
+    ScanKv,                     // 1061
+    GetClusterHealth,           // 1062
+    ListRemoteLogManifests,     // 1063
+    ListKvSnapshots,            // 1064
     Unknown(i16),
 }
 
@@ -71,14 +96,39 @@ impl ApiKey {
             | ApiKey::ProduceLog
             | ApiKey::FetchLog
             | ApiKey::ListOffsets
+            | ApiKey::GetLatestKvSnapshots
+            | ApiKey::GetKvSnapshotMetadata
             | ApiKey::GetFileSystemSecurityToken
             | ApiKey::InitWriter
-            | ApiKey::GetLatestLakeSnapshot
+            | ApiKey::GetLakeSnapshot
             | ApiKey::LimitScan
             | ApiKey::GetDatabaseInfo
             | ApiKey::CreatePartition
             | ApiKey::DropPartition
-            | ApiKey::Authenticate => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
+            | ApiKey::Authenticate
+            | ApiKey::CreateAcls
+            | ApiKey::ListAcls
+            | ApiKey::DropAcls
+            | ApiKey::AlterTable
+            | ApiKey::DescribeClusterConfigs
+            | ApiKey::AlterClusterConfigs
+            | ApiKey::AddServerTag
+            | ApiKey::RemoveServerTag
+            | ApiKey::Rebalance
+            | ApiKey::ListRebalanceProgress
+            | ApiKey::CancelRebalance
+            | ApiKey::RegisterProducerOffsets
+            | ApiKey::GetProducerOffsets
+            | ApiKey::DeleteProducerOffsets
+            | ApiKey::AcquireKvSnapshotLease
+            | ApiKey::ReleaseKvSnapshotLease
+            | ApiKey::DropKvSnapshotLease
+            | ApiKey::GetTableStats
+            | ApiKey::AlterDatabase
+            | ApiKey::ScanKv
+            | ApiKey::GetClusterHealth
+            | ApiKey::ListRemoteLogManifests
+            | ApiKey::ListKvSnapshots => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
             // PutKv / Lookup / PrefixLookup support v0 (legacy key encoding)
             // and v1 (Paimon BinaryRow key encoding for kv_format_version=2
             // non-default bucket keys). The Rust client encodes both.
@@ -111,15 +161,40 @@ impl From<i16> for ApiKey {
             1016 => ApiKey::PutKv,
             1017 => ApiKey::Lookup,
             1021 => ApiKey::ListOffsets,
+            1023 => ApiKey::GetLatestKvSnapshots,
+            1024 => ApiKey::GetKvSnapshotMetadata,
             1025 => ApiKey::GetFileSystemSecurityToken,
             1026 => ApiKey::InitWriter,
-            1032 => ApiKey::GetLatestLakeSnapshot,
+            1032 => ApiKey::GetLakeSnapshot,
             1033 => ApiKey::LimitScan,
             1034 => ApiKey::PrefixLookup,
             1035 => ApiKey::GetDatabaseInfo,
             1036 => ApiKey::CreatePartition,
             1037 => ApiKey::DropPartition,
             1038 => ApiKey::Authenticate,
+            1039 => ApiKey::CreateAcls,
+            1040 => ApiKey::ListAcls,
+            1041 => ApiKey::DropAcls,
+            1044 => ApiKey::AlterTable,
+            1045 => ApiKey::DescribeClusterConfigs,
+            1046 => ApiKey::AlterClusterConfigs,
+            1047 => ApiKey::AddServerTag,
+            1048 => ApiKey::RemoveServerTag,
+            1049 => ApiKey::Rebalance,
+            1050 => ApiKey::ListRebalanceProgress,
+            1051 => ApiKey::CancelRebalance,
+            1053 => ApiKey::RegisterProducerOffsets,
+            1054 => ApiKey::GetProducerOffsets,
+            1055 => ApiKey::DeleteProducerOffsets,
+            1056 => ApiKey::AcquireKvSnapshotLease,
+            1057 => ApiKey::ReleaseKvSnapshotLease,
+            1058 => ApiKey::DropKvSnapshotLease,
+            1059 => ApiKey::GetTableStats,
+            1060 => ApiKey::AlterDatabase,
+            1061 => ApiKey::ScanKv,
+            1062 => ApiKey::GetClusterHealth,
+            1063 => ApiKey::ListRemoteLogManifests,
+            1064 => ApiKey::ListKvSnapshots,
 
             _ => Unknown(key),
         }
@@ -147,15 +222,40 @@ impl From<ApiKey> for i16 {
             ApiKey::PutKv => 1016,
             ApiKey::Lookup => 1017,
             ApiKey::ListOffsets => 1021,
+            ApiKey::GetLatestKvSnapshots => 1023,
+            ApiKey::GetKvSnapshotMetadata => 1024,
             ApiKey::GetFileSystemSecurityToken => 1025,
             ApiKey::InitWriter => 1026,
-            ApiKey::GetLatestLakeSnapshot => 1032,
+            ApiKey::GetLakeSnapshot => 1032,
             ApiKey::LimitScan => 1033,
             ApiKey::PrefixLookup => 1034,
             ApiKey::GetDatabaseInfo => 1035,
             ApiKey::CreatePartition => 1036,
             ApiKey::DropPartition => 1037,
             ApiKey::Authenticate => 1038,
+            ApiKey::CreateAcls => 1039,
+            ApiKey::ListAcls => 1040,
+            ApiKey::DropAcls => 1041,
+            ApiKey::AlterTable => 1044,
+            ApiKey::DescribeClusterConfigs => 1045,
+            ApiKey::AlterClusterConfigs => 1046,
+            ApiKey::AddServerTag => 1047,
+            ApiKey::RemoveServerTag => 1048,
+            ApiKey::Rebalance => 1049,
+            ApiKey::ListRebalanceProgress => 1050,
+            ApiKey::CancelRebalance => 1051,
+            ApiKey::RegisterProducerOffsets => 1053,
+            ApiKey::GetProducerOffsets => 1054,
+            ApiKey::DeleteProducerOffsets => 1055,
+            ApiKey::AcquireKvSnapshotLease => 1056,
+            ApiKey::ReleaseKvSnapshotLease => 1057,
+            ApiKey::DropKvSnapshotLease => 1058,
+            ApiKey::GetTableStats => 1059,
+            ApiKey::AlterDatabase => 1060,
+            ApiKey::ScanKv => 1061,
+            ApiKey::GetClusterHealth => 1062,
+            ApiKey::ListRemoteLogManifests => 1063,
+            ApiKey::ListKvSnapshots => 1064,
             Unknown(x) => x,
         }
     }
@@ -186,15 +286,40 @@ mod tests {
             (1016, ApiKey::PutKv),
             (1017, ApiKey::Lookup),
             (1021, ApiKey::ListOffsets),
+            (1023, ApiKey::GetLatestKvSnapshots),
+            (1024, ApiKey::GetKvSnapshotMetadata),
             (1025, ApiKey::GetFileSystemSecurityToken),
             (1026, ApiKey::InitWriter),
-            (1032, ApiKey::GetLatestLakeSnapshot),
+            (1032, ApiKey::GetLakeSnapshot),
             (1033, ApiKey::LimitScan),
             (1034, ApiKey::PrefixLookup),
             (1035, ApiKey::GetDatabaseInfo),
             (1036, ApiKey::CreatePartition),
             (1037, ApiKey::DropPartition),
             (1038, ApiKey::Authenticate),
+            (1039, ApiKey::CreateAcls),
+            (1040, ApiKey::ListAcls),
+            (1041, ApiKey::DropAcls),
+            (1044, ApiKey::AlterTable),
+            (1045, ApiKey::DescribeClusterConfigs),
+            (1046, ApiKey::AlterClusterConfigs),
+            (1047, ApiKey::AddServerTag),
+            (1048, ApiKey::RemoveServerTag),
+            (1049, ApiKey::Rebalance),
+            (1050, ApiKey::ListRebalanceProgress),
+            (1051, ApiKey::CancelRebalance),
+            (1053, ApiKey::RegisterProducerOffsets),
+            (1054, ApiKey::GetProducerOffsets),
+            (1055, ApiKey::DeleteProducerOffsets),
+            (1056, ApiKey::AcquireKvSnapshotLease),
+            (1057, ApiKey::ReleaseKvSnapshotLease),
+            (1058, ApiKey::DropKvSnapshotLease),
+            (1059, ApiKey::GetTableStats),
+            (1060, ApiKey::AlterDatabase),
+            (1061, ApiKey::ScanKv),
+            (1062, ApiKey::GetClusterHealth),
+            (1063, ApiKey::ListRemoteLogManifests),
+            (1064, ApiKey::ListKvSnapshots),
         ];
 
         for (raw, key) in cases {
