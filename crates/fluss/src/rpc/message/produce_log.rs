@@ -28,7 +28,7 @@ use bytes::{Buf, BufMut};
 use prost::Message;
 
 pub struct ProduceLogRequest {
-    pub inner_request: proto::ProduceLogRequest,
+    pub(crate) inner_request: proto::ProduceLogRequest,
 }
 
 impl ProduceLogRequest {

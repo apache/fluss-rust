@@ -27,7 +27,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct DropPartitionRequest {
-    pub inner_request: proto::DropPartitionRequest,
+    pub(crate) inner_request: proto::DropPartitionRequest,
 }
 
 impl DropPartitionRequest {

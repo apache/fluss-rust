@@ -28,7 +28,7 @@ use prost::Message;
 use bytes::{Buf, BufMut};
 
 pub struct PrefixLookupRequest {
-    pub inner_request: proto::PrefixLookupRequest,
+    pub(crate) inner_request: proto::PrefixLookupRequest,
 }
 
 impl PrefixLookupRequest {

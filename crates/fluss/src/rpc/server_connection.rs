@@ -85,7 +85,7 @@ pub struct ServerApiVersions {
 
 impl ServerApiVersions {
     /// Build from the server's advertised API version list.
-    pub fn new(server_versions: &[PbApiVersion]) -> Self {
+    pub(crate) fn new(server_versions: &[PbApiVersion]) -> Self {
         let mut versions = HashMap::new();
         for sv in server_versions {
             let api_key = ApiKey::from(i16::try_from(sv.api_key).unwrap());
@@ -207,7 +207,7 @@ impl RpcClient {
         self
     }
 
-    pub async fn get_connection(
+    pub(crate) async fn get_connection(
         &self,
         server_node: &ServerNode,
     ) -> Result<ServerConnection, Error> {
@@ -534,7 +534,7 @@ where
         matches!(*guard, ConnectionState::Poison(_))
     }
 
-    pub async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, Error>
+    pub(crate) async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, Error>
     where
         R: RequestBody + Send + WriteType<Vec<u8>>,
         R::ResponseBody: ReadType<Cursor<Vec<u8>>>,

@@ -27,7 +27,7 @@ use prost::Message;
 
 #[allow(dead_code)]
 pub struct PutKvRequest {
-    pub inner_request: proto::PutKvRequest,
+    pub(crate) inner_request: proto::PutKvRequest,
 }
 
 #[allow(dead_code)]

@@ -27,7 +27,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct ListPartitionInfosRequest {
-    pub inner_request: proto::ListPartitionInfosRequest,
+    pub(crate) inner_request: proto::ListPartitionInfosRequest,
 }
 
 impl ListPartitionInfosRequest {

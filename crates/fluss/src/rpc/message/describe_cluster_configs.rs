@@ -24,7 +24,7 @@ use prost::Message;
 
 #[derive(Debug, Default)]
 pub struct DescribeClusterConfigsRequest {
-    pub inner_request: proto::DescribeClusterConfigsRequest,
+    pub(crate) inner_request: proto::DescribeClusterConfigsRequest,
 }
 
 impl DescribeClusterConfigsRequest {

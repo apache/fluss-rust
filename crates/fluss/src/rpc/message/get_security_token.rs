@@ -25,7 +25,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct GetSecurityTokenRequest {
-    pub inner_request: GetFileSystemSecurityTokenRequest,
+    pub(crate) inner_request: GetFileSystemSecurityTokenRequest,
 }
 
 impl GetSecurityTokenRequest {

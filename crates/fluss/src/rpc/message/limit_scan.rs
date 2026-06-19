@@ -27,7 +27,7 @@ use prost::Message;
 use bytes::{Buf, BufMut};
 
 pub struct LimitScanRequest {
-    pub inner_request: proto::LimitScanRequest,
+    pub(crate) inner_request: proto::LimitScanRequest,
 }
 
 impl LimitScanRequest {

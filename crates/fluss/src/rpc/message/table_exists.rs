@@ -30,7 +30,7 @@ use bytes::{Buf, BufMut};
 use prost::Message;
 #[derive(Debug)]
 pub struct TableExistsRequest {
-    pub inner_request: proto::TableExistsRequest,
+    pub(crate) inner_request: proto::TableExistsRequest,
 }
 
 impl TableExistsRequest {

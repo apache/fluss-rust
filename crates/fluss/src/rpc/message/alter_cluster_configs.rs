@@ -25,7 +25,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct AlterClusterConfigsRequest {
-    pub inner_request: proto::AlterClusterConfigsRequest,
+    pub(crate) inner_request: proto::AlterClusterConfigsRequest,
 }
 
 impl AlterClusterConfigsRequest {

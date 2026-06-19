@@ -31,7 +31,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct CreateTableRequest {
-    pub inner_request: proto::CreateTableRequest,
+    pub(crate) inner_request: proto::CreateTableRequest,
 }
 
 impl CreateTableRequest {

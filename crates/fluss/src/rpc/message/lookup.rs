@@ -28,7 +28,7 @@ use prost::Message;
 use bytes::{Buf, BufMut};
 
 pub struct LookupRequest {
-    pub inner_request: proto::LookupRequest,
+    pub(crate) inner_request: proto::LookupRequest,
 }
 
 impl LookupRequest {

@@ -30,7 +30,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct CreateDatabaseRequest {
-    pub inner_request: proto::CreateDatabaseRequest,
+    pub(crate) inner_request: proto::CreateDatabaseRequest,
 }
 
 impl CreateDatabaseRequest {

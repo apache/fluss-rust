@@ -30,7 +30,7 @@ use prost::Message;
 /// `schema_id = None` requests the latest schema.
 #[derive(Debug)]
 pub struct GetTableSchemaRequestMsg {
-    pub inner_request: GetTableSchemaRequest,
+    pub(crate) inner_request: GetTableSchemaRequest,
 }
 
 impl GetTableSchemaRequestMsg {

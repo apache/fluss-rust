@@ -24,11 +24,11 @@ use bytes::{Buf, BufMut};
 use prost::Message;
 
 pub struct InitWriterRequest {
-    pub inner_request: proto::InitWriterRequest,
+    pub(crate) inner_request: proto::InitWriterRequest,
 }
 
 impl InitWriterRequest {
-    pub fn new(table_paths: Vec<PbTablePath>) -> Self {
+    pub(crate) fn new(table_paths: Vec<PbTablePath>) -> Self {
         InitWriterRequest {
             inner_request: proto::InitWriterRequest {
                 table_path: table_paths,
