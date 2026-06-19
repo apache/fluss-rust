@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::proto::{PbBucketOffset, PbProducerTableOffsets};
+use crate::proto::{GetProducerOffsetsResponse, PbBucketOffset, PbProducerTableOffsets};
 
 /// Per-bucket producer log-end offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +69,28 @@ impl ProducerTableOffsets {
                 .bucket_offsets
                 .iter()
                 .map(BucketOffset::from_pb)
+                .collect(),
+        }
+    }
+}
+
+/// Result of `get_producer_offsets`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProducerOffsets {
+    pub producer_id: Option<String>,
+    pub expiration_time: Option<i64>,
+    pub table_offsets: Vec<ProducerTableOffsets>,
+}
+
+impl ProducerOffsets {
+    pub fn from_pb(pb: &GetProducerOffsetsResponse) -> Self {
+        Self {
+            producer_id: pb.producer_id.clone(),
+            expiration_time: pb.expiration_time,
+            table_offsets: pb
+                .table_offsets
+                .iter()
+                .map(ProducerTableOffsets::from_pb)
                 .collect(),
         }
     }

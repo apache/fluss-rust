@@ -205,6 +205,24 @@ impl DatabaseDescriptor {
     }
 }
 
+/// Lightweight summary of a database returned by `list_database_summaries`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseSummary {
+    pub database_name: String,
+    pub created_time: i64,
+    pub table_count: i32,
+}
+
+impl DatabaseSummary {
+    pub fn from_pb(pb: &crate::proto::PbDatabaseSummary) -> Self {
+        Self {
+            database_name: pb.database_name.clone(),
+            created_time: pb.created_time,
+            table_count: pb.table_count,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

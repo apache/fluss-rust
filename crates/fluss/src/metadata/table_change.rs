@@ -121,6 +121,18 @@ impl RenameColumn {
     }
 }
 
+/// Bundle of column-level changes for a single `alter_table` call. Empty `Vec`s
+/// mean "no change of that kind"; pass `Default::default()` to send only
+/// config changes.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AlterTableChanges {
+    pub config_changes: Vec<crate::metadata::AlterConfig>,
+    pub add_columns: Vec<AddColumn>,
+    pub drop_columns: Vec<DropColumn>,
+    pub rename_columns: Vec<RenameColumn>,
+    pub modify_columns: Vec<ModifyColumn>,
+}
+
 /// Modify a column's type/comment/position. Mirrors the `ModifyColumn` variant of
 /// Java `TableChange`. All fields except `column_name` are optional — only the
 /// non-`None` ones are applied.
