@@ -31,7 +31,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct DropTableRequest {
-    pub inner_request: proto::DropTableRequest,
+    pub(crate) inner_request: proto::DropTableRequest,
 }
 
 impl DropTableRequest {

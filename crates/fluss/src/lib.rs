@@ -146,6 +146,8 @@ pub type TableId = i64;
 pub type PartitionId = i64;
 pub type BucketId = i32;
 
-pub mod proto {
+pub(crate) mod proto {
+    // Generated; not every 1.x message is wired up to a caller yet.
+    #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/proto.rs"));
 }

@@ -26,7 +26,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct DatabaseExistsRequest {
-    pub inner_request: proto::DatabaseExistsRequest,
+    pub(crate) inner_request: proto::DatabaseExistsRequest,
 }
 
 impl DatabaseExistsRequest {

@@ -30,7 +30,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct GetLatestLakeSnapshotRequest {
-    pub inner_request: proto::GetLatestLakeSnapshotRequest,
+    pub(crate) inner_request: proto::GetLatestLakeSnapshotRequest,
 }
 
 impl GetLatestLakeSnapshotRequest {

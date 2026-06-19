@@ -26,7 +26,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct AlterTableRequest {
-    pub inner_request: proto::AlterTableRequest,
+    pub(crate) inner_request: proto::AlterTableRequest,
 }
 
 impl AlterTableRequest {

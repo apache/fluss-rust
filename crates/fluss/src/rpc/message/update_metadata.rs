@@ -29,7 +29,7 @@ use bytes::{Buf, BufMut};
 use prost::Message;
 
 pub struct UpdateMetadataRequest {
-    pub inner_request: proto::MetadataRequest,
+    pub(crate) inner_request: proto::MetadataRequest,
 }
 
 impl UpdateMetadataRequest {

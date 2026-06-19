@@ -25,7 +25,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct AlterDatabaseRequest {
-    pub inner_request: proto::AlterDatabaseRequest,
+    pub(crate) inner_request: proto::AlterDatabaseRequest,
 }
 
 impl AlterDatabaseRequest {

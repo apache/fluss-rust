@@ -25,7 +25,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct GetTableStatsRequest {
-    pub inner_request: proto::GetTableStatsRequest,
+    pub(crate) inner_request: proto::GetTableStatsRequest,
 }
 
 impl GetTableStatsRequest {

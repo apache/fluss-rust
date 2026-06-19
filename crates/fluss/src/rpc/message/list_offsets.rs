@@ -68,7 +68,7 @@ impl OffsetSpec {
 
 #[derive(Debug)]
 pub struct ListOffsetsRequest {
-    pub inner_request: proto::ListOffsetsRequest,
+    pub(crate) inner_request: proto::ListOffsetsRequest,
 }
 
 impl ListOffsetsRequest {

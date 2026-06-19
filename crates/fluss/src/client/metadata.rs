@@ -239,7 +239,10 @@ impl Metadata {
         Ok(self.get_cluster().get_partition_id(physical_table_path))
     }
 
-    pub async fn get_connection(&self, server_node: &ServerNode) -> Result<ServerConnection> {
+    pub(crate) async fn get_connection(
+        &self,
+        server_node: &ServerNode,
+    ) -> Result<ServerConnection> {
         let result = self.connections.get_connection(server_node).await?;
         Ok(result)
     }

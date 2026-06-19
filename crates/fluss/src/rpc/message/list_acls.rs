@@ -25,7 +25,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct ListAclsRequest {
-    pub inner_request: proto::ListAclsRequest,
+    pub(crate) inner_request: proto::ListAclsRequest,
 }
 
 impl ListAclsRequest {

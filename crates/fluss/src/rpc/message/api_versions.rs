@@ -27,7 +27,7 @@ use prost::Message;
 
 #[derive(Debug, Clone)]
 pub struct ApiVersionsRequest {
-    pub inner_request: ProtoApiVersionsRequest,
+    pub(crate) inner_request: ProtoApiVersionsRequest,
 }
 
 impl ApiVersionsRequest {

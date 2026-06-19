@@ -25,7 +25,7 @@ use prost::Message;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticateRequest {
-    pub inner_request: ProtoAuthenticateRequest,
+    pub(crate) inner_request: ProtoAuthenticateRequest,
 }
 
 impl AuthenticateRequest {

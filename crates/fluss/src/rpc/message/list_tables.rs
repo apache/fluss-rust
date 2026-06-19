@@ -29,7 +29,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct ListTablesRequest {
-    pub inner_request: proto::ListTablesRequest,
+    pub(crate) inner_request: proto::ListTablesRequest,
 }
 
 impl ListTablesRequest {

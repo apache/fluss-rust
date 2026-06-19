@@ -29,7 +29,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct GetTableRequest {
-    pub inner_request: GetTableInfoRequest,
+    pub(crate) inner_request: GetTableInfoRequest,
 }
 
 impl GetTableRequest {

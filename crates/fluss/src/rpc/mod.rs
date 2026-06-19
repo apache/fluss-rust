@@ -29,4 +29,4 @@ pub use server_connection::*;
 mod convert;
 mod transport;
 
-pub use convert::*;
+pub(crate) use convert::*;

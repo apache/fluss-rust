@@ -24,7 +24,7 @@ use prost::Message;
 
 #[derive(Debug, Default)]
 pub struct ListDatabaseSummariesRequest {
-    pub inner_request: proto::ListDatabasesRequest,
+    pub(crate) inner_request: proto::ListDatabasesRequest,
 }
 
 impl ListDatabaseSummariesRequest {

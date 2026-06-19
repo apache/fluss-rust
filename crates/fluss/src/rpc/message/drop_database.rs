@@ -26,7 +26,7 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct DropDatabaseRequest {
-    pub inner_request: proto::DropDatabaseRequest,
+    pub(crate) inner_request: proto::DropDatabaseRequest,
 }
 
 impl DropDatabaseRequest {
