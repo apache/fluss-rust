@@ -30,6 +30,7 @@ use std::sync::Arc;
 pub enum NifServerType {
     TabletServer,
     CoordinatorServer,
+    Unknown,
 }
 
 #[derive(NifStruct)]
@@ -52,6 +53,7 @@ impl NifServerNode {
             server_type: match node.server_type() {
                 ServerType::TabletServer => NifServerType::TabletServer,
                 ServerType::CoordinatorServer => NifServerType::CoordinatorServer,
+                ServerType::Unknown => NifServerType::Unknown,
             },
         }
     }

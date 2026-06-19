@@ -293,7 +293,7 @@ class ServerNode:
         ...
     @property
     def server_type(self) -> str:
-        """The type of server ('CoordinatorServer' or 'TabletServer')."""
+        """The type of server ('CoordinatorServer', 'TabletServer', or 'Unknown')."""
         ...
     @property
     def uid(self) -> str:

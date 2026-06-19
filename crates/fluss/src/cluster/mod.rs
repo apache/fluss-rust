@@ -36,12 +36,14 @@ pub struct ServerNode {
 
 impl ServerNode {
     pub fn new(id: i32, host: String, port: u32, server_type: ServerType) -> ServerNode {
+        let uid = match &server_type {
+            ServerType::CoordinatorServer => format!("cs-{id}"),
+            ServerType::TabletServer => format!("ts-{id}"),
+            ServerType::Unknown => format!("unknown-{host}:{port}"),
+        };
         ServerNode {
             id,
-            uid: match server_type {
-                ServerType::CoordinatorServer => format!("cs-{id}"),
-                ServerType::TabletServer => format!("ts-{id}"),
-            },
+            uid,
             host,
             port,
             server_type,
@@ -77,6 +79,7 @@ impl ServerNode {
 pub enum ServerType {
     TabletServer,
     CoordinatorServer,
+    Unknown,
 }
 
 impl ServerType {
@@ -84,14 +87,15 @@ impl ServerType {
         match self {
             ServerType::CoordinatorServer => 1,
             ServerType::TabletServer => 2,
+            ServerType::Unknown => -1,
         }
     }
 
-    pub fn from_type_id(type_id: i32) -> Option<ServerType> {
+    pub fn from_type_id(type_id: i32) -> ServerType {
         match type_id {
-            1 => Some(ServerType::CoordinatorServer),
-            2 => Some(ServerType::TabletServer),
-            _ => None,
+            1 => ServerType::CoordinatorServer,
+            2 => ServerType::TabletServer,
+            _ => ServerType::Unknown,
         }
     }
 }
@@ -101,6 +105,7 @@ impl fmt::Display for ServerType {
         match self {
             ServerType::TabletServer => write!(f, "TabletServer"),
             ServerType::CoordinatorServer => write!(f, "CoordinatorServer"),
+            ServerType::Unknown => write!(f, "Unknown"),
         }
     }
 }

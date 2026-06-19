@@ -99,8 +99,11 @@ Complete API reference for the Fluss Rust client.
 | `fn id(&self) -> i32`            | Server node ID                                       |
 | `fn host(&self) -> &str`         | Hostname of the server                               |
 | `fn port(&self) -> u32`          | Port number                                          |
-| `fn server_type(&self) -> &ServerType` | Server type (`CoordinatorServer` or `TabletServer`) |
+| `fn server_type(&self) -> &ServerType` | Server type (`CoordinatorServer`, `TabletServer`, or `Unknown`) |
 | `fn uid(&self) -> &str`          | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)         |
+
+`ServerType::Unknown` is used when the client has not yet determined the endpoint
+type, such as bootstrap endpoints.
 
 ## `FlussTable<'a>`
 

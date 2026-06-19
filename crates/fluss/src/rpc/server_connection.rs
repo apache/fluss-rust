@@ -156,20 +156,21 @@ fn validate_server_type(
     expected: &ServerType,
     response_server_type: Option<i32>,
 ) -> Result<(), Error> {
+    if *expected == ServerType::Unknown {
+        return Ok(());
+    }
+
     // For forward-compat with servers that do not populate `server_type`, validation is skipped.
     let Some(type_id) = response_server_type else {
         return Ok(());
     };
     let actual = ServerType::from_type_id(type_id);
-    if actual.as_ref() == Some(expected) {
+    if &actual == expected {
         return Ok(());
     }
-    let actual_desc = actual
-        .map(|t| t.to_string())
-        .unwrap_or_else(|| format!("Unknown(type_id={type_id})"));
     Err(Error::InvalidServerType {
         message: format!(
-            "Expected server type {expected} but the server advertised {actual_desc}. \
+            "Expected server type {expected} but the server advertised {actual}. \
              The client may be talking to the wrong endpoint \
              (e.g. coordinator vs tablet server)."
         ),
@@ -1268,6 +1269,21 @@ mod tests {
             )
             .is_ok()
         );
+        assert!(
+            validate_server_type(
+                &ServerType::Unknown,
+                Some(ServerType::CoordinatorServer.to_type_id()),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_server_type(
+                &ServerType::Unknown,
+                Some(ServerType::TabletServer.to_type_id()),
+            )
+            .is_ok()
+        );
+        assert!(validate_server_type(&ServerType::Unknown, Some(99),).is_ok());
 
         // Mismatch: connected to a coordinator while expecting a tablet server
         // (and vice versa).
@@ -1290,8 +1306,8 @@ mod tests {
         ));
 
         validate_server_type(&ServerType::TabletServer, None).ok();
-        // Unknown / unmapped type id still fails, with the raw id surfaced so
-        // operators can diagnose protocol drift.
+        // Unknown / unmapped type id is treated as Unknown, which still fails
+        // when the client expects a concrete server type.
         assert!(matches!(
             validate_server_type(&ServerType::CoordinatorServer, Some(99),),
             Err(Error::InvalidServerType { .. })

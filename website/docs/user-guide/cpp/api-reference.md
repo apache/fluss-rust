@@ -105,8 +105,10 @@ Complete API reference for the Fluss C++ client.
 | `id`          | `int32_t`     | Server node ID                                           |
 | `host`        | `std::string` | Hostname of the server                                   |
 | `port`        | `uint32_t`    | Port number                                              |
-| `server_type` | `std::string` | Server type (`"CoordinatorServer"` or `"TabletServer"`)  |
+| `server_type` | `std::string` | Server type (`"CoordinatorServer"`, `"TabletServer"`, or `"Unknown"`)  |
 | `uid`         | `std::string` | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)             |
+
+`"Unknown"` is used when the client has not yet determined the endpoint type, such as bootstrap endpoints.
 
 ## `Table`
 
