@@ -3398,6 +3398,21 @@ fn timestamp_datum(
     }
 }
 
+/// Narrow a C++ `int32` into the `Datum` a map key/value expects, erroring on
+/// overflow. Core needs `Int8`/`Int16` for TINYINT/SMALLINT; a widened `Int32`
+/// is rejected. Mirrors `ArrayWriterInner::aw_set_i32`.
+fn int_datum(dt: &DataType, val: i32, role: &str) -> Result<Datum<'static>, String> {
+    match dt {
+        DataType::TinyInt(_) => i8::try_from(val)
+            .map(Datum::Int8)
+            .map_err(|_| format!("Value {val} does not fit TINYINT map {role}")),
+        DataType::SmallInt(_) => i16::try_from(val)
+            .map(Datum::Int16)
+            .map_err(|_| format!("Value {val} does not fit SMALLINT map {role}")),
+        _ => Ok(Datum::Int32(val)),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn new_map_writer(
     capacity: usize,
@@ -3466,7 +3481,7 @@ impl MapWriterInner {
         Ok(())
     }
     fn mw_key_i32(&mut self, val: i32) -> Result<(), String> {
-        self.pending_key = Some(fcore::row::Datum::Int32(val));
+        self.pending_key = Some(int_datum(&self.key_type, val, "key")?);
         Ok(())
     }
     fn mw_key_i64(&mut self, val: i64) -> Result<(), String> {
@@ -3519,7 +3534,7 @@ impl MapWriterInner {
         Ok(())
     }
     fn mw_value_i32(&mut self, val: i32) -> Result<(), String> {
-        self.pending_value = Some(fcore::row::Datum::Int32(val));
+        self.pending_value = Some(int_datum(&self.value_type, val, "value")?);
         Ok(())
     }
     fn mw_value_i64(&mut self, val: i64) -> Result<(), String> {

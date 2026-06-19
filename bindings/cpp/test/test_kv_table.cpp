@@ -489,6 +489,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
     // map<string,int> — entry 1 has a NULL value.
     {
         auto m = result.GetValue("m_str_int");
+        EXPECT_EQ(m.Type(), fluss::TypeId::Map);
         ASSERT_EQ(m.Size(), 2u);
         EXPECT_EQ(m.KeyAt(0).GetString(), "a");
         EXPECT_FALSE(m.ValueAt(0).IsNull());
@@ -530,6 +531,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
     // array<row<seq,label>>
     {
         auto a = result.GetValue("arr_row");
+        EXPECT_EQ(a.Type(), fluss::TypeId::Array);
         ASSERT_EQ(a.Size(), 2u);
         EXPECT_EQ(a.At(0).Field(0).GetInt32(), 1);
         EXPECT_EQ(a.At(0).Field(1).GetString(), "one");
@@ -544,6 +546,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
     // row<f_int, f_arr>
     {
         auto r = result.GetValue("r_with_arr");
+        EXPECT_EQ(r.Type(), fluss::TypeId::Row);
         EXPECT_EQ(r.Field(0).GetInt32(), 100);
         EXPECT_EQ(r.Field("f_int").GetInt32(), 100);  // ROW field by name
         auto arr = r.Field(1);
@@ -597,107 +600,6 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
             EXPECT_TRUE(result2.IsNull(i)) << "column " << i << " should be null";
         }
     }
-
-    ASSERT_OK(adm.DropTable(table_path, false));
-}
-
-TEST_F(KvTableTest, LookupWithValueHandle) {
-    auto& adm = admin();
-    auto& conn = connection();
-
-    fluss::TablePath table_path("fluss", "test_lookup_value_handle_cpp");
-
-    auto row_seq_label = arrow::struct_(
-        {arrow::field("seq", arrow::int32()), arrow::field("label", arrow::utf8())});
-    auto arrow_schema = arrow::schema({
-        arrow::field("id", arrow::int32()),
-        arrow::field("m", arrow::map(arrow::utf8(), arrow::int32())),
-        arrow::field("mr", arrow::map(arrow::utf8(), row_seq_label)),
-        arrow::field("ar", arrow::list(row_seq_label)),
-        arrow::field("r", arrow::struct_({arrow::field("f_int", arrow::int32()),
-                                          arrow::field("f_arr", arrow::list(arrow::int32()))})),
-    });
-    auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
-
-    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
-                                .SetSchema(schema)
-                                .SetProperty("table.replication.factor", "1")
-                                .Build();
-    fluss_test::CreateTable(adm, table_path, table_descriptor);
-
-    fluss::Table table;
-    ASSERT_OK(conn.GetTable(table_path, table));
-    fluss::UpsertWriter writer;
-    ASSERT_OK(table.NewUpsert().CreateWriter(writer));
-
-    {
-        auto row = table.NewRow();
-        row.SetInt32(0, 1);
-        // m = {"a":1, "b":null}
-        fluss::MapWriter m(2, fluss::DataType::String(), fluss::DataType::Int());
-        m.SetKeyString("a"); m.SetValueInt32(1); m.Commit();
-        m.SetKeyString("b"); m.SetValueNull(); m.Commit();
-        row.SetMap(1, std::move(m));
-        // mr = {"k": {7,"seven"}}
-        fluss::MapWriter mr(1, arrow::utf8(), row_seq_label);
-        mr.SetKeyString("k");
-        fluss::GenericRow rv(2); rv.SetInt32(0, 7); rv.SetString(1, "seven");
-        mr.SetValueRow(std::move(rv));
-        mr.Commit();
-        row.SetMap(2, std::move(mr));
-        // ar = [{1,"one"},{2,"two"}]
-        fluss::ArrayWriter ar(2, row_seq_label);
-        fluss::GenericRow e0(2); e0.SetInt32(0, 1); e0.SetString(1, "one");
-        fluss::GenericRow e1(2); e1.SetInt32(0, 2); e1.SetString(1, "two");
-        ar.SetRow(0, std::move(e0)); ar.SetRow(1, std::move(e1));
-        row.SetArray(3, std::move(ar));
-        // r = {100, [1,2,3]}
-        fluss::GenericRow r(2); r.SetInt32(0, 100);
-        fluss::ArrayWriter fa(3, fluss::DataType::Int());
-        fa.SetInt32(0, 1); fa.SetInt32(1, 2); fa.SetInt32(2, 3);
-        r.SetArray(1, std::move(fa));
-        row.SetRow(4, std::move(r));
-        ASSERT_OK(writer.Upsert(row));
-        ASSERT_OK(writer.Flush());
-    }
-
-    fluss::Lookuper lookuper;
-    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
-    auto key = table.NewRow();
-    key.SetInt32(0, 1);
-    fluss::LookupResult result;
-    ASSERT_OK(lookuper.Lookup(key, result));
-    ASSERT_TRUE(result.Found());
-
-    // map<string,int>, with a null value — navigate + leaf-read off one handle.
-    auto m = result.GetValue("m");
-    EXPECT_EQ(m.Type(), fluss::TypeId::Map);
-    ASSERT_EQ(m.Size(), 2u);
-    EXPECT_EQ(m.KeyAt(0).GetString(), "a");
-    EXPECT_EQ(m.ValueAt(0).GetInt32(), 1);
-    EXPECT_EQ(m.KeyAt(1).GetString(), "b");
-    EXPECT_TRUE(m.ValueAt(1).IsNull());
-
-    // map<string, row>
-    auto mr = result.GetValue("mr");
-    EXPECT_EQ(mr.ValueAt(0).Field(0).GetInt32(), 7);
-    EXPECT_EQ(mr.ValueAt(0).Field(1).GetString(), "seven");
-
-    // array<row>
-    auto ar = result.GetValue("ar");
-    EXPECT_EQ(ar.Type(), fluss::TypeId::Array);
-    ASSERT_EQ(ar.Size(), 2u);
-    EXPECT_EQ(ar.At(0).Field(0).GetInt32(), 1);
-    EXPECT_EQ(ar.At(1).Field(1).GetString(), "two");
-
-    // row<f_int, f_arr>
-    auto r = result.GetValue("r");
-    EXPECT_EQ(r.Type(), fluss::TypeId::Row);
-    ASSERT_EQ(r.FieldCount(), 2u);
-    EXPECT_EQ(r.Field(0).GetInt32(), 100);
-    auto fa = r.Field(1);
-    ASSERT_EQ(fa.Size(), 3u);
-    EXPECT_EQ(fa.At(2).GetInt32(), 3);
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }

@@ -1849,6 +1849,57 @@ TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
     }
 }
 
+TEST_F(LogTableTest, MapWriterOverflowDetection) {
+    // Keys/values go through SetKeyInt32/SetValueInt32 (always i32), so TINYINT /
+    // SMALLINT must be range-checked like array elements.
+
+    // TINYINT map value overflowing i8 (-128..127) must throw.
+    {
+        fluss::MapWriter m(1, fluss::DataType::String(), fluss::DataType::TinyInt());
+        bool threw = false;
+        try {
+            m.SetValueInt32(1000);
+        } catch (const std::exception& e) {
+            threw = true;
+            EXPECT_NE(std::string(e.what()).find("TINYINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // SMALLINT map value overflowing i16 must throw.
+    {
+        fluss::MapWriter m(1, fluss::DataType::String(), fluss::DataType::SmallInt());
+        bool threw = false;
+        try {
+            m.SetValueInt32(40000);
+        } catch (const std::exception& e) {
+            threw = true;
+            EXPECT_NE(std::string(e.what()).find("SMALLINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // Keys are checked the same way: a TINYINT key out of range throws.
+    {
+        fluss::MapWriter m(1, fluss::DataType::TinyInt(), fluss::DataType::Int());
+        bool threw = false;
+        try {
+            m.SetKeyInt32(-200);
+        } catch (const std::exception& e) {
+            threw = true;
+            EXPECT_NE(std::string(e.what()).find("TINYINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // In-range key and value must succeed.
+    {
+        fluss::MapWriter m(1, fluss::DataType::TinyInt(), fluss::DataType::SmallInt());
+        EXPECT_NO_THROW(m.SetKeyInt32(127));
+        EXPECT_NO_THROW(m.SetValueInt32(32767));
+    }
+}
+
 TEST_F(LogTableTest, NullabilityPreservedInTableInfo) {
     auto& adm = admin();
     auto& conn = connection();
