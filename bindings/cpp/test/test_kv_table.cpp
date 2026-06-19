@@ -343,6 +343,8 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
                          arrow::field("f_binary", arrow::fixed_size_binary(4)),
                          arrow::field("f_arr", arrow::list(arrow::int32())),
                      })),
+        arrow::field("m_str_tiny", arrow::map(arrow::utf8(), arrow::int8())),
+        arrow::field("arr_small", arrow::list(arrow::int16())),
     });
     auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
 
@@ -473,6 +475,24 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
             rr.SetArray(13, std::move(farr));
             row.Set("r_rich", std::move(rr));
         }
+        // map<string,tinyint>
+        {
+            fluss::MapWriter m(2, fluss::DataType::String(), fluss::DataType::TinyInt());
+            m.SetKeyString("lo");
+            m.SetValueInt32(-128);
+            m.Commit();
+            m.SetKeyString("hi");
+            m.SetValueInt32(127);
+            m.Commit();
+            row.Set("m_str_tiny", std::move(m));
+        }
+        // array<smallint>
+        {
+            fluss::ArrayWriter a(2, fluss::DataType::SmallInt());
+            a.SetInt32(0, 1000);
+            a.SetInt32(1, -2000);
+            row.Set("arr_small", std::move(a));
+        }
 
         ASSERT_OK(writer.Upsert(row));
         ASSERT_OK(writer.Flush());
@@ -579,12 +599,27 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         EXPECT_TRUE(fa.At(1).IsNull());
         EXPECT_EQ(fa.At(2).GetInt32(), 11);
     }
+    // map<string,tinyint>
+    {
+        auto m = result.GetValue("m_str_tiny");
+        ASSERT_EQ(m.Size(), 2u);
+        EXPECT_EQ(m.ValueAt(0).GetInt32(), -128);
+        EXPECT_EQ(m.ValueAt(1).GetInt32(), 127);
+    }
+    // array<smallint>
+    {
+        auto a = result.GetValue("arr_small");
+        ASSERT_EQ(a.Size(), 2u);
+        EXPECT_EQ(a.At(0).GetInt32(), 1000);
+        EXPECT_EQ(a.At(1).GetInt32(), -2000);
+    }
 
     // Row 2 (id=2) — every compound column NULL.
     {
+        const int column_count = arrow_schema->num_fields();
         auto row = table.NewRow();
         row.SetInt32(0, 2);
-        for (size_t i = 1; i <= 9; ++i) {
+        for (int i = 1; i < column_count; ++i) {
             row.SetNull(i);
         }
         ASSERT_OK(writer.Upsert(row));
@@ -596,7 +631,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         ASSERT_OK(lookuper.Lookup(key2, result2));
         ASSERT_TRUE(result2.Found());
         EXPECT_EQ(result2.GetInt32(0), 2);
-        for (size_t i = 1; i <= 9; ++i) {
+        for (int i = 1; i < column_count; ++i) {
             EXPECT_TRUE(result2.IsNull(i)) << "column " << i << " should be null";
         }
     }
