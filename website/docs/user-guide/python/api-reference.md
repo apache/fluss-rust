@@ -73,8 +73,10 @@ Supports `async with` statement (async context manager).
 | `.id -> int`             | Server node ID                                             |
 | `.host -> str`           | Hostname of the server                                     |
 | `.port -> int`           | Port number                                                |
-| `.server_type -> str`    | Server type (`"CoordinatorServer"` or `"TabletServer"`)    |
+| `.server_type -> str`    | Server type (`"CoordinatorServer"`, `"TabletServer"`, or `"Unknown"`)    |
 | `.uid -> str`            | Unique identifier (e.g. `"cs-0"`, `"ts-1"`)               |
+
+`"Unknown"` is used when the client has not yet determined the endpoint type, such as bootstrap endpoints.
 
 ## `FlussTable`
 
