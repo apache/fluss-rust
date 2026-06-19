@@ -22,8 +22,9 @@ fn main() -> Result<()> {
     config.bytes([
         ".proto.PbProduceLogReqForBucket.records",
         ".proto.PbPutKvReqForBucket.records",
-        ".proto.PbLookupReqForBucket.key",
+        ".proto.PbLookupReqForBucket.keys",
         ".proto.PbPrefixLookupReqForBucket.keys",
+        ".proto.ScanKvResponse.records",
     ]);
     config.compile_protos(&["src/proto/fluss_api.proto"], &["src/proto"])?;
     Ok(())
