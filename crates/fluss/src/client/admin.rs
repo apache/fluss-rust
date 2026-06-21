@@ -20,11 +20,11 @@ use crate::cluster::ServerNode;
 use crate::metadata::{
     AclFilter, AclInfo, AcquireKvSnapshotLeaseResult, ActiveKvSnapshots, AlterConfig,
     AlterTableChanges, ClusterHealth, CreateAclResult, DatabaseDescriptor, DatabaseInfo,
-    DatabaseSummary, DescribeConfig, DropAclsFilterResult, JsonSerde, KvSnapshotLeaseForTable,
-    KvSnapshotMetadata, LakeSnapshot, LakeSnapshotInfo, LatestKvSnapshots, PartitionInfo,
-    PartitionSpec, PhysicalTablePath, ProducerOffsets, ProducerTableOffsets, RebalanceProgress,
-    RemoteLogManifestEntry, Schema, SchemaInfo, TableBucket, TableDescriptor, TableInfo, TablePath,
-    TableStats,
+    DatabaseSummary, DescribeConfig, DropAclsFilterResult, GoalType, JsonSerde,
+    KvSnapshotLeaseForTable, KvSnapshotMetadata, LakeSnapshot, LakeSnapshotInfo, LatestKvSnapshots,
+    PartitionInfo, PartitionSpec, PhysicalTablePath, ProducerOffsets, ProducerTableOffsets,
+    RebalanceProgress, RemoteLogManifestEntry, Schema, SchemaInfo, ServerTag, TableBucket,
+    TableDescriptor, TableInfo, TablePath, TableStats,
 };
 use crate::rpc::message::{
     AcquireKvSnapshotLeaseRequest, AddServerTagRequest, AlterClusterConfigsRequest,
@@ -709,7 +709,7 @@ impl FlussAdmin {
     }
 
     /// Add a tag to servers.
-    pub async fn add_server_tag(&self, server_ids: Vec<i32>, server_tag: i32) -> Result<()> {
+    pub async fn add_server_tag(&self, server_ids: Vec<i32>, server_tag: ServerTag) -> Result<()> {
         let _response = self
             .admin_gateway()
             .await?
@@ -719,7 +719,11 @@ impl FlussAdmin {
     }
 
     /// Remove a tag from servers.
-    pub async fn remove_server_tag(&self, server_ids: Vec<i32>, server_tag: i32) -> Result<()> {
+    pub async fn remove_server_tag(
+        &self,
+        server_ids: Vec<i32>,
+        server_tag: ServerTag,
+    ) -> Result<()> {
         let _response = self
             .admin_gateway()
             .await?
@@ -729,7 +733,7 @@ impl FlussAdmin {
     }
 
     /// Trigger a rebalance. Returns the rebalance id assigned by the server.
-    pub async fn rebalance(&self, goals: Vec<i32>) -> Result<String> {
+    pub async fn rebalance(&self, goals: Vec<GoalType>) -> Result<String> {
         let response = self
             .admin_gateway()
             .await?
