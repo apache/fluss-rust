@@ -33,12 +33,9 @@ mod admin_extended_test {
         AclFilter, AclInfo, AddColumn, AlterConfig, AlterConfigOpType, AlterTableChanges,
         BucketOffset, BucketStatsRequest, ColumnPositionType, DataTypes, DatabaseDescriptorBuilder,
         JsonSerde, KvFormat, KvSnapshotLeaseForBucket, KvSnapshotLeaseForTable, LogFormat,
-        OperationType, PermissionType, ProducerTableOffsets, ResourceType, Schema, TableDescriptor,
-        TablePath,
+        OperationType, PermissionType, ProducerTableOffsets, ResourceType, Schema, ServerTag,
+        TableDescriptor, TablePath,
     };
-
-    // ServerTag codes (no domain enum yet — server-tag API is admin-level only).
-    const SERVER_TAG_TEMPORARY_OFFLINE: i32 = 1;
 
     /// Asserts an error decoded into one of the `allowed` Fluss API errors.
     /// Panics (failing the test) on a transport/decoding error or an unexpected
@@ -546,11 +543,11 @@ mod admin_extended_test {
         // Add then immediately remove a TEMPORARY_OFFLINE tag so cluster state
         // is restored. Both RPCs must complete without a transport error.
         admin
-            .add_server_tag(vec![tablet_id], SERVER_TAG_TEMPORARY_OFFLINE)
+            .add_server_tag(vec![tablet_id], ServerTag::TemporaryOffline)
             .await
             .expect("should add server tag");
         admin
-            .remove_server_tag(vec![tablet_id], SERVER_TAG_TEMPORARY_OFFLINE)
+            .remove_server_tag(vec![tablet_id], ServerTag::TemporaryOffline)
             .await
             .expect("should remove server tag");
     }
@@ -772,7 +769,7 @@ mod admin_extended_test {
         if let Err(error) = admin.get_latest_lake_snapshot(&table_path).await {
             assert_expected_api_error(error, &lake_errors);
         }
-        if let Err(error) = admin.get_lake_snapshot(&table_path, None).await {
+        if let Err(error) = admin.get_lake_snapshot(&table_path, None, None).await {
             assert_expected_api_error(error, &lake_errors);
         }
 
