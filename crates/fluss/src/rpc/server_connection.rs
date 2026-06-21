@@ -18,9 +18,9 @@
 use crate::cluster::{ServerNode, ServerType};
 use crate::error::Error;
 use crate::metrics::{
-    CLIENT_BYTES_RECEIVED_TOTAL, CLIENT_BYTES_SENT_TOTAL, CLIENT_REQUEST_LATENCY_MS,
-    CLIENT_REQUESTS_IN_FLIGHT, CLIENT_REQUESTS_TOTAL, CLIENT_RESPONSES_TOTAL, LABEL_API_KEY,
-    api_key_label,
+    CLIENT_BYTES_RECEIVED_TOTAL, CLIENT_BYTES_SENT_TOTAL, CLIENT_CONNECTIONS_POISONED_TOTAL,
+    CLIENT_REQUEST_LATENCY_MS, CLIENT_REQUESTS_IN_FLIGHT, CLIENT_REQUESTS_TOTAL,
+    CLIENT_RESPONSES_TOTAL, LABEL_API_KEY, api_key_label,
 };
 use crate::proto::PbApiVersion;
 use crate::rpc::api_key::ApiKey;
@@ -414,6 +414,11 @@ impl ConnectionState {
         match self {
             Self::RequestMap(map) => {
                 let err = Arc::new(err);
+
+                // Counted on the live -> poisoned transition only, so the value
+                // reflects connection deaths rather than how many callers
+                // observed the poison (the `Self::Poison` arm below is re-entry).
+                metrics::counter!(CLIENT_CONNECTIONS_POISONED_TOTAL).increment(1);
 
                 // inform all active requests
                 for (_request_id, active_request) in map.drain() {
@@ -985,6 +990,30 @@ mod tests {
     }
 
     // -- Tests -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn poison_counts_once_per_connection_death() {
+        let _test_guard = test_lock().lock().await;
+        let snapshotter = test_snapshotter();
+
+        let before: Vec<_> = snapshotter.snapshot().into_vec();
+        let poisoned_before = counter_sum(&before, CLIENT_CONNECTIONS_POISONED_TOTAL);
+
+        let mut state = ConnectionState::RequestMap(HashMap::new());
+        // First call transitions live -> poisoned (counted); the second is
+        // re-entry on the already-poisoned state and must NOT be counted.
+        state.poison(RpcError::ConnectionError("boom".to_string()));
+        state.poison(RpcError::ConnectionError("boom again".to_string()));
+
+        let after: Vec<_> = snapshotter.snapshot().into_vec();
+        let poisoned_after = counter_sum(&after, CLIENT_CONNECTIONS_POISONED_TOTAL);
+
+        assert_eq!(
+            poisoned_after - poisoned_before,
+            1,
+            "poison() must increment the counter exactly once per connection death"
+        );
+    }
 
     #[tokio::test]
     async fn request_records_metrics_for_reportable_api_key() {
