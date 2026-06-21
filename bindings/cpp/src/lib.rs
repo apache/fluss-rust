@@ -17,17 +17,20 @@
 
 mod types;
 
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use fluss as fcore;
 use fluss::PartitionId;
 use fluss::client::PrefixKeyLookuper;
 use fluss::error::Error;
-use fluss::metadata::{Column, TableInfo};
+use fluss::metadata::{Column, DataType, TableInfo};
 use fluss::row::{Datum, GenericRow};
 use fluss::rpc::FlussError as CoreFlussError;
+use fluss::rpc::message::OffsetSpec;
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -297,7 +300,8 @@ mod ffi {
         type LookupResultInner;
         type PrefixLookupResultInner;
         type ArrayWriterInner;
-        type ArrayViewInner;
+        type MapWriterInner;
+        type ValueInner;
 
         // Connection
         fn new_connection(config: &FfiConfig) -> FfiPtrResult;
@@ -311,6 +315,17 @@ mod ffi {
             self: &Admin,
             table_path: &FfiTablePath,
             descriptor: &FfiTableDescriptor,
+            ignore_if_exists: bool,
+        ) -> FfiResult;
+        // Create a table whose columns come from an Arrow schema (C Data
+        // Interface pointer), supporting nested MAP/ROW columns. `descriptor`
+        // supplies primary keys + table-level metadata; its `schema.columns`
+        // are ignored in favour of `arrow_schema_ptr`.
+        fn create_table_arrow(
+            self: &Admin,
+            table_path: &FfiTablePath,
+            descriptor: &FfiTableDescriptor,
+            arrow_schema_ptr: usize,
             ignore_if_exists: bool,
         ) -> FfiResult;
         fn drop_table(
@@ -416,6 +431,16 @@ mod ffi {
             idx: usize,
             writer: &mut ArrayWriterInner,
         ) -> Result<()>;
+        fn gr_set_map(
+            self: &mut GenericRowInner,
+            idx: usize,
+            writer: &mut MapWriterInner,
+        ) -> Result<()>;
+        fn gr_set_row(
+            self: &mut GenericRowInner,
+            idx: usize,
+            row: &mut GenericRowInner,
+        ) -> Result<()>;
 
         // ArrayWriterInner — opaque array builder for writes
         fn new_array_writer(
@@ -424,6 +449,11 @@ mod ffi {
             precision: u32,
             scale: u32,
             array_nesting: u32,
+        ) -> Result<Box<ArrayWriterInner>>;
+        // ROW/MAP element types: a one-field Arrow schema (the flat encoding can't carry them).
+        fn new_array_writer_arrow(
+            size: usize,
+            element_schema_ptr: usize,
         ) -> Result<Box<ArrayWriterInner>>;
         fn aw_size(self: &ArrayWriterInner) -> usize;
         fn aw_set_null(self: &mut ArrayWriterInner, idx: usize) -> Result<()>;
@@ -454,6 +484,61 @@ mod ffi {
             idx: usize,
             nested: &mut ArrayWriterInner,
         ) -> Result<()>;
+        fn aw_set_row(
+            self: &mut ArrayWriterInner,
+            idx: usize,
+            row: &mut GenericRowInner,
+        ) -> Result<()>;
+        fn aw_set_map(
+            self: &mut ArrayWriterInner,
+            idx: usize,
+            map: &mut MapWriterInner,
+        ) -> Result<()>;
+
+        // MapWriterInner — opaque map builder for writes.
+        #[allow(clippy::too_many_arguments)]
+        fn new_map_writer(
+            capacity: usize,
+            key_leaf_type_id: i32,
+            key_precision: u32,
+            key_scale: u32,
+            value_leaf_type_id: i32,
+            value_precision: u32,
+            value_scale: u32,
+            value_array_nesting: u32,
+        ) -> Result<Box<MapWriterInner>>;
+        // ROW/MAP key/value types: a [key, value] Arrow schema (the flat encoding can't).
+        fn new_map_writer_arrow(
+            capacity: usize,
+            kv_schema_ptr: usize,
+        ) -> Result<Box<MapWriterInner>>;
+        fn mw_key_bool(self: &mut MapWriterInner, val: bool) -> Result<()>;
+        fn mw_key_i32(self: &mut MapWriterInner, val: i32) -> Result<()>;
+        fn mw_key_i64(self: &mut MapWriterInner, val: i64) -> Result<()>;
+        fn mw_key_f32(self: &mut MapWriterInner, val: f32) -> Result<()>;
+        fn mw_key_f64(self: &mut MapWriterInner, val: f64) -> Result<()>;
+        fn mw_key_str(self: &mut MapWriterInner, val: &str) -> Result<()>;
+        fn mw_key_bytes(self: &mut MapWriterInner, val: &[u8]) -> Result<()>;
+        fn mw_key_date(self: &mut MapWriterInner, days: i32) -> Result<()>;
+        fn mw_key_time(self: &mut MapWriterInner, millis: i32) -> Result<()>;
+        fn mw_key_timestamp(self: &mut MapWriterInner, millis: i64, nanos: i32) -> Result<()>;
+        fn mw_key_decimal_str(self: &mut MapWriterInner, val: &str) -> Result<()>;
+        fn mw_value_null(self: &mut MapWriterInner) -> Result<()>;
+        fn mw_value_bool(self: &mut MapWriterInner, val: bool) -> Result<()>;
+        fn mw_value_i32(self: &mut MapWriterInner, val: i32) -> Result<()>;
+        fn mw_value_i64(self: &mut MapWriterInner, val: i64) -> Result<()>;
+        fn mw_value_f32(self: &mut MapWriterInner, val: f32) -> Result<()>;
+        fn mw_value_f64(self: &mut MapWriterInner, val: f64) -> Result<()>;
+        fn mw_value_str(self: &mut MapWriterInner, val: &str) -> Result<()>;
+        fn mw_value_bytes(self: &mut MapWriterInner, val: &[u8]) -> Result<()>;
+        fn mw_value_date(self: &mut MapWriterInner, days: i32) -> Result<()>;
+        fn mw_value_time(self: &mut MapWriterInner, millis: i32) -> Result<()>;
+        fn mw_value_timestamp(self: &mut MapWriterInner, millis: i64, nanos: i32) -> Result<()>;
+        fn mw_value_decimal_str(self: &mut MapWriterInner, val: &str) -> Result<()>;
+        fn mw_value_row(self: &mut MapWriterInner, row: &mut GenericRowInner) -> Result<()>;
+        fn mw_value_map(self: &mut MapWriterInner, map: &mut MapWriterInner) -> Result<()>;
+        fn mw_value_array(self: &mut MapWriterInner, array: &mut ArrayWriterInner) -> Result<()>;
+        fn mw_commit(self: &mut MapWriterInner) -> Result<()>;
 
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
@@ -502,59 +587,35 @@ mod ffi {
         fn lv_is_ts_ltz(self: &LookupResultInner, field: usize) -> Result<bool>;
         fn lv_get_decimal_str(self: &LookupResultInner, field: usize) -> Result<String>;
 
-        fn lv_get_array_size(self: &LookupResultInner, field: usize) -> Result<usize>;
-        fn lv_get_array_is_null(
-            self: &LookupResultInner,
+        // ValueInner — recursive value handle for complex column reads.
+        fn lv_get_value(self: &LookupResultInner, field: usize) -> Result<Box<ValueInner>>;
+        fn sv_get_value(
+            self: &ScanResultInner,
+            bucket: usize,
+            rec: usize,
             field: usize,
-            element: usize,
-        ) -> Result<bool>;
-        fn lv_get_array_bool(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<bool>;
-        fn lv_get_array_i32(self: &LookupResultInner, field: usize, element: usize) -> Result<i32>;
-        fn lv_get_array_i64(self: &LookupResultInner, field: usize, element: usize) -> Result<i64>;
-        fn lv_get_array_f32(self: &LookupResultInner, field: usize, element: usize) -> Result<f32>;
-        fn lv_get_array_f64(self: &LookupResultInner, field: usize, element: usize) -> Result<f64>;
-        fn lv_get_array_str(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<String>;
-        fn lv_get_array_bytes(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<Vec<u8>>;
-        fn lv_get_array_date_days(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn lv_get_array_time_millis(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn lv_get_array_ts_millis(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<i64>;
-        fn lv_get_array_ts_nanos(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn lv_get_array_decimal_str(
-            self: &LookupResultInner,
-            field: usize,
-            element: usize,
-        ) -> Result<String>;
-        fn lv_get_array_element_type(self: &LookupResultInner, field: usize) -> Result<i32>;
-        fn lv_get_array_view(self: &LookupResultInner, field: usize)
-        -> Result<Box<ArrayViewInner>>;
+        ) -> Result<Box<ValueInner>>;
+        fn v_type(self: &ValueInner) -> i32;
+        fn v_is_null(self: &ValueInner) -> bool;
+        fn v_get_bool(self: &ValueInner) -> Result<bool>;
+        fn v_get_i32(self: &ValueInner) -> Result<i32>;
+        fn v_get_i64(self: &ValueInner) -> Result<i64>;
+        fn v_get_f32(self: &ValueInner) -> Result<f32>;
+        fn v_get_f64(self: &ValueInner) -> Result<f64>;
+        fn v_get_str(self: &ValueInner) -> Result<String>;
+        fn v_get_bytes(self: &ValueInner) -> Result<Vec<u8>>;
+        fn v_get_date_days(self: &ValueInner) -> Result<i32>;
+        fn v_get_time_millis(self: &ValueInner) -> Result<i32>;
+        fn v_get_ts_millis(self: &ValueInner) -> Result<i64>;
+        fn v_get_ts_nanos(self: &ValueInner) -> Result<i32>;
+        fn v_get_decimal_str(self: &ValueInner) -> Result<String>;
+        fn v_size(self: &ValueInner) -> Result<usize>;
+        fn v_field_count(self: &ValueInner) -> Result<usize>;
+        fn v_at(self: &ValueInner, i: usize) -> Result<Box<ValueInner>>;
+        fn v_key_at(self: &ValueInner, i: usize) -> Result<Box<ValueInner>>;
+        fn v_value_at(self: &ValueInner, i: usize) -> Result<Box<ValueInner>>;
+        fn v_field(self: &ValueInner, i: usize) -> Result<Box<ValueInner>>;
+        fn v_field_by_name(self: &ValueInner, name: &str) -> Result<Box<ValueInner>>;
 
         // PrefixLookuper
         unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper);
@@ -608,117 +669,11 @@ mod ffi {
             field: usize,
         ) -> Result<String>;
 
-        fn plv_get_array_size(
+        fn plv_get_value(
             self: &PrefixLookupResultInner,
             rec: usize,
             field: usize,
-        ) -> Result<usize>;
-        fn plv_get_array_is_null(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<bool>;
-        fn plv_get_array_bool(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<bool>;
-        fn plv_get_array_i32(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn plv_get_array_i64(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i64>;
-        fn plv_get_array_f32(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<f32>;
-        fn plv_get_array_f64(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<f64>;
-        fn plv_get_array_str(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<String>;
-        fn plv_get_array_bytes(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<Vec<u8>>;
-        fn plv_get_array_date_days(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn plv_get_array_time_millis(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn plv_get_array_ts_millis(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i64>;
-        fn plv_get_array_ts_nanos(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn plv_get_array_decimal_str(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<String>;
-        fn plv_get_array_element_type(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-        ) -> Result<i32>;
-        fn plv_get_array_view(
-            self: &PrefixLookupResultInner,
-            rec: usize,
-            field: usize,
-        ) -> Result<Box<ArrayViewInner>>;
-
-        // ArrayViewInner — opaque recursive array reader for C++ bindings
-        fn av_size(self: &ArrayViewInner) -> usize;
-        fn av_element_type_id(self: &ArrayViewInner) -> i32;
-        fn av_is_null(self: &ArrayViewInner, element: usize) -> Result<bool>;
-        fn av_get_bool(self: &ArrayViewInner, element: usize) -> Result<bool>;
-        fn av_get_i32(self: &ArrayViewInner, element: usize) -> Result<i32>;
-        fn av_get_i64(self: &ArrayViewInner, element: usize) -> Result<i64>;
-        fn av_get_f32(self: &ArrayViewInner, element: usize) -> Result<f32>;
-        fn av_get_f64(self: &ArrayViewInner, element: usize) -> Result<f64>;
-        fn av_get_str(self: &ArrayViewInner, element: usize) -> Result<String>;
-        fn av_get_bytes(self: &ArrayViewInner, element: usize) -> Result<Vec<u8>>;
-        fn av_get_date_days(self: &ArrayViewInner, element: usize) -> Result<i32>;
-        fn av_get_time_millis(self: &ArrayViewInner, element: usize) -> Result<i32>;
-        fn av_get_ts_millis(self: &ArrayViewInner, element: usize) -> Result<i64>;
-        fn av_get_ts_nanos(self: &ArrayViewInner, element: usize) -> Result<i32>;
-        fn av_get_decimal_str(self: &ArrayViewInner, element: usize) -> Result<String>;
-        fn av_get_nested(self: &ArrayViewInner, element: usize) -> Result<Box<ArrayViewInner>>;
+        ) -> Result<Box<ValueInner>>;
 
         // LogScanner
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
@@ -845,111 +800,6 @@ mod ffi {
             rec: usize,
             field: usize,
         ) -> Result<String>;
-
-        fn sv_get_array_size(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-        ) -> Result<usize>;
-        fn sv_get_array_is_null(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<bool>;
-        fn sv_get_array_bool(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<bool>;
-        fn sv_get_array_i32(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn sv_get_array_i64(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i64>;
-        fn sv_get_array_f32(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<f32>;
-        fn sv_get_array_f64(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<f64>;
-        fn sv_get_array_str(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<String>;
-        fn sv_get_array_bytes(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<Vec<u8>>;
-        fn sv_get_array_date_days(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn sv_get_array_time_millis(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn sv_get_array_ts_millis(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i64>;
-        fn sv_get_array_ts_nanos(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<i32>;
-        fn sv_get_array_decimal_str(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-            element: usize,
-        ) -> Result<String>;
-        fn sv_get_array_element_type(self: &ScanResultInner, field: usize) -> Result<i32>;
-        fn sv_get_array_view(
-            self: &ScanResultInner,
-            bucket: usize,
-            rec: usize,
-            field: usize,
-        ) -> Result<Box<ArrayViewInner>>;
 
         fn sv_bucket_infos(self: &ScanResultInner) -> &Vec<FfiBucketInfo>;
     }
@@ -1228,6 +1078,38 @@ impl Admin {
         }
     }
 
+    fn create_table_arrow(
+        &self,
+        table_path: &ffi::FfiTablePath,
+        descriptor: &ffi::FfiTableDescriptor,
+        arrow_schema_ptr: usize,
+        ignore_if_exists: bool,
+    ) -> ffi::FfiResult {
+        let path = fcore::metadata::TablePath::new(
+            table_path.database_name.clone(),
+            table_path.table_name.clone(),
+        );
+
+        // Safety: C++ exports the schema via `arrow::ExportSchema` into a heap
+        // `FFI_ArrowSchema` whose pointer is passed here; ownership transfers.
+        let core_descriptor =
+            match unsafe { types::arrow_ffi_to_core_descriptor(arrow_schema_ptr, descriptor) } {
+                Ok(d) => d,
+                Err(e) => return client_err(e.to_string()),
+            };
+
+        let result = RUNTIME.block_on(async {
+            self.inner
+                .create_table(&path, &core_descriptor, ignore_if_exists)
+                .await
+        });
+
+        match result {
+            Ok(_) => ok_result(),
+            Err(e) => err_from_core_error(&e),
+        }
+    }
+
     fn drop_table(
         &self,
         table_path: &ffi::FfiTablePath,
@@ -1301,8 +1183,6 @@ impl Admin {
         bucket_ids: Vec<i32>,
         offset_query: &ffi::FfiOffsetQuery,
     ) -> ffi::FfiListOffsetsResult {
-        use fcore::rpc::message::OffsetSpec;
-
         let path = fcore::metadata::TablePath::new(
             table_path.database_name.clone(),
             table_path.table_name.clone(),
@@ -1898,8 +1778,6 @@ impl AppendWriter {
     }
 
     fn append_arrow_batch(&mut self, array_ptr: usize, schema_ptr: usize) -> ffi::FfiPtrResult {
-        use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-
         // Safety: C++ allocates these via `new ArrowArray/ArrowSchema` after a
         // successful `ExportRecordBatch`, so both pointers are valid heap
         // allocations that we take ownership of here.
@@ -2199,7 +2077,6 @@ unsafe fn delete_log_scanner(scanner: *mut LogScanner) {
 
 // Helper function to free the Arrow FFI structures separately (for use after ImportRecordBatch)
 pub extern "C" fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize) {
-    use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
     if array_ptr != 0 {
         let _array = unsafe { Box::from_raw(array_ptr as *mut FFI_ArrowArray) };
     }
@@ -2230,7 +2107,6 @@ impl LogScanner {
     }
 
     fn subscribe_buckets(&self, subscriptions: Vec<ffi::FfiBucketSubscription>) -> ffi::FfiResult {
-        use std::collections::HashMap;
         let bucket_offsets: HashMap<i32, i64> = subscriptions
             .into_iter()
             .map(|s| (s.bucket_id, s.offset))
@@ -2254,7 +2130,6 @@ impl LogScanner {
         &self,
         subscriptions: Vec<ffi::FfiPartitionBucketSubscription>,
     ) -> ffi::FfiResult {
-        use std::collections::HashMap;
         let offsets: HashMap<(PartitionId, i32), i64> = subscriptions
             .into_iter()
             .map(|s| ((s.partition_id, s.bucket_id), s.offset))
@@ -2479,6 +2354,25 @@ impl GenericRowInner {
         Ok(())
     }
 
+    fn gr_set_map(&mut self, idx: usize, writer: &mut MapWriterInner) -> Result<(), String> {
+        self.ensure_size(idx);
+        writer.complete_if_needed()?;
+        let map = writer.completed.take().ok_or_else(|| {
+            "MapWriter invariant violation: completed map missing after finalize".to_string()
+        })?;
+        self.row.set_field(idx, fcore::row::Datum::Map(map));
+        Ok(())
+    }
+
+    fn gr_set_row(&mut self, idx: usize, row: &mut GenericRowInner) -> Result<(), String> {
+        self.ensure_size(idx);
+        // Move the nested row out; the C++ side discards its writer afterwards.
+        let nested = std::mem::replace(&mut row.row, fcore::row::GenericRow::new(0));
+        self.row
+            .set_field(idx, fcore::row::Datum::Row(Box::new(nested)));
+        Ok(())
+    }
+
     fn ensure_size(&mut self, idx: usize) {
         if self.row.values.len() <= idx {
             self.row.values.resize(idx + 1, fcore::row::Datum::Null);
@@ -2491,7 +2385,6 @@ impl GenericRowInner {
 // ============================================================================
 
 mod row_reader {
-    use super::array_reader;
     use fcore::row::InternalRow;
     use fluss as fcore;
 
@@ -2760,207 +2653,20 @@ mod row_reader {
             dt => Err(format!("get_decimal_str: unexpected type {dt}")),
         }
     }
-
-    fn get_fluss_array(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-    ) -> Result<fcore::row::binary_array::FlussArray, String> {
-        validate(row, columns, field, "get_array", |dt| {
-            matches!(dt, fcore::metadata::DataType::Array(_))
-        })?;
-        row.get_array(field)
-            .map_err(|e| e.to_string())?
-            .try_into_binary()
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn get_array_element_type(
-        columns: &[fcore::metadata::Column],
-        field: usize,
-    ) -> Result<&fcore::metadata::DataType, String> {
-        let col = get_column(columns, field)?;
-        match col.data_type() {
-            fcore::metadata::DataType::Array(at) => Ok(at.get_element_type()),
-            dt => Err(format!("get_array: column {field} is not Array, got {dt}")),
-        }
-    }
-
-    pub fn get_array_size(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-    ) -> Result<usize, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        Ok(arr.size())
-    }
-
-    pub fn get_array_and_elem_type<'a>(
-        row: &dyn InternalRow,
-        columns: &'a [fcore::metadata::Column],
-        field: usize,
-    ) -> Result<
-        (
-            fcore::row::binary_array::FlussArray,
-            &'a fcore::metadata::DataType,
-        ),
-        String,
-    > {
-        let arr = get_fluss_array(row, columns, field)?;
-        let elem = get_array_element_type(columns, field)?;
-        Ok((arr, elem))
-    }
-
-    pub fn get_array_is_null(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<bool, String> {
-        let arr = get_fluss_array(row, columns, field)?;
-        array_reader::is_null(&arr, element)
-    }
-
-    pub fn get_array_bool(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<bool, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_bool(&arr, elem, element)
-    }
-
-    pub fn get_array_i32(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<i32, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_i32(&arr, elem, element)
-    }
-
-    pub fn get_array_i64(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<i64, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_i64(&arr, elem, element)
-    }
-
-    pub fn get_array_f32(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<f32, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_f32(&arr, elem, element)
-    }
-
-    pub fn get_array_f64(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<f64, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_f64(&arr, elem, element)
-    }
-
-    pub fn get_array_str(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<String, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_str(&arr, elem, element)
-    }
-
-    pub fn get_array_bytes(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<Vec<u8>, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_bytes(&arr, elem, element)
-    }
-
-    pub fn get_array_date_days(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<i32, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_date_days(&arr, elem, element)
-    }
-
-    pub fn get_array_time_millis(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<i32, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_time_millis(&arr, elem, element)
-    }
-
-    pub fn get_array_ts_millis(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<i64, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_ts_millis(&arr, elem, element)
-    }
-
-    pub fn get_array_ts_nanos(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<i32, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_ts_nanos(&arr, elem, element)
-    }
-
-    pub fn get_array_decimal_str(
-        row: &dyn InternalRow,
-        columns: &[fcore::metadata::Column],
-        field: usize,
-        element: usize,
-    ) -> Result<String, String> {
-        let (arr, elem) = get_array_and_elem_type(row, columns, field)?;
-        array_reader::get_decimal_str(&arr, elem, element)
-    }
-
-    pub fn get_array_element_type_id(
-        columns: &[fcore::metadata::Column],
-        field: usize,
-    ) -> Result<i32, String> {
-        let elem_type = get_array_element_type(columns, field)?;
-        Ok(crate::types::core_data_type_to_ffi(elem_type))
-    }
 }
 
 // ============================================================================
-// array_reader — low-level accessors over an already-resolved FlussArray
+// array_reader — low-level accessors over an already-resolved FlussArray.
 //
-// Shared by the top-level `row_reader::get_array_*` wrappers and by
-// `ArrayViewInner` (which exposes recursive/nested access to C++). Keeping
-// one implementation here guarantees identical bounds-checking, null
-// validation, type checking, and type dispatch across flat and nested reads.
+// `get_datum` is the single dispatch that turns any array/map element into an
+// owned `Datum` for the recursive `ValueInner` handle (bounds-checked, null
+// and type validated, recursing into nested ROW/MAP/ARRAY).
 // ============================================================================
 
 mod array_reader {
     use super::fcore;
+    use fcore::metadata::DataType as DT;
+    use fcore::row::Datum;
 
     fn validate_index(
         arr: &fcore::row::binary_array::FlussArray,
@@ -2977,48 +2683,6 @@ mod array_reader {
         }
     }
 
-    fn ensure_non_null(
-        arr: &fcore::row::binary_array::FlussArray,
-        element: usize,
-        op: &str,
-    ) -> Result<(), String> {
-        if arr.is_null_at(element) {
-            Err(format!(
-                "{op}: element at index {element} is null; call array_is_null first"
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn ensure_type(
-        elem_type: &fcore::metadata::DataType,
-        op: &str,
-        expected: &str,
-        allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
-    ) -> Result<(), String> {
-        if allowed(elem_type) {
-            Ok(())
-        } else {
-            Err(format!(
-                "{op}: element type is {elem_type}, expected {expected}"
-            ))
-        }
-    }
-
-    fn ensure_readable(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-        op: &str,
-        expected: &str,
-        allowed: impl FnOnce(&fcore::metadata::DataType) -> bool,
-    ) -> Result<(), String> {
-        validate_index(arr, element, op)?;
-        ensure_type(elem_type, op, expected, allowed)?;
-        ensure_non_null(arr, element, op)
-    }
-
     pub fn is_null(
         arr: &fcore::row::binary_array::FlussArray,
         element: usize,
@@ -3027,291 +2691,62 @@ mod array_reader {
         Ok(arr.is_null_at(element))
     }
 
-    pub fn get_bool(
+    pub fn get_datum(
         arr: &fcore::row::binary_array::FlussArray,
         elem_type: &fcore::metadata::DataType,
         element: usize,
-    ) -> Result<bool, String> {
-        ensure_readable(arr, elem_type, element, "array_bool", "BOOLEAN", |dt| {
-            matches!(dt, fcore::metadata::DataType::Boolean(_))
-        })?;
-        arr.get_boolean(element).map_err(|e| e.to_string())
-    }
-
-    pub fn get_i32(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<i32, String> {
-        ensure_readable(
-            arr,
-            elem_type,
-            element,
-            "array_i32",
-            "TINYINT/SMALLINT/INT",
-            |dt| {
-                matches!(
-                    dt,
-                    fcore::metadata::DataType::TinyInt(_)
-                        | fcore::metadata::DataType::SmallInt(_)
-                        | fcore::metadata::DataType::Int(_)
-                )
-            },
-        )?;
-        match elem_type {
-            fcore::metadata::DataType::TinyInt(_) => arr
-                .get_byte(element)
-                .map(|v| v as i32)
-                .map_err(|e| e.to_string()),
-            fcore::metadata::DataType::SmallInt(_) => arr
-                .get_short(element)
-                .map(|v| v as i32)
-                .map_err(|e| e.to_string()),
-            fcore::metadata::DataType::Int(_) => arr.get_int(element).map_err(|e| e.to_string()),
-            _ => unreachable!("type validated by ensure_readable"),
+    ) -> Result<fcore::row::Datum<'static>, String> {
+        if is_null(arr, element)? {
+            return Ok(Datum::Null);
         }
-    }
-
-    pub fn get_i64(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<i64, String> {
-        ensure_readable(arr, elem_type, element, "array_i64", "BIGINT", |dt| {
-            matches!(dt, fcore::metadata::DataType::BigInt(_))
-        })?;
-        arr.get_long(element).map_err(|e| e.to_string())
-    }
-
-    pub fn get_f32(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<f32, String> {
-        ensure_readable(arr, elem_type, element, "array_f32", "FLOAT", |dt| {
-            matches!(dt, fcore::metadata::DataType::Float(_))
-        })?;
-        arr.get_float(element).map_err(|e| e.to_string())
-    }
-
-    pub fn get_f64(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<f64, String> {
-        ensure_readable(arr, elem_type, element, "array_f64", "DOUBLE", |dt| {
-            matches!(dt, fcore::metadata::DataType::Double(_))
-        })?;
-        arr.get_double(element).map_err(|e| e.to_string())
-    }
-
-    pub fn get_str(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<String, String> {
-        ensure_readable(arr, elem_type, element, "array_str", "STRING/CHAR", |dt| {
-            matches!(
-                dt,
-                fcore::metadata::DataType::String(_) | fcore::metadata::DataType::Char(_)
-            )
-        })?;
-        arr.get_string(element)
-            .map(|s| s.to_string())
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn get_bytes(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<Vec<u8>, String> {
-        ensure_readable(
-            arr,
-            elem_type,
-            element,
-            "array_bytes",
-            "BYTES/BINARY",
-            |dt| {
-                matches!(
-                    dt,
-                    fcore::metadata::DataType::Bytes(_) | fcore::metadata::DataType::Binary(_)
-                )
-            },
-        )?;
-        arr.get_binary(element)
-            .map(|b| b.to_vec())
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn get_date_days(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<i32, String> {
-        ensure_readable(arr, elem_type, element, "array_date", "DATE", |dt| {
-            matches!(dt, fcore::metadata::DataType::Date(_))
-        })?;
-        arr.get_date(element)
-            .map(|d| d.get_inner())
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn get_time_millis(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<i32, String> {
-        ensure_readable(arr, elem_type, element, "array_time", "TIME", |dt| {
-            matches!(dt, fcore::metadata::DataType::Time(_))
-        })?;
-        arr.get_time(element)
-            .map(|t| t.get_inner())
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn get_ts_millis(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<i64, String> {
-        ensure_readable(
-            arr,
-            elem_type,
-            element,
-            "array_ts_millis",
-            "TIMESTAMP/TIMESTAMP_LTZ",
-            |dt| {
-                matches!(
-                    dt,
-                    fcore::metadata::DataType::Timestamp(_)
-                        | fcore::metadata::DataType::TimestampLTz(_)
-                )
-            },
-        )?;
-        match elem_type {
-            fcore::metadata::DataType::TimestampLTz(ts) => arr
-                .get_timestamp_ltz(element, ts.precision())
-                .map(|v| v.get_epoch_millisecond())
-                .map_err(|e| e.to_string()),
-            fcore::metadata::DataType::Timestamp(ts) => arr
-                .get_timestamp_ntz(element, ts.precision())
-                .map(|v| v.get_millisecond())
-                .map_err(|e| e.to_string()),
-            _ => unreachable!("type validated by ensure_readable"),
-        }
-    }
-
-    pub fn get_ts_nanos(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<i32, String> {
-        ensure_readable(
-            arr,
-            elem_type,
-            element,
-            "array_ts_nanos",
-            "TIMESTAMP/TIMESTAMP_LTZ",
-            |dt| {
-                matches!(
-                    dt,
-                    fcore::metadata::DataType::Timestamp(_)
-                        | fcore::metadata::DataType::TimestampLTz(_)
-                )
-            },
-        )?;
-        match elem_type {
-            fcore::metadata::DataType::TimestampLTz(ts) => arr
-                .get_timestamp_ltz(element, ts.precision())
-                .map(|v| v.get_nano_of_millisecond())
-                .map_err(|e| e.to_string()),
-            fcore::metadata::DataType::Timestamp(ts) => arr
-                .get_timestamp_ntz(element, ts.precision())
-                .map(|v| v.get_nano_of_millisecond())
-                .map_err(|e| e.to_string()),
-            _ => unreachable!("type validated by ensure_readable"),
-        }
-    }
-
-    pub fn get_decimal_str(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<String, String> {
-        ensure_readable(arr, elem_type, element, "array_decimal", "DECIMAL", |dt| {
-            matches!(dt, fcore::metadata::DataType::Decimal(_))
-        })?;
-        match elem_type {
-            fcore::metadata::DataType::Decimal(dd) => {
-                let decimal = arr
-                    .get_decimal(element, dd.precision(), dd.scale())
-                    .map_err(|e| e.to_string())?;
-                Ok(decimal.to_big_decimal().to_string())
+        let map_err = |e: fcore::error::Error| e.to_string();
+        Ok(match elem_type {
+            DT::Boolean(_) => Datum::Bool(arr.get_boolean(element).map_err(map_err)?),
+            DT::TinyInt(_) => Datum::Int8(arr.get_byte(element).map_err(map_err)?),
+            DT::SmallInt(_) => Datum::Int16(arr.get_short(element).map_err(map_err)?),
+            DT::Int(_) => Datum::Int32(arr.get_int(element).map_err(map_err)?),
+            DT::BigInt(_) => Datum::Int64(arr.get_long(element).map_err(map_err)?),
+            DT::Float(_) => Datum::Float32(arr.get_float(element).map_err(map_err)?.into()),
+            DT::Double(_) => Datum::Float64(arr.get_double(element).map_err(map_err)?.into()),
+            DT::String(_) | DT::Char(_) => Datum::String(std::borrow::Cow::Owned(
+                arr.get_string(element).map_err(map_err)?.to_string(),
+            )),
+            DT::Bytes(_) | DT::Binary(_) => Datum::Blob(std::borrow::Cow::Owned(
+                arr.get_binary(element).map_err(map_err)?.to_vec(),
+            )),
+            DT::Decimal(d) => Datum::Decimal(
+                arr.get_decimal(element, d.precision(), d.scale())
+                    .map_err(map_err)?,
+            ),
+            DT::Date(_) => Datum::Date(arr.get_date(element).map_err(map_err)?),
+            DT::Time(_) => Datum::Time(arr.get_time(element).map_err(map_err)?),
+            DT::Timestamp(t) => Datum::TimestampNtz(
+                arr.get_timestamp_ntz(element, t.precision())
+                    .map_err(map_err)?,
+            ),
+            DT::TimestampLTz(t) => Datum::TimestampLtz(
+                arr.get_timestamp_ltz(element, t.precision())
+                    .map_err(map_err)?,
+            ),
+            DT::Array(_) => Datum::Array(arr.get_array(element).map_err(map_err)?),
+            DT::Map(mt) => Datum::Map(
+                arr.get_map(element, mt.key_type(), mt.value_type())
+                    .map_err(map_err)?,
+            ),
+            DT::Row(rt) => {
+                let cr = arr.get_row(element, rt).map_err(map_err)?;
+                let cols: Vec<fcore::metadata::Column> = rt
+                    .fields()
+                    .iter()
+                    .map(|f| fcore::metadata::Column::new(f.name(), f.data_type().clone()))
+                    .collect();
+                Datum::Row(Box::new(
+                    crate::types::internal_row_to_owned_generic(&cr, &cols)
+                        .map_err(|e| e.to_string())?,
+                ))
             }
-            _ => unreachable!("type validated by ensure_readable"),
-        }
+        })
     }
-
-    pub fn get_nested_array(
-        arr: &fcore::row::binary_array::FlussArray,
-        elem_type: &fcore::metadata::DataType,
-        element: usize,
-    ) -> Result<
-        (
-            fcore::row::binary_array::FlussArray,
-            fcore::metadata::DataType,
-        ),
-        String,
-    > {
-        ensure_readable(arr, elem_type, element, "array_nested", "ARRAY", |dt| {
-            matches!(dt, fcore::metadata::DataType::Array(_))
-        })?;
-        match elem_type {
-            fcore::metadata::DataType::Array(at) => {
-                let nested = arr.get_array(element).map_err(|e| e.to_string())?;
-                Ok((nested, at.get_element_type().clone()))
-            }
-            _ => unreachable!("type validated by ensure_readable"),
-        }
-    }
-}
-
-// ============================================================================
-// Macros that generate uniform sv_/lv_ array element getters (thin wrappers
-// that only forward to `row_reader::get_array_*`).
-// ============================================================================
-
-macro_rules! sv_array_element_getters {
-    ($( $method:ident, $reader_fn:ident, $ret:ty; )+) => {
-        $(
-            fn $method(
-                &self,
-                bucket: usize,
-                rec: usize,
-                field: usize,
-                element: usize,
-            ) -> Result<$ret, String> {
-                row_reader::$reader_fn(
-                    self.resolve(bucket, rec).row(),
-                    &self.columns,
-                    field,
-                    element,
-                )
-            }
-        )+
-    };
-}
-
-macro_rules! lv_array_element_getters {
-    ($( $method:ident, $reader_fn:ident, $ret:ty; )+) => {
-        $(
-            fn $method(&self, field: usize, element: usize) -> Result<$ret, String> {
-                let r = self.lv_row()?;
-                row_reader::$reader_fn(r, &self.columns, field, element)
-            }
-        )+
-    };
 }
 
 // ============================================================================
@@ -3429,42 +2864,28 @@ impl ScanResultInner {
         row_reader::get_decimal_str(self.resolve(bucket, rec).row(), &self.columns, field)
     }
 
-    fn sv_get_array_size(&self, bucket: usize, rec: usize, field: usize) -> Result<usize, String> {
-        row_reader::get_array_size(self.resolve(bucket, rec).row(), &self.columns, field)
-    }
-    sv_array_element_getters! {
-        sv_get_array_is_null, get_array_is_null, bool;
-        sv_get_array_bool,    get_array_bool,    bool;
-        sv_get_array_i32,     get_array_i32,     i32;
-        sv_get_array_i64,     get_array_i64,     i64;
-        sv_get_array_f32,     get_array_f32,     f32;
-        sv_get_array_f64,     get_array_f64,     f64;
-        sv_get_array_str,     get_array_str,     String;
-        sv_get_array_bytes,   get_array_bytes,   Vec<u8>;
-        sv_get_array_date_days,   get_array_date_days,   i32;
-        sv_get_array_time_millis, get_array_time_millis, i32;
-        sv_get_array_ts_millis,   get_array_ts_millis,   i64;
-        sv_get_array_ts_nanos,    get_array_ts_nanos,    i32;
-        sv_get_array_decimal_str, get_array_decimal_str, String;
-    }
-    fn sv_get_array_element_type(&self, field: usize) -> Result<i32, String> {
-        row_reader::get_array_element_type_id(&self.columns, field)
-    }
-    fn sv_get_array_view(
+    fn sv_get_value(
         &self,
         bucket: usize,
         rec: usize,
         field: usize,
-    ) -> Result<Box<ArrayViewInner>, String> {
-        let (arr, elem) = row_reader::get_array_and_elem_type(
+    ) -> Result<Box<ValueInner>, String> {
+        // Scan rows are borrowed Arrow cursors; materialize only the requested
+        // field's owned datum (not the whole row). Top-level scalar scan reads
+        // keep their zero-copy index fast-path.
+        let datum = crate::types::field_to_owned_datum(
             self.resolve(bucket, rec).row(),
             &self.columns,
             field,
-        )?;
-        Ok(Box::new(ArrayViewInner {
-            array: arr,
-            element_type: elem.clone(),
-        }))
+        )
+        .map_err(|e| e.to_string())?;
+        let data_type = self
+            .columns
+            .get(field)
+            .ok_or_else(|| format!("field index {field} out of range"))?
+            .data_type()
+            .clone();
+        Ok(Box::new(ValueInner { datum, data_type }))
     }
 
     fn sv_bucket_infos(&self) -> &Vec<ffi::FfiBucketInfo> {
@@ -3583,35 +3004,8 @@ impl LookupResultInner {
         let r = self.lv_row()?;
         row_reader::get_decimal_str(r, &self.columns, field)
     }
-    fn lv_get_array_size(&self, field: usize) -> Result<usize, String> {
-        let r = self.lv_row()?;
-        row_reader::get_array_size(r, &self.columns, field)
-    }
-    lv_array_element_getters! {
-        lv_get_array_is_null, get_array_is_null, bool;
-        lv_get_array_bool,    get_array_bool,    bool;
-        lv_get_array_i32,     get_array_i32,     i32;
-        lv_get_array_i64,     get_array_i64,     i64;
-        lv_get_array_f32,     get_array_f32,     f32;
-        lv_get_array_f64,     get_array_f64,     f64;
-        lv_get_array_str,     get_array_str,     String;
-        lv_get_array_bytes,   get_array_bytes,   Vec<u8>;
-        lv_get_array_date_days,   get_array_date_days,   i32;
-        lv_get_array_time_millis, get_array_time_millis, i32;
-        lv_get_array_ts_millis,   get_array_ts_millis,   i64;
-        lv_get_array_ts_nanos,    get_array_ts_nanos,    i32;
-        lv_get_array_decimal_str, get_array_decimal_str, String;
-    }
-    fn lv_get_array_element_type(&self, field: usize) -> Result<i32, String> {
-        row_reader::get_array_element_type_id(&self.columns, field)
-    }
-    fn lv_get_array_view(&self, field: usize) -> Result<Box<ArrayViewInner>, String> {
-        let r = self.lv_row()?;
-        let (arr, elem) = row_reader::get_array_and_elem_type(r, &self.columns, field)?;
-        Ok(Box::new(ArrayViewInner {
-            array: arr,
-            element_type: elem.clone(),
-        }))
+    fn lv_get_value(&self, field: usize) -> Result<Box<ValueInner>, String> {
+        value_from_owned_row(self.lv_row()?, &self.columns, field)
     }
 }
 
@@ -3625,17 +3019,6 @@ pub struct PrefixLookupResultInner {
     error: Option<(i32, String)>,
     rows: Vec<GenericRow<'static>>,
     columns: Vec<Column>,
-}
-
-macro_rules! plv_array_element_getters {
-    ($( $method:ident, $reader_fn:ident, $ret:ty; )+) => {
-        $(
-            fn $method(&self, rec: usize, field: usize, element: usize) -> Result<$ret, String> {
-                let r = self.plv_row(rec)?;
-                row_reader::$reader_fn(r, &self.columns, field, element)
-            }
-        )+
-    };
 }
 
 impl PrefixLookupResultInner {
@@ -3724,118 +3107,223 @@ impl PrefixLookupResultInner {
     fn plv_get_decimal_str(&self, rec: usize, field: usize) -> Result<String, String> {
         row_reader::get_decimal_str(self.plv_row(rec)?, &self.columns, field)
     }
-    fn plv_get_array_size(&self, rec: usize, field: usize) -> Result<usize, String> {
-        row_reader::get_array_size(self.plv_row(rec)?, &self.columns, field)
-    }
-    plv_array_element_getters! {
-        plv_get_array_is_null, get_array_is_null, bool;
-        plv_get_array_bool,    get_array_bool,    bool;
-        plv_get_array_i32,     get_array_i32,     i32;
-        plv_get_array_i64,     get_array_i64,     i64;
-        plv_get_array_f32,     get_array_f32,     f32;
-        plv_get_array_f64,     get_array_f64,     f64;
-        plv_get_array_str,     get_array_str,     String;
-        plv_get_array_bytes,   get_array_bytes,   Vec<u8>;
-        plv_get_array_date_days,   get_array_date_days,   i32;
-        plv_get_array_time_millis, get_array_time_millis, i32;
-        plv_get_array_ts_millis,   get_array_ts_millis,   i64;
-        plv_get_array_ts_nanos,    get_array_ts_nanos,    i32;
-        plv_get_array_decimal_str, get_array_decimal_str, String;
-    }
-    fn plv_get_array_element_type(&self, _rec: usize, field: usize) -> Result<i32, String> {
-        row_reader::get_array_element_type_id(&self.columns, field)
-    }
-    fn plv_get_array_view(&self, rec: usize, field: usize) -> Result<Box<ArrayViewInner>, String> {
-        let r = self.plv_row(rec)?;
-        let (arr, elem) = row_reader::get_array_and_elem_type(r, &self.columns, field)?;
-        Ok(Box::new(ArrayViewInner {
-            array: arr,
-            element_type: elem.clone(),
-        }))
+    fn plv_get_value(&self, rec: usize, field: usize) -> Result<Box<ValueInner>, String> {
+        value_from_owned_row(self.plv_row(rec)?, &self.columns, field)
     }
 }
 
 // ============================================================================
-// Opaque types: ArrayViewInner (recursive array reader)
-//
-// Wraps an owned `FlussArray` plus its element `DataType` and exposes the
-// same accessors as `row_reader::get_array_*`, delegating to the shared
-// `array_reader` primitives. Enables C++ bindings to recurse into nested
-// arrays without per-level FFI scaffolding.
+// ValueInner — recursive value handle for complex reads. Holds an owned Datum
+// + its DataType: leaf getters match on the datum, navigators (v_at/v_key_at/
+// v_value_at/v_field) descend into a child node.
 // ============================================================================
 
-pub struct ArrayViewInner {
-    array: fcore::row::binary_array::FlussArray,
-    element_type: fcore::metadata::DataType,
+pub struct ValueInner {
+    datum: fcore::row::Datum<'static>,
+    data_type: fcore::metadata::DataType,
 }
 
-impl ArrayViewInner {
-    fn av_size(&self) -> usize {
-        self.array.size()
+/// Builds a `ValueInner` from an owned row; shared by the lookup and prefix-lookup paths.
+fn value_from_owned_row(
+    row: &GenericRow<'static>,
+    columns: &[Column],
+    field: usize,
+) -> Result<Box<ValueInner>, String> {
+    let datum = row
+        .values
+        .get(field)
+        .ok_or_else(|| format!("field index {field} out of range"))?
+        .clone();
+    let data_type = columns
+        .get(field)
+        .ok_or_else(|| format!("field index {field} out of range"))?
+        .data_type()
+        .clone();
+    Ok(Box::new(ValueInner { datum, data_type }))
+}
+
+impl ValueInner {
+    fn type_err(&self, expected: &str) -> String {
+        format!("value of type {} is not {expected}", self.data_type)
     }
 
-    fn av_element_type_id(&self) -> i32 {
-        crate::types::core_data_type_to_ffi(&self.element_type)
+    fn v_type(&self) -> i32 {
+        crate::types::core_data_type_to_ffi(&self.data_type)
+    }
+    fn v_is_null(&self) -> bool {
+        matches!(self.datum, fcore::row::Datum::Null)
     }
 
-    fn av_is_null(&self, element: usize) -> Result<bool, String> {
-        array_reader::is_null(&self.array, element)
+    fn v_get_bool(&self) -> Result<bool, String> {
+        match &self.datum {
+            fcore::row::Datum::Bool(v) => Ok(*v),
+            _ => Err(self.type_err("BOOLEAN")),
+        }
+    }
+    fn v_get_i32(&self) -> Result<i32, String> {
+        match &self.datum {
+            fcore::row::Datum::Int8(v) => Ok(i32::from(*v)),
+            fcore::row::Datum::Int16(v) => Ok(i32::from(*v)),
+            fcore::row::Datum::Int32(v) => Ok(*v),
+            _ => Err(self.type_err("INT")),
+        }
+    }
+    fn v_get_i64(&self) -> Result<i64, String> {
+        match &self.datum {
+            fcore::row::Datum::Int64(v) => Ok(*v),
+            _ => Err(self.type_err("BIGINT")),
+        }
+    }
+    fn v_get_f32(&self) -> Result<f32, String> {
+        match &self.datum {
+            fcore::row::Datum::Float32(v) => Ok(v.0),
+            _ => Err(self.type_err("FLOAT")),
+        }
+    }
+    fn v_get_f64(&self) -> Result<f64, String> {
+        match &self.datum {
+            fcore::row::Datum::Float64(v) => Ok(v.0),
+            _ => Err(self.type_err("DOUBLE")),
+        }
+    }
+    fn v_get_str(&self) -> Result<String, String> {
+        match &self.datum {
+            fcore::row::Datum::String(v) => Ok(v.to_string()),
+            _ => Err(self.type_err("STRING")),
+        }
+    }
+    fn v_get_bytes(&self) -> Result<Vec<u8>, String> {
+        match &self.datum {
+            fcore::row::Datum::Blob(v) => Ok(v.to_vec()),
+            _ => Err(self.type_err("BYTES")),
+        }
+    }
+    fn v_get_date_days(&self) -> Result<i32, String> {
+        match &self.datum {
+            fcore::row::Datum::Date(d) => Ok(d.get_inner()),
+            _ => Err(self.type_err("DATE")),
+        }
+    }
+    fn v_get_time_millis(&self) -> Result<i32, String> {
+        match &self.datum {
+            fcore::row::Datum::Time(t) => Ok(t.get_inner()),
+            _ => Err(self.type_err("TIME")),
+        }
+    }
+    fn v_get_ts_millis(&self) -> Result<i64, String> {
+        match &self.datum {
+            fcore::row::Datum::TimestampNtz(t) => Ok(t.get_millisecond()),
+            fcore::row::Datum::TimestampLtz(t) => Ok(t.get_epoch_millisecond()),
+            _ => Err(self.type_err("TIMESTAMP")),
+        }
+    }
+    fn v_get_ts_nanos(&self) -> Result<i32, String> {
+        match &self.datum {
+            fcore::row::Datum::TimestampNtz(t) => Ok(t.get_nano_of_millisecond()),
+            fcore::row::Datum::TimestampLtz(t) => Ok(t.get_nano_of_millisecond()),
+            _ => Err(self.type_err("TIMESTAMP")),
+        }
+    }
+    fn v_get_decimal_str(&self) -> Result<String, String> {
+        match &self.datum {
+            fcore::row::Datum::Decimal(d) => Ok(d.to_big_decimal().to_string()),
+            _ => Err(self.type_err("DECIMAL")),
+        }
     }
 
-    fn av_get_bool(&self, element: usize) -> Result<bool, String> {
-        array_reader::get_bool(&self.array, &self.element_type, element)
+    fn v_size(&self) -> Result<usize, String> {
+        match &self.datum {
+            fcore::row::Datum::Array(a) => Ok(a.size()),
+            fcore::row::Datum::Map(m) => Ok(m.size()),
+            _ => Err(self.type_err("ARRAY/MAP")),
+        }
+    }
+    fn v_field_count(&self) -> Result<usize, String> {
+        match &self.datum {
+            fcore::row::Datum::Row(r) => Ok(r.values.len()),
+            _ => Err(self.type_err("ROW")),
+        }
+    }
+    fn v_at(&self, i: usize) -> Result<Box<ValueInner>, String> {
+        match &self.datum {
+            fcore::row::Datum::Array(a) => {
+                let elem_type = match &self.data_type {
+                    fcore::metadata::DataType::Array(at) => at.get_element_type().clone(),
+                    _ => return Err("internal: ARRAY datum without ARRAY type".to_string()),
+                };
+                let datum = array_reader::get_datum(a, &elem_type, i)?;
+                Ok(Box::new(ValueInner {
+                    datum,
+                    data_type: elem_type,
+                }))
+            }
+            _ => Err(self.type_err("ARRAY")),
+        }
+    }
+    fn v_key_at(&self, i: usize) -> Result<Box<ValueInner>, String> {
+        match &self.datum {
+            fcore::row::Datum::Map(m) => {
+                let kt = m.key_type().clone();
+                let datum = array_reader::get_datum(m.key_array(), &kt, i)?;
+                Ok(Box::new(ValueInner {
+                    datum,
+                    data_type: kt,
+                }))
+            }
+            _ => Err(self.type_err("MAP")),
+        }
+    }
+    fn v_value_at(&self, i: usize) -> Result<Box<ValueInner>, String> {
+        match &self.datum {
+            fcore::row::Datum::Map(m) => {
+                let vt = m.value_type().clone();
+                let datum = array_reader::get_datum(m.value_array(), &vt, i)?;
+                Ok(Box::new(ValueInner {
+                    datum,
+                    data_type: vt,
+                }))
+            }
+            _ => Err(self.type_err("MAP")),
+        }
+    }
+    fn v_field(&self, i: usize) -> Result<Box<ValueInner>, String> {
+        match &self.datum {
+            fcore::row::Datum::Row(r) => {
+                let ft = match &self.data_type {
+                    fcore::metadata::DataType::Row(rt) => rt
+                        .fields()
+                        .get(i)
+                        .ok_or_else(|| format!("field index {i} out of range"))?
+                        .data_type()
+                        .clone(),
+                    _ => return Err("internal: ROW datum without ROW type".to_string()),
+                };
+                let datum = r
+                    .values
+                    .get(i)
+                    .ok_or_else(|| format!("field index {i} out of range"))?
+                    .clone();
+                Ok(Box::new(ValueInner {
+                    datum,
+                    data_type: ft,
+                }))
+            }
+            _ => Err(self.type_err("ROW")),
+        }
     }
 
-    fn av_get_i32(&self, element: usize) -> Result<i32, String> {
-        array_reader::get_i32(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_i64(&self, element: usize) -> Result<i64, String> {
-        array_reader::get_i64(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_f32(&self, element: usize) -> Result<f32, String> {
-        array_reader::get_f32(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_f64(&self, element: usize) -> Result<f64, String> {
-        array_reader::get_f64(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_str(&self, element: usize) -> Result<String, String> {
-        array_reader::get_str(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_bytes(&self, element: usize) -> Result<Vec<u8>, String> {
-        array_reader::get_bytes(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_date_days(&self, element: usize) -> Result<i32, String> {
-        array_reader::get_date_days(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_time_millis(&self, element: usize) -> Result<i32, String> {
-        array_reader::get_time_millis(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_ts_millis(&self, element: usize) -> Result<i64, String> {
-        array_reader::get_ts_millis(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_ts_nanos(&self, element: usize) -> Result<i32, String> {
-        array_reader::get_ts_nanos(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_decimal_str(&self, element: usize) -> Result<String, String> {
-        array_reader::get_decimal_str(&self.array, &self.element_type, element)
-    }
-
-    fn av_get_nested(&self, element: usize) -> Result<Box<ArrayViewInner>, String> {
-        let (arr, elem) = array_reader::get_nested_array(&self.array, &self.element_type, element)?;
-        Ok(Box::new(ArrayViewInner {
-            array: arr,
-            element_type: elem,
-        }))
+    fn v_field_by_name(&self, name: &str) -> Result<Box<ValueInner>, String> {
+        match &self.data_type {
+            fcore::metadata::DataType::Row(rt) => {
+                let idx = rt
+                    .fields()
+                    .iter()
+                    .position(|f| f.name() == name)
+                    .ok_or_else(|| format!("no field named '{name}' in {}", self.data_type))?;
+                self.v_field(idx)
+            }
+            _ => Err(self.type_err("ROW")),
+        }
     }
 }
 
@@ -3850,6 +3338,294 @@ pub struct ArrayWriterInner {
     num_elements: usize,
 }
 
+// ============================================================================
+// MapWriterInner — opaque map builder (mirrors ArrayWriterInner)
+// ============================================================================
+
+pub struct MapWriterInner {
+    writer: Option<fcore::row::binary_map::FlussMapWriter>,
+    completed: Option<fcore::row::binary_map::FlussMap>,
+    key_type: fcore::metadata::DataType,
+    value_type: fcore::metadata::DataType,
+    pending_key: Option<fcore::row::Datum<'static>>,
+    pending_value: Option<fcore::row::Datum<'static>>,
+}
+
+fn ts_ntz_from(millis: i64, nanos: i32) -> fcore::row::TimestampNtz {
+    fcore::row::TimestampNtz::from_millis_nanos(millis, nanos)
+        .unwrap_or_else(|_| fcore::row::TimestampNtz::new(millis))
+}
+
+fn ts_ltz_from(millis: i64, nanos: i32) -> fcore::row::TimestampLtz {
+    fcore::row::TimestampLtz::from_millis_nanos(millis, nanos)
+        .unwrap_or_else(|_| fcore::row::TimestampLtz::new(millis))
+}
+
+/// Parse a decimal string into a `Datum::Decimal` matching `dt`'s precision and
+/// scale. Used by the map key/value decimal setters, which carry no schema.
+fn parse_decimal_datum(
+    dt: &fcore::metadata::DataType,
+    val: &str,
+) -> Result<fcore::row::Datum<'static>, String> {
+    match dt {
+        fcore::metadata::DataType::Decimal(d) => {
+            let bd = bigdecimal::BigDecimal::from_str(val).map_err(|e| e.to_string())?;
+            let dec = fcore::row::Decimal::from_big_decimal(bd, d.precision(), d.scale())
+                .map_err(|e| e.to_string())?;
+            Ok(fcore::row::Datum::Decimal(dec))
+        }
+        other => Err(format!(
+            "decimal setter used on non-DECIMAL map type {other}"
+        )),
+    }
+}
+
+fn timestamp_datum(
+    dt: &fcore::metadata::DataType,
+    millis: i64,
+    nanos: i32,
+) -> Result<fcore::row::Datum<'static>, String> {
+    match dt {
+        fcore::metadata::DataType::Timestamp(_) => {
+            Ok(fcore::row::Datum::TimestampNtz(ts_ntz_from(millis, nanos)))
+        }
+        fcore::metadata::DataType::TimestampLTz(_) => {
+            Ok(fcore::row::Datum::TimestampLtz(ts_ltz_from(millis, nanos)))
+        }
+        other => Err(format!(
+            "timestamp setter used on non-TIMESTAMP map type {other}"
+        )),
+    }
+}
+
+/// Narrow a C++ `int32` into the `Datum` a map key/value expects, erroring on
+/// overflow. Core needs `Int8`/`Int16` for TINYINT/SMALLINT; a widened `Int32`
+/// is rejected. Mirrors `ArrayWriterInner::aw_set_i32`.
+fn int_datum(dt: &DataType, val: i32, role: &str) -> Result<Datum<'static>, String> {
+    match dt {
+        DataType::TinyInt(_) => i8::try_from(val)
+            .map(Datum::Int8)
+            .map_err(|_| format!("Value {val} does not fit TINYINT map {role}")),
+        DataType::SmallInt(_) => i16::try_from(val)
+            .map(Datum::Int16)
+            .map_err(|_| format!("Value {val} does not fit SMALLINT map {role}")),
+        _ => Ok(Datum::Int32(val)),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn new_map_writer(
+    capacity: usize,
+    key_leaf_type_id: i32,
+    key_precision: u32,
+    key_scale: u32,
+    value_leaf_type_id: i32,
+    value_precision: u32,
+    value_scale: u32,
+    value_array_nesting: u32,
+) -> Result<Box<MapWriterInner>, String> {
+    let key_type = types::element_type_from_ffi(key_leaf_type_id, key_precision, key_scale, 0)
+        .map_err(|e| e.to_string())?;
+    let value_type = types::element_type_from_ffi(
+        value_leaf_type_id,
+        value_precision,
+        value_scale,
+        value_array_nesting,
+    )
+    .map_err(|e| e.to_string())?;
+    let writer = fcore::row::binary_map::FlussMapWriter::new(capacity, &key_type, &value_type);
+    Ok(Box::new(MapWriterInner {
+        writer: Some(writer),
+        completed: None,
+        key_type,
+        value_type,
+        pending_key: None,
+        pending_value: None,
+    }))
+}
+
+fn new_map_writer_arrow(
+    capacity: usize,
+    kv_schema_ptr: usize,
+) -> Result<Box<MapWriterInner>, String> {
+    let mut types =
+        unsafe { types::arrow_ffi_to_data_types(kv_schema_ptr) }.map_err(|e| e.to_string())?;
+    if types.len() != 2 {
+        return Err(format!(
+            "map writer Arrow schema must have exactly 2 fields (key, value), got {}",
+            types.len()
+        ));
+    }
+    let value_type = types.swap_remove(1);
+    let key_type = types.swap_remove(0);
+    let writer = fcore::row::binary_map::FlussMapWriter::new(capacity, &key_type, &value_type);
+    Ok(Box::new(MapWriterInner {
+        writer: Some(writer),
+        completed: None,
+        key_type,
+        value_type,
+        pending_key: None,
+        pending_value: None,
+    }))
+}
+
+impl MapWriterInner {
+    fn writer_mut(&mut self) -> Result<&mut fcore::row::binary_map::FlussMapWriter, String> {
+        self.writer
+            .as_mut()
+            .ok_or_else(|| "MapWriter is already finalized".to_string())
+    }
+
+    fn mw_key_bool(&mut self, val: bool) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::Bool(val));
+        Ok(())
+    }
+    fn mw_key_i32(&mut self, val: i32) -> Result<(), String> {
+        self.pending_key = Some(int_datum(&self.key_type, val, "key")?);
+        Ok(())
+    }
+    fn mw_key_i64(&mut self, val: i64) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::Int64(val));
+        Ok(())
+    }
+    fn mw_key_f32(&mut self, val: f32) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::Float32(val.into()));
+        Ok(())
+    }
+    fn mw_key_f64(&mut self, val: f64) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::Float64(val.into()));
+        Ok(())
+    }
+    fn mw_key_str(&mut self, val: &str) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::String(std::borrow::Cow::Owned(
+            val.to_string(),
+        )));
+        Ok(())
+    }
+    fn mw_key_bytes(&mut self, val: &[u8]) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::Blob(std::borrow::Cow::Owned(
+            val.to_vec(),
+        )));
+        Ok(())
+    }
+    fn mw_key_date(&mut self, days: i32) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::Date(fcore::row::Date::new(days)));
+        Ok(())
+    }
+    fn mw_key_time(&mut self, millis: i32) -> Result<(), String> {
+        self.pending_key = Some(fcore::row::Datum::Time(fcore::row::Time::new(millis)));
+        Ok(())
+    }
+    fn mw_key_timestamp(&mut self, millis: i64, nanos: i32) -> Result<(), String> {
+        self.pending_key = Some(timestamp_datum(&self.key_type, millis, nanos)?);
+        Ok(())
+    }
+    fn mw_key_decimal_str(&mut self, val: &str) -> Result<(), String> {
+        self.pending_key = Some(parse_decimal_datum(&self.key_type, val)?);
+        Ok(())
+    }
+
+    fn mw_value_null(&mut self) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Null);
+        Ok(())
+    }
+    fn mw_value_bool(&mut self, val: bool) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Bool(val));
+        Ok(())
+    }
+    fn mw_value_i32(&mut self, val: i32) -> Result<(), String> {
+        self.pending_value = Some(int_datum(&self.value_type, val, "value")?);
+        Ok(())
+    }
+    fn mw_value_i64(&mut self, val: i64) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Int64(val));
+        Ok(())
+    }
+    fn mw_value_f32(&mut self, val: f32) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Float32(val.into()));
+        Ok(())
+    }
+    fn mw_value_f64(&mut self, val: f64) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Float64(val.into()));
+        Ok(())
+    }
+    fn mw_value_str(&mut self, val: &str) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::String(std::borrow::Cow::Owned(
+            val.to_string(),
+        )));
+        Ok(())
+    }
+    fn mw_value_bytes(&mut self, val: &[u8]) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Blob(std::borrow::Cow::Owned(
+            val.to_vec(),
+        )));
+        Ok(())
+    }
+    fn mw_value_date(&mut self, days: i32) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Date(fcore::row::Date::new(days)));
+        Ok(())
+    }
+    fn mw_value_time(&mut self, millis: i32) -> Result<(), String> {
+        self.pending_value = Some(fcore::row::Datum::Time(fcore::row::Time::new(millis)));
+        Ok(())
+    }
+    fn mw_value_timestamp(&mut self, millis: i64, nanos: i32) -> Result<(), String> {
+        self.pending_value = Some(timestamp_datum(&self.value_type, millis, nanos)?);
+        Ok(())
+    }
+    fn mw_value_decimal_str(&mut self, val: &str) -> Result<(), String> {
+        self.pending_value = Some(parse_decimal_datum(&self.value_type, val)?);
+        Ok(())
+    }
+    fn mw_value_row(&mut self, row: &mut GenericRowInner) -> Result<(), String> {
+        let nested = std::mem::replace(&mut row.row, fcore::row::GenericRow::new(0));
+        self.pending_value = Some(fcore::row::Datum::Row(Box::new(nested)));
+        Ok(())
+    }
+    fn mw_value_map(&mut self, map: &mut MapWriterInner) -> Result<(), String> {
+        map.complete_if_needed()?;
+        let completed = map
+            .completed
+            .take()
+            .ok_or_else(|| "MapWriter invariant violation: nested map missing".to_string())?;
+        self.pending_value = Some(fcore::row::Datum::Map(completed));
+        Ok(())
+    }
+    fn mw_value_array(&mut self, array: &mut ArrayWriterInner) -> Result<(), String> {
+        array.complete_if_needed()?;
+        let completed = array
+            .completed
+            .take()
+            .ok_or_else(|| "ArrayWriter invariant violation: nested array missing".to_string())?;
+        self.pending_value = Some(fcore::row::Datum::Array(completed));
+        Ok(())
+    }
+
+    /// Commit the pending key/value as one map entry. Keys cannot be null;
+    /// an unset value defaults to null.
+    fn mw_commit(&mut self) -> Result<(), String> {
+        let key = self
+            .pending_key
+            .take()
+            .ok_or_else(|| "MapWriter: entry key not set before commit".to_string())?;
+        let value = self.pending_value.take().unwrap_or(fcore::row::Datum::Null);
+        self.writer_mut()?
+            .write_entry(key, value)
+            .map_err(|e| e.to_string())
+    }
+
+    fn complete_if_needed(&mut self) -> Result<(), String> {
+        if self.completed.is_none() {
+            let w = self
+                .writer
+                .take()
+                .ok_or_else(|| "MapWriter has already been finalized".to_string())?;
+            self.completed = Some(w.complete().map_err(|e| e.to_string())?);
+        }
+        Ok(())
+    }
+}
+
 fn new_array_writer(
     size: usize,
     element_leaf_type_id: i32,
@@ -3860,6 +3636,26 @@ fn new_array_writer(
     let element_type =
         types::element_type_from_ffi(element_leaf_type_id, precision, scale, array_nesting)
             .map_err(|e| e.to_string())?;
+    let writer = fcore::row::binary_array::FlussArrayWriter::new(size, &element_type);
+    Ok(Box::new(ArrayWriterInner {
+        writer: Some(writer),
+        completed: None,
+        element_type,
+        num_elements: size,
+    }))
+}
+
+fn new_array_writer_arrow(
+    size: usize,
+    element_schema_ptr: usize,
+) -> Result<Box<ArrayWriterInner>, String> {
+    let mut types =
+        unsafe { types::arrow_ffi_to_data_types(element_schema_ptr) }.map_err(|e| e.to_string())?;
+    let element_type = if types.is_empty() {
+        return Err("array element Arrow schema must have one field".to_string());
+    } else {
+        types.swap_remove(0)
+    };
     let writer = fcore::row::binary_array::FlussArrayWriter::new(size, &element_type);
     Ok(Box::new(ArrayWriterInner {
         writer: Some(writer),
@@ -4126,6 +3922,36 @@ impl ArrayWriterInner {
         self.writer_mut()?.write_array(idx, arr);
         Ok(())
     }
+
+    fn aw_set_row(&mut self, idx: usize, row: &mut GenericRowInner) -> Result<(), String> {
+        self.ensure_writable(idx)?;
+        if !matches!(self.element_type, fcore::metadata::DataType::Row(_)) {
+            return Err(format!(
+                "ArrayWriter type mismatch: expected ROW element, got {}",
+                self.element_type
+            ));
+        }
+        self.writer_mut()?
+            .write_row(idx, &row.row)
+            .map_err(|e| e.to_string())
+    }
+
+    fn aw_set_map(&mut self, idx: usize, map: &mut MapWriterInner) -> Result<(), String> {
+        self.ensure_writable(idx)?;
+        if !matches!(self.element_type, fcore::metadata::DataType::Map(_)) {
+            return Err(format!(
+                "ArrayWriter type mismatch: expected MAP element, got {}",
+                self.element_type
+            ));
+        }
+        map.complete_if_needed()?;
+        let completed = map.completed.as_ref().ok_or_else(|| {
+            "ArrayWriter invariant violation: nested completed map missing after finalize"
+                .to_string()
+        })?;
+        self.writer_mut()?.write_map(idx, completed);
+        Ok(())
+    }
 }
 
 /// Structural type equivalence that ignores nullability flags but preserves
@@ -4134,7 +3960,6 @@ impl ArrayWriterInner {
 /// because the Rust-side element type is always reconstructed as nullable
 /// (encoding doesn't depend on it).
 fn structurally_compatible(a: &fcore::metadata::DataType, b: &fcore::metadata::DataType) -> bool {
-    use fcore::metadata::DataType;
     match (a, b) {
         (DataType::Boolean(_), DataType::Boolean(_))
         | (DataType::TinyInt(_), DataType::TinyInt(_))

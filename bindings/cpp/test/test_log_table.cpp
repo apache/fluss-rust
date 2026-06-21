@@ -1132,18 +1132,17 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
         Record rec;
         rec.id = rv.GetInt32(0);
 
-        rec.tag_count = rv.GetArraySize(1);
+        auto tags = rv.GetValue(1);
+        rec.tag_count = tags.Size();
         for (size_t i = 0; i < rec.tag_count; ++i) {
-            if (rv.IsArrayElementNull(1, i)) {
-                rec.tags.push_back("<null>");
-            } else {
-                rec.tags.push_back(rv.GetArrayString(1, i));
-            }
+            auto el = tags.At(i);
+            rec.tags.push_back(el.IsNull() ? "<null>" : el.GetString());
         }
 
-        rec.score_count = rv.GetArraySize(2);
+        auto scores = rv.GetValue(2);
+        rec.score_count = scores.Size();
         for (size_t i = 0; i < rec.score_count; ++i) {
-            rec.scores.push_back(rv.GetArrayInt32(2, i));
+            rec.scores.push_back(scores.At(i).GetInt32());
         }
 
         return rec;
@@ -1169,6 +1168,191 @@ TEST_F(LogTableTest, AppendAndScanWithArray) {
     ASSERT_EQ(collected[1].tag_count, 1u);
     EXPECT_EQ(collected[1].tags[0], "<null>");
     ASSERT_EQ(collected[1].score_count, 0u);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, AppendAndScanWithMapAndRow) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_append_scan_map_row_cpp");
+
+    // MAP / ROW columns can't be built with the flat schema builder.
+    auto arrow_schema = arrow::schema({
+        arrow::field("id", arrow::int32()),
+        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
+        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
+                                               arrow::field("label", arrow::utf8())})),
+    });
+    auto schema = fluss::Schema::FromArrow(arrow_schema);
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
+    {
+        auto row = table.NewRow();
+        row.Set("id", 1);
+
+        fluss::MapWriter attrs(2, fluss::DataType::String(), fluss::DataType::Int());
+        attrs.SetKeyString("a");
+        attrs.SetValueInt32(1);
+        attrs.Commit();
+        attrs.SetKeyString("b");
+        attrs.SetValueInt32(2);
+        attrs.Commit();
+        row.Set("attrs", std::move(attrs));
+
+        fluss::GenericRow nested(2);
+        nested.SetInt32(0, 7);
+        nested.SetString(1, "seven");
+        row.Set("nested", std::move(nested));
+
+        ASSERT_OK(append_writer.Append(row));
+    }
+    ASSERT_OK(append_writer.Flush());
+
+    auto scan = table.NewScan();
+    fluss::LogScanner scanner;
+    ASSERT_OK(scan.CreateLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+
+    struct Record {
+        int32_t id;
+        size_t attr_count;
+        std::string k0;
+        int32_t v0;
+        int32_t seq;
+        std::string label;
+    };
+    std::vector<Record> collected;
+    auto extract = [](const fluss::ScanRecord& scan_rec) {
+        const auto& rv = scan_rec.row;
+        Record rec;
+        rec.id = rv.GetInt32(0);
+        auto attrs = rv.GetValue(1);
+        rec.attr_count = attrs.Size();
+        rec.k0 = attrs.KeyAt(0).GetString();
+        rec.v0 = attrs.ValueAt(0).GetInt32();
+        auto nested = rv.GetValue("nested");
+        rec.seq = nested.Field(0).GetInt32();
+        rec.label = nested.Field(1).GetString();
+        return rec;
+    };
+    fluss_test::PollRecords(scanner, 1, extract, collected);
+
+    ASSERT_EQ(collected.size(), 1u);
+    EXPECT_EQ(collected[0].id, 1);
+    EXPECT_EQ(collected[0].attr_count, 2u);
+    EXPECT_EQ(collected[0].k0, "a");
+    EXPECT_EQ(collected[0].v0, 1);
+    EXPECT_EQ(collected[0].seq, 7);
+    EXPECT_EQ(collected[0].label, "seven");
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(LogTableTest, ProjectionWithCompoundTypes) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_log_projection_compound_cpp");
+
+    auto arrow_schema = arrow::schema({
+        arrow::field("id", arrow::int32()),
+        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
+                                               arrow::field("label", arrow::utf8())})),
+        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
+        arrow::field("tags", arrow::list(arrow::utf8())),
+        arrow::field("extra", arrow::utf8()),
+    });
+    auto schema = fluss::Schema::FromArrow(arrow_schema);
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetBucketCount(1)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    fluss::AppendWriter append_writer;
+    ASSERT_OK(table.NewAppend().CreateWriter(append_writer));
+    {
+        auto row = table.NewRow();
+        row.SetInt32(0, 7);
+        fluss::GenericRow nested(2);
+        nested.SetInt32(0, 42);
+        nested.SetString(1, "hello");
+        row.SetRow(1, std::move(nested));
+        fluss::MapWriter attrs(2, fluss::DataType::String(), fluss::DataType::Int());
+        attrs.SetKeyString("x");
+        attrs.SetValueInt32(1);
+        attrs.Commit();
+        attrs.SetKeyString("y");
+        attrs.SetValueInt32(2);
+        attrs.Commit();
+        row.SetMap(2, std::move(attrs));
+        fluss::ArrayWriter tags(2, fluss::DataType::String());
+        tags.SetString(0, "alpha");
+        tags.SetString(1, "beta");
+        row.SetArray(3, std::move(tags));
+        row.SetString(4, "ignore-me");
+        ASSERT_OK(append_writer.Append(row));
+    }
+    ASSERT_OK(append_writer.Flush());
+
+    // Project columns reordered, dropping `extra`: new layout is
+    // [nested=0, attrs=1, tags=2, id=3].
+    auto scan = table.NewScan();
+    scan.ProjectByName({"nested", "attrs", "tags", "id"});
+    fluss::LogScanner scanner;
+    ASSERT_OK(scan.CreateLogScanner(scanner));
+    ASSERT_OK(scanner.Subscribe(0, 0));
+
+    struct Rec {
+        int32_t id;
+        int32_t seq;
+        std::string label;
+        size_t attr_count;
+        size_t tag_count;
+        std::string tag0;
+    };
+    std::vector<Rec> collected;
+    auto extract = [](const fluss::ScanRecord& sr) {
+        const auto& rv = sr.row;
+        Rec rec;
+        auto nested = rv.GetValue(0);
+        rec.seq = nested.Field(0).GetInt32();
+        rec.label = nested.Field(1).GetString();
+        auto m = rv.GetValue(1);
+        rec.attr_count = m.Size();
+        auto a = rv.GetValue(2);
+        rec.tag_count = a.Size();
+        rec.tag0 = a.At(0).GetString();
+        rec.id = rv.GetInt32(3);
+        return rec;
+    };
+    fluss_test::PollRecords(scanner, 1, extract, collected);
+
+    ASSERT_EQ(collected.size(), 1u);
+    EXPECT_EQ(collected[0].id, 7);
+    EXPECT_EQ(collected[0].seq, 42);
+    EXPECT_EQ(collected[0].label, "hello");
+    EXPECT_EQ(collected[0].attr_count, 2u);
+    EXPECT_EQ(collected[0].tag_count, 2u);
+    EXPECT_EQ(collected[0].tag0, "alpha");
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
@@ -1240,16 +1424,16 @@ TEST_F(LogTableTest, AppendAndScanWithNestedArray) {
         const auto& rv = scan_rec.row;
         Record rec;
         rec.id = rv.GetInt32(0);
-        rec.outer_count = rv.GetArraySize(1);
-        rec.element_type = rv.GetArrayElementType(1);
-        auto outer = rv.GetArrayView(1);
+        auto outer = rv.GetValue(1);
+        rec.outer_count = outer.Size();
+        rec.element_type = outer.Size() > 0 ? outer.At(0).Type() : fluss::TypeId::Array;
         rec.values.reserve(outer.Size());
         for (size_t i = 0; i < outer.Size(); ++i) {
-            auto inner = outer.GetArray(i);
+            auto inner = outer.At(i);
             std::vector<int32_t> row;
             row.reserve(inner.Size());
             for (size_t j = 0; j < inner.Size(); ++j) {
-                row.push_back(inner.GetInt32(j));
+                row.push_back(inner.At(j).GetInt32());
             }
             rec.values.push_back(std::move(row));
         }
@@ -1346,29 +1530,35 @@ TEST_F(LogTableTest, AppendAndScanWithArrayRichTypes) {
     auto rec = *it;
     const auto& rv = rec.row;
 
-    EXPECT_EQ(rv.GetArraySize(1), 2u);
-    auto bytes0 = rv.GetArrayBytes(1, 0);
+    auto arr_bytes = rv.GetValue(1);
+    EXPECT_EQ(arr_bytes.Size(), 2u);
+    auto bytes0 = arr_bytes.At(0).GetBytes();
     ASSERT_EQ(bytes0.size(), 3u);
     EXPECT_EQ(bytes0[0], 0x10);
     EXPECT_EQ(bytes0[1], 0x20);
     EXPECT_EQ(bytes0[2], 0x30);
-    EXPECT_TRUE(rv.IsArrayElementNull(1, 1));
+    EXPECT_TRUE(arr_bytes.At(1).IsNull());
 
-    EXPECT_EQ(rv.GetArraySize(2), 2u);
-    EXPECT_EQ(rv.GetArrayDate(2, 0).days_since_epoch, fluss::Date::FromDays(20000).days_since_epoch);
-    EXPECT_TRUE(rv.IsArrayElementNull(2, 1));
+    auto arr_date = rv.GetValue(2);
+    EXPECT_EQ(arr_date.Size(), 2u);
+    EXPECT_EQ(arr_date.At(0).GetDate().days_since_epoch, fluss::Date::FromDays(20000).days_since_epoch);
+    EXPECT_TRUE(arr_date.At(1).IsNull());
 
-    EXPECT_EQ(rv.GetArraySize(3), 1u);
-    EXPECT_EQ(rv.GetArrayTime(3, 0).millis_since_midnight, fluss::Time::FromMillis(3600000).millis_since_midnight);
+    auto arr_time = rv.GetValue(3);
+    EXPECT_EQ(arr_time.Size(), 1u);
+    EXPECT_EQ(arr_time.At(0).GetTime().millis_since_midnight,
+              fluss::Time::FromMillis(3600000).millis_since_midnight);
 
-    EXPECT_EQ(rv.GetArraySize(4), 1u);
-    auto ts = rv.GetArrayTimestamp(4, 0);
+    auto arr_ts = rv.GetValue(4);
+    EXPECT_EQ(arr_ts.Size(), 1u);
+    auto ts = arr_ts.At(0).GetTimestamp();
     EXPECT_EQ(ts.epoch_millis, 1769163227123);
     EXPECT_EQ(ts.nano_of_millisecond, 456000);
 
-    EXPECT_EQ(rv.GetArraySize(5), 2u);
-    EXPECT_EQ(rv.GetArrayDecimalString(5, 0), "123.45");
-    EXPECT_TRUE(rv.IsArrayElementNull(5, 1));
+    auto arr_dec = rv.GetValue(5);
+    EXPECT_EQ(arr_dec.Size(), 2u);
+    EXPECT_EQ(arr_dec.At(0).GetDecimalString(), "123.45");
+    EXPECT_TRUE(arr_dec.At(1).IsNull());
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
@@ -1426,49 +1616,37 @@ TEST_F(LogTableTest, ArrayApiValidationErrors) {
     ASSERT_TRUE(it != records.end());
     auto rec = *it;
 
+    auto view = rec.row.GetValue(1);
+    EXPECT_EQ(view.Type(), fluss::TypeId::Array);
+    EXPECT_EQ(view.Size(), 2u);
+    EXPECT_TRUE(view.At(1).IsNull());
+
+    // Out-of-bounds navigation throws.
     bool oob_threw = false;
     try {
-        (void)rec.row.GetArrayInt32(1, 5);
+        (void)view.At(5).GetInt32();
     } catch (const std::exception&) {
         oob_threw = true;
     }
     EXPECT_TRUE(oob_threw);
 
+    // Wrong-type leaf read throws.
     bool wrong_type_threw = false;
     try {
-        (void)rec.row.GetArrayInt64(1, 0);
+        (void)view.At(0).GetInt64();
     } catch (const std::exception&) {
         wrong_type_threw = true;
     }
     EXPECT_TRUE(wrong_type_threw);
 
+    // Typed read of a null element throws.
     bool null_typed_getter_threw = false;
     try {
-        (void)rec.row.GetArrayInt32(1, 1);
+        (void)view.At(1).GetInt32();
     } catch (const std::exception&) {
         null_typed_getter_threw = true;
     }
     EXPECT_TRUE(null_typed_getter_threw);
-
-    auto view = rec.row.GetArrayView(1);
-    EXPECT_EQ(view.Size(), 2u);
-    EXPECT_TRUE(view.IsNull(1));
-
-    bool view_wrong_type_threw = false;
-    try {
-        (void)view.GetInt64(0);
-    } catch (const std::exception&) {
-        view_wrong_type_threw = true;
-    }
-    EXPECT_TRUE(view_wrong_type_threw);
-
-    bool view_null_typed_getter_threw = false;
-    try {
-        (void)view.GetInt32(1);
-    } catch (const std::exception&) {
-        view_null_typed_getter_threw = true;
-    }
-    EXPECT_TRUE(view_null_typed_getter_threw);
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
@@ -1564,46 +1742,52 @@ TEST_F(LogTableTest, AppendAndScanWithArrayEncodingEdgeCases) {
     const auto& rv = rec.row;
 
     // Long strings: heap-encoded variable-length round-trip
-    EXPECT_EQ(rv.GetArraySize(1), 2u);
-    EXPECT_EQ(rv.GetArrayString(1, 0), "abcdefgh");
-    EXPECT_EQ(rv.GetArrayString(1, 1), "this is a much longer string that definitely exceeds inline");
+    auto strs = rv.GetValue(1);
+    EXPECT_EQ(strs.Size(), 2u);
+    EXPECT_EQ(strs.At(0).GetString(), "abcdefgh");
+    EXPECT_EQ(strs.At(1).GetString(), "this is a much longer string that definitely exceeds inline");
 
     // Non-compact decimal (precision 22 > MAX_COMPACT_PRECISION 18)
-    EXPECT_EQ(rv.GetArraySize(2), 2u);
-    EXPECT_EQ(rv.GetArrayDecimalString(2, 0), "12345678901234567.12345");
-    EXPECT_EQ(rv.GetArrayDecimalString(2, 1), "-99999999999999999.99999");
+    auto decs = rv.GetValue(2);
+    EXPECT_EQ(decs.Size(), 2u);
+    EXPECT_EQ(decs.At(0).GetDecimalString(), "12345678901234567.12345");
+    EXPECT_EQ(decs.At(1).GetDecimalString(), "-99999999999999999.99999");
 
     // Non-compact timestamp (precision 9 > MAX_COMPACT_TIMESTAMP_PRECISION 3)
-    EXPECT_EQ(rv.GetArraySize(3), 1u);
-    auto ts = rv.GetArrayTimestamp(3, 0);
+    auto tss = rv.GetValue(3);
+    EXPECT_EQ(tss.Size(), 1u);
+    auto ts = tss.At(0).GetTimestamp();
     EXPECT_EQ(ts.epoch_millis, 1769163227123);
     EXPECT_EQ(ts.nano_of_millisecond, 456789);
 
     // Float NaN / Infinity round-trip
-    EXPECT_EQ(rv.GetArraySize(4), 3u);
-    EXPECT_TRUE(std::isnan(rv.GetArrayFloat32(4, 0)));
-    EXPECT_TRUE(std::isinf(rv.GetArrayFloat32(4, 1)));
-    EXPECT_GT(rv.GetArrayFloat32(4, 1), 0.0f);
-    EXPECT_TRUE(std::isinf(rv.GetArrayFloat32(4, 2)));
-    EXPECT_LT(rv.GetArrayFloat32(4, 2), 0.0f);
+    auto floats = rv.GetValue(4);
+    EXPECT_EQ(floats.Size(), 3u);
+    EXPECT_TRUE(std::isnan(floats.At(0).GetFloat32()));
+    EXPECT_TRUE(std::isinf(floats.At(1).GetFloat32()));
+    EXPECT_GT(floats.At(1).GetFloat32(), 0.0f);
+    EXPECT_TRUE(std::isinf(floats.At(2).GetFloat32()));
+    EXPECT_LT(floats.At(2).GetFloat32(), 0.0f);
 
     // Double NaN / Infinity round-trip
-    EXPECT_EQ(rv.GetArraySize(5), 3u);
-    EXPECT_TRUE(std::isnan(rv.GetArrayFloat64(5, 0)));
-    EXPECT_TRUE(std::isinf(rv.GetArrayFloat64(5, 1)));
-    EXPECT_GT(rv.GetArrayFloat64(5, 1), 0.0);
-    EXPECT_TRUE(std::isinf(rv.GetArrayFloat64(5, 2)));
-    EXPECT_LT(rv.GetArrayFloat64(5, 2), 0.0);
+    auto doubles = rv.GetValue(5);
+    EXPECT_EQ(doubles.Size(), 3u);
+    EXPECT_TRUE(std::isnan(doubles.At(0).GetFloat64()));
+    EXPECT_TRUE(std::isinf(doubles.At(1).GetFloat64()));
+    EXPECT_GT(doubles.At(1).GetFloat64(), 0.0);
+    EXPECT_TRUE(std::isinf(doubles.At(2).GetFloat64()));
+    EXPECT_LT(doubles.At(2).GetFloat64(), 0.0);
 
     // Fixed-length binary round-trip
-    EXPECT_EQ(rv.GetArraySize(6), 2u);
-    auto bin = rv.GetArrayBytes(6, 0);
+    auto bins = rv.GetValue(6);
+    EXPECT_EQ(bins.Size(), 2u);
+    auto bin = bins.At(0).GetBytes();
     ASSERT_EQ(bin.size(), 4u);
     EXPECT_EQ(bin[0], 0xDE);
     EXPECT_EQ(bin[1], 0xAD);
     EXPECT_EQ(bin[2], 0xBE);
     EXPECT_EQ(bin[3], 0xEF);
-    EXPECT_TRUE(rv.IsArrayElementNull(6, 1));
+    EXPECT_TRUE(bins.At(1).IsNull());
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
@@ -1662,6 +1846,57 @@ TEST_F(LogTableTest, ArrayWriterOverflowDetection) {
     {
         fluss::ArrayWriter smallint_arr(1, fluss::DataType::SmallInt());
         EXPECT_NO_THROW(smallint_arr.SetInt32(0, 32767));
+    }
+}
+
+TEST_F(LogTableTest, MapWriterOverflowDetection) {
+    // Keys/values go through SetKeyInt32/SetValueInt32 (always i32), so TINYINT /
+    // SMALLINT must be range-checked like array elements.
+
+    // TINYINT map value overflowing i8 (-128..127) must throw.
+    {
+        fluss::MapWriter m(1, fluss::DataType::String(), fluss::DataType::TinyInt());
+        bool threw = false;
+        try {
+            m.SetValueInt32(1000);
+        } catch (const std::exception& e) {
+            threw = true;
+            EXPECT_NE(std::string(e.what()).find("TINYINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // SMALLINT map value overflowing i16 must throw.
+    {
+        fluss::MapWriter m(1, fluss::DataType::String(), fluss::DataType::SmallInt());
+        bool threw = false;
+        try {
+            m.SetValueInt32(40000);
+        } catch (const std::exception& e) {
+            threw = true;
+            EXPECT_NE(std::string(e.what()).find("SMALLINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // Keys are checked the same way: a TINYINT key out of range throws.
+    {
+        fluss::MapWriter m(1, fluss::DataType::TinyInt(), fluss::DataType::Int());
+        bool threw = false;
+        try {
+            m.SetKeyInt32(-200);
+        } catch (const std::exception& e) {
+            threw = true;
+            EXPECT_NE(std::string(e.what()).find("TINYINT"), std::string::npos);
+        }
+        EXPECT_TRUE(threw);
+    }
+
+    // In-range key and value must succeed.
+    {
+        fluss::MapWriter m(1, fluss::DataType::TinyInt(), fluss::DataType::SmallInt());
+        EXPECT_NO_THROW(m.SetKeyInt32(127));
+        EXPECT_NO_THROW(m.SetValueInt32(32767));
     }
 }
 

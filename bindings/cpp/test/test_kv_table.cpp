@@ -19,6 +19,8 @@
 
 #include <gtest/gtest.h>
 
+#include <arrow/api.h>
+
 #include "test_utils.h"
 
 class KvTableTest : public ::testing::Test {
@@ -225,7 +227,7 @@ TEST_F(KvTableTest, LimitScan) {
     ASSERT_OK(adm.DropTable(table_path, false));
 }
 
-TEST_F(KvTableTest, LookupWithNestedArrayArrayView) {
+TEST_F(KvTableTest, LookupWithNestedArray) {
     auto& adm = admin();
     auto& conn = connection();
 
@@ -282,24 +284,713 @@ TEST_F(KvTableTest, LookupWithNestedArrayArrayView) {
     fluss::LookupResult result;
     ASSERT_OK(lookuper.Lookup(key, result));
     ASSERT_TRUE(result.Found());
-    EXPECT_EQ(result.GetArraySize("matrix"), 2u);
-    EXPECT_EQ(result.GetArrayElementType("matrix"), fluss::TypeId::Array);
-
-    auto outer = result.GetArrayView("matrix");
+    auto outer = result.GetValue("matrix");
+    EXPECT_EQ(outer.Type(), fluss::TypeId::Array);
     ASSERT_EQ(outer.Size(), 2u);
-    EXPECT_EQ(outer.ElementType(), fluss::TypeId::Array);
 
-    auto first = outer.GetArray(0);
+    auto first = outer.At(0);
+    EXPECT_EQ(first.Type(), fluss::TypeId::Array);
     ASSERT_EQ(first.Size(), 2u);
-    EXPECT_EQ(first.ElementType(), fluss::TypeId::Int);
-    EXPECT_EQ(first.GetInt32(0), 11);
-    EXPECT_EQ(first.GetInt32(1), 12);
+    EXPECT_EQ(first.At(0).GetInt32(), 11);
+    EXPECT_EQ(first.At(1).GetInt32(), 12);
 
-    auto second = outer.GetArray(1);
+    auto second = outer.At(1);
     ASSERT_EQ(second.Size(), 2u);
-    EXPECT_EQ(second.ElementType(), fluss::TypeId::Int);
-    EXPECT_EQ(second.GetInt32(0), 21);
-    EXPECT_EQ(second.GetInt32(1), 22);
+    EXPECT_EQ(second.At(0).GetInt32(), 21);
+    EXPECT_EQ(second.At(1).GetInt32(), 22);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(KvTableTest, LookupComplexTypesMatrix) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_lookup_complex_matrix_cpp");
+
+    auto row_seq_label = arrow::struct_(
+        {arrow::field("seq", arrow::int32()), arrow::field("label", arrow::utf8())});
+
+    auto arrow_schema = arrow::schema({
+        arrow::field("id", arrow::int32()),
+        arrow::field("m_str_int", arrow::map(arrow::utf8(), arrow::int32())),
+        arrow::field("m_str_row", arrow::map(arrow::utf8(), row_seq_label)),
+        arrow::field("m_str_map",
+                     arrow::map(arrow::utf8(), arrow::map(arrow::utf8(), arrow::int32()))),
+        arrow::field("m_str_arr", arrow::map(arrow::utf8(), arrow::list(arrow::int32()))),
+        arrow::field("arr_map", arrow::list(arrow::map(arrow::utf8(), arrow::int32()))),
+        arrow::field("arr_row", arrow::list(row_seq_label)),
+        arrow::field("r_deep", arrow::struct_({arrow::field(
+                                   "inner", arrow::struct_({arrow::field("n", arrow::int32())}))})),
+        arrow::field("r_with_arr",
+                     arrow::struct_({arrow::field("f_int", arrow::int32()),
+                                     arrow::field("f_arr", arrow::list(arrow::int32()))})),
+        // row_rich: every scalar type + an array field in one ROW.
+        arrow::field("r_rich",
+                     arrow::struct_({
+                         arrow::field("f_bool", arrow::boolean()),
+                         arrow::field("f_int", arrow::int32()),
+                         arrow::field("f_long", arrow::int64()),
+                         arrow::field("f_float", arrow::float32()),
+                         arrow::field("f_double", arrow::float64()),
+                         arrow::field("f_str", arrow::utf8()),
+                         arrow::field("f_bytes", arrow::binary()),
+                         arrow::field("f_decimal", arrow::decimal128(10, 2)),
+                         arrow::field("f_date", arrow::date32()),
+                         arrow::field("f_time", arrow::time32(arrow::TimeUnit::MILLI)),
+                         arrow::field("f_ts_ntz", arrow::timestamp(arrow::TimeUnit::MICRO)),
+                         arrow::field("f_ts_ltz", arrow::timestamp(arrow::TimeUnit::MICRO, "UTC")),
+                         arrow::field("f_binary", arrow::fixed_size_binary(4)),
+                         arrow::field("f_arr", arrow::list(arrow::int32())),
+                     })),
+        arrow::field("m_str_tiny", arrow::map(arrow::utf8(), arrow::int8())),
+        arrow::field("arr_small", arrow::list(arrow::int16())),
+    });
+    auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    auto upsert = table.NewUpsert();
+    fluss::UpsertWriter writer;
+    ASSERT_OK(upsert.CreateWriter(writer));
+
+    {
+        auto row = table.NewRow();
+        row.Set("id", 1);
+
+        // map<string,int> — second entry has a NULL value.
+        {
+            fluss::MapWriter m(2, fluss::DataType::String(), fluss::DataType::Int());
+            m.SetKeyString("a");
+            m.SetValueInt32(1);
+            m.Commit();
+            m.SetKeyString("b");
+            m.SetValueNull();
+            m.Commit();
+            row.Set("m_str_int", std::move(m));
+        }
+        // map<string, row<seq,label>> — value is a ROW, so the Arrow ctor.
+        {
+            fluss::MapWriter m(1, arrow::utf8(), row_seq_label);
+            m.SetKeyString("k");
+            fluss::GenericRow v(2);
+            v.SetInt32(0, 7);
+            v.SetString(1, "seven");
+            m.SetValueRow(std::move(v));
+            m.Commit();
+            row.Set("m_str_row", std::move(m));
+        }
+        // map<string, map<string,int>>
+        {
+            fluss::MapWriter m(1, arrow::utf8(), arrow::map(arrow::utf8(), arrow::int32()));
+            m.SetKeyString("k");
+            fluss::MapWriter inner(1, fluss::DataType::String(), fluss::DataType::Int());
+            inner.SetKeyString("x");
+            inner.SetValueInt32(9);
+            inner.Commit();
+            m.SetValueMap(std::move(inner));
+            m.Commit();
+            row.Set("m_str_map", std::move(m));
+        }
+        // map<string, array<int>> — value array fits the flat ctor.
+        {
+            fluss::MapWriter m(1, fluss::DataType::String(),
+                               fluss::DataType::Array(fluss::DataType::Int()));
+            m.SetKeyString("k");
+            fluss::ArrayWriter v(2, fluss::DataType::Int());
+            v.SetInt32(0, 10);
+            v.SetInt32(1, 20);
+            m.SetValueArray(std::move(v));
+            m.Commit();
+            row.Set("m_str_arr", std::move(m));
+        }
+        // array<map<string,int>> — element is a MAP, so the Arrow ctor.
+        {
+            fluss::ArrayWriter a(1, arrow::map(arrow::utf8(), arrow::int32()));
+            fluss::MapWriter e(1, fluss::DataType::String(), fluss::DataType::Int());
+            e.SetKeyString("p");
+            e.SetValueInt32(5);
+            e.Commit();
+            a.SetMap(0, std::move(e));
+            row.Set("arr_map", std::move(a));
+        }
+        // array<row<seq,label>> — element is a ROW, so the Arrow ctor.
+        {
+            fluss::ArrayWriter a(2, row_seq_label);
+            fluss::GenericRow e0(2);
+            e0.SetInt32(0, 1);
+            e0.SetString(1, "one");
+            fluss::GenericRow e1(2);
+            e1.SetInt32(0, 2);
+            e1.SetString(1, "two");
+            a.SetRow(0, std::move(e0));
+            a.SetRow(1, std::move(e1));
+            row.Set("arr_row", std::move(a));
+        }
+        // row<inner: row<n>>
+        {
+            fluss::GenericRow inner(1);
+            inner.SetInt32(0, 42);
+            fluss::GenericRow outer(1);
+            outer.SetRow(0, std::move(inner));
+            row.Set("r_deep", std::move(outer));
+        }
+        // row<f_int, f_arr: array<int>>
+        {
+            fluss::GenericRow r(2);
+            r.SetInt32(0, 100);
+            fluss::ArrayWriter arr(3, fluss::DataType::Int());
+            arr.SetInt32(0, 1);
+            arr.SetInt32(1, 2);
+            arr.SetInt32(2, 3);
+            r.SetArray(1, std::move(arr));
+            row.Set("r_with_arr", std::move(r));
+        }
+        // row_rich: exercise every Value leaf getter + an array field.
+        {
+            fluss::GenericRow rr(14);
+            rr.SetBool(0, true);
+            rr.SetInt32(1, 100000);
+            rr.SetInt64(2, 9876543210LL);
+            rr.SetFloat32(3, 3.5F);
+            rr.SetFloat64(4, 2.5);
+            rr.SetString(5, "hello world");
+            rr.SetBytes(6, {'b', 'i', 'n'});
+            rr.SetDecimal(7, "123.45");
+            rr.SetDate(8, fluss::Date{20476});
+            rr.SetTime(9, fluss::Time{36827123});
+            rr.SetTimestampNtz(10, fluss::Timestamp{1769163227123LL, 456000});
+            rr.SetTimestampLtz(11, fluss::Timestamp{1769163227456LL, 0});
+            rr.SetBytes(12, {1, 2, 3, 4});
+            fluss::ArrayWriter farr(3, fluss::DataType::Int());
+            farr.SetInt32(0, 7);
+            farr.SetNull(1);
+            farr.SetInt32(2, 11);
+            rr.SetArray(13, std::move(farr));
+            row.Set("r_rich", std::move(rr));
+        }
+        // map<string,tinyint>
+        {
+            fluss::MapWriter m(2, fluss::DataType::String(), fluss::DataType::TinyInt());
+            m.SetKeyString("lo");
+            m.SetValueInt32(-128);
+            m.Commit();
+            m.SetKeyString("hi");
+            m.SetValueInt32(127);
+            m.Commit();
+            row.Set("m_str_tiny", std::move(m));
+        }
+        // array<smallint>
+        {
+            fluss::ArrayWriter a(2, fluss::DataType::SmallInt());
+            a.SetInt32(0, 1000);
+            a.SetInt32(1, -2000);
+            row.Set("arr_small", std::move(a));
+        }
+
+        ASSERT_OK(writer.Upsert(row));
+        ASSERT_OK(writer.Flush());
+    }
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    auto key = table.NewRow();
+    key.Set("id", 1);
+    fluss::LookupResult result;
+    ASSERT_OK(lookuper.Lookup(key, result));
+    ASSERT_TRUE(result.Found());
+
+    // map<string,int> — entry 1 has a NULL value.
+    {
+        auto m = result.GetValue("m_str_int");
+        EXPECT_EQ(m.Type(), fluss::TypeId::Map);
+        ASSERT_EQ(m.Size(), 2u);
+        EXPECT_EQ(m.KeyAt(0).GetString(), "a");
+        EXPECT_FALSE(m.ValueAt(0).IsNull());
+        EXPECT_EQ(m.ValueAt(0).GetInt32(), 1);
+        EXPECT_EQ(m.KeyAt(1).GetString(), "b");
+        EXPECT_TRUE(m.ValueAt(1).IsNull());
+    }
+    // map<string, row<seq,label>>
+    {
+        auto m = result.GetValue("m_str_row");
+        ASSERT_EQ(m.Size(), 1u);
+        EXPECT_EQ(m.KeyAt(0).GetString(), "k");
+        auto v = m.ValueAt(0);
+        EXPECT_EQ(v.Field(0).GetInt32(), 7);
+        EXPECT_EQ(v.Field(1).GetString(), "seven");
+    }
+    // map<string, map<string,int>>
+    {
+        auto inner = result.GetValue("m_str_map").ValueAt(0);
+        ASSERT_EQ(inner.Size(), 1u);
+        EXPECT_EQ(inner.KeyAt(0).GetString(), "x");
+        EXPECT_EQ(inner.ValueAt(0).GetInt32(), 9);
+    }
+    // map<string, array<int>>
+    {
+        auto av = result.GetValue("m_str_arr").ValueAt(0);
+        ASSERT_EQ(av.Size(), 2u);
+        EXPECT_EQ(av.At(0).GetInt32(), 10);
+        EXPECT_EQ(av.At(1).GetInt32(), 20);
+    }
+    // array<map<string,int>>
+    {
+        auto a = result.GetValue("arr_map");
+        ASSERT_EQ(a.Size(), 1u);
+        auto e = a.At(0);
+        EXPECT_EQ(e.KeyAt(0).GetString(), "p");
+        EXPECT_EQ(e.ValueAt(0).GetInt32(), 5);
+    }
+    // array<row<seq,label>>
+    {
+        auto a = result.GetValue("arr_row");
+        EXPECT_EQ(a.Type(), fluss::TypeId::Array);
+        ASSERT_EQ(a.Size(), 2u);
+        EXPECT_EQ(a.At(0).Field(0).GetInt32(), 1);
+        EXPECT_EQ(a.At(0).Field(1).GetString(), "one");
+        EXPECT_EQ(a.At(1).Field(0).GetInt32(), 2);
+        EXPECT_EQ(a.At(1).Field(1).GetString(), "two");
+    }
+    // row<inner: row<n>>
+    {
+        auto inner = result.GetValue("r_deep").Field(0);
+        EXPECT_EQ(inner.Field(0).GetInt32(), 42);
+    }
+    // row<f_int, f_arr>
+    {
+        auto r = result.GetValue("r_with_arr");
+        EXPECT_EQ(r.Type(), fluss::TypeId::Row);
+        EXPECT_EQ(r.Field(0).GetInt32(), 100);
+        EXPECT_EQ(r.Field("f_int").GetInt32(), 100);  // ROW field by name
+        auto arr = r.Field(1);
+        ASSERT_EQ(arr.Size(), 3u);
+        EXPECT_EQ(arr.At(2).GetInt32(), 3);
+    }
+    // row_rich — every leaf getter on one Value handle.
+    {
+        auto rr = result.GetValue("r_rich");
+        ASSERT_EQ(rr.FieldCount(), 14u);
+        EXPECT_TRUE(rr.Field(0).GetBool());
+        EXPECT_EQ(rr.Field(1).GetInt32(), 100000);
+        EXPECT_EQ(rr.Field(2).GetInt64(), 9876543210LL);
+        EXPECT_FLOAT_EQ(rr.Field(3).GetFloat32(), 3.5F);
+        EXPECT_DOUBLE_EQ(rr.Field(4).GetFloat64(), 2.5);
+        EXPECT_EQ(rr.Field(5).GetString(), "hello world");
+        auto by = rr.Field(6).GetBytes();
+        ASSERT_EQ(by.size(), 3u);
+        EXPECT_EQ(by[0], 'b');
+        EXPECT_EQ(rr.Field(7).GetDecimalString(), "123.45");
+        EXPECT_EQ(rr.Field(8).GetDate().days_since_epoch, 20476);
+        EXPECT_EQ(rr.Field(9).GetTime().millis_since_midnight, 36827123);
+        EXPECT_EQ(rr.Field(10).GetTimestamp().epoch_millis, 1769163227123LL);
+        EXPECT_EQ(rr.Field(11).GetTimestamp().epoch_millis, 1769163227456LL);
+        auto bin = rr.Field(12).GetBytes();
+        ASSERT_EQ(bin.size(), 4u);
+        EXPECT_EQ(bin[3], 4);
+        auto fa = rr.Field(13);
+        ASSERT_EQ(fa.Size(), 3u);
+        EXPECT_TRUE(fa.At(1).IsNull());
+        EXPECT_EQ(fa.At(2).GetInt32(), 11);
+    }
+    // map<string,tinyint>
+    {
+        auto m = result.GetValue("m_str_tiny");
+        ASSERT_EQ(m.Size(), 2u);
+        EXPECT_EQ(m.ValueAt(0).GetInt32(), -128);
+        EXPECT_EQ(m.ValueAt(1).GetInt32(), 127);
+    }
+    // array<smallint>
+    {
+        auto a = result.GetValue("arr_small");
+        ASSERT_EQ(a.Size(), 2u);
+        EXPECT_EQ(a.At(0).GetInt32(), 1000);
+        EXPECT_EQ(a.At(1).GetInt32(), -2000);
+    }
+
+    // Row 2 (id=2) — every compound column NULL.
+    {
+        const int column_count = arrow_schema->num_fields();
+        auto row = table.NewRow();
+        row.SetInt32(0, 2);
+        for (int i = 1; i < column_count; ++i) {
+            row.SetNull(i);
+        }
+        ASSERT_OK(writer.Upsert(row));
+        ASSERT_OK(writer.Flush());
+
+        auto key2 = table.NewRow();
+        key2.SetInt32(0, 2);
+        fluss::LookupResult result2;
+        ASSERT_OK(lookuper.Lookup(key2, result2));
+        ASSERT_TRUE(result2.Found());
+        EXPECT_EQ(result2.GetInt32(0), 2);
+        for (int i = 1; i < column_count; ++i) {
+            EXPECT_TRUE(result2.IsNull(i)) << "column " << i << " should be null";
+        }
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+// Regression: timestamp map values built via the Arrow MapWriter ctor must pick
+// NTZ vs LTZ from the declared value type (previously always wrote NTZ).
+TEST_F(KvTableTest, MapWithTimestampValuesNtzAndLtz) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_map_timestamp_values_cpp");
+
+    auto arrow_schema = arrow::schema({
+        arrow::field("id", arrow::int32()),
+        arrow::field("mn", arrow::map(arrow::utf8(), arrow::timestamp(arrow::TimeUnit::MICRO))),
+        arrow::field("ml",
+                     arrow::map(arrow::utf8(), arrow::timestamp(arrow::TimeUnit::MICRO, "UTC"))),
+    });
+    auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    fluss::UpsertWriter writer;
+    ASSERT_OK(table.NewUpsert().CreateWriter(writer));
+
+    const fluss::Timestamp ntz_val{1769163227123LL, 456000};
+    const fluss::Timestamp ltz_val{1700000000789LL, 123000};
+    {
+        auto row = table.NewRow();
+        row.SetInt32(0, 1);
+        // mn: map<string, timestamp> (NTZ), via the Arrow ctor.
+        fluss::MapWriter mn(1, arrow::utf8(), arrow::timestamp(arrow::TimeUnit::MICRO));
+        mn.SetKeyString("k");
+        mn.SetValueTimestamp(ntz_val);
+        mn.Commit();
+        row.SetMap(1, std::move(mn));
+        // ml: map<string, timestamp_ltz> (LTZ), via the Arrow ctor.
+        fluss::MapWriter ml(1, arrow::utf8(), arrow::timestamp(arrow::TimeUnit::MICRO, "UTC"));
+        ml.SetKeyString("k");
+        ml.SetValueTimestamp(ltz_val);
+        ml.Commit();
+        row.SetMap(2, std::move(ml));
+        ASSERT_OK(writer.Upsert(row));
+        ASSERT_OK(writer.Flush());
+    }
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    auto key = table.NewRow();
+    key.SetInt32(0, 1);
+    fluss::LookupResult result;
+    ASSERT_OK(lookuper.Lookup(key, result));
+    ASSERT_TRUE(result.Found());
+
+    auto mn = result.GetValue("mn");
+    ASSERT_EQ(mn.Size(), 1u);
+    EXPECT_EQ(mn.ValueAt(0).GetTimestamp().epoch_millis, ntz_val.epoch_millis);
+    EXPECT_EQ(mn.ValueAt(0).GetTimestamp().nano_of_millisecond, ntz_val.nano_of_millisecond);
+
+    auto ml = result.GetValue("ml");
+    ASSERT_EQ(ml.Size(), 1u);
+    EXPECT_EQ(ml.ValueAt(0).GetTimestamp().epoch_millis, ltz_val.epoch_millis);
+    EXPECT_EQ(ml.ValueAt(0).GetTimestamp().nano_of_millisecond, ltz_val.nano_of_millisecond);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+// Deeply nested MAP/ROW via native DataType::Map / DataType::Row only — no Arrow.
+TEST_F(KvTableTest, NativeNestedBuilderNoArrow) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_native_nested_builder_cpp");
+
+    // array<row<seq: int, attrs: map<string, int>>>
+    auto event = fluss::DataType::Row({
+        {"seq", fluss::DataType::Int()},
+        {"attrs", fluss::DataType::Map(fluss::DataType::String(), fluss::DataType::Int())},
+    });
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("events", fluss::DataType::Array(event))
+                      .AddColumn("profile", fluss::DataType::Row({
+                                                {"name", fluss::DataType::String()},
+                                                {"score", fluss::DataType::Double()},
+                                            }))
+                      .SetPrimaryKeys({"id"})
+                      .Build();
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+    fluss::UpsertWriter writer;
+    ASSERT_OK(table.NewUpsert().CreateWriter(writer));
+
+    {
+        auto row = table.NewRow();
+        row.Set("id", 1);
+
+        // events = [ {0, {"a":0}}, {1, {"a":10,"b":11}} ]
+        fluss::ArrayWriter events(2, event);
+        for (int i = 0; i < 2; i++) {
+            fluss::GenericRow ev(2);
+            ev.SetInt32(0, i);
+            fluss::MapWriter attrs(static_cast<size_t>(i + 1), fluss::DataType::String(),
+                                   fluss::DataType::Int());
+            attrs.SetKeyString("a");
+            attrs.SetValueInt32(i * 10);
+            attrs.Commit();
+            if (i == 1) {
+                attrs.SetKeyString("b");
+                attrs.SetValueInt32(11);
+                attrs.Commit();
+            }
+            ev.SetMap(1, std::move(attrs));
+            events.SetRow(i, std::move(ev));
+        }
+        row.Set("events", std::move(events));
+
+        fluss::GenericRow profile(2);
+        profile.SetString(0, "alice");
+        profile.SetFloat64(1, 9.5);
+        row.Set("profile", std::move(profile));
+
+        ASSERT_OK(writer.Upsert(row));
+        ASSERT_OK(writer.Flush());
+    }
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    auto key = table.NewRow();
+    key.SetInt32(0, 1);
+    fluss::LookupResult result;
+    ASSERT_OK(lookuper.Lookup(key, result));
+    ASSERT_TRUE(result.Found());
+
+    auto events = result.GetValue("events");  // ARRAY<ROW<int, MAP<string,int>>>
+    ASSERT_EQ(events.Type(), fluss::TypeId::Array);
+    ASSERT_EQ(events.Size(), 2u);
+    EXPECT_EQ(events.At(0).Field("seq").GetInt32(), 0);
+    EXPECT_EQ(events.At(0).Field("attrs").ValueAt(0).GetInt32(), 0);
+    auto e1_attrs = events.At(1).Field("attrs");
+    ASSERT_EQ(e1_attrs.Size(), 2u);
+    EXPECT_EQ(e1_attrs.KeyAt(1).GetString(), "b");
+    EXPECT_EQ(e1_attrs.ValueAt(1).GetInt32(), 11);
+
+    auto profile = result.GetValue("profile");  // ROW<name, score>
+    EXPECT_EQ(profile.Field("name").GetString(), "alice");
+    EXPECT_DOUBLE_EQ(profile.Field("score").GetFloat64(), 9.5);
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(KvTableTest, ComplexTypesPartialUpdate) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_complex_partial_update_cpp");
+
+    auto arrow_schema = arrow::schema({
+        arrow::field("id", arrow::int32()),
+        arrow::field("name", arrow::utf8()),
+        arrow::field("score", arrow::int64()),
+        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
+                                               arrow::field("label", arrow::utf8())})),
+        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
+        arrow::field("tags", arrow::list(arrow::utf8())),
+    });
+    auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    {
+        auto upsert = table.NewUpsert();
+        fluss::UpsertWriter w;
+        ASSERT_OK(upsert.CreateWriter(w));
+        auto row = table.NewRow();
+        row.SetInt32(0, 1);
+        row.SetString(1, "Verso");
+        row.SetInt64(2, 100);
+        fluss::GenericRow nested(2);
+        nested.SetInt32(0, 10);
+        nested.SetString(1, "alpha");
+        row.SetRow(3, std::move(nested));
+        fluss::MapWriter attrs(2, fluss::DataType::String(), fluss::DataType::Int());
+        attrs.SetKeyString("a");
+        attrs.SetValueInt32(1);
+        attrs.Commit();
+        attrs.SetKeyString("b");
+        attrs.SetValueInt32(2);
+        attrs.Commit();
+        row.SetMap(4, std::move(attrs));
+        fluss::ArrayWriter tags(2, fluss::DataType::String());
+        tags.SetString(0, "x");
+        tags.SetString(1, "y");
+        row.SetArray(5, std::move(tags));
+        ASSERT_OK(w.Upsert(row));
+        ASSERT_OK(w.Flush());
+    }
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    auto key = table.NewRow();
+    key.SetInt32(0, 1);
+
+    // Partial update of a scalar column — compound columns must be preserved.
+    {
+        auto pu = table.NewUpsert();
+        pu.PartialUpdateByName({"id", "score"});
+        fluss::UpsertWriter pw;
+        ASSERT_OK(pu.CreateWriter(pw));
+        auto row = table.NewRow();
+        row.SetInt32(0, 1);
+        row.SetNull(1);
+        row.SetInt64(2, 420);
+        row.SetNull(3);
+        row.SetNull(4);
+        row.SetNull(5);
+        ASSERT_OK(pw.Upsert(row));
+        ASSERT_OK(pw.Flush());
+
+        fluss::LookupResult result;
+        ASSERT_OK(lookuper.Lookup(key, result));
+        ASSERT_TRUE(result.Found());
+        EXPECT_EQ(result.GetString(1), "Verso");
+        EXPECT_EQ(result.GetInt64(2), 420);
+        auto n = result.GetValue(3);
+        EXPECT_EQ(n.Field(0).GetInt32(), 10);
+        EXPECT_EQ(n.Field(1).GetString(), "alpha");
+        EXPECT_EQ(result.GetValue(4).Size(), 2u);
+        EXPECT_EQ(result.GetValue(5).Size(), 2u);
+    }
+
+    // Partial update of the ROW column — other compound columns preserved.
+    {
+        auto pu = table.NewUpsert();
+        pu.PartialUpdateByName({"id", "nested"});
+        fluss::UpsertWriter pw;
+        ASSERT_OK(pu.CreateWriter(pw));
+        auto row = table.NewRow();
+        row.SetInt32(0, 1);
+        row.SetNull(1);
+        row.SetNull(2);
+        fluss::GenericRow nn(2);
+        nn.SetInt32(0, 99);
+        nn.SetString(1, "omega");
+        row.SetRow(3, std::move(nn));
+        row.SetNull(4);
+        row.SetNull(5);
+        ASSERT_OK(pw.Upsert(row));
+        ASSERT_OK(pw.Flush());
+
+        fluss::LookupResult result;
+        ASSERT_OK(lookuper.Lookup(key, result));
+        ASSERT_TRUE(result.Found());
+        EXPECT_EQ(result.GetInt64(2), 420);
+        auto n = result.GetValue(3);
+        EXPECT_EQ(n.Field(0).GetInt32(), 99);
+        EXPECT_EQ(n.Field(1).GetString(), "omega");
+        EXPECT_EQ(result.GetValue(4).Size(), 2u);
+        EXPECT_EQ(result.GetValue(5).Size(), 2u);
+    }
+
+    ASSERT_OK(adm.DropTable(table_path, false));
+}
+
+TEST_F(KvTableTest, PartitionedComplexTypes) {
+    auto& adm = admin();
+    auto& conn = connection();
+
+    fluss::TablePath table_path("fluss", "test_partitioned_complex_cpp");
+
+    auto arrow_schema = arrow::schema({
+        arrow::field("region", arrow::utf8()),
+        arrow::field("user_id", arrow::int32()),
+        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
+                                               arrow::field("label", arrow::utf8())})),
+        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
+    });
+    auto schema = fluss::Schema::FromArrow(arrow_schema, {"region", "user_id"});
+
+    auto table_descriptor = fluss::TableDescriptor::NewBuilder()
+                                .SetSchema(schema)
+                                .SetPartitionKeys({"region"})
+                                .SetProperty("table.replication.factor", "1")
+                                .Build();
+    fluss_test::CreateTable(adm, table_path, table_descriptor);
+    fluss_test::CreatePartitions(adm, table_path, "region", {"US", "EU"});
+
+    fluss::Table table;
+    ASSERT_OK(conn.GetTable(table_path, table));
+
+    fluss::UpsertWriter writer;
+    ASSERT_OK(table.NewUpsert().CreateWriter(writer));
+
+    struct Rec {
+        const char* region;
+        int32_t user_id;
+        int32_t seq;
+        const char* label;
+    };
+    const Rec data[] = {{"US", 1, 11, "alpha"}, {"EU", 2, 22, "beta"}};
+
+    for (const auto& d : data) {
+        auto row = table.NewRow();
+        row.SetString(0, d.region);
+        row.SetInt32(1, d.user_id);
+        fluss::GenericRow nested(2);
+        nested.SetInt32(0, d.seq);
+        nested.SetString(1, d.label);
+        row.SetRow(2, std::move(nested));
+        fluss::MapWriter attrs(1, fluss::DataType::String(), fluss::DataType::Int());
+        attrs.SetKeyString(d.label);
+        attrs.SetValueInt32(d.seq);
+        attrs.Commit();
+        row.SetMap(3, std::move(attrs));
+        ASSERT_OK(writer.Upsert(row));
+    }
+    ASSERT_OK(writer.Flush());
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+
+    for (const auto& d : data) {
+        auto key = table.NewRow();
+        key.SetString(0, d.region);
+        key.SetInt32(1, d.user_id);
+        fluss::LookupResult result;
+        ASSERT_OK(lookuper.Lookup(key, result));
+        ASSERT_TRUE(result.Found());
+        auto nested = result.GetValue(2);
+        EXPECT_EQ(nested.Field(0).GetInt32(), d.seq);
+        EXPECT_EQ(nested.Field(1).GetString(), d.label);
+        auto attrs = result.GetValue(3);
+        ASSERT_EQ(attrs.Size(), 1u);
+        EXPECT_EQ(attrs.KeyAt(0).GetString(), d.label);
+        EXPECT_EQ(attrs.ValueAt(0).GetInt32(), d.seq);
+    }
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
@@ -345,41 +1036,29 @@ TEST_F(KvTableTest, LookupArrayValidationErrors) {
     ASSERT_OK(lookuper.Lookup(key, result));
     ASSERT_TRUE(result.Found());
 
+    auto view = result.GetValue("vals");
+    EXPECT_EQ(view.Type(), fluss::TypeId::Array);
+    ASSERT_EQ(view.Size(), 2u);
+    EXPECT_EQ(view.At(0).GetInt32(), 99);
+    EXPECT_TRUE(view.At(1).IsNull());
+
+    // A wrong-type leaf read throws.
     bool wrong_type_threw = false;
     try {
-        (void)result.GetArrayInt64("vals", 0);
+        (void)view.At(0).GetInt64();
     } catch (const std::exception&) {
         wrong_type_threw = true;
     }
     EXPECT_TRUE(wrong_type_threw);
 
+    // A typed read of a null element throws.
     bool null_typed_getter_threw = false;
     try {
-        (void)result.GetArrayInt32("vals", 1);
+        (void)view.At(1).GetInt32();
     } catch (const std::exception&) {
         null_typed_getter_threw = true;
     }
     EXPECT_TRUE(null_typed_getter_threw);
-
-    auto view = result.GetArrayView("vals");
-    EXPECT_EQ(view.Size(), 2u);
-    EXPECT_TRUE(view.IsNull(1));
-
-    bool view_wrong_type_threw = false;
-    try {
-        (void)view.GetInt64(0);
-    } catch (const std::exception&) {
-        view_wrong_type_threw = true;
-    }
-    EXPECT_TRUE(view_wrong_type_threw);
-
-    bool view_null_typed_getter_threw = false;
-    try {
-        (void)view.GetInt32(1);
-    } catch (const std::exception&) {
-        view_null_typed_getter_threw = true;
-    }
-    EXPECT_TRUE(view_null_typed_getter_threw);
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }

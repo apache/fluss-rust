@@ -237,6 +237,8 @@ One-shot bounded scan of a single bucket. Obtained from `TableScan::CreateBucket
 | `SetTimestampLtz(size_t idx, const Timestamp& value)`     | Set timestamp with timezone    |
 | `SetDecimal(size_t idx, const std::string& value)`        | Set decimal from string        |
 | `SetArray(size_t idx, ArrayWriter&& writer)`              | Set array value (consumes the writer) |
+| `SetMap(size_t idx, MapWriter&& writer)`                  | Set map value (consumes the writer)   |
+| `SetRow(size_t idx, GenericRow&& nested)`                 | Set ROW value from a nested row (consumes it) |
 
 ### Name-Based Setters
 
@@ -254,6 +256,9 @@ When using `table.NewRow()`, the `Set()` method auto-routes to the correct type 
 | `Set(const std::string& name, const Date& value)`        | Set date by column name           |
 | `Set(const std::string& name, const Time& value)`        | Set time by column name           |
 | `Set(const std::string& name, const Timestamp& value)`   | Set timestamp by column name      |
+| `Set(const std::string& name, ArrayWriter&& writer)`     | Set array value by column name    |
+| `Set(const std::string& name, MapWriter&& writer)`       | Set map value by column name      |
+| `Set(const std::string& name, GenericRow&& nested)`      | Set ROW value by column name      |
 
 ## `RowView`
 
@@ -283,27 +288,14 @@ Read-only row view for scan results. Provides zero-copy access to string and byt
 | `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
 | `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
 
-### Array Getters (Index-Based)
+### Complex Getters (ARRAY / MAP / ROW)
 
-| Method                                                             |  Description                              |
-|--------------------------------------------------------------------|-------------------------------------------|
-| `GetArraySize(size_t idx) -> size_t`                               | Get element count of array at index       |
-| `GetArrayElementType(size_t idx) -> TypeId`                        | Get element type of array at index        |
-| `IsArrayElementNull(size_t idx, size_t element) -> bool`           | Check if array element is null            |
-| `GetArrayBool(size_t idx, size_t element) -> bool`                 | Get boolean array element                 |
-| `GetArrayInt32(size_t idx, size_t element) -> int32_t`             | Get 32-bit integer array element          |
-| `GetArrayInt64(size_t idx, size_t element) -> int64_t`             | Get 64-bit integer array element          |
-| `GetArrayFloat32(size_t idx, size_t element) -> float`             | Get 32-bit float array element            |
-| `GetArrayFloat64(size_t idx, size_t element) -> double`            | Get 64-bit float array element            |
-| `GetArrayString(size_t idx, size_t element) -> std::string`        | Get string array element                  |
-| `GetArrayBytes(size_t idx, size_t element) -> std::vector<uint8_t>`| Get binary array element                  |
-| `GetArrayDate(size_t idx, size_t element) -> Date`                 | Get date array element                    |
-| `GetArrayTime(size_t idx, size_t element) -> Time`                 | Get time array element                    |
-| `GetArrayTimestamp(size_t idx, size_t element) -> Timestamp`       | Get timestamp array element               |
-| `GetArrayDecimalString(size_t idx, size_t element) -> std::string` | Get decimal array element as string       |
-| `GetArrayView(size_t idx) -> ArrayView`                            | Get owning ArrayView for nested access    |
+| Method                                       |  Description                                                 |
+|----------------------------------------------|--------------------------------------------------------------|
+| `GetValue(size_t idx) -> Value`              | Get a complex column as a recursive [`Value`](#value) handle |
+| `GetValue(const std::string& name) -> Value` | Same, by column name                                         |
 
-All array getters are also available by column name (e.g., `GetArraySize("col")`, `GetArrayView("col")`).
+Navigate the returned [`Value`](#value) with `At` / `KeyAt` / `ValueAt` / `Field` and read leaves with its `Get*()` methods.
 
 ### Name-Based Getters
 
@@ -411,9 +403,9 @@ Read-only result for lookup operations. Provides zero-copy access to field value
 | `IsDecimal(size_t idx) -> bool`                            | Check if field is a decimal type|
 | `GetDecimalString(size_t idx) -> std::string`              | Get decimal as string at index |
 
-### Array Getters (Index-Based)
+### Complex Getters (ARRAY / MAP / ROW)
 
-Same array getters as [`RowView`](#array-getters-index-based) — `GetArraySize`, `GetArrayInt32`, `GetArrayView`, etc. Also available by column name.
+`GetValue(size_t idx) -> Value` and `GetValue(const std::string& name) -> Value`, same as on [`RowView`](#rowview). Navigate the returned [`Value`](#value).
 
 ### Name-Based Getters
 
@@ -434,7 +426,7 @@ Same array getters as [`RowView`](#array-getters-index-based) — `GetArraySize`
 
 ## `PrefixLookupResult`
 
-Read-only result of a prefix lookup — zero or more matched rows. Each row is a `PrefixRowView` exposing the same getters as [`RowView`](#rowview) (index- and name-based, including arrays).
+Read-only result of a prefix lookup — zero or more matched rows. Each row is a `PrefixRowView` exposing the same scalar getters as [`RowView`](#rowview) (index- and name-based) plus `GetValue(...)` for complex (ARRAY / MAP / ROW) columns.
 
 | Method                                  | Description                                       |
 |-----------------------------------------|---------------------------------------------------|
@@ -469,6 +461,7 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | Method                            |  Description                |
 |-----------------------------------|-----------------------------|
 | `NewBuilder() -> Schema::Builder` | Create a new schema builder |
+| `FromArrow(std::shared_ptr<arrow::Schema> schema, std::vector<std::string> primary_keys = {}) -> Schema` | Build a schema from an existing Arrow schema (escape hatch; prefer `DataType::Map` / `DataType::Row`) |
 
 ## `Schema::Builder`
 
@@ -518,6 +511,10 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `DataType::TimestampLtz(int precision)`       | Timestamp with timezone            |
 | `DataType::Decimal(int precision, int scale)` | Decimal with precision and scale   |
 | `DataType::Array(DataType element)`           | Array of the given element type    |
+| `DataType::Map(DataType key, DataType value)` | Map of key/value types (either may be complex) |
+| `DataType::Row(std::vector<std::pair<std::string, DataType>> fields)` | Row of named fields (types may be complex) |
+
+`MAP` / `ROW` (and arrays nesting them) compose to any depth; the binding lowers them to Arrow internally when the table is created or a writer is built.
 
 ### Accessors
 
@@ -528,15 +525,20 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `scale() -> int`                   | Get scale (for Decimal type)                |
 | `nullable() -> bool`               | Returns `true` if this type is nullable (default), `false` if `NOT NULL` |
 | `element_type() -> const DataType*` | Get element type (for Array type, nullptr otherwise) |
+| `key_type() / value_type() -> const DataType*` | MAP key / value types (nullptr otherwise) |
+| `field_count() -> size_t`          | ROW field count (0 otherwise)               |
+| `field_name(size_t i) -> const std::string&` | ROW field name at `i`             |
+| `field_type(size_t i) -> const DataType*` | ROW field type at `i`                  |
 | `NotNull() -> DataType`            | Returns a copy of this type with nullable set to `false` |
 
 ## `ArrayWriter`
 
-Write-only builder for array column values. Constructed with a fixed size and element type, then populated element-by-element. Move-only — consumed by `GenericRow::SetArray()` or `ArrayWriter::SetArray()` for nested arrays.
+Write-only builder for array column values. Constructed with a fixed size and element type, then populated element-by-element. Move-only — consumed by `GenericRow::SetArray()` or `ArrayWriter::SetArray()` for nested arrays. For arrays whose element is a `ROW` / `MAP`, construct from an Arrow element type (`arrow::struct_(...)` / `arrow::map(...)`).
 
 | Method                                                    |  Description                              |
 |-----------------------------------------------------------|-------------------------------------------|
-| `ArrayWriter(size_t size, DataType element_type)`         | Create an array writer                    |
+| `ArrayWriter(size_t size, DataType element_type)`         | Create an array writer; element may be complex (`DataType::Map`/`Row`) |
+| `ArrayWriter(size_t size, std::shared_ptr<arrow::DataType> element_type)` | Arrow escape hatch for the element type |
 | `SetNull(size_t idx)`                                     | Set element to null                       |
 | `SetBool(size_t idx, bool value)`                         | Set boolean element                       |
 | `SetInt32(size_t idx, int32_t value)`                     | Set 32-bit integer element                |
@@ -551,29 +553,56 @@ Write-only builder for array column values. Constructed with a fixed size and el
 | `SetTimestampLtz(size_t idx, const Timestamp& value)`     | Set timestamp with timezone element       |
 | `SetDecimal(size_t idx, const std::string& value)`        | Set decimal element from string           |
 | `SetArray(size_t idx, ArrayWriter&& nested)`              | Set nested array element (consumes nested)|
+| `SetRow(size_t idx, GenericRow&& row)`                    | Set ROW element (consumes the row)        |
+| `SetMap(size_t idx, MapWriter&& map)`                     | Set MAP element (consumes the map)        |
 
-## `ArrayView`
+## `MapWriter`
 
-Read-only view over an array column value. Obtained from `RowView::GetArrayView()` or `LookupResult::GetArrayView()`, and recursively from `ArrayView::GetArray()` for nested `ARRAY<ARRAY<...>>` columns. Move-only.
+Write-only builder for map column values. Construct with the key/value types, then for each entry set the key and value and call `Commit()`. Keys cannot be null; an unset value defaults to null. Move-only — consumed by `GenericRow::SetMap()`, `ArrayWriter::SetMap()`, and `MapWriter::SetValueMap()`. For a key/value that is itself a `ROW` / `MAP` / `ARRAY`, construct from Arrow types and use the `SetValue{Row,Map,Array}` setters.
 
-| Method                                                  |  Description                              |
-|---------------------------------------------------------|-------------------------------------------|
-| `Size() -> size_t`                                      | Get element count                         |
-| `ElementType() -> TypeId`                               | Get element type                          |
-| `IsNull(size_t element) -> bool`                        | Check if element is null                  |
-| `GetBool(size_t element) -> bool`                       | Get boolean element                       |
-| `GetInt32(size_t element) -> int32_t`                   | Get 32-bit integer element                |
-| `GetInt64(size_t element) -> int64_t`                   | Get 64-bit integer element                |
-| `GetFloat32(size_t element) -> float`                   | Get 32-bit float element                  |
-| `GetFloat64(size_t element) -> double`                  | Get 64-bit float element                  |
-| `GetString(size_t element) -> std::string`              | Get string element                        |
-| `GetBytes(size_t element) -> std::vector<uint8_t>`      | Get binary element                        |
-| `GetDate(size_t element) -> Date`                       | Get date element                          |
-| `GetTime(size_t element) -> Time`                       | Get time element                          |
-| `GetTimestamp(size_t element) -> Timestamp`              | Get timestamp element                     |
-| `GetTimestampLtz(size_t element) -> Timestamp`          | Get timestamp with timezone element       |
-| `GetDecimalString(size_t element) -> std::string`       | Get decimal element as string             |
-| `GetArray(size_t element) -> ArrayView`                 | Get nested array as child ArrayView       |
+| Method                                                                                                              | Description                                                       |
+|---------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|
+| `MapWriter(size_t capacity, DataType key_type, DataType value_type)`                                                | Create a map writer; key/value may be complex (`DataType::Map`/`Row`/`Array`) |
+| `MapWriter(size_t capacity, std::shared_ptr<arrow::DataType> key_type, std::shared_ptr<arrow::DataType> value_type)`| Arrow escape hatch for key/value types                            |
+| `SetKey{Bool,Int32,Int64,Float32,Float64,String,Bytes,Date,Time,Timestamp,Decimal}(...)`                            | Stage the entry key (NTZ vs LTZ chosen from the declared key type)|
+| `SetValueNull()`                                                                                                    | Stage a null entry value                                          |
+| `SetValue{Bool,Int32,Int64,Float32,Float64,String,Bytes,Date,Time,Timestamp,Decimal}(...)`                          | Stage the entry value (NTZ vs LTZ from the declared value type)   |
+| `SetValueRow(GenericRow&&)` / `SetValueMap(MapWriter&&)` / `SetValueArray(ArrayWriter&&)`                            | Stage a compound entry value (consumes the writer)                |
+| `Commit()`                                                                                                          | Append the staged key/value as one map entry                      |
+
+## `Value`
+
+Read-only handle for a complex (`ARRAY` / `MAP` / `ROW`) column value, obtained from `RowView::GetValue()`, `LookupResult::GetValue()`, or `PrefixRowView::GetValue()`. **Navigate** to children with `At` / `KeyAt` / `ValueAt` / `Field` (each returns a child `Value`); **read** a leaf with the `Get*()` methods. A typed read on a null or wrong-typed value throws. Move-only; owns a Rust handle released on destruction.
+
+### Leaf reads
+
+| Method                              |  Description                  |
+|-------------------------------------|-------------------------------|
+| `Type() -> TypeId`                  | Type of this value            |
+| `IsNull() -> bool`                  | Whether this value is null    |
+| `GetBool() -> bool`                 | Read a boolean leaf           |
+| `GetInt32() -> int32_t`             | Read a 32-bit integer leaf    |
+| `GetInt64() -> int64_t`             | Read a 64-bit integer leaf    |
+| `GetFloat32() -> float`             | Read a 32-bit float leaf      |
+| `GetFloat64() -> double`            | Read a 64-bit float leaf      |
+| `GetString() -> std::string`        | Read a string leaf            |
+| `GetBytes() -> std::vector<uint8_t>`| Read a binary leaf            |
+| `GetDate() -> Date`                 | Read a date leaf              |
+| `GetTime() -> Time`                 | Read a time leaf              |
+| `GetTimestamp() -> Timestamp`       | Read a timestamp leaf         |
+| `GetDecimalString() -> std::string` | Read a decimal leaf as string |
+
+### Navigation
+
+| Method                                       |  Description                       |
+|----------------------------------------------|------------------------------------|
+| `Size() -> size_t`                           | Element count (ARRAY) / entries (MAP) |
+| `FieldCount() -> size_t`                     | Field count (ROW)                  |
+| `At(size_t i) -> Value`                      | ARRAY element `i`                  |
+| `KeyAt(size_t i) -> Value`                   | MAP key at entry `i`               |
+| `ValueAt(size_t i) -> Value`                 | MAP value at entry `i`             |
+| `Field(size_t i) -> Value`                   | ROW field `i`                      |
+| `Field(const std::string& name) -> Value`    | ROW field by name                  |
 
 ## `TablePath`
 
@@ -743,6 +772,8 @@ inline const char* ChangeTypeShortString(ChangeType ct) {
 | `TimestampLtz` | Timestamp with timezone    |
 | `Decimal`      | Decimal                    |
 | `Array`        | Array of elements          |
+| `Map`          | Map of key/value pairs     |
+| `Row`          | Row (struct) of fields     |
 
 ### `ChangeType`
 

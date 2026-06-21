@@ -19,6 +19,7 @@ use crate::ffi;
 use anyhow::{Result, anyhow};
 use arrow::array::Array;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use fcore::row::Datum;
 use fluss as fcore;
 use std::borrow::Cow;
 use std::str::FromStr;
@@ -40,6 +41,8 @@ pub const DATA_TYPE_DECIMAL: i32 = 14;
 pub const DATA_TYPE_CHAR: i32 = 15;
 pub const DATA_TYPE_BINARY: i32 = 16;
 pub const DATA_TYPE_ARRAY: i32 = 17;
+pub const DATA_TYPE_MAP: i32 = 18;
+pub const DATA_TYPE_ROW: i32 = 19;
 
 /// Separates scalar and array type specs so each variant only carries
 /// the fields it actually needs — no zeroed-out placeholders.
@@ -237,7 +240,8 @@ pub fn core_data_type_to_ffi(dt: &fcore::metadata::DataType) -> i32 {
         fcore::metadata::DataType::Char(_) => DATA_TYPE_CHAR,
         fcore::metadata::DataType::Binary(_) => DATA_TYPE_BINARY,
         fcore::metadata::DataType::Array(_) => DATA_TYPE_ARRAY,
-        _ => 0,
+        fcore::metadata::DataType::Map(_) => DATA_TYPE_MAP,
+        fcore::metadata::DataType::Row(_) => DATA_TYPE_ROW,
     }
 }
 
@@ -289,8 +293,16 @@ pub fn ffi_descriptor_to_core(
         schema_builder = schema_builder.primary_key(descriptor.schema.primary_keys.clone());
     }
 
-    let schema = schema_builder.build()?;
+    build_descriptor(schema_builder.build()?, descriptor)
+}
 
+/// Assemble a core `TableDescriptor` from a pre-built `Schema` plus the
+/// descriptor's table-level metadata (partition/bucket keys, properties,
+/// comment). Shared by the flat-column and Arrow-schema create-table paths.
+fn build_descriptor(
+    schema: fcore::metadata::Schema,
+    descriptor: &ffi::FfiTableDescriptor,
+) -> Result<fcore::metadata::TableDescriptor> {
     let mut builder = fcore::metadata::TableDescriptor::builder()
         .schema(schema)
         .partitioned_by(descriptor.partition_keys.clone());
@@ -322,6 +334,52 @@ pub fn ffi_descriptor_to_core(
     }
 
     Ok(builder.build()?)
+}
+
+/// Build a core `TableDescriptor` whose columns come from an Arrow schema
+/// imported over the C Data Interface. Lets C++ define nested MAP/ROW columns
+/// the flat `FfiColumn` encoding can't express, reusing core's canonical
+/// `from_arrow_field` converter rather than a second conversion copy.
+///
+/// # Safety
+/// `schema_ptr` must be a valid `FFI_ArrowSchema` heap pointer exported by C++
+/// (e.g. via `arrow::ExportSchema`); ownership is taken and released here.
+pub unsafe fn arrow_ffi_to_core_descriptor(
+    schema_ptr: usize,
+    descriptor: &ffi::FfiTableDescriptor,
+) -> Result<fcore::metadata::TableDescriptor> {
+    let ffi_schema = unsafe { Box::from_raw(schema_ptr as *mut arrow::ffi::FFI_ArrowSchema) };
+    let arrow_schema = arrow::datatypes::Schema::try_from(ffi_schema.as_ref())
+        .map_err(|e| anyhow!("Failed to import Arrow schema: {e}"))?;
+
+    let mut schema_builder = fcore::metadata::Schema::builder();
+    for field in arrow_schema.fields() {
+        let dt = fcore::record::from_arrow_field(field.as_ref())?;
+        schema_builder = schema_builder.column(field.name(), dt);
+    }
+    if !descriptor.schema.primary_keys.is_empty() {
+        schema_builder = schema_builder.primary_key(descriptor.schema.primary_keys.clone());
+    }
+
+    build_descriptor(schema_builder.build()?, descriptor)
+}
+
+/// Import a heap `FFI_ArrowSchema` (exported by C++) and return its fields as
+/// Fluss DataTypes. Lets ArrayWriter/MapWriter carry ROW/MAP element and
+/// key/value types that the flat FFI encoding cannot express.
+///
+/// # Safety
+/// `schema_ptr` must be a valid `FFI_ArrowSchema` heap pointer exported by C++
+/// (e.g. via `arrow::ExportSchema`); ownership is taken and released here.
+pub unsafe fn arrow_ffi_to_data_types(schema_ptr: usize) -> Result<Vec<fcore::metadata::DataType>> {
+    let ffi_schema = unsafe { Box::from_raw(schema_ptr as *mut arrow::ffi::FFI_ArrowSchema) };
+    let arrow_schema = arrow::datatypes::Schema::try_from(ffi_schema.as_ref())
+        .map_err(|e| anyhow!("Failed to import Arrow schema: {e}"))?;
+    let mut out = Vec::with_capacity(arrow_schema.fields().len());
+    for field in arrow_schema.fields() {
+        out.push(fcore::record::from_arrow_field(field.as_ref())?);
+    }
+    Ok(out)
 }
 
 pub fn core_table_info_to_ffi(info: &fcore::metadata::TableInfo) -> ffi::FfiTableInfo {
@@ -478,64 +536,78 @@ pub fn resolve_row_types(
     row: &fcore::row::GenericRow<'_>,
     schema: Option<&fcore::metadata::Schema>,
 ) -> Result<fcore::row::GenericRow<'static>> {
-    use fcore::row::Datum;
-
     let mut out = fcore::row::GenericRow::new(row.values.len());
 
     for (idx, datum) in row.values.iter().enumerate() {
-        let resolved = match datum {
-            Datum::Null => Datum::Null,
-            Datum::Bool(v) => Datum::Bool(*v),
-            Datum::Int32(v) => match schema
-                .and_then(|s| s.columns().get(idx))
-                .map(|c| c.data_type())
-            {
-                Some(fcore::metadata::DataType::TinyInt(_)) => Datum::Int8(
-                    i8::try_from(*v).map_err(|_| anyhow!("Column {idx}: {v} overflows TinyInt"))?,
-                ),
-                Some(fcore::metadata::DataType::SmallInt(_)) => Datum::Int16(
-                    i16::try_from(*v)
-                        .map_err(|_| anyhow!("Column {idx}: {v} overflows SmallInt"))?,
-                ),
-                _ => Datum::Int32(*v),
-            },
-            Datum::Int64(v) => Datum::Int64(*v),
-            Datum::Float32(v) => Datum::Float32(*v),
-            Datum::Float64(v) => Datum::Float64(*v),
-            Datum::Int8(v) => Datum::Int8(*v),
-            Datum::Int16(v) => Datum::Int16(*v),
-            Datum::String(cow) => {
-                // Check if the schema column is Decimal — if so, parse the string as decimal
-                match schema
-                    .and_then(|s| s.columns().get(idx))
-                    .map(|c| c.data_type())
-                {
-                    Some(fcore::metadata::DataType::Decimal(dt)) => {
-                        let (precision, scale) = (dt.precision(), dt.scale());
-                        let bd = bigdecimal::BigDecimal::from_str(cow.as_ref()).map_err(|e| {
-                            anyhow!("Column {idx}: invalid decimal string '{cow}': {e}")
-                        })?;
-                        let decimal = fcore::row::Decimal::from_big_decimal(bd, precision, scale)
-                            .map_err(|e| anyhow!("Column {idx}: {e}"))?;
-                        Datum::Decimal(decimal)
-                    }
-                    _ => Datum::String(Cow::Owned(cow.to_string())),
-                }
-            }
-            Datum::Blob(cow) => Datum::Blob(Cow::Owned(cow.to_vec())),
-            Datum::Decimal(d) => Datum::Decimal(d.clone()),
-            Datum::Date(d) => Datum::Date(*d),
-            Datum::Time(t) => Datum::Time(*t),
-            Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
-            Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
-            Datum::Array(a) => Datum::Array(a.clone()),
-            Datum::Map(m) => Datum::Map(m.clone()),
-            Datum::Row(_) => return Err(anyhow!("Row datum is not yet supported in C++ bindings")),
-        };
-        out.set_field(idx, resolved);
+        let target = schema
+            .and_then(|s| s.columns().get(idx))
+            .map(|c| c.data_type());
+        out.set_field(idx, resolve_datum(datum, target, idx)?);
     }
 
     Ok(out)
+}
+
+/// Resolve a single datum against its (optional) target column type, recursing
+/// into nested ROW values. Narrows Int32 → Int8/Int16, parses decimal strings,
+/// and leaves already-typed ARRAY/MAP binaries (built by the writers) untouched.
+fn resolve_datum(
+    datum: &fcore::row::Datum<'_>,
+    target: Option<&fcore::metadata::DataType>,
+    idx: usize,
+) -> Result<fcore::row::Datum<'static>> {
+    Ok(match datum {
+        Datum::Null => Datum::Null,
+        Datum::Bool(v) => Datum::Bool(*v),
+        Datum::Int32(v) => match target {
+            Some(fcore::metadata::DataType::TinyInt(_)) => Datum::Int8(
+                i8::try_from(*v).map_err(|_| anyhow!("Column {idx}: {v} overflows TinyInt"))?,
+            ),
+            Some(fcore::metadata::DataType::SmallInt(_)) => Datum::Int16(
+                i16::try_from(*v).map_err(|_| anyhow!("Column {idx}: {v} overflows SmallInt"))?,
+            ),
+            _ => Datum::Int32(*v),
+        },
+        Datum::Int64(v) => Datum::Int64(*v),
+        Datum::Float32(v) => Datum::Float32(*v),
+        Datum::Float64(v) => Datum::Float64(*v),
+        Datum::Int8(v) => Datum::Int8(*v),
+        Datum::Int16(v) => Datum::Int16(*v),
+        Datum::String(cow) => match target {
+            // String standing in for a Decimal column — parse it.
+            Some(fcore::metadata::DataType::Decimal(dt)) => {
+                let (precision, scale) = (dt.precision(), dt.scale());
+                let bd = bigdecimal::BigDecimal::from_str(cow.as_ref())
+                    .map_err(|e| anyhow!("Column {idx}: invalid decimal string '{cow}': {e}"))?;
+                let decimal = fcore::row::Decimal::from_big_decimal(bd, precision, scale)
+                    .map_err(|e| anyhow!("Column {idx}: {e}"))?;
+                Datum::Decimal(decimal)
+            }
+            _ => Datum::String(Cow::Owned(cow.to_string())),
+        },
+        Datum::Blob(cow) => Datum::Blob(Cow::Owned(cow.to_vec())),
+        Datum::Decimal(d) => Datum::Decimal(d.clone()),
+        Datum::Date(d) => Datum::Date(*d),
+        Datum::Time(t) => Datum::Time(*t),
+        Datum::TimestampNtz(ts) => Datum::TimestampNtz(*ts),
+        Datum::TimestampLtz(ts) => Datum::TimestampLtz(*ts),
+        Datum::Array(a) => Datum::Array(a.clone()),
+        Datum::Map(m) => Datum::Map(m.clone()),
+        Datum::Row(nested) => {
+            // A nested row carries untyped datums; resolve each field against
+            // the ROW's own field types so decimals/narrowing work recursively.
+            let field_types = match target {
+                Some(fcore::metadata::DataType::Row(rt)) => Some(rt.fields()),
+                _ => None,
+            };
+            let mut out = fcore::row::GenericRow::new(nested.values.len());
+            for (i, d) in nested.values.iter().enumerate() {
+                let ft = field_types.and_then(|f| f.get(i)).map(|f| f.data_type());
+                out.set_field(i, resolve_datum(d, ft, i)?);
+            }
+            Datum::Row(Box::new(out))
+        }
+    })
 }
 
 /// Convert a CompactedRow (lookup result) to an owned GenericRow<'static>.
@@ -544,60 +616,80 @@ pub fn compacted_row_to_owned(
     row: &dyn fcore::row::InternalRow,
     table_info: &fcore::metadata::TableInfo,
 ) -> Result<fcore::row::GenericRow<'static>> {
-    use fcore::row::Datum;
+    internal_row_to_owned_generic(row, table_info.get_schema().columns())
+}
 
-    let schema = table_info.get_schema();
-    let columns = schema.columns();
-    let mut out = fcore::row::GenericRow::new(columns.len());
-
-    for (i, col) in columns.iter().enumerate() {
-        if row.is_null_at(i)? {
-            out.set_field(i, Datum::Null);
-            continue;
-        }
-
-        let datum = match col.data_type() {
-            fcore::metadata::DataType::Boolean(_) => Datum::Bool(row.get_boolean(i)?),
-            fcore::metadata::DataType::TinyInt(_) => Datum::Int8(row.get_byte(i)?),
-            fcore::metadata::DataType::SmallInt(_) => Datum::Int16(row.get_short(i)?),
-            fcore::metadata::DataType::Int(_) => Datum::Int32(row.get_int(i)?),
-            fcore::metadata::DataType::BigInt(_) => Datum::Int64(row.get_long(i)?),
-            fcore::metadata::DataType::Float(_) => Datum::Float32(row.get_float(i)?.into()),
-            fcore::metadata::DataType::Double(_) => Datum::Float64(row.get_double(i)?.into()),
-            fcore::metadata::DataType::String(_) => {
-                Datum::String(Cow::Owned(row.get_string(i)?.to_string()))
-            }
-            fcore::metadata::DataType::Bytes(_) => {
-                Datum::Blob(Cow::Owned(row.get_bytes(i)?.to_vec()))
-            }
-            fcore::metadata::DataType::Date(_) => Datum::Date(row.get_date(i)?),
-            fcore::metadata::DataType::Time(_) => Datum::Time(row.get_time(i)?),
-            fcore::metadata::DataType::Timestamp(dt) => {
-                Datum::TimestampNtz(row.get_timestamp_ntz(i, dt.precision())?)
-            }
-            fcore::metadata::DataType::TimestampLTz(dt) => {
-                Datum::TimestampLtz(row.get_timestamp_ltz(i, dt.precision())?)
-            }
-            fcore::metadata::DataType::Decimal(dt) => {
-                let decimal = row.get_decimal(i, dt.precision() as usize, dt.scale() as usize)?;
-                Datum::Decimal(decimal)
-            }
-            fcore::metadata::DataType::Char(dt) => Datum::String(Cow::Owned(
-                row.get_char(i, dt.length() as usize)?.to_string(),
-            )),
-            fcore::metadata::DataType::Binary(dt) => {
-                Datum::Blob(Cow::Owned(row.get_binary(i, dt.length())?.to_vec()))
-            }
-            fcore::metadata::DataType::Array(_) => {
-                Datum::Array(row.get_array(i)?.try_into_binary()?)
-            }
-            fcore::metadata::DataType::Map(_) => Datum::Map(row.get_map(i)?.try_into_binary()?),
-            other => return Err(anyhow!("Unsupported data type for column {i}: {other:?}")),
-        };
-
-        out.set_field(i, datum);
+/// Read a single field of an InternalRow into an owned `'static` Datum, using
+/// the column's declared type. This is the per-field core of
+/// `internal_row_to_owned_generic`; the scan read path uses it to materialize
+/// one complex cell without unpacking the whole row.
+pub fn field_to_owned_datum(
+    row: &dyn fcore::row::InternalRow,
+    columns: &[fcore::metadata::Column],
+    field: usize,
+) -> Result<fcore::row::Datum<'static>> {
+    let col = columns.get(field).ok_or_else(|| {
+        anyhow!(
+            "field index {field} out of range ({} columns)",
+            columns.len()
+        )
+    })?;
+    if row.is_null_at(field)? {
+        return Ok(Datum::Null);
     }
 
+    Ok(match col.data_type() {
+        fcore::metadata::DataType::Boolean(_) => Datum::Bool(row.get_boolean(field)?),
+        fcore::metadata::DataType::TinyInt(_) => Datum::Int8(row.get_byte(field)?),
+        fcore::metadata::DataType::SmallInt(_) => Datum::Int16(row.get_short(field)?),
+        fcore::metadata::DataType::Int(_) => Datum::Int32(row.get_int(field)?),
+        fcore::metadata::DataType::BigInt(_) => Datum::Int64(row.get_long(field)?),
+        fcore::metadata::DataType::Float(_) => Datum::Float32(row.get_float(field)?.into()),
+        fcore::metadata::DataType::Double(_) => Datum::Float64(row.get_double(field)?.into()),
+        fcore::metadata::DataType::String(_) => {
+            Datum::String(Cow::Owned(row.get_string(field)?.to_string()))
+        }
+        fcore::metadata::DataType::Bytes(_) => {
+            Datum::Blob(Cow::Owned(row.get_bytes(field)?.to_vec()))
+        }
+        fcore::metadata::DataType::Date(_) => Datum::Date(row.get_date(field)?),
+        fcore::metadata::DataType::Time(_) => Datum::Time(row.get_time(field)?),
+        fcore::metadata::DataType::Timestamp(dt) => {
+            Datum::TimestampNtz(row.get_timestamp_ntz(field, dt.precision())?)
+        }
+        fcore::metadata::DataType::TimestampLTz(dt) => {
+            Datum::TimestampLtz(row.get_timestamp_ltz(field, dt.precision())?)
+        }
+        fcore::metadata::DataType::Decimal(dt) => {
+            Datum::Decimal(row.get_decimal(field, dt.precision() as usize, dt.scale() as usize)?)
+        }
+        fcore::metadata::DataType::Char(dt) => Datum::String(Cow::Owned(
+            row.get_char(field, dt.length() as usize)?.to_string(),
+        )),
+        fcore::metadata::DataType::Binary(dt) => {
+            Datum::Blob(Cow::Owned(row.get_binary(field, dt.length())?.to_vec()))
+        }
+        fcore::metadata::DataType::Array(_) => {
+            Datum::Array(row.get_array(field)?.try_into_binary()?)
+        }
+        fcore::metadata::DataType::Map(_) => Datum::Map(row.get_map(field)?.try_into_binary()?),
+        fcore::metadata::DataType::Row(rt) => {
+            Datum::Row(Box::new(row.get_row(field)?.try_into_generic(rt)?))
+        }
+    })
+}
+
+/// Walk an InternalRow field-by-field into an owned GenericRow<'static>, using
+/// the given column types. Recurses through nested ROW/MAP/ARRAY values, so it
+/// also materializes a ROW element read out of an array or map.
+pub fn internal_row_to_owned_generic(
+    row: &dyn fcore::row::InternalRow,
+    columns: &[fcore::metadata::Column],
+) -> Result<fcore::row::GenericRow<'static>> {
+    let mut out = fcore::row::GenericRow::new(columns.len());
+    for i in 0..columns.len() {
+        out.set_field(i, field_to_owned_datum(row, columns, i)?);
+    }
     Ok(out)
 }
 
