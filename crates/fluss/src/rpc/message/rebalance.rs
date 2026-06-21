@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::metadata::GoalType;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
@@ -28,9 +29,11 @@ pub struct RebalanceRequest {
 }
 
 impl RebalanceRequest {
-    pub fn new(goals: Vec<i32>) -> Self {
+    pub fn new(goals: Vec<GoalType>) -> Self {
         RebalanceRequest {
-            inner_request: proto::RebalanceRequest { goals },
+            inner_request: proto::RebalanceRequest {
+                goals: goals.iter().map(|g| g.to_i32()).collect(),
+            },
         }
     }
 }

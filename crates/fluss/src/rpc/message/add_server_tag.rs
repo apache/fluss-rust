@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::metadata::ServerTag;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
@@ -28,11 +29,11 @@ pub struct AddServerTagRequest {
 }
 
 impl AddServerTagRequest {
-    pub fn new(server_ids: Vec<i32>, server_tag: i32) -> Self {
+    pub fn new(server_ids: Vec<i32>, server_tag: ServerTag) -> Self {
         AddServerTagRequest {
             inner_request: proto::AddServerTagRequest {
                 server_ids,
-                server_tag,
+                server_tag: server_tag.to_i32(),
             },
         }
     }
