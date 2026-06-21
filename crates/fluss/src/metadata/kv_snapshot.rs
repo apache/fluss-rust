@@ -19,13 +19,14 @@ use crate::proto::{
     AcquireKvSnapshotLeaseResponse, GetKvSnapshotMetadataResponse, GetLatestKvSnapshotsResponse,
     ListKvSnapshotsResponse, PbKvSnapshot, PbRemotePathAndLocalFile,
 };
+use crate::{BucketId, PartitionId, TableId};
 
 use crate::metadata::KvSnapshotLeaseForTable;
 
 /// Per-bucket KV snapshot info.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvSnapshot {
-    pub bucket_id: i32,
+    pub bucket_id: BucketId,
     pub snapshot_id: Option<i64>,
     pub log_offset: Option<i64>,
 }
@@ -43,8 +44,8 @@ impl KvSnapshot {
 /// Result of `get_latest_kv_snapshots`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LatestKvSnapshots {
-    pub table_id: i64,
-    pub partition_id: Option<i64>,
+    pub table_id: TableId,
+    pub partition_id: Option<PartitionId>,
     pub latest_snapshots: Vec<KvSnapshot>,
 }
 
@@ -121,8 +122,8 @@ impl AcquireKvSnapshotLeaseResult {
 /// Result of `list_kv_snapshots`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveKvSnapshots {
-    pub table_id: i64,
-    pub partition_id: Option<i64>,
+    pub table_id: TableId,
+    pub partition_id: Option<PartitionId>,
     pub active_snapshots: Vec<KvSnapshot>,
 }
 

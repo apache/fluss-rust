@@ -632,11 +632,16 @@ impl FlussAdmin {
         &self,
         table_path: &TablePath,
         snapshot_id: Option<i64>,
+        readable: Option<bool>,
     ) -> Result<LakeSnapshotInfo> {
         let response = self
             .admin_gateway()
             .await?
-            .request(GetLakeSnapshotRequest::new(table_path, snapshot_id, None))
+            .request(GetLakeSnapshotRequest::new(
+                table_path,
+                snapshot_id,
+                readable,
+            ))
             .await?;
         Ok(LakeSnapshotInfo::from_pb(&response))
     }
@@ -743,7 +748,7 @@ impl FlussAdmin {
             .await?
             .request(ListRebalanceProgressRequest::new(rebalance_id))
             .await?;
-        Ok(RebalanceProgress::from_pb(&response))
+        RebalanceProgress::from_pb(&response)
     }
 
     /// Cancel a rebalance.
@@ -802,7 +807,7 @@ impl FlussAdmin {
             .await?
             .request(GetClusterHealthRequest::new())
             .await?;
-        Ok(ClusterHealth::from_pb(&response))
+        ClusterHealth::from_pb(&response)
     }
 
     /// List remote log manifests for a table (optionally scoped to one partition).

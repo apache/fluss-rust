@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::proto::{GetLakeSnapshotResponse, PbLakeSnapshotForBucket};
+use crate::{BucketId, PartitionId, TableId};
 
 /// One bucket's slice of a lake snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LakeBucketSnapshot {
-    pub partition_id: Option<i64>,
-    pub bucket_id: i32,
+    pub partition_id: Option<PartitionId>,
+    pub bucket_id: BucketId,
     pub log_offset: Option<i64>,
     pub partition_name: Option<String>,
 }
@@ -42,7 +43,7 @@ impl LakeBucketSnapshot {
 /// "latest" snapshot summary returned by `get_latest_lake_snapshot`.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LakeSnapshotInfo {
-    pub table_id: i64,
+    pub table_id: TableId,
     pub snapshot_id: i64,
     pub bucket_snapshots: Vec<LakeBucketSnapshot>,
 }

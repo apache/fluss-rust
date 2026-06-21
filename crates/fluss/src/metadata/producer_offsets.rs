@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::proto::{GetProducerOffsetsResponse, PbBucketOffset, PbProducerTableOffsets};
+use crate::{BucketId, PartitionId, TableId};
 
 /// Per-bucket producer log-end offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BucketOffset {
-    pub partition_id: Option<i64>,
-    pub bucket_id: i32,
+    pub partition_id: Option<PartitionId>,
+    pub bucket_id: BucketId,
     pub log_end_offset: Option<i64>,
 }
 
@@ -46,7 +47,7 @@ impl BucketOffset {
 /// All bucket offsets of a single table belonging to one producer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProducerTableOffsets {
-    pub table_id: i64,
+    pub table_id: TableId,
     pub bucket_offsets: Vec<BucketOffset>,
 }
 
