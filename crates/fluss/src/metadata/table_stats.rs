@@ -16,17 +16,18 @@
 // under the License.
 
 use crate::proto::{GetTableStatsResponse, PbTableStatsReqForBucket, PbTableStatsRespForBucket};
+use crate::{BucketId, PartitionId};
 
 /// Per-bucket request item for `GetTableStats`.
 /// Mirrors the bucket-stats request shape used by the Java client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BucketStatsRequest {
-    pub partition_id: Option<i64>,
-    pub bucket_id: i32,
+    pub partition_id: Option<PartitionId>,
+    pub bucket_id: BucketId,
 }
 
 impl BucketStatsRequest {
-    pub fn new(partition_id: Option<i64>, bucket_id: i32) -> Self {
+    pub fn new(partition_id: Option<PartitionId>, bucket_id: BucketId) -> Self {
         Self {
             partition_id,
             bucket_id,
@@ -52,8 +53,8 @@ impl BucketStatsRequest {
 /// when the server returned an error for the bucket; check `error` in that case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BucketStats {
-    pub bucket_id: i32,
-    pub partition_id: Option<i64>,
+    pub bucket_id: BucketId,
+    pub partition_id: Option<PartitionId>,
     pub row_count: Option<i64>,
     pub error: Option<BucketStatsError>,
 }

@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::proto::{PbKvSnapshotLeaseForBucket, PbKvSnapshotLeaseForTable};
+use crate::{BucketId, PartitionId, TableId};
 
 /// One bucket's slot in a KV-snapshot lease request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvSnapshotLeaseForBucket {
-    pub partition_id: Option<i64>,
-    pub bucket_id: i32,
+    pub partition_id: Option<PartitionId>,
+    pub bucket_id: BucketId,
     pub snapshot_id: i64,
 }
 
@@ -46,7 +47,7 @@ impl KvSnapshotLeaseForBucket {
 /// All the buckets of a single table that should be leased together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvSnapshotLeaseForTable {
-    pub table_id: i64,
+    pub table_id: TableId,
     pub bucket_snapshots: Vec<KvSnapshotLeaseForBucket>,
 }
 
