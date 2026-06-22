@@ -338,7 +338,7 @@ impl Cluster {
         self.partition_name_by_id.get(&partition_id)
     }
 
-    pub fn get_table_id(&self, table_path: &TablePath) -> Option<i64> {
+    pub fn get_table_id(&self, table_path: &TablePath) -> Option<TableId> {
         self.table_id_by_path.get(table_path).copied()
     }
 
@@ -352,7 +352,7 @@ impl Cluster {
         &self.table_info_by_path
     }
 
-    pub fn get_table_id_by_path(&self) -> &HashMap<TablePath, i64> {
+    pub fn get_table_id_by_path(&self) -> &HashMap<TablePath, TableId> {
         &self.table_id_by_path
     }
 
@@ -411,7 +411,7 @@ impl Cluster {
 fn get_bucket_locations(
     servers: &mut HashMap<i32, ServerNode>,
     bucket_metadata: &[PbBucketMetadata],
-    table_id: i64,
+    table_id: TableId,
     partition_id: Option<PartitionId>,
     physical_table_path: &Arc<PhysicalTablePath>,
 ) -> Vec<BucketLocation> {

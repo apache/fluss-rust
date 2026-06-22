@@ -30,7 +30,7 @@ use crate::proto::{
 use crate::record::{NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::rpc::ServerConnection;
 use crate::rpc::message::{InitWriterRequest, ProduceLogRequest, PutKvRequest};
-use crate::{PartitionId, TableId};
+use crate::{BucketId, PartitionId, TableId};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use log::{debug, warn};
@@ -405,7 +405,7 @@ impl Sender {
     }
 
     fn build_write_request(
-        table_id: i64,
+        table_id: TableId,
         acks: i16,
         timeout_ms: i32,
         request_batches: &mut [ReadyWriteBatch],
@@ -457,7 +457,7 @@ impl Sender {
         &self,
         connection: &ServerConnection,
         write_request: WriteRequest,
-        table_id: i64,
+        table_id: TableId,
         table_buckets: &[TableBucket],
         records_by_bucket: &mut HashMap<TableBucket, ReadyWriteBatch>,
     ) -> Result<()> {
@@ -502,7 +502,7 @@ impl Sender {
 
     async fn handle_write_response<R: WriteResponse>(
         &self,
-        table_id: i64,
+        table_id: TableId,
         request_buckets: &[TableBucket],
         records_by_bucket: &mut HashMap<TableBucket, ReadyWriteBatch>,
         response: R,
@@ -1007,7 +1007,7 @@ enum WriteRequest {
 }
 
 trait BucketResponse {
-    fn bucket_id(&self) -> i32;
+    fn bucket_id(&self) -> BucketId;
     fn error_code(&self) -> Option<i32>;
     fn error_message(&self) -> Option<&String>;
 
@@ -1015,7 +1015,7 @@ trait BucketResponse {
 }
 
 impl BucketResponse for PbProduceLogRespForBucket {
-    fn bucket_id(&self) -> i32 {
+    fn bucket_id(&self) -> BucketId {
         self.bucket_id
     }
     fn error_code(&self) -> Option<i32> {
@@ -1031,7 +1031,7 @@ impl BucketResponse for PbProduceLogRespForBucket {
 }
 
 impl BucketResponse for PbPutKvRespForBucket {
-    fn bucket_id(&self) -> i32 {
+    fn bucket_id(&self) -> BucketId {
         self.bucket_id
     }
     fn error_code(&self) -> Option<i32> {

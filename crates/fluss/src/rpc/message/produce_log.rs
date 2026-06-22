@@ -23,7 +23,7 @@ use crate::client::ReadyWriteBatch;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::WriteError;
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{impl_read_type, impl_write_type, proto};
+use crate::{TableId, impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -33,7 +33,7 @@ pub struct ProduceLogRequest {
 
 impl ProduceLogRequest {
     pub fn new(
-        table_id: i64,
+        table_id: TableId,
         ack: i16,
         max_request_timeout_ms: i32,
         ready_batches: &mut [ReadyWriteBatch],

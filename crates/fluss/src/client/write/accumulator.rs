@@ -1172,7 +1172,7 @@ mod tests {
         accumulator: &RecordAccumulator,
         cluster: &Arc<crate::cluster::Cluster>,
         table_path: &TablePath,
-        bucket_id: i32,
+        bucket_id: BucketId,
     ) -> Result<ReadyWriteBatch> {
         let table_info = Arc::new(build_table_info(table_path.clone(), 1, 2));
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
