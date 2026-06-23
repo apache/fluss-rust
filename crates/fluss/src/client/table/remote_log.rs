@@ -988,10 +988,10 @@ mod tests {
     use super::*;
     use crate::metadata::TablePath;
     use crate::test_utils::test_scanner_metrics;
+    use crate::{BucketId, TableId};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Helper function to create a TableBucket for testing
-    fn create_table_bucket(table_id: i64, bucket_id: i32) -> TableBucket {
+    fn create_table_bucket(table_id: TableId, bucket_id: BucketId) -> TableBucket {
         TableBucket::new(table_id, bucket_id)
     }
 

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::BucketId;
 use crate::bucketing::BucketingFunction;
 use crate::cluster::Cluster;
 use crate::error::Error::IllegalArgument;
@@ -28,9 +29,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 pub trait BucketAssigner: Sync + Send {
     fn abort_if_batch_full(&self) -> bool;
 
-    fn on_new_batch(&self, cluster: &Cluster, prev_bucket_id: i32);
+    fn on_new_batch(&self, cluster: &Cluster, prev_bucket_id: BucketId);
 
-    fn assign_bucket(&self, bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<i32>;
+    fn assign_bucket(&self, bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<BucketId>;
 }
 
 #[derive(Debug)]
@@ -47,7 +48,7 @@ impl StickyBucketAssigner {
         }
     }
 
-    fn next_bucket(&self, cluster: &Cluster, prev_bucket_id: i32) -> i32 {
+    fn next_bucket(&self, cluster: &Cluster, prev_bucket_id: BucketId) -> BucketId {
         let old_bucket = self.current_bucket_id.load(Ordering::Relaxed);
         let mut new_bucket = old_bucket;
         if old_bucket < 0 || old_bucket == prev_bucket_id {
@@ -92,11 +93,11 @@ impl BucketAssigner for StickyBucketAssigner {
         true
     }
 
-    fn on_new_batch(&self, cluster: &Cluster, prev_bucket_id: i32) {
+    fn on_new_batch(&self, cluster: &Cluster, prev_bucket_id: BucketId) {
         self.next_bucket(cluster, prev_bucket_id);
     }
 
-    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<i32> {
+    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<BucketId> {
         let bucket_id = self.current_bucket_id.load(Ordering::Relaxed);
         if bucket_id < 0 {
             Ok(self.next_bucket(cluster, bucket_id))
@@ -130,9 +131,9 @@ impl BucketAssigner for RoundRobinBucketAssigner {
         false
     }
 
-    fn on_new_batch(&self, _cluster: &Cluster, _prev_bucket_id: i32) {}
+    fn on_new_batch(&self, _cluster: &Cluster, _prev_bucket_id: BucketId) {}
 
-    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<i32> {
+    fn assign_bucket(&self, _bucket_key: Option<&Bytes>, cluster: &Cluster) -> Result<BucketId> {
         let next_value = self.counter.fetch_add(1, Ordering::Relaxed);
         let available_buckets = cluster.get_available_buckets_for_table_path(&self.table_path);
         if available_buckets.is_empty() {
@@ -175,11 +176,11 @@ impl BucketAssigner for HashBucketAssigner {
         false
     }
 
-    fn on_new_batch(&self, _: &Cluster, _: i32) {
+    fn on_new_batch(&self, _: &Cluster, _: BucketId) {
         // do nothing
     }
 
-    fn assign_bucket(&self, bucket_key: Option<&Bytes>, _: &Cluster) -> Result<i32> {
+    fn assign_bucket(&self, bucket_key: Option<&Bytes>, _: &Cluster) -> Result<BucketId> {
         let key = bucket_key.ok_or_else(|| IllegalArgument {
             message: "no bucket key provided".to_string(),
         })?;
