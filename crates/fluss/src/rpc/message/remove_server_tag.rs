@@ -15,46 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::proto::LimitScanResponse;
-use crate::rpc::frame::ReadError;
-
+use crate::metadata::ServerTag;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::frame::WriteError;
+use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{BucketId, PartitionId, TableId, impl_read_type, impl_write_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
+use bytes::{Buf, BufMut};
 use prost::Message;
 
-use bytes::{Buf, BufMut};
-
-pub struct LimitScanRequest {
-    pub(crate) inner_request: proto::LimitScanRequest,
+#[derive(Debug)]
+pub struct RemoveServerTagRequest {
+    pub(crate) inner_request: proto::RemoveServerTagRequest,
 }
 
-impl LimitScanRequest {
-    pub fn new(
-        table_id: TableId,
-        partition_id: Option<PartitionId>,
-        bucket_id: BucketId,
-        limit: i32,
-    ) -> Self {
-        let request = proto::LimitScanRequest {
-            table_id,
-            partition_id,
-            bucket_id,
-            limit,
-        };
-
-        Self {
-            inner_request: request,
+impl RemoveServerTagRequest {
+    pub fn new(server_ids: Vec<i32>, server_tag: ServerTag) -> Self {
+        RemoveServerTagRequest {
+            inner_request: proto::RemoveServerTagRequest {
+                server_ids,
+                server_tag: server_tag.to_i32(),
+            },
         }
     }
 }
 
-impl RequestBody for LimitScanRequest {
-    type ResponseBody = LimitScanResponse;
-
-    const API_KEY: ApiKey = ApiKey::LimitScan;
+impl RequestBody for RemoveServerTagRequest {
+    type ResponseBody = proto::RemoveServerTagResponse;
+    const API_KEY: ApiKey = ApiKey::RemoveServerTag;
 }
 
-impl_write_type!(LimitScanRequest);
-impl_read_type!(LimitScanResponse);
+impl_write_type!(RemoveServerTagRequest);
+impl_read_type!(proto::RemoveServerTagResponse);

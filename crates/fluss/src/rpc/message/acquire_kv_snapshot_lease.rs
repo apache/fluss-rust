@@ -15,39 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::BucketStatsRequest;
+use crate::metadata::KvSnapshotLeaseForTable;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{TableId, impl_read_type, impl_write_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
 #[derive(Debug)]
-pub struct GetTableStatsRequest {
-    pub(crate) inner_request: proto::GetTableStatsRequest,
+pub struct AcquireKvSnapshotLeaseRequest {
+    pub(crate) inner_request: proto::AcquireKvSnapshotLeaseRequest,
 }
 
-impl GetTableStatsRequest {
+impl AcquireKvSnapshotLeaseRequest {
     pub fn new(
-        table_id: TableId,
-        buckets_req: Vec<BucketStatsRequest>,
-        target_columns: Vec<i32>,
+        lease_id: &str,
+        lease_duration_ms: i64,
+        snapshots_to_lease: Vec<KvSnapshotLeaseForTable>,
     ) -> Self {
-        GetTableStatsRequest {
-            inner_request: proto::GetTableStatsRequest {
-                table_id,
-                buckets_req: buckets_req.iter().map(BucketStatsRequest::to_pb).collect(),
-                target_columns,
+        AcquireKvSnapshotLeaseRequest {
+            inner_request: proto::AcquireKvSnapshotLeaseRequest {
+                lease_id: lease_id.to_string(),
+                lease_duration_ms,
+                snapshots_to_lease: snapshots_to_lease
+                    .iter()
+                    .map(KvSnapshotLeaseForTable::to_pb)
+                    .collect(),
             },
         }
     }
 }
 
-impl RequestBody for GetTableStatsRequest {
-    type ResponseBody = proto::GetTableStatsResponse;
-    const API_KEY: ApiKey = ApiKey::GetTableStats;
+impl RequestBody for AcquireKvSnapshotLeaseRequest {
+    type ResponseBody = proto::AcquireKvSnapshotLeaseResponse;
+    const API_KEY: ApiKey = ApiKey::AcquireKvSnapshotLease;
 }
 
-impl_write_type!(GetTableStatsRequest);
-impl_read_type!(proto::GetTableStatsResponse);
+impl_write_type!(AcquireKvSnapshotLeaseRequest);
+impl_read_type!(proto::AcquireKvSnapshotLeaseResponse);

@@ -15,46 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::proto::LimitScanResponse;
-use crate::rpc::frame::ReadError;
-
+use crate::metadata::TableBucket;
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::frame::WriteError;
+use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{BucketId, PartitionId, TableId, impl_read_type, impl_write_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
+use bytes::{Buf, BufMut};
 use prost::Message;
 
-use bytes::{Buf, BufMut};
-
-pub struct LimitScanRequest {
-    pub(crate) inner_request: proto::LimitScanRequest,
+#[derive(Debug)]
+pub struct ReleaseKvSnapshotLeaseRequest {
+    pub(crate) inner_request: proto::ReleaseKvSnapshotLeaseRequest,
 }
 
-impl LimitScanRequest {
-    pub fn new(
-        table_id: TableId,
-        partition_id: Option<PartitionId>,
-        bucket_id: BucketId,
-        limit: i32,
-    ) -> Self {
-        let request = proto::LimitScanRequest {
-            table_id,
-            partition_id,
-            bucket_id,
-            limit,
-        };
-
-        Self {
-            inner_request: request,
+impl ReleaseKvSnapshotLeaseRequest {
+    pub fn new(lease_id: &str, buckets_to_release: Vec<TableBucket>) -> Self {
+        ReleaseKvSnapshotLeaseRequest {
+            inner_request: proto::ReleaseKvSnapshotLeaseRequest {
+                lease_id: lease_id.to_string(),
+                buckets_to_release: buckets_to_release.iter().map(TableBucket::to_pb).collect(),
+            },
         }
     }
 }
 
-impl RequestBody for LimitScanRequest {
-    type ResponseBody = LimitScanResponse;
-
-    const API_KEY: ApiKey = ApiKey::LimitScan;
+impl RequestBody for ReleaseKvSnapshotLeaseRequest {
+    type ResponseBody = proto::ReleaseKvSnapshotLeaseResponse;
+    const API_KEY: ApiKey = ApiKey::ReleaseKvSnapshotLease;
 }
 
-impl_write_type!(LimitScanRequest);
-impl_read_type!(LimitScanResponse);
+impl_write_type!(ReleaseKvSnapshotLeaseRequest);
+impl_read_type!(proto::ReleaseKvSnapshotLeaseResponse);

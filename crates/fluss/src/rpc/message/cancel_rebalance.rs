@@ -15,46 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::proto::LimitScanResponse;
-use crate::rpc::frame::ReadError;
-
 use crate::rpc::api_key::ApiKey;
-use crate::rpc::frame::WriteError;
+use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{BucketId, PartitionId, TableId, impl_read_type, impl_write_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
+use bytes::{Buf, BufMut};
 use prost::Message;
 
-use bytes::{Buf, BufMut};
-
-pub struct LimitScanRequest {
-    pub(crate) inner_request: proto::LimitScanRequest,
+#[derive(Debug)]
+pub struct CancelRebalanceRequest {
+    pub(crate) inner_request: proto::CancelRebalanceRequest,
 }
 
-impl LimitScanRequest {
-    pub fn new(
-        table_id: TableId,
-        partition_id: Option<PartitionId>,
-        bucket_id: BucketId,
-        limit: i32,
-    ) -> Self {
-        let request = proto::LimitScanRequest {
-            table_id,
-            partition_id,
-            bucket_id,
-            limit,
-        };
-
-        Self {
-            inner_request: request,
+impl CancelRebalanceRequest {
+    pub fn new(rebalance_id: Option<&str>) -> Self {
+        CancelRebalanceRequest {
+            inner_request: proto::CancelRebalanceRequest {
+                rebalance_id: rebalance_id.map(|s| s.to_string()),
+            },
         }
     }
 }
 
-impl RequestBody for LimitScanRequest {
-    type ResponseBody = LimitScanResponse;
-
-    const API_KEY: ApiKey = ApiKey::LimitScan;
+impl RequestBody for CancelRebalanceRequest {
+    type ResponseBody = proto::CancelRebalanceResponse;
+    const API_KEY: ApiKey = ApiKey::CancelRebalance;
 }
 
-impl_write_type!(LimitScanRequest);
-impl_read_type!(LimitScanResponse);
+impl_write_type!(CancelRebalanceRequest);
+impl_read_type!(proto::CancelRebalanceResponse);

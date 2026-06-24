@@ -15,39 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metadata::BucketStatsRequest;
+use crate::metadata::ProducerTableOffsets;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{TableId, impl_read_type, impl_write_type, proto};
+use crate::{impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
 #[derive(Debug)]
-pub struct GetTableStatsRequest {
-    pub(crate) inner_request: proto::GetTableStatsRequest,
+pub struct RegisterProducerOffsetsRequest {
+    pub(crate) inner_request: proto::RegisterProducerOffsetsRequest,
 }
 
-impl GetTableStatsRequest {
+impl RegisterProducerOffsetsRequest {
     pub fn new(
-        table_id: TableId,
-        buckets_req: Vec<BucketStatsRequest>,
-        target_columns: Vec<i32>,
+        producer_id: &str,
+        table_offsets: Vec<ProducerTableOffsets>,
+        ttl_ms: Option<i64>,
     ) -> Self {
-        GetTableStatsRequest {
-            inner_request: proto::GetTableStatsRequest {
-                table_id,
-                buckets_req: buckets_req.iter().map(BucketStatsRequest::to_pb).collect(),
-                target_columns,
+        RegisterProducerOffsetsRequest {
+            inner_request: proto::RegisterProducerOffsetsRequest {
+                producer_id: producer_id.to_string(),
+                table_offsets: table_offsets
+                    .iter()
+                    .map(ProducerTableOffsets::to_pb)
+                    .collect(),
+                ttl_ms,
             },
         }
     }
 }
 
-impl RequestBody for GetTableStatsRequest {
-    type ResponseBody = proto::GetTableStatsResponse;
-    const API_KEY: ApiKey = ApiKey::GetTableStats;
+impl RequestBody for RegisterProducerOffsetsRequest {
+    type ResponseBody = proto::RegisterProducerOffsetsResponse;
+    const API_KEY: ApiKey = ApiKey::RegisterProducerOffsets;
 }
 
-impl_write_type!(GetTableStatsRequest);
-impl_read_type!(proto::GetTableStatsResponse);
+impl_write_type!(RegisterProducerOffsetsRequest);
+impl_read_type!(proto::RegisterProducerOffsetsResponse);
