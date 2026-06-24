@@ -176,4 +176,20 @@ defmodule Fluss.Admin do
       {:error, %Fluss.Error{} = err} -> raise err
     end
   end
+
+  @spec get_table_info(t(), String.t(), String.t()) ::
+          {:ok, Fluss.TableInfo.t()} | {:error, Fluss.Error.t()}
+  def get_table_info(admin, database_name, table_name) do
+    admin
+    |> Native.admin_get_table_info(database_name, table_name)
+    |> Native.await_nif()
+  end
+
+  @spec get_table_info!(t(), String.t(), String.t()) :: Fluss.TableInfo.t()
+  def get_table_info!(admin, database_name, table_name) do
+    case get_table_info(admin, database_name, table_name) do
+      {:ok, table_info} -> table_info
+      {:error, %Fluss.Error{} = err} -> raise err
+    end
+  end
 end
