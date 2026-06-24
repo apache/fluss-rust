@@ -1630,7 +1630,21 @@ class TableScan {
 
     TableScan& Limit(int32_t row_number);
 
+    /// Creates a record-mode log scanner, polled for individual `ScanRecord`s.
+    ///
+    /// Works on log tables and on primary-key (KV) tables. For a primary-key
+    /// table this subscribes to its CDC changelog: each `ScanRecord` carries a
+    /// `ChangeType` -- `+I` (insert), `-U` (update-before), `+U` (update-after)
+    /// or `-D` (delete). A log table yields `+A` (append-only). Requires the
+    /// ARROW log format.
     Result CreateLogScanner(LogScanner& out);
+
+    /// Creates a batch-mode log scanner that yields Arrow record batches.
+    ///
+    /// Log tables only. Primary-key tables are rejected because the Arrow batch
+    /// path carries no per-record change types; read a primary-key table's
+    /// changelog with `CreateLogScanner()` instead. Requires the ARROW log
+    /// format.
     Result CreateRecordBatchLogScanner(LogScanner& out);
 
     Result CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out);
