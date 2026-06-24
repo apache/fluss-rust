@@ -19,7 +19,7 @@ use crate::metadata::BucketStatsRequest;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{impl_read_type, impl_write_type, proto};
+use crate::{TableId, impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -30,7 +30,7 @@ pub struct GetTableStatsRequest {
 
 impl GetTableStatsRequest {
     pub fn new(
-        table_id: i64,
+        table_id: TableId,
         buckets_req: Vec<BucketStatsRequest>,
         target_columns: Vec<i32>,
     ) -> Self {

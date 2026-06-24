@@ -18,7 +18,7 @@
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{impl_read_type, impl_write_type, proto};
+use crate::{BucketId, PartitionId, TableId, impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -28,7 +28,12 @@ pub struct GetKvSnapshotMetadataRequest {
 }
 
 impl GetKvSnapshotMetadataRequest {
-    pub fn new(table_id: i64, partition_id: Option<i64>, bucket_id: i32, snapshot_id: i64) -> Self {
+    pub fn new(
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+        bucket_id: BucketId,
+        snapshot_id: i64,
+    ) -> Self {
         GetKvSnapshotMetadataRequest {
             inner_request: proto::GetKvSnapshotMetadataRequest {
                 table_id,

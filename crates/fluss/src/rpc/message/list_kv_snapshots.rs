@@ -18,7 +18,7 @@
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{impl_read_type, impl_write_type, proto};
+use crate::{PartitionId, TableId, impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -28,7 +28,7 @@ pub struct ListKvSnapshotsRequest {
 }
 
 impl ListKvSnapshotsRequest {
-    pub fn new(table_id: i64, partition_id: Option<i64>) -> Self {
+    pub fn new(table_id: TableId, partition_id: Option<PartitionId>) -> Self {
         ListKvSnapshotsRequest {
             inner_request: proto::ListKvSnapshotsRequest {
                 table_id,
