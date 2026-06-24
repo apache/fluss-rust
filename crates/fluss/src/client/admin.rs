@@ -557,7 +557,7 @@ impl FlussAdmin {
     /// Get table statistics for buckets. Pass empty `target_columns` to request stats for all columns.
     pub async fn get_table_stats(
         &self,
-        table_id: i64,
+        table_id: TableId,
         buckets_req: Vec<crate::metadata::BucketStatsRequest>,
         target_columns: Vec<i32>,
     ) -> Result<TableStats> {
@@ -590,9 +590,9 @@ impl FlussAdmin {
     /// Get KV snapshot metadata (manifest file list).
     pub async fn get_kv_snapshot_metadata(
         &self,
-        table_id: i64,
-        partition_id: Option<i64>,
-        bucket_id: i32,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+        bucket_id: BucketId,
         snapshot_id: i64,
     ) -> Result<KvSnapshotMetadata> {
         let response = self
@@ -817,8 +817,8 @@ impl FlussAdmin {
     /// List remote log manifests for a table (optionally scoped to one partition).
     pub async fn list_remote_log_manifests(
         &self,
-        table_id: i64,
-        partition_id: Option<i64>,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
     ) -> Result<Vec<RemoteLogManifestEntry>> {
         let response = self
             .admin_gateway()
@@ -835,8 +835,8 @@ impl FlussAdmin {
     /// List active KV snapshots for a table (optionally scoped to one partition).
     pub async fn list_kv_snapshots(
         &self,
-        table_id: i64,
-        partition_id: Option<i64>,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
     ) -> Result<ActiveKvSnapshots> {
         let response = self
             .admin_gateway()
