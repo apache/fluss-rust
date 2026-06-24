@@ -60,6 +60,28 @@ partial_writer.upsert({"id": 1, "age": 27})  # only updates age
 await partial_writer.flush()
 ```
 
+## Subscribing to the Changelog (CDC)
+
+Every primary key table maintains a changelog of its row-level changes. Read it with a record-mode scanner — the same API used for [log tables](./log-tables.md) — to stream CDC events. Each `ScanRecord` carries a `change_type`: `+I` (insert), `-U` / `+U` (the old and new images of an update), and `-D` (delete, carrying the old row).
+
+```python
+table = await conn.get_table(table_path)
+scanner = await table.new_scan().create_log_scanner()
+
+# Subscribe to every bucket from the start of the changelog.
+num_buckets = (await admin.get_table_info(table_path)).num_buckets
+scanner.subscribe_buckets({i: fluss.EARLIEST_OFFSET for i in range(num_buckets)})
+
+while True:
+    records = await scanner.poll(3000)
+    if records.is_empty():
+        break
+    for record in records:
+        print(record.change_type.short_string(), record.row)  # +I / -U / +U / -D
+```
+
+With the default changelog mode (`'table.changelog.image' = 'FULL'`), updating a key emits a `-U`/`+U` pair and deleting it emits `-D`; the `WAL` mode emits only `+U` on update. To resume from a committed position instead of the start, `subscribe` at a specific offset.
+
 ## Limit Scan
 
 To read up to `n` rows of a bucket's current state without supplying keys, use a batch scanner. The server returns the deduplicated current rows as Arrow batches — convenient for previews or DataFusion sources.
