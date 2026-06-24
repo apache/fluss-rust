@@ -316,9 +316,16 @@ impl<'a> TableScan<'a> {
         Ok(self)
     }
 
+    /// Creates a record-mode log scanner, polled for individual [`ScanRecord`]s.
+    ///
+    /// Works on log tables and on primary-key (KV) tables. For a primary-key
+    /// table this subscribes to its CDC changelog: each [`ScanRecord`] carries a
+    /// [`ChangeType`](crate::record::ChangeType) — `+I` (insert), `-U`
+    /// (update-before), `+U` (update-after) or `-D` (delete). A log table yields
+    /// `+A` (append-only) for every record. Requires the ARROW log format.
     pub fn create_log_scanner(self) -> Result<LogScanner> {
         self.reject_limit("LogScanner")?;
-        validate_scan_support(&self.table_info.table_path, &self.table_info)?;
+        validate_scan_support_inner(&self.table_info.table_path, &self.table_info, true)?;
         let inner = LogScannerInner::new(
             &self.table_info,
             self.metadata.clone(),
@@ -331,6 +338,12 @@ impl<'a> TableScan<'a> {
         })
     }
 
+    /// Creates a batch-mode log scanner that yields Arrow `RecordBatch`es.
+    ///
+    /// Log tables only. Primary-key tables are rejected because the Arrow batch
+    /// path carries no per-record change types; read a primary-key table's
+    /// changelog with [`create_log_scanner`](Self::create_log_scanner) instead.
+    /// Requires the ARROW log format.
     pub fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner> {
         self.reject_limit("RecordBatchLogScanner")?;
         validate_scan_support(&self.table_info.table_path, &self.table_info)?;
@@ -2225,10 +2238,29 @@ impl BucketScanStatus {
     }
 }
 
+/// Validates that `table_info` can be scanned as a log, rejecting primary-key
+/// tables (the default for batch-mode scans).
 fn validate_scan_support(table_path: &TablePath, table_info: &TableInfo) -> Result<()> {
-    if table_info.schema.primary_key().is_some() {
+    validate_scan_support_inner(table_path, table_info, false)
+}
+
+/// Validates that `table_info` can be scanned as a log. ARROW log format is
+/// required; INDEXED is not supported by the client decoder.
+///
+/// When `allow_primary_key` is set, a primary-key table is accepted and its
+/// changelog is read as a CDC stream (each record carries a `ChangeType`). It is
+/// cleared for the Arrow batch path, which has no slot for per-record change
+/// types, so reading a changelog there would silently drop them.
+fn validate_scan_support_inner(
+    table_path: &TablePath,
+    table_info: &TableInfo,
+    allow_primary_key: bool,
+) -> Result<()> {
+    if !allow_primary_key && table_info.schema.primary_key().is_some() {
         return Err(UnsupportedOperation {
-            message: format!("Table {table_path} is not a Log Table and doesn't support scan."),
+            message: format!(
+                "Batch-mode log scan does not support primary-key table {table_path}; use create_log_scanner() to read its changelog record by record"
+            ),
         });
     }
 
@@ -2236,7 +2268,7 @@ fn validate_scan_support(table_path: &TablePath, table_info: &TableInfo) -> Resu
     if LogFormat::ARROW != log_format {
         return Err(UnsupportedOperation {
             message: format!(
-                "Scan is only supported for ARROW format and table {table_path} uses {log_format} format"
+                "Log scan is only supported for ARROW log format, but table {table_path} uses {log_format} format"
             ),
         });
     }
@@ -2529,35 +2561,33 @@ mod tests {
 
     #[test]
     fn test_validate_scan_support() {
-        // Primary key table
+        // Record mode (allow_primary_key = true): a primary-key table's changelog
+        // is scannable on ARROW or the default format.
         let (table_info, table_path) = create_test_table_info(true, Some("ARROW"));
-        let result = validate_scan_support(&table_path, &table_info);
+        assert!(validate_scan_support_inner(&table_path, &table_info, true).is_ok());
+        let (table_info, table_path) = create_test_table_info(true, None);
+        assert!(validate_scan_support_inner(&table_path, &table_info, true).is_ok());
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+        // Batch mode (allow_primary_key = false): a primary-key table is rejected.
+        let (table_info, table_path) = create_test_table_info(true, Some("ARROW"));
+        let err = validate_scan_support(&table_path, &table_info).unwrap_err();
         assert!(matches!(err, UnsupportedOperation { .. }));
-        assert!(err.to_string().contains(
-            format!("Table {table_path} is not a Log Table and doesn't support scan.").as_str()
-        ));
+        assert!(err.to_string().contains("primary-key table"));
 
-        // Indexed format
-        let (table_info, table_path) = create_test_table_info(false, Some("INDEXED"));
-        let result = validate_scan_support(&table_path, &table_info);
+        // INDEXED is unsupported regardless of table type or mode.
+        for allow_primary_key in [false, true] {
+            let (table_info, table_path) = create_test_table_info(false, Some("INDEXED"));
+            let err = validate_scan_support_inner(&table_path, &table_info, allow_primary_key)
+                .unwrap_err();
+            assert!(matches!(err, UnsupportedOperation { .. }));
+            assert!(err.to_string().contains("ARROW log format"));
+        }
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, UnsupportedOperation { .. }));
-        assert!(err.to_string().contains(format!("Scan is only supported for ARROW format and table {table_path} uses INDEXED format").as_str()));
-
-        // Default format
+        // Log tables scan on ARROW or the default format.
         let (table_info, table_path) = create_test_table_info(false, None);
-        let result = validate_scan_support(&table_path, &table_info);
-        assert!(result.is_ok());
-
-        // Arrow format
+        assert!(validate_scan_support(&table_path, &table_info).is_ok());
         let (table_info, table_path) = create_test_table_info(false, Some("ARROW"));
-        let result = validate_scan_support(&table_path, &table_info);
-        assert!(result.is_ok());
+        assert!(validate_scan_support(&table_path, &table_info).is_ok());
     }
 
     #[tokio::test]

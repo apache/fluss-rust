@@ -145,8 +145,8 @@ series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
 | `fn project(self, indices: &[usize]) -> Result<Self>`                       | Project columns by index                |
 | `fn project_by_name(self, names: &[&str]) -> Result<Self>`                  | Project columns by name                 |
 | `fn limit(self, n: i32) -> Result<Self>`                                    | Set a row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
-| `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner       |
-| `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner |
+| `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `ChangeType`) |
+| `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner (log tables only — no per-record change types) |
 | `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
 
 ## `LogScanner`
@@ -244,6 +244,23 @@ server-deduplicated state); yields a single batch of at most `n` rows.
 | `fn offset(&self) -> i64`              | Record offset in the log               |
 | `fn timestamp(&self) -> i64`           | Record timestamp                       |
 | `fn change_type(&self) -> &ChangeType` | Change type (AppendOnly, Insert, etc.) |
+
+## `ChangeType`
+
+The kind of change a `ScanRecord` represents. Log (append-only) tables always
+produce `AppendOnly`; scanning a primary-key table's changelog produces the CDC
+variants below.
+
+| Variant        | Symbol | Meaning                                     |
+|----------------|--------|---------------------------------------------|
+| `AppendOnly`   | `+A`   | Append-only record (log tables)             |
+| `Insert`       | `+I`   | A new primary key was inserted              |
+| `UpdateBefore` | `-U`   | Row image *before* an update                |
+| `UpdateAfter`  | `+U`   | Row image *after* an update                 |
+| `Delete`       | `-D`   | A primary key was deleted (carries old row) |
+
+With the default `FULL` changelog mode (`table.changelog.image`), updating an
+existing key emits `-U` then `+U`; the `WAL` mode emits only `+U`.
 
 ## `ScanRecords`
 

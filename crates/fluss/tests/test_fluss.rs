@@ -23,6 +23,7 @@ mod integration {
     mod admin;
     mod batch_scanner;
     mod fluss_cluster;
+    mod kv_changelog;
     mod kv_table;
     mod log_table;
     mod record_batch_log_reader;
