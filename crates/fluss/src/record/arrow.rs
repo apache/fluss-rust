@@ -1020,7 +1020,14 @@ impl LogRecordBatch {
             return Ok((BatchChangeTypes::Uniform(ChangeType::AppendOnly), body));
         }
 
-        let record_count = self.record_count() as usize;
+        let record_count = self.record_count();
+        if record_count < 0 {
+            return Err(Error::UnexpectedError {
+                message: format!("Corrupt changelog batch: negative record count {record_count}"),
+                source: None,
+            });
+        }
+        let record_count = record_count as usize;
         let (change_type_bytes, arrow_data) =
             body.split_at_checked(record_count)
                 .ok_or_else(|| Error::UnexpectedError {
@@ -2483,7 +2490,7 @@ mod tests {
     /// header and the Arrow payload, then fixes up the length field and CRC.
     fn splice_change_type_vector(append_only: &[u8], change_types: &[ChangeType]) -> Vec<u8> {
         let mut data = append_only.to_vec();
-        data[ATTRIBUTES_OFFSET] = 0;
+        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
         let change_bytes = change_types.iter().map(|ct| ct.to_byte_value());
         data.splice(RECORDS_OFFSET..RECORDS_OFFSET, change_bytes);
 
@@ -2585,7 +2592,7 @@ mod tests {
         // Clear the append-only flag, then cut the body shorter than the
         // record_count change-type bytes the decoder now expects.
         let mut data = append_only;
-        data[ATTRIBUTES_OFFSET] = 0;
+        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
         data.truncate(RECORDS_OFFSET + 1);
 
         let batch = LogRecordBatch::new(Bytes::from(data));

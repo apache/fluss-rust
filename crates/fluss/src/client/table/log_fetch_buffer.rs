@@ -858,7 +858,7 @@ mod tests {
     };
     use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
     use crate::record::{
-        ATTRIBUTES_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD,
+        APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD,
         MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, to_arrow_schema,
     };
     use crate::row::GenericRow;
@@ -1014,7 +1014,7 @@ mod tests {
         data.extend_from_slice(&append_only[..RECORDS_OFFSET]);
         data.extend(change_types.iter().map(ChangeType::to_byte_value));
         data.extend_from_slice(&append_only[RECORDS_OFFSET..]);
-        data[ATTRIBUTES_OFFSET] = 0;
+        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
         let new_len = ((data.len() - LOG_OVERHEAD) as i32).to_le_bytes();
         data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&new_len);
 
