@@ -18,9 +18,10 @@
 use crate::async_nif;
 use crate::atoms::to_nif_err;
 use crate::connection::ConnectionResource;
-use crate::schema::TableDescriptorResource;
+use crate::schema::{NifSchema, TableDescriptorResource};
 use fluss::client::FlussAdmin;
-use fluss::metadata::{DatabaseDescriptor, DatabaseInfo, TableInfo, TablePath};
+use fluss::error::Error;
+use fluss::metadata::{DatabaseDescriptor, DatabaseInfo, SchemaInfo, TableInfo, TablePath};
 use fluss::{ServerNode, ServerType};
 use rustler::{Env, NifStruct, NifUnitEnum, ResourceArc, Term};
 use std::collections::HashMap;
@@ -112,6 +113,7 @@ pub struct NifTableInfo {
     pub table_name: String,
     pub table_id: i64,
     pub schema_id: i32,
+    pub schema: NifSchema,
     pub num_buckets: i32,
     pub has_primary_key: bool,
     pub primary_keys: Vec<String>,
@@ -130,14 +132,15 @@ pub struct NifTableInfo {
 }
 
 impl NifTableInfo {
-    pub fn from_core(info: &TableInfo) -> Self {
+    pub fn from_core(info: &TableInfo) -> Result<Self, Error> {
         let table_path: &TablePath = info.get_table_path();
 
-        Self {
+        Ok(Self {
             database_name: table_path.database().to_string(),
             table_name: table_path.table().to_string(),
             table_id: info.get_table_id(),
             schema_id: info.get_schema_id(),
+            schema: NifSchema::from_core(info.get_schema())?,
             num_buckets: info.get_num_buckets(),
             has_primary_key: info.has_primary_key(),
             primary_keys: info.get_primary_keys().to_vec(),
@@ -153,7 +156,7 @@ impl NifTableInfo {
             custom_properties: info.get_custom_properties().clone(),
             created_time: info.get_created_time(),
             modified_time: info.get_modified_time(),
-        }
+        })
     }
 }
 
@@ -310,6 +313,37 @@ fn admin_get_table_info<'a>(
     async_nif::spawn_task_with_result(env, async move {
         let table_path = TablePath::new(database_name, table_name);
         let table_info = admin.inner.get_table_info(&table_path).await?;
-        Ok(NifTableInfo::from_core(&table_info))
+        NifTableInfo::from_core(&table_info)
+    })
+}
+
+#[derive(NifStruct)]
+#[module = "Fluss.SchemaInfo"]
+pub struct NifSchemaInfo {
+    pub schema: NifSchema,
+    pub schema_id: i32,
+}
+
+impl NifSchemaInfo {
+    pub fn from_core(info: &SchemaInfo) -> Result<Self, Error> {
+        Ok(Self {
+            schema: NifSchema::from_core(info.schema())?,
+            schema_id: info.schema_id(),
+        })
+    }
+}
+
+#[rustler::nif]
+fn admin_get_table_schema<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    table_name: String,
+    schema_id: Option<i32>,
+) -> Term<'a> {
+    async_nif::spawn_task_with_result(env, async move {
+        let table_path = TablePath::new(database_name, table_name);
+        let schema_info = admin.inner.get_table_schema(&table_path, schema_id).await?;
+        NifSchemaInfo::from_core(&schema_info)
     })
 }

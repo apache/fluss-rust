@@ -57,6 +57,9 @@ defmodule Fluss.Native do
   def admin_get_table_info(_admin, _database_name, _table_name),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def admin_get_table_schema(_admin, _database_name, _table_name, _schema_id),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   # Schema / TableDescriptor
   def table_descriptor_new(_schema, _bucket_count, _properties),
     do: :erlang.nif_error(:nif_not_loaded)

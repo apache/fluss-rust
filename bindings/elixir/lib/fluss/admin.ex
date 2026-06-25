@@ -192,4 +192,20 @@ defmodule Fluss.Admin do
       {:error, %Fluss.Error{} = err} -> raise err
     end
   end
+
+  @spec get_table_schema(t(), String.t(), String.t(), integer() | nil) ::
+          {:ok, Fluss.SchemaInfo.t()} | {:error, Fluss.Error.t()}
+  def get_table_schema(admin, database_name, table_name, schema_id \\ nil) do
+    admin
+    |> Native.admin_get_table_schema(database_name, table_name, schema_id)
+    |> Native.await_nif()
+  end
+
+  @spec get_table_schema!(t(), String.t(), String.t(), integer() | nil) :: Fluss.SchemaInfo.t()
+  def get_table_schema!(admin, database_name, table_name, schema_id \\ nil) do
+    case get_table_schema(admin, database_name, table_name, schema_id) do
+      {:ok, schema_info} -> schema_info
+      {:error, %Fluss.Error{} = err} -> raise err
+    end
+  end
 end
