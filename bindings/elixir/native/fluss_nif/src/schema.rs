@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::atoms::to_nif_err;
+use fluss::error::Error;
 use fluss::metadata::{self, DataTypes, Schema, TableDescriptor};
 use rustler::{NifStruct, NifTaggedEnum, ResourceArc};
 
@@ -73,12 +74,59 @@ fn to_fluss_type(dt: &DataType) -> metadata::DataType {
     }
 }
 
+fn from_fluss_type(dt: &metadata::DataType) -> Result<DataType, Error> {
+    match dt {
+        metadata::DataType::Boolean(_) => Ok(DataType::Boolean),
+        metadata::DataType::TinyInt(_) => Ok(DataType::Tinyint),
+        metadata::DataType::SmallInt(_) => Ok(DataType::Smallint),
+        metadata::DataType::Int(_) => Ok(DataType::Int),
+        metadata::DataType::BigInt(_) => Ok(DataType::Bigint),
+        metadata::DataType::Float(_) => Ok(DataType::Float),
+        metadata::DataType::Double(_) => Ok(DataType::Double),
+        metadata::DataType::String(_) => Ok(DataType::String),
+        metadata::DataType::Bytes(_) => Ok(DataType::Bytes),
+        metadata::DataType::Date(_) => Ok(DataType::Date),
+        metadata::DataType::Time(_) => Ok(DataType::Time),
+        metadata::DataType::Timestamp(_) => Ok(DataType::Timestamp),
+        metadata::DataType::TimestampLTz(_) => Ok(DataType::TimestampLtz),
+        metadata::DataType::Decimal(d) => Ok(DataType::Decimal(d.precision(), d.scale())),
+        metadata::DataType::Char(c) => Ok(DataType::Char(c.length())),
+        metadata::DataType::Binary(b) => Ok(DataType::Binary(b.length())),
+        metadata::DataType::Array(_) | metadata::DataType::Map(_) | metadata::DataType::Row(_) => {
+            Err(Error::UnsupportedOperation {
+                message: format!("data type {dt:?} is not supported by the Elixir bindings"),
+            })
+        }
+    }
+}
+
 /// Decoded from `%Fluss.Schema{}` Elixir struct.
 #[derive(NifStruct)]
 #[module = "Fluss.Schema"]
 pub struct NifSchema {
     pub columns: Vec<(String, DataType)>,
     pub primary_key: Vec<String>,
+}
+
+impl NifSchema {
+    pub fn from_core(schema: &Schema) -> Result<NifSchema, Error> {
+        let mut columns: Vec<(String, DataType)> = Vec::new();
+
+        for col in schema.columns() {
+            columns.push((col.name().to_string(), from_fluss_type(col.data_type())?));
+        }
+
+        let primary_key: Vec<String> = schema
+            .primary_key_column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        Ok(Self {
+            columns,
+            primary_key,
+        })
+    }
 }
 
 #[rustler::nif]

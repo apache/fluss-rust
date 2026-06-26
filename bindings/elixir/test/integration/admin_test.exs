@@ -235,4 +235,169 @@ defmodule Fluss.Integration.AdminTest do
       refute Fluss.Admin.table_exists!(admin, @database, table)
     end
   end
+
+  describe "get_table_info/3" do
+    test "returns a %Fluss.TableInfo{} with the table's metadata", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("name", :string)
+        |> Fluss.Schema.primary_key(["id"])
+
+      descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 4)
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_table_info(admin, @database, table)
+      assert %Fluss.TableInfo{} = info
+
+      # Fields we set explicitly — exact assertions.
+      assert info.database_name == @database
+      assert info.table_name == table
+      assert info.num_buckets == 4
+      assert info.has_primary_key == true
+      assert info.primary_keys == ["id"]
+
+      # Schema round-trips: columns in definition order, PK preserved.
+      assert info.schema == %Fluss.Schema{
+               columns: [{"id", :int}, {"name", :string}],
+               primary_key: ["id"]
+             }
+
+      assert info.is_partitioned == false
+      assert info.is_auto_partitioned == false
+      assert info.partition_keys == []
+      assert info.comment == nil
+
+      assert info.physical_primary_keys == ["id"]
+      assert info.bucket_keys == ["id"]
+      assert info.has_bucket_key == true
+      assert info.is_default_bucket_key == true
+
+      # Server-assigned — sanity only, values aren't predictable.
+      assert is_integer(info.table_id) and info.table_id > 0
+      assert is_integer(info.schema_id) and info.schema_id >= 1
+      assert is_integer(info.created_time) and info.created_time > 0
+      assert is_integer(info.modified_time) and info.modified_time > 0
+
+      assert is_map(info.properties)
+      assert is_map(info.custom_properties)
+    end
+
+    test "exposes a composite primary key", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("region", :string)
+        |> Fluss.Schema.column("name", :string)
+        |> Fluss.Schema.primary_key(["id", "region"])
+
+      descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 4)
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_table_info(admin, @database, table)
+
+      assert info.has_primary_key == true
+      assert info.primary_keys == ["id", "region"]
+      assert info.physical_primary_keys == ["id", "region"]
+
+      assert info.schema == %Fluss.Schema{
+               columns: [{"id", :int}, {"region", :string}, {"name", :string}],
+               primary_key: ["id", "region"]
+             }
+    end
+
+    test "returns {:error, %Fluss.Error{}} for a non-existent table", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+      assert {:error, %Fluss.Error{}} = Fluss.Admin.get_table_info(admin, @database, table)
+    end
+  end
+
+  describe "get_table_info!/3" do
+    test "returns the %Fluss.TableInfo{} directly without an :ok tuple", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("name", :string)
+
+      descriptor = Fluss.TableDescriptor.new!(schema)
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      info = Fluss.Admin.get_table_info!(admin, @database, table)
+      assert %Fluss.TableInfo{} = info
+      assert info.table_name == table
+    end
+
+    test "raises Fluss.Error for a non-existent table", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      assert_raise Fluss.Error, fn ->
+        Fluss.Admin.get_table_info!(admin, @database, table)
+      end
+    end
+  end
+
+  describe "get_table_schema/4" do
+    test "returns the current schema as %Fluss.SchemaInfo{}", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("name", :string)
+        |> Fluss.Schema.primary_key(["id"])
+
+      descriptor = Fluss.TableDescriptor.new!(schema)
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:ok, %Fluss.SchemaInfo{} = info} =
+               Fluss.Admin.get_table_schema(admin, @database, table)
+
+      assert info.schema == %Fluss.Schema{
+               columns: [{"id", :int}, {"name", :string}],
+               primary_key: ["id"]
+             }
+
+      assert is_integer(info.schema_id) and info.schema_id >= 1
+    end
+
+    test "fetches a specific schema version by id", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("name", :string)
+        |> Fluss.Schema.primary_key(["id"])
+
+      descriptor = Fluss.TableDescriptor.new!(schema)
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      # Without alter_table there's only one version, so requesting its id
+      # explicitly must return the same SchemaInfo as the latest (nil) lookup.
+      {:ok, current} = Fluss.Admin.get_table_schema(admin, @database, table)
+
+      assert {:ok, by_id} =
+               Fluss.Admin.get_table_schema(admin, @database, table, current.schema_id)
+
+      assert by_id == current
+    end
+
+    test "returns {:error, %Fluss.Error{}} for a non-existent table", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      assert {:error, %Fluss.Error{}} =
+               Fluss.Admin.get_table_schema(admin, @database, table)
+    end
+  end
 end
