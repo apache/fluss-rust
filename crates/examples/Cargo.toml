@@ -42,6 +42,10 @@ name = "example-upsert-lookup"
 path = "src/example_kv_table.rs"
 
 [[example]]
+name = "example-kv-changelog"
+path = "src/example_kv_changelog.rs"
+
+[[example]]
 name = "example-partitioned-upsert-lookup"
 path = "src/example_partitioned_kv_table.rs"
 

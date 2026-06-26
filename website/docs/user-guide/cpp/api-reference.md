@@ -151,8 +151,8 @@ Complete API reference for the Fluss C++ client.
 | `ProjectByIndex(std::vector<size_t> column_indices) -> TableScan&`   | Project columns by index                      |
 | `ProjectByName(std::vector<std::string> column_names) -> TableScan&` | Project columns by name                       |
 | `Limit(int32_t row_number) -> TableScan&`                            | Set a positive row limit (enables `CreateBucketBatchScanner`; rejected by log scanners) |
-| `CreateLogScanner(LogScanner& out) -> Result`                        | Create a record-based log scanner             |
-| `CreateRecordBatchLogScanner(LogScanner& out) -> Result`             | Create an Arrow RecordBatch-based log scanner |
+| `CreateLogScanner(LogScanner& out) -> Result`                        | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `change_type`) |
+| `CreateRecordBatchLogScanner(LogScanner& out) -> Result`             | Create an Arrow RecordBatch-based log scanner (log tables only — no per-record change types) |
 | `CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out) -> Result` | Bounded scan of one bucket (requires `Limit`) |
 
 ## `AppendWriter`

@@ -121,6 +121,48 @@ let batch = result.to_record_batch()?;
 println!("Rows: {}", batch.num_rows());
 ```
 
+## Subscribing to the Changelog (CDC)
+
+Every primary key table maintains a changelog of its row-level changes. Read it
+with a record-mode `LogScanner` — the same API used for [log tables](./log-tables.md) —
+to stream CDC events. Each `ScanRecord` carries a `ChangeType`:
+
+- `+I` — a new key was inserted
+- `-U` / `+U` — the old and new images of an updated key
+- `-D` — a key was deleted (the record carries the old row)
+
+```rust
+use fluss::client::EARLIEST_OFFSET;
+use std::time::Duration;
+
+let table = conn.get_table(&table_path).await?;
+let log_scanner = table.new_scan().create_log_scanner()?;
+
+// Subscribe to every bucket from the start of the changelog.
+let num_buckets = table.get_table_info().get_num_buckets();
+for bucket in 0..num_buckets {
+    log_scanner.subscribe(bucket, EARLIEST_OFFSET).await?;
+}
+
+loop {
+    let records = log_scanner.poll(Duration::from_secs(1)).await?;
+    for record in records {
+        let row = record.row();
+        println!(
+            "{} id={} name={}",
+            record.change_type().short_string(), // +I / -U / +U / -D
+            row.get_int(0)?,
+            row.get_string(1)?,
+        );
+    }
+}
+```
+
+With the default changelog mode (`'table.changelog.image' = 'FULL'`), updating a
+key emits a `-U`/`+U` pair and deleting it emits `-D`; the `WAL` mode emits only
+`+U` on update. To resume from a previously committed position rather than the
+start, `subscribe` at a specific offset instead of `EARLIEST_OFFSET`.
+
 ## Prefix Lookup
 
 To fetch all rows sharing a common primary-key prefix (by choosing a bucket key that's a strict prefix of the primary key), see [Prefix Lookup](./prefix-lookup.md).

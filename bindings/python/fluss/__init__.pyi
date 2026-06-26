@@ -537,6 +537,11 @@ class TableScan:
         Use this scanner with `poll()` to get individual records with metadata
         (offset, timestamp, change_type).
 
+        Works on log tables and on primary-key (KV) tables. For a primary-key
+        table it subscribes to the CDC changelog: each record's ``change_type``
+        is ``+I`` (insert), ``-U`` (update-before), ``+U`` (update-after) or
+        ``-D`` (delete). A log table yields ``+A`` (append-only).
+
         Returns:
             LogScanner for record-by-record scanning with `poll()`
         """
@@ -546,6 +551,10 @@ class TableScan:
 
         Use this scanner with `poll_arrow()` to get Arrow Tables, or with
         `poll_record_batch()` to get individual batches with metadata.
+
+        Log tables only. Primary-key tables are rejected because the Arrow batch
+        path carries no per-record change types; read a primary-key table's
+        changelog with `create_log_scanner()` instead.
 
         Returns:
             LogScanner for batch-based scanning with `poll_arrow()` or `poll_record_batch()`
