@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::AlterConfig;
 use crate::error::{Error, Result};
 use crate::proto::{PbAddColumn, PbDropColumn, PbModifyColumn, PbRenameColumn};
 
@@ -119,6 +120,18 @@ impl RenameColumn {
             new_column_name: pb.new_column_name.clone(),
         }
     }
+}
+
+/// Bundle of column-level changes for a single `alter_table` call. Empty `Vec`s
+/// mean "no change of that kind"; pass `Default::default()` to send only
+/// config changes.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AlterTableChanges {
+    pub config_changes: Vec<AlterConfig>,
+    pub add_columns: Vec<AddColumn>,
+    pub drop_columns: Vec<DropColumn>,
+    pub rename_columns: Vec<RenameColumn>,
+    pub modify_columns: Vec<ModifyColumn>,
 }
 
 /// Modify a column's type/comment/position. Mirrors the `ModifyColumn` variant of

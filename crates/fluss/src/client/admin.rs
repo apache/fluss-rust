@@ -18,14 +18,27 @@
 use crate::client::metadata::Metadata;
 use crate::cluster::ServerNode;
 use crate::metadata::{
-    DatabaseDescriptor, DatabaseInfo, JsonSerde, LakeSnapshot, PartitionInfo, PartitionSpec,
-    PhysicalTablePath, Schema, SchemaInfo, TableBucket, TableDescriptor, TableInfo, TablePath,
+    AclFilter, AclInfo, AcquireKvSnapshotLeaseResult, ActiveKvSnapshots, AlterConfig,
+    AlterTableChanges, BucketStatsRequest, ClusterHealth, CreateAclResult, DatabaseDescriptor,
+    DatabaseInfo, DatabaseSummary, DescribeConfig, DropAclsFilterResult, GoalType, JsonSerde,
+    KvSnapshotLeaseForTable, KvSnapshotMetadata, LakeSnapshot, LakeSnapshotInfo, LatestKvSnapshots,
+    PartitionInfo, PartitionSpec, PhysicalTablePath, ProducerOffsets, ProducerTableOffsets,
+    RebalanceProgress, RegisterProducerResult, RemoteLogManifestEntry, Schema, SchemaInfo,
+    ServerTag, TableBucket, TableDescriptor, TableInfo, TablePath, TableStats,
 };
 use crate::rpc::message::{
+    AcquireKvSnapshotLeaseRequest, AddServerTagRequest, AlterClusterConfigsRequest,
+    AlterDatabaseRequest, AlterTableRequest, CancelRebalanceRequest, CreateAclsRequest,
     CreateDatabaseRequest, CreatePartitionRequest, CreateTableRequest, DatabaseExistsRequest,
-    DropDatabaseRequest, DropPartitionRequest, DropTableRequest, GetDatabaseInfoRequest,
-    GetLatestLakeSnapshotRequest, GetTableRequest, GetTableSchemaRequestMsg, ListDatabasesRequest,
-    ListPartitionInfosRequest, ListTablesRequest, TableExistsRequest,
+    DeleteProducerOffsetsRequest, DescribeClusterConfigsRequest, DropAclsRequest,
+    DropDatabaseRequest, DropKvSnapshotLeaseRequest, DropPartitionRequest, DropTableRequest,
+    GetClusterHealthRequest, GetDatabaseInfoRequest, GetKvSnapshotMetadataRequest,
+    GetLakeSnapshotRequest, GetLatestKvSnapshotsRequest, GetLatestLakeSnapshotRequest,
+    GetProducerOffsetsRequest, GetTableRequest, GetTableSchemaRequestMsg, GetTableStatsRequest,
+    ListAclsRequest, ListDatabaseSummariesRequest, ListDatabasesRequest, ListKvSnapshotsRequest,
+    ListPartitionInfosRequest, ListRebalanceProgressRequest, ListRemoteLogManifestsRequest,
+    ListTablesRequest, RebalanceRequest, RegisterProducerOffsetsRequest,
+    ReleaseKvSnapshotLeaseRequest, RemoveServerTagRequest, TableExistsRequest,
 };
 use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
@@ -482,5 +495,389 @@ impl FlussAdmin {
             tasks.push(task);
         }
         Ok(tasks)
+    }
+
+    /// List database summaries (name, created_time, table_count).
+    pub async fn list_database_summaries(&self) -> Result<Vec<DatabaseSummary>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(ListDatabaseSummariesRequest::new())
+            .await?;
+        Ok(response
+            .database_summary
+            .iter()
+            .map(DatabaseSummary::from_pb)
+            .collect())
+    }
+
+    /// Alter a database: config changes and/or an updated comment.
+    pub async fn alter_database(
+        &self,
+        name: &str,
+        config_changes: Vec<AlterConfig>,
+        comment: Option<&str>,
+        ignore_if_not_exists: bool,
+    ) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(AlterDatabaseRequest::new(
+                name,
+                ignore_if_not_exists,
+                config_changes,
+                comment,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Alter a table: config changes plus any combination of add/drop/rename/modify columns.
+    /// Bundle the column-level edits in [`AlterTableChanges`].
+    pub async fn alter_table(
+        &self,
+        table_path: &TablePath,
+        ignore_if_not_exists: bool,
+        changes: AlterTableChanges,
+    ) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(AlterTableRequest::new(
+                table_path,
+                ignore_if_not_exists,
+                changes.config_changes,
+                changes.add_columns,
+                changes.drop_columns,
+                changes.rename_columns,
+                changes.modify_columns,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Get table statistics for buckets. Pass empty `target_columns` to request stats for all columns.
+    pub async fn get_table_stats(
+        &self,
+        table_id: TableId,
+        buckets_req: Vec<BucketStatsRequest>,
+        target_columns: Vec<i32>,
+    ) -> Result<TableStats> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(GetTableStatsRequest::new(
+                table_id,
+                buckets_req,
+                target_columns,
+            ))
+            .await?;
+        Ok(TableStats::from_pb(&response))
+    }
+
+    /// Get the latest KV snapshots for a table (optionally scoped to one partition).
+    pub async fn get_latest_kv_snapshots(
+        &self,
+        table_path: &TablePath,
+        partition_name: Option<&str>,
+    ) -> Result<LatestKvSnapshots> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(GetLatestKvSnapshotsRequest::new(table_path, partition_name))
+            .await?;
+        Ok(LatestKvSnapshots::from_pb(&response))
+    }
+
+    /// Get KV snapshot metadata (manifest file list).
+    pub async fn get_kv_snapshot_metadata(
+        &self,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+        bucket_id: BucketId,
+        snapshot_id: i64,
+    ) -> Result<KvSnapshotMetadata> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(GetKvSnapshotMetadataRequest::new(
+                table_id,
+                partition_id,
+                bucket_id,
+                snapshot_id,
+            ))
+            .await?;
+        Ok(KvSnapshotMetadata::from_pb(&response))
+    }
+
+    /// Acquire a KV snapshot lease. Returns the snapshots the server could not lease.
+    pub async fn create_kv_snapshot_lease(
+        &self,
+        lease_id: &str,
+        lease_duration_ms: i64,
+        snapshots_to_lease: Vec<KvSnapshotLeaseForTable>,
+    ) -> Result<AcquireKvSnapshotLeaseResult> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(AcquireKvSnapshotLeaseRequest::new(
+                lease_id,
+                lease_duration_ms,
+                snapshots_to_lease,
+            ))
+            .await?;
+        Ok(AcquireKvSnapshotLeaseResult::from_pb(&response))
+    }
+
+    /// Get a specific lake snapshot for a table.
+    pub async fn get_lake_snapshot(
+        &self,
+        table_path: &TablePath,
+        snapshot_id: Option<i64>,
+        readable: Option<bool>,
+    ) -> Result<LakeSnapshotInfo> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(GetLakeSnapshotRequest::new(
+                table_path,
+                snapshot_id,
+                readable,
+            ))
+            .await?;
+        Ok(LakeSnapshotInfo::from_pb(&response))
+    }
+
+    /// Create ACLs. Returns one result per submitted ACL (success or per-ACL error).
+    pub async fn create_acls(&self, acls: Vec<AclInfo>) -> Result<Vec<CreateAclResult>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(CreateAclsRequest::new(acls))
+            .await?;
+        response
+            .acl_res
+            .iter()
+            .map(CreateAclResult::from_pb)
+            .collect()
+    }
+
+    /// List ACLs matching a filter.
+    pub async fn list_acls(&self, acl_filter: AclFilter) -> Result<Vec<AclInfo>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(ListAclsRequest::new(acl_filter))
+            .await?;
+        response.acl.iter().map(AclInfo::from_pb).collect()
+    }
+
+    /// Drop ACLs matching filters. Returns one result per submitted filter.
+    pub async fn drop_acls(
+        &self,
+        acl_filters: Vec<AclFilter>,
+    ) -> Result<Vec<DropAclsFilterResult>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(DropAclsRequest::new(acl_filters))
+            .await?;
+        response
+            .filter_results
+            .iter()
+            .map(DropAclsFilterResult::from_pb)
+            .collect()
+    }
+
+    /// Describe cluster configuration.
+    pub async fn describe_cluster_configs(&self) -> Result<Vec<DescribeConfig>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(DescribeClusterConfigsRequest::new())
+            .await?;
+        Ok(response
+            .configs
+            .iter()
+            .map(DescribeConfig::from_pb)
+            .collect())
+    }
+
+    /// Alter cluster configuration.
+    pub async fn alter_cluster_configs(&self, alter_configs: Vec<AlterConfig>) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(AlterClusterConfigsRequest::new(alter_configs))
+            .await?;
+        Ok(())
+    }
+
+    /// Add a tag to servers.
+    pub async fn add_server_tag(&self, server_ids: Vec<i32>, server_tag: ServerTag) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(AddServerTagRequest::new(server_ids, server_tag))
+            .await?;
+        Ok(())
+    }
+
+    /// Remove a tag from servers.
+    pub async fn remove_server_tag(
+        &self,
+        server_ids: Vec<i32>,
+        server_tag: ServerTag,
+    ) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(RemoveServerTagRequest::new(server_ids, server_tag))
+            .await?;
+        Ok(())
+    }
+
+    /// Trigger a rebalance. Returns the rebalance id assigned by the server.
+    pub async fn rebalance(&self, goals: Vec<GoalType>) -> Result<String> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(RebalanceRequest::new(goals))
+            .await?;
+        Ok(response.rebalance_id)
+    }
+
+    /// List rebalance progress (for a specific rebalance id, or all in-flight ones if `None`).
+    pub async fn list_rebalance_progress(
+        &self,
+        rebalance_id: Option<&str>,
+    ) -> Result<RebalanceProgress> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(ListRebalanceProgressRequest::new(rebalance_id))
+            .await?;
+        RebalanceProgress::from_pb(&response)
+    }
+
+    /// Cancel a rebalance.
+    pub async fn cancel_rebalance(&self, rebalance_id: Option<&str>) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(CancelRebalanceRequest::new(rebalance_id))
+            .await?;
+        Ok(())
+    }
+
+    /// Register producer offsets. Returns the server-side registration outcome (if any).
+    pub async fn register_producer_offsets(
+        &self,
+        producer_id: &str,
+        table_offsets: Vec<ProducerTableOffsets>,
+        ttl_ms: Option<i64>,
+    ) -> Result<Option<RegisterProducerResult>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(RegisterProducerOffsetsRequest::new(
+                producer_id,
+                table_offsets,
+                ttl_ms,
+            ))
+            .await?;
+        response
+            .result
+            .map(RegisterProducerResult::try_from_i32)
+            .transpose()
+    }
+
+    /// Get producer offsets.
+    pub async fn get_producer_offsets(&self, producer_id: &str) -> Result<ProducerOffsets> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(GetProducerOffsetsRequest::new(producer_id))
+            .await?;
+        Ok(ProducerOffsets::from_pb(&response))
+    }
+
+    /// Delete producer offsets.
+    pub async fn delete_producer_offsets(&self, producer_id: &str) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(DeleteProducerOffsetsRequest::new(producer_id))
+            .await?;
+        Ok(())
+    }
+
+    /// Get cluster health status.
+    pub async fn get_cluster_health(&self) -> Result<ClusterHealth> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(GetClusterHealthRequest::new())
+            .await?;
+        ClusterHealth::from_pb(&response)
+    }
+
+    /// List remote log manifests for a table (optionally scoped to one partition).
+    pub async fn list_remote_log_manifests(
+        &self,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+    ) -> Result<Vec<RemoteLogManifestEntry>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(ListRemoteLogManifestsRequest::new(table_id, partition_id))
+            .await?;
+        Ok(response
+            .manifests
+            .iter()
+            .map(RemoteLogManifestEntry::from_pb)
+            .collect())
+    }
+
+    /// List active KV snapshots for a table (optionally scoped to one partition).
+    pub async fn list_kv_snapshots(
+        &self,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+    ) -> Result<ActiveKvSnapshots> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(ListKvSnapshotsRequest::new(table_id, partition_id))
+            .await?;
+        Ok(ActiveKvSnapshots::from_pb(&response))
+    }
+
+    /// Release specific bucket snapshots from a KV snapshot lease.
+    pub async fn release_kv_snapshot_lease(
+        &self,
+        lease_id: &str,
+        buckets_to_release: Vec<TableBucket>,
+    ) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(ReleaseKvSnapshotLeaseRequest::new(
+                lease_id,
+                buckets_to_release,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Drop an entire KV snapshot lease.
+    pub async fn drop_kv_snapshot_lease(&self, lease_id: &str) -> Result<()> {
+        let _response = self
+            .admin_gateway()
+            .await?
+            .request(DropKvSnapshotLeaseRequest::new(lease_id))
+            .await?;
+        Ok(())
     }
 }

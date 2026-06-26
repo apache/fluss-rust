@@ -18,6 +18,7 @@
 use crate::error::Error::JsonSerdeError;
 use crate::error::Result;
 use crate::metadata::JsonSerde;
+use crate::proto::PbDatabaseSummary;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -202,6 +203,24 @@ impl DatabaseDescriptor {
         serde_json::to_vec(&json_value).map_err(|e| JsonSerdeError {
             message: format!("Failed to serialize to JSON: {e}"),
         })
+    }
+}
+
+/// Lightweight summary of a database returned by `list_database_summaries`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseSummary {
+    pub database_name: String,
+    pub created_time: i64,
+    pub table_count: i32,
+}
+
+impl DatabaseSummary {
+    pub fn from_pb(pb: &PbDatabaseSummary) -> Self {
+        Self {
+            database_name: pb.database_name.clone(),
+            created_time: pb.created_time,
+            table_count: pb.table_count,
+        }
     }
 }
 

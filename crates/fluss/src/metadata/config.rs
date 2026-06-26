@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::error::{Error, Result};
-use crate::proto::PbAlterConfig;
+use crate::proto::{PbAlterConfig, PbDescribeConfig};
 
 /// Mirrors Java `org.apache.fluss.config.cluster.AlterConfigOpType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +85,33 @@ impl AlterConfig {
             config_value: pb.config_value.clone(),
             op_type: AlterConfigOpType::try_from_i32(pb.op_type)?,
         })
+    }
+}
+
+/// One entry in the response of `describe_cluster_configs`. Mirrors Java's
+/// `org.apache.fluss.config.cluster.DescribeConfig`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescribeConfig {
+    pub config_key: String,
+    pub config_value: Option<String>,
+    pub config_source: String,
+}
+
+impl DescribeConfig {
+    pub fn from_pb(pb: &PbDescribeConfig) -> Self {
+        Self {
+            config_key: pb.config_key.clone(),
+            config_value: pb.config_value.clone(),
+            config_source: pb.config_source.clone(),
+        }
+    }
+
+    pub fn to_pb(&self) -> PbDescribeConfig {
+        PbDescribeConfig {
+            config_key: self.config_key.clone(),
+            config_value: self.config_value.clone(),
+            config_source: self.config_source.clone(),
+        }
     }
 }
 

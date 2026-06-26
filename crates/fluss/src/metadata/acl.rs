@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::error::{Error, Result};
-use crate::proto::{PbAclFilter, PbAclInfo};
+use crate::proto::{
+    PbAclFilter, PbAclInfo, PbCreateAclRespInfo, PbDropAclsFilterResult, PbDropAclsMatchingAcl,
+};
 
 /// Mirrors Java `org.apache.fluss.security.acl.ResourceType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +195,76 @@ impl AclFilter {
             host: pb.host.clone(),
             operation_type: OperationType::try_from_i32(pb.operation_type)?,
             permission_type: PermissionType::try_from_i32(pb.permission_type)?,
+        })
+    }
+}
+
+/// One per ACL submitted to `create_acls`: success or a server-side error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateAclResult {
+    pub acl: AclInfo,
+    pub error: Option<AclError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AclError {
+    pub code: i32,
+    pub message: Option<String>,
+}
+
+impl CreateAclResult {
+    pub fn from_pb(pb: &PbCreateAclRespInfo) -> Result<Self> {
+        Ok(Self {
+            acl: AclInfo::from_pb(&pb.acl)?,
+            error: pb.error_code.map(|code| AclError {
+                code,
+                message: pb.error_message.clone(),
+            }),
+        })
+    }
+}
+
+/// One ACL matched by a filter in `drop_acls`. Reports the bound ACL and any
+/// server-side error encountered while dropping it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropAclMatchingAcl {
+    pub acl: AclInfo,
+    pub error: Option<AclError>,
+}
+
+impl DropAclMatchingAcl {
+    pub fn from_pb(pb: &PbDropAclsMatchingAcl) -> Result<Self> {
+        Ok(Self {
+            acl: AclInfo::from_pb(&pb.acl)?,
+            error: pb.error_code.map(|code| AclError {
+                code,
+                message: pb.error_message.clone(),
+            }),
+        })
+    }
+}
+
+/// One per filter submitted to `drop_acls`: the matching ACLs that were
+/// targeted plus any filter-level error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DropAclsFilterResult {
+    pub matching_acls: Vec<DropAclMatchingAcl>,
+    pub error: Option<AclError>,
+}
+
+impl DropAclsFilterResult {
+    pub fn from_pb(pb: &PbDropAclsFilterResult) -> Result<Self> {
+        let matching_acls = pb
+            .matching_acls
+            .iter()
+            .map(DropAclMatchingAcl::from_pb)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            matching_acls,
+            error: pb.error_code.map(|code| AclError {
+                code,
+                message: pb.error_message.clone(),
+            }),
         })
     }
 }
