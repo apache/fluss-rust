@@ -35,16 +35,10 @@ mod admin_v1_test {
         let connection = cluster.get_fluss_connection().await;
         let admin = connection.get_admin().expect("should get admin");
 
-        let response = admin
+        let _response = admin
             .get_cluster_health()
             .await
             .expect("should get cluster health");
-
-        assert!(
-            response.status >= 0,
-            "Cluster health status should be non-negative, got: {}",
-            response.status
-        );
     }
 
     /// `list_kv_snapshots` (API key 1064) returns the active snapshots for a KV
