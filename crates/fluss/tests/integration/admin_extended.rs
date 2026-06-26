@@ -306,13 +306,13 @@ mod admin_extended_test {
         // AlterDatabase is not implemented on every server build (e.g. 0.9.x).
         // Accept the server's "unsupported" signal but never a transport failure.
         match admin
-            .alter_database(db_name, vec![config_change], false)
+            .alter_database(db_name, vec![config_change], None, false)
             .await
         {
             Ok(()) => {
                 // Altering a non-existent database with ignore_if_not_exists = true is a no-op.
                 admin
-                    .alter_database("no_such_db_for_alter", vec![], true)
+                    .alter_database("no_such_db_for_alter", vec![], None, true)
                     .await
                     .expect("altering missing db with ignore flag should succeed");
             }
