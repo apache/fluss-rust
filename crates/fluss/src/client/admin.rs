@@ -19,12 +19,12 @@ use crate::client::metadata::Metadata;
 use crate::cluster::ServerNode;
 use crate::metadata::{
     AclFilter, AclInfo, AcquireKvSnapshotLeaseResult, ActiveKvSnapshots, AlterConfig,
-    AlterTableChanges, ClusterHealth, CreateAclResult, DatabaseDescriptor, DatabaseInfo,
-    DatabaseSummary, DescribeConfig, DropAclsFilterResult, GoalType, JsonSerde,
+    AlterTableChanges, BucketStatsRequest, ClusterHealth, CreateAclResult, DatabaseDescriptor,
+    DatabaseInfo, DatabaseSummary, DescribeConfig, DropAclsFilterResult, GoalType, JsonSerde,
     KvSnapshotLeaseForTable, KvSnapshotMetadata, LakeSnapshot, LakeSnapshotInfo, LatestKvSnapshots,
     PartitionInfo, PartitionSpec, PhysicalTablePath, ProducerOffsets, ProducerTableOffsets,
-    RebalanceProgress, RemoteLogManifestEntry, Schema, SchemaInfo, ServerTag, TableBucket,
-    TableDescriptor, TableInfo, TablePath, TableStats,
+    RebalanceProgress, RegisterProducerResult, RemoteLogManifestEntry, Schema, SchemaInfo,
+    ServerTag, TableBucket, TableDescriptor, TableInfo, TablePath, TableStats,
 };
 use crate::rpc::message::{
     AcquireKvSnapshotLeaseRequest, AddServerTagRequest, AlterClusterConfigsRequest,
@@ -511,11 +511,12 @@ impl FlussAdmin {
             .collect())
     }
 
-    /// Alter a database's configuration.
+    /// Alter a database: config changes and/or an updated comment.
     pub async fn alter_database(
         &self,
         name: &str,
         config_changes: Vec<AlterConfig>,
+        comment: Option<&str>,
         ignore_if_not_exists: bool,
     ) -> Result<()> {
         let _response = self
@@ -525,6 +526,7 @@ impl FlussAdmin {
                 name,
                 ignore_if_not_exists,
                 config_changes,
+                comment,
             ))
             .await?;
         Ok(())
@@ -558,7 +560,7 @@ impl FlussAdmin {
     pub async fn get_table_stats(
         &self,
         table_id: TableId,
-        buckets_req: Vec<crate::metadata::BucketStatsRequest>,
+        buckets_req: Vec<BucketStatsRequest>,
         target_columns: Vec<i32>,
     ) -> Result<TableStats> {
         let response = self
@@ -647,11 +649,11 @@ impl FlussAdmin {
     }
 
     /// Create ACLs. Returns one result per submitted ACL (success or per-ACL error).
-    pub async fn create_acls(&self, acl: Vec<AclInfo>) -> Result<Vec<CreateAclResult>> {
+    pub async fn create_acls(&self, acls: Vec<AclInfo>) -> Result<Vec<CreateAclResult>> {
         let response = self
             .admin_gateway()
             .await?
-            .request(CreateAclsRequest::new(acl))
+            .request(CreateAclsRequest::new(acls))
             .await?;
         response
             .acl_res
@@ -671,11 +673,14 @@ impl FlussAdmin {
     }
 
     /// Drop ACLs matching filters. Returns one result per submitted filter.
-    pub async fn drop_acls(&self, acl_filter: Vec<AclFilter>) -> Result<Vec<DropAclsFilterResult>> {
+    pub async fn drop_acls(
+        &self,
+        acl_filters: Vec<AclFilter>,
+    ) -> Result<Vec<DropAclsFilterResult>> {
         let response = self
             .admin_gateway()
             .await?
-            .request(DropAclsRequest::new(acl_filter))
+            .request(DropAclsRequest::new(acl_filters))
             .await?;
         response
             .filter_results
@@ -765,13 +770,13 @@ impl FlussAdmin {
         Ok(())
     }
 
-    /// Register producer offsets. Returns the server-side result code (if any).
+    /// Register producer offsets. Returns the server-side registration outcome (if any).
     pub async fn register_producer_offsets(
         &self,
         producer_id: &str,
         table_offsets: Vec<ProducerTableOffsets>,
         ttl_ms: Option<i64>,
-    ) -> Result<Option<i32>> {
+    ) -> Result<Option<RegisterProducerResult>> {
         let response = self
             .admin_gateway()
             .await?
@@ -781,7 +786,10 @@ impl FlussAdmin {
                 ttl_ms,
             ))
             .await?;
-        Ok(response.result)
+        response
+            .result
+            .map(RegisterProducerResult::try_from_i32)
+            .transpose()
     }
 
     /// Get producer offsets.

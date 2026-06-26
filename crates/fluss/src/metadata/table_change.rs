@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::AlterConfig;
 use crate::error::{Error, Result};
 use crate::proto::{PbAddColumn, PbDropColumn, PbModifyColumn, PbRenameColumn};
 
@@ -126,7 +127,7 @@ impl RenameColumn {
 /// config changes.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AlterTableChanges {
-    pub config_changes: Vec<crate::metadata::AlterConfig>,
+    pub config_changes: Vec<AlterConfig>,
     pub add_columns: Vec<AddColumn>,
     pub drop_columns: Vec<DropColumn>,
     pub rename_columns: Vec<RenameColumn>,

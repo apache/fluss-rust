@@ -33,13 +33,14 @@ impl AlterDatabaseRequest {
         database_name: &str,
         ignore_if_not_exists: bool,
         config_changes: Vec<AlterConfig>,
+        comment: Option<&str>,
     ) -> Self {
         AlterDatabaseRequest {
             inner_request: proto::AlterDatabaseRequest {
                 database_name: database_name.to_string(),
                 ignore_if_not_exists,
                 config_changes: config_changes.iter().map(AlterConfig::to_pb).collect(),
-                comment: None,
+                comment: comment.map(str::to_string),
             },
         }
     }

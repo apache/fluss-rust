@@ -18,6 +18,7 @@
 use crate::error::Error::JsonSerdeError;
 use crate::error::Result;
 use crate::metadata::JsonSerde;
+use crate::proto::PbDatabaseSummary;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -214,7 +215,7 @@ pub struct DatabaseSummary {
 }
 
 impl DatabaseSummary {
-    pub fn from_pb(pb: &crate::proto::PbDatabaseSummary) -> Self {
+    pub fn from_pb(pb: &PbDatabaseSummary) -> Self {
         Self {
             database_name: pb.database_name.clone(),
             created_time: pb.created_time,
