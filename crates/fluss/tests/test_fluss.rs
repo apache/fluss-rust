@@ -31,6 +31,6 @@ mod integration {
 
     mod utils;
 
-    mod table_remote_scan;
     mod dynamic_batch_size;
+    mod table_remote_scan;
 }
