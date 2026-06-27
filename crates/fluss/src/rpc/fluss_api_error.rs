@@ -171,6 +171,14 @@ pub enum FlussError {
     InvalidAlterTableException = 56,
     /// Deletion operations are disabled on this table.
     DeletionDisabledException = 57,
+    /// The scanner has expired on the server.
+    ScannerExpiredException = 66,
+    /// The scanner id is unknown to the server.
+    UnknownScannerIdException = 67,
+    /// The scan request is invalid.
+    InvalidScanRequestException = 68,
+    /// Too many scanners are open on the server.
+    TooManyScanners = 69,
 }
 
 impl FlussError {
@@ -195,6 +203,8 @@ impl FlussError {
                 | FlussError::NotEnoughReplicasAfterAppendException
                 | FlussError::NotEnoughReplicasException
                 | FlussError::LeaderNotAvailableException
+                | FlussError::ScannerExpiredException
+                | FlussError::TooManyScanners
         )
     }
 
@@ -298,6 +308,10 @@ impl FlussError {
             FlussError::DeletionDisabledException => {
                 "Deletion operations are disabled on this table."
             }
+            FlussError::ScannerExpiredException => "The scanner has expired on the server.",
+            FlussError::UnknownScannerIdException => "The scanner id is unknown to the server.",
+            FlussError::InvalidScanRequestException => "The scan request is invalid.",
+            FlussError::TooManyScanners => "Too many scanners are open on the server.",
         }
     }
 
@@ -372,6 +386,10 @@ impl FlussError {
             55 => FlussError::IneligibleReplicaException,
             56 => FlussError::InvalidAlterTableException,
             57 => FlussError::DeletionDisabledException,
+            66 => FlussError::ScannerExpiredException,
+            67 => FlussError::UnknownScannerIdException,
+            68 => FlussError::InvalidScanRequestException,
+            69 => FlussError::TooManyScanners,
             _ => FlussError::UnknownServerError,
         }
     }
@@ -473,6 +491,8 @@ mod tests {
             FlussError::NotEnoughReplicasAfterAppendException,
             FlussError::NotEnoughReplicasException,
             FlussError::LeaderNotAvailableException,
+            FlussError::ScannerExpiredException,
+            FlussError::TooManyScanners,
         ];
         for err in &retriable {
             assert!(err.is_retriable(), "{err:?} should be retriable");
@@ -493,6 +513,8 @@ mod tests {
             FlussError::FencedLeaderEpochException,
             FlussError::FencedTieringEpochException,
             FlussError::RetriableAuthenticateException,
+            FlussError::UnknownScannerIdException,
+            FlussError::InvalidScanRequestException,
         ];
         for err in &non_retriable {
             assert!(!err.is_retriable(), "{err:?} should not be retriable");

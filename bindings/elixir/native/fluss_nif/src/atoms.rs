@@ -100,6 +100,10 @@ rustler::atoms! {
     ineligible_replica_exception,
     invalid_alter_table_exception,
     deletion_disabled_exception,
+    scanner_expired_exception,
+    unknown_scanner_id_exception,
+    invalid_scan_request_exception,
+    too_many_scanners,
     client_error,
 }
 
@@ -212,6 +216,10 @@ fn api_error_atom(code: i32) -> Atom {
         FlussError::IneligibleReplicaException => ineligible_replica_exception(),
         FlussError::InvalidAlterTableException => invalid_alter_table_exception(),
         FlussError::DeletionDisabledException => deletion_disabled_exception(),
+        FlussError::ScannerExpiredException => scanner_expired_exception(),
+        FlussError::UnknownScannerIdException => unknown_scanner_id_exception(),
+        FlussError::InvalidScanRequestException => invalid_scan_request_exception(),
+        FlussError::TooManyScanners => too_many_scanners(),
     }
 }
 
