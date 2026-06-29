@@ -131,6 +131,36 @@ if (result.Found()) {
 }
 ```
 
+## Subscribing to the Changelog (CDC)
+
+Every primary key table maintains a changelog of its row-level changes. Read it with a record-mode `LogScanner` — the same API used for [log tables](./log-tables.md) — to stream CDC events. Each `ScanRecord` carries a `change_type`: `+I` (insert), `-U` / `+U` (the old and new images of an update), and `-D` (delete, carrying the old row).
+
+```cpp
+fluss::LogScanner log_scanner;
+table.NewScan().CreateLogScanner(log_scanner);
+
+// Subscribe to every bucket from the start of the changelog.
+int32_t num_buckets = table.GetTableInfo().num_buckets;
+for (int32_t bucket_id = 0; bucket_id < num_buckets; ++bucket_id) {
+    log_scanner.Subscribe(bucket_id, fluss::EARLIEST_OFFSET);
+}
+
+while (true) {
+    fluss::ScanRecords records;
+    log_scanner.Poll(3000, records);
+    if (records.IsEmpty()) {
+        break;  // caught up to the end of the changelog
+    }
+    for (auto rec : records) {
+        // rec.change_type is +I / -U / +U / -D (see ChangeTypeShortString in the API reference)
+        std::cout << ChangeTypeShortString(rec.change_type) << " " << rec.row.GetInt32(0) << " "
+                  << rec.row.GetString(1) << std::endl;
+    }
+}
+```
+
+With the default changelog mode (`'table.changelog.image' = 'FULL'`), updating a key emits a `-U`/`+U` pair and deleting it emits `-D`; the `WAL` mode emits only `+U` on update. To resume from a committed position instead of the start, `Subscribe` at a specific offset.
+
 ## Limit Scan
 
 To read up to `n` rows of a bucket's current state without supplying keys, use a batch scanner. The server returns the deduplicated current rows as Arrow batches, convenient for previews or analytics.

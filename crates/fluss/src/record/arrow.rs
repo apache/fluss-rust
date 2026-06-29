@@ -84,6 +84,12 @@ pub const RECORD_BATCH_HEADER_SIZE: usize = RECORDS_OFFSET;
 pub const ARROW_CHANGETYPE_OFFSET: usize = RECORD_BATCH_HEADER_SIZE;
 pub const LOG_OVERHEAD: usize = LENGTH_OFFSET + LENGTH_LENGTH;
 
+/// Bit 0 of the attributes byte. When set, the batch is append-only and carries
+/// no change-type vector; when clear, a `record_count`-byte change-type vector
+/// precedes the Arrow IPC payload (the changelog of a primary-key table). Shares
+/// the wire layout of the Java client's `DefaultLogRecordBatch`.
+pub const APPEND_ONLY_FLAG_MASK: u8 = 0x01;
+
 /// Maximum batch size matches Java's Integer.MAX_VALUE limit.
 /// Java uses int type for batch size, so max value is 2^31 - 1 = 2,147,483,647 bytes (~2GB).
 /// This is the implicit limit in FileLogRecords.java and other Java components.
@@ -952,6 +958,11 @@ impl LogRecordBatch {
         self.data[ATTRIBUTES_OFFSET]
     }
 
+    /// Whether this batch is append-only (see [`APPEND_ONLY_FLAG_MASK`]).
+    fn is_append_only(&self) -> bool {
+        self.attributes() & APPEND_ONLY_FLAG_MASK != 0
+    }
+
     pub fn next_log_offset(&self) -> i64 {
         self.last_log_offset() + 1
     }
@@ -990,28 +1001,77 @@ impl LogRecordBatch {
         LittleEndian::read_i32(&self.data[offset..offset + RECORDS_COUNT_LENGTH])
     }
 
+    /// Splits the batch body into its per-record change types and the trailing
+    /// Arrow IPC payload (see [`APPEND_ONLY_FLAG_MASK`] for the layout).
+    fn decode_change_types(&self) -> Result<(BatchChangeTypes, &[u8])> {
+        let body = self
+            .data
+            .get(RECORDS_OFFSET..)
+            .ok_or_else(|| Error::UnexpectedError {
+                message: format!(
+                    "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
+                    self.data.len(),
+                    RECORDS_OFFSET
+                ),
+                source: None,
+            })?;
+
+        if self.is_append_only() {
+            return Ok((BatchChangeTypes::Uniform(ChangeType::AppendOnly), body));
+        }
+
+        let record_count = self.record_count();
+        if record_count < 0 {
+            return Err(Error::UnexpectedError {
+                message: format!("Corrupt changelog batch: negative record count {record_count}"),
+                source: None,
+            });
+        }
+        let record_count = record_count as usize;
+        let (change_type_bytes, arrow_data) =
+            body.split_at_checked(record_count)
+                .ok_or_else(|| Error::UnexpectedError {
+                    message: format!(
+                        "Corrupt changelog batch: body length {} is smaller than its \
+                         {record_count}-record change-type vector",
+                        body.len()
+                    ),
+                    source: None,
+                })?;
+
+        let mut change_types = Vec::with_capacity(record_count);
+        for &byte in change_type_bytes {
+            let change_type =
+                ChangeType::from_byte_value(byte).map_err(|message| Error::UnexpectedError {
+                    message,
+                    source: None,
+                })?;
+            change_types.push(change_type);
+        }
+
+        Ok((BatchChangeTypes::PerRecord(change_types), arrow_data))
+    }
+
     pub fn records(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
         if self.record_count() == 0 {
             return Ok(LogRecordIterator::empty());
         }
 
-        let data = &self.data[RECORDS_OFFSET..];
-
-        let record_batch = read_context.record_batch(data)?;
+        let (change_types, arrow_data) = self.decode_change_types()?;
+        let record_batch = read_context.record_batch(arrow_data)?;
         let arrow_reader = ArrowReader::new_with_fluss_row_type(
             Arc::new(record_batch),
             read_context.row_type.clone(),
             read_context.fluss_row_type().cloned(),
         )?;
-        let log_record_iterator = LogRecordIterator::Arrow(ArrowLogRecordIterator {
-            reader: arrow_reader,
-            base_offset: self.base_log_offset(),
-            timestamp: self.commit_timestamp(),
-            row_id: 0,
-            change_type: ChangeType::AppendOnly,
-        });
+        let iterator = ArrowLogRecordIterator::new(
+            arrow_reader,
+            self.base_log_offset(),
+            self.commit_timestamp(),
+            change_types,
+        )?;
 
-        Ok(log_record_iterator)
+        Ok(LogRecordIterator::Arrow(iterator))
     }
 
     pub fn records_for_remote_log(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
@@ -1019,9 +1079,8 @@ impl LogRecordBatch {
             return Ok(LogRecordIterator::empty());
         }
 
-        let data = &self.data[RECORDS_OFFSET..];
-
-        let record_batch = read_context.record_batch_for_remote_log(data)?;
+        let (change_types, arrow_data) = self.decode_change_types()?;
+        let record_batch = read_context.record_batch_for_remote_log(arrow_data)?;
         let log_record_iterator = match record_batch {
             None => LogRecordIterator::empty(),
             Some(record_batch) => {
@@ -1030,13 +1089,13 @@ impl LogRecordBatch {
                     read_context.row_type.clone(),
                     read_context.fluss_row_type().cloned(),
                 )?;
-                LogRecordIterator::Arrow(ArrowLogRecordIterator {
-                    reader: arrow_reader,
-                    base_offset: self.base_log_offset(),
-                    timestamp: self.commit_timestamp(),
-                    row_id: 0,
-                    change_type: ChangeType::AppendOnly,
-                })
+                let iterator = ArrowLogRecordIterator::new(
+                    arrow_reader,
+                    self.base_log_offset(),
+                    self.commit_timestamp(),
+                    change_types,
+                )?;
+                LogRecordIterator::Arrow(iterator)
             }
         };
         Ok(log_record_iterator)
@@ -1051,18 +1110,9 @@ impl LogRecordBatch {
             return Ok(RecordBatch::new_empty(read_context.target_schema.clone()));
         }
 
-        let data = self
-            .data
-            .get(RECORDS_OFFSET..)
-            .ok_or_else(|| Error::UnexpectedError {
-                message: format!(
-                    "Corrupt log record batch: data length {} is less than RECORDS_OFFSET {}",
-                    self.data.len(),
-                    RECORDS_OFFSET
-                ),
-                source: None,
-            })?;
-        read_context.record_batch(data)
+        // Batch access drops the change-type vector; use `records()` for CDC.
+        let (_, arrow_data) = self.decode_change_types()?;
+        read_context.record_batch(arrow_data)
     }
 }
 
@@ -1645,24 +1695,63 @@ impl Iterator for LogRecordIterator {
     }
 }
 
+/// Per-record change types decoded from a log batch.
+///
+/// Append-only batches carry no change-type vector on the wire, so a single
+/// `AppendOnly` value covers every record without allocating. Changelog batches
+/// (the CDC stream of a primary-key table) decode one change type per record,
+/// in record order.
+enum BatchChangeTypes {
+    /// Every record shares this change type (append-only batches).
+    Uniform(ChangeType),
+    /// One change type per record, indexed by row id (changelog batches).
+    PerRecord(Vec<ChangeType>),
+}
+
+impl BatchChangeTypes {
+    fn get(&self, row_id: usize) -> ChangeType {
+        match self {
+            BatchChangeTypes::Uniform(change_type) => *change_type,
+            BatchChangeTypes::PerRecord(change_types) => change_types[row_id],
+        }
+    }
+}
+
 pub struct ArrowLogRecordIterator {
     reader: ArrowReader,
     base_offset: i64,
     timestamp: i64,
     row_id: usize,
-    change_type: ChangeType,
+    change_types: BatchChangeTypes,
 }
 
-#[allow(dead_code)]
 impl ArrowLogRecordIterator {
-    fn new(reader: ArrowReader, base_offset: i64, timestamp: i64, change_type: ChangeType) -> Self {
-        Self {
+    fn new(
+        reader: ArrowReader,
+        base_offset: i64,
+        timestamp: i64,
+        change_types: BatchChangeTypes,
+    ) -> Result<Self> {
+        if let BatchChangeTypes::PerRecord(ref change_types) = change_types {
+            if change_types.len() != reader.row_count() {
+                return Err(Error::UnexpectedError {
+                    message: format!(
+                        "Changelog batch decode mismatch: {} change types for {} Arrow rows",
+                        change_types.len(),
+                        reader.row_count()
+                    ),
+                    source: None,
+                });
+            }
+        }
+
+        Ok(Self {
             reader,
             base_offset,
             timestamp,
             row_id: 0,
-            change_type,
-        }
+            change_types,
+        })
     }
 }
 
@@ -1679,7 +1768,7 @@ impl Iterator for ArrowLogRecordIterator {
             columnar_row,
             self.base_offset + self.row_id as i64,
             self.timestamp,
-            self.change_type,
+            self.change_types.get(self.row_id),
         );
         self.row_id += 1;
         Some(scan_record)
@@ -1720,7 +1809,12 @@ pub struct MyVec<T>(pub StreamReader<T>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{DataField, DataTypes, RowType};
+    use crate::client::WriteRecord;
+    use crate::compression::{
+        ArrowCompressionInfo, ArrowCompressionType, DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+    };
+    use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
+    use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::build_table_info;
 
     #[test]
@@ -2348,5 +2442,165 @@ mod tests {
         assert_eq!(batch.record_count(), 2);
 
         Ok(())
+    }
+
+    /// Builds an append-only `(id INT, name STRING)` Arrow log batch from `rows`.
+    /// The writer always emits append-only batches, so changelog tests derive
+    /// their bytes from this with [`splice_change_type_vector`].
+    fn build_append_only_batch(rows: &[(i32, &str)]) -> (RowType, Vec<u8>) {
+        let row_type = RowType::new(vec![
+            DataField::new("id".to_string(), DataTypes::int(), None),
+            DataField::new("name".to_string(), DataTypes::string(), None),
+        ]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            1,
+            &row_type,
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )
+        .unwrap();
+
+        for (id, name) in rows {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, *id);
+            row.set_field(1, *name);
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                physical_table_path.clone(),
+                1,
+                &row,
+            );
+            builder.append(&record).unwrap();
+        }
+
+        (row_type, builder.build().unwrap())
+    }
+
+    /// Turns an append-only batch into a wire-valid changelog batch: clears the
+    /// append-only flag, splices one change-type byte per record between the
+    /// header and the Arrow payload, then fixes up the length field and CRC.
+    fn splice_change_type_vector(append_only: &[u8], change_types: &[ChangeType]) -> Vec<u8> {
+        let mut data = append_only.to_vec();
+        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
+        let change_bytes = change_types.iter().map(|ct| ct.to_byte_value());
+        data.splice(RECORDS_OFFSET..RECORDS_OFFSET, change_bytes);
+
+        let new_length = (data.len() - LOG_OVERHEAD) as i32;
+        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
+            .copy_from_slice(&new_length.to_le_bytes());
+
+        let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
+        data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn decode_changelog_batch_applies_per_record_change_types() -> Result<()> {
+        let (row_type, append_only) =
+            build_append_only_batch(&[(1, "alice"), (2, "bob"), (3, "carol")]);
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
+
+        // Append-only batch: every record decodes as AppendOnly (regression guard).
+        let batch = LogRecordsBatches::new(append_only.clone())
+            .next()
+            .expect("append-only batch")?;
+        assert!(batch.is_append_only());
+        let records: Vec<_> = batch.records(&read_context)?.collect();
+        assert_eq!(records.len(), 3);
+        assert!(
+            records
+                .iter()
+                .all(|r| *r.change_type() == ChangeType::AppendOnly)
+        );
+
+        // Changelog variant: the spliced change-type vector drives per-record types.
+        let change_types = [
+            ChangeType::Insert,
+            ChangeType::UpdateAfter,
+            ChangeType::Delete,
+        ];
+        let changelog = splice_change_type_vector(&append_only, &change_types);
+        let batch = LogRecordsBatches::new(changelog)
+            .next()
+            .expect("changelog batch")?;
+        assert!(!batch.is_append_only());
+        assert_eq!(batch.record_count(), 3);
+
+        let records: Vec<_> = batch.records(&read_context)?.collect();
+        let got: Vec<ChangeType> = records.iter().map(|r| *r.change_type()).collect();
+        assert_eq!(got, change_types.to_vec());
+
+        // The row payload and offsets survive the splice unchanged.
+        let mut ids = Vec::new();
+        for record in &records {
+            ids.push(record.row().get_int(0)?);
+        }
+        assert_eq!(ids, vec![1, 2, 3]);
+        let offsets: Vec<i64> = records.iter().map(|r| r.offset()).collect();
+        assert_eq!(offsets, vec![0, 1, 2]);
+
+        // Batch-level access skips the change-type vector and still decodes rows.
+        let batch = LogRecordsBatches::new(splice_change_type_vector(&append_only, &change_types))
+            .next()
+            .expect("changelog batch")?;
+        assert_eq!(batch.record_batch(&read_context)?.num_rows(), 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn decode_changelog_batch_rejects_invalid_change_type_byte() {
+        let (row_type, append_only) = build_append_only_batch(&[(1, "a"), (2, "b")]);
+        let read_context = ReadContext::new(
+            to_arrow_schema(&row_type).unwrap(),
+            Arc::new(row_type),
+            false,
+        );
+
+        let mut changelog =
+            splice_change_type_vector(&append_only, &[ChangeType::Insert, ChangeType::Insert]);
+        // Corrupt the second change-type byte to an out-of-range value.
+        changelog[RECORDS_OFFSET + 1] = 99;
+
+        let batch = LogRecordBatch::new(Bytes::from(changelog));
+        let err = batch
+            .records(&read_context)
+            .err()
+            .expect("expected decode to reject an invalid change-type byte");
+        assert!(matches!(err, Error::UnexpectedError { .. }));
+        assert!(err.to_string().contains("change type"));
+    }
+
+    #[test]
+    fn decode_changelog_batch_rejects_truncated_change_type_vector() {
+        let (row_type, append_only) = build_append_only_batch(&[(1, "a"), (2, "b")]);
+        let read_context = ReadContext::new(
+            to_arrow_schema(&row_type).unwrap(),
+            Arc::new(row_type),
+            false,
+        );
+
+        // Clear the append-only flag, then cut the body shorter than the
+        // record_count change-type bytes the decoder now expects.
+        let mut data = append_only;
+        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
+        data.truncate(RECORDS_OFFSET + 1);
+
+        let batch = LogRecordBatch::new(Bytes::from(data));
+        assert_eq!(batch.record_count(), 2);
+        let err = batch
+            .records(&read_context)
+            .err()
+            .expect("expected decode to reject a truncated change-type vector");
+        assert!(matches!(err, Error::UnexpectedError { .. }));
     }
 }

@@ -97,8 +97,8 @@ Supports `async with` statement (async context manager).
 | `.project(indices) -> TableScan`                         | Project columns by index                                            |
 | `.project_by_name(names) -> TableScan`                   | Project columns by name                                             |
 | `.limit(n) -> TableScan`                                 | Set a positive row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
-| `await .create_log_scanner() -> LogScanner`              | Create record-based scanner (for `poll()`)                          |
-| `await .create_record_batch_log_scanner() -> LogScanner` | Create batch-based scanner (for `poll_arrow()`, `to_arrow()`, etc.) |
+| `await .create_log_scanner() -> LogScanner`              | Create record-based scanner (for `poll()`); on a primary-key table, subscribes to its CDC changelog (per-record `change_type`) |
+| `await .create_record_batch_log_scanner() -> LogScanner` | Create batch-based scanner (for `poll_arrow()`, `to_arrow()`, etc.); log tables only — no per-record change types |
 | `.create_bucket_batch_scanner(bucket) -> BatchScanner`   | Bounded scan of one bucket (requires `limit`; runs on first `next_batch()`) |
 
 ## `TableAppend`

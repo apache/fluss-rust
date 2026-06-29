@@ -24,7 +24,7 @@ use crate::client::table::remote_log::{
 use crate::error::{ApiError, Error, Result};
 use crate::metadata::TableBucket;
 use crate::record::{
-    LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
+    ChangeType, LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -463,6 +463,38 @@ impl DefaultCompletedFetch {
         }
     }
 
+    /// Pulls the next decoded record into `out`, returning whether one was
+    /// pushed. A fetch error is cached and surfaced on a later call rather than
+    /// propagated mid-batch (mirrors one iteration of Java
+    /// `CompletedFetch.fetchRecord`).
+    fn fetch_one_record(&mut self, out: &mut Vec<ScanRecord>) -> bool {
+        if self.cached_record_error.is_none() {
+            self.corrupt_last_record = true;
+            match self.next_fetched_record() {
+                Ok(Some(record)) => {
+                    self.corrupt_last_record = false;
+                    self.last_record = Some(record);
+                }
+                Ok(None) => {
+                    self.corrupt_last_record = false;
+                    self.last_record = None;
+                }
+                Err(e) => {
+                    self.cached_record_error = Some(e.to_string());
+                }
+            }
+        }
+
+        let Some(record) = self.last_record.take() else {
+            return false;
+        };
+
+        self.next_fetch_offset = record.offset() + 1;
+        self.records_read += 1;
+        out.push(record);
+        true
+    }
+
     fn fetch_error(&self) -> Error {
         let mut message = format!(
             "Received exception when fetching the next record from {table_bucket}. If needed, please back to past the record to continue scanning.",
@@ -556,30 +588,20 @@ impl CompletedFetch for DefaultCompletedFetch {
         let mut scan_records = Vec::new();
 
         for _ in 0..max_records {
-            if self.cached_record_error.is_none() {
-                self.corrupt_last_record = true;
-                match self.next_fetched_record() {
-                    Ok(Some(record)) => {
-                        self.corrupt_last_record = false;
-                        self.last_record = Some(record);
-                    }
-                    Ok(None) => {
-                        self.corrupt_last_record = false;
-                        self.last_record = None;
-                    }
-                    Err(e) => {
-                        self.cached_record_error = Some(e.to_string());
-                    }
-                }
-            }
-
-            let Some(record) = self.last_record.take() else {
+            if !self.fetch_one_record(&mut scan_records) {
                 break;
-            };
+            }
+        }
 
-            self.next_fetch_offset = record.offset() + 1;
-            self.records_read += 1;
-            scan_records.push(record);
+        // Keep a -U paired with its +U in the same poll batch: a KV changelog
+        // writes the pair as consecutive records, and splitting it across polls
+        // would expose an orphaned -U to retract-based CDC consumers. Mirrors
+        // Java's `CompletedFetch.fetchRecords`.
+        if scan_records
+            .last()
+            .is_some_and(|record| *record.change_type() == ChangeType::UpdateBefore)
+        {
+            self.fetch_one_record(&mut scan_records);
         }
 
         if self.cached_record_error.is_some() && scan_records.is_empty() {
@@ -835,7 +857,10 @@ mod tests {
         DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
     };
     use crate::metadata::{DataField, DataTypes, PhysicalTablePath, RowType, TablePath};
-    use crate::record::{MemoryLogRecordsArrowBuilder, ReadContext, to_arrow_schema};
+    use crate::record::{
+        APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD,
+        MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, to_arrow_schema,
+    };
     use crate::row::GenericRow;
     use crate::test_utils::build_table_info;
     use std::sync::Arc;
@@ -941,6 +966,78 @@ mod tests {
 
         let empty = fetch.fetch_records(10)?;
         assert!(empty.is_empty());
+
+        Ok(())
+    }
+
+    /// A `-U`/`+U` pair must not be split across polls: even when `max_records`
+    /// falls between them, `fetch_records` pulls the matching `+U` so the batch
+    /// ends on a complete pair (mirrors Java `CompletedFetch.fetchRecords`).
+    #[test]
+    fn fetch_records_keeps_update_before_after_pair_together() -> Result<()> {
+        let row_type = RowType::new(vec![DataField::new("id", DataTypes::int(), None)]);
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
+        let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
+
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            1,
+            &row_type,
+            false,
+            ArrowCompressionInfo {
+                compression_type: ArrowCompressionType::None,
+                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
+            },
+            usize::MAX,
+            Arc::new(ArrowCompressionRatioEstimator::default()),
+        )?;
+        for id in [10_i32, 20, 20] {
+            let mut row = GenericRow::new(1);
+            row.set_field(0, id);
+            let record = WriteRecord::for_append(
+                Arc::clone(&table_info),
+                physical_table_path.clone(),
+                1,
+                &row,
+            );
+            builder.append(&record)?;
+        }
+        let append_only = builder.build()?;
+
+        // Synthesize a changelog batch carrying +I, -U, +U.
+        let change_types = [
+            ChangeType::Insert,
+            ChangeType::UpdateBefore,
+            ChangeType::UpdateAfter,
+        ];
+        let mut data = Vec::with_capacity(append_only.len() + change_types.len());
+        data.extend_from_slice(&append_only[..RECORDS_OFFSET]);
+        data.extend(change_types.iter().map(ChangeType::to_byte_value));
+        data.extend_from_slice(&append_only[RECORDS_OFFSET..]);
+        data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
+        let new_len = ((data.len() - LOG_OVERHEAD) as i32).to_le_bytes();
+        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&new_len);
+
+        let read_context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data.clone()),
+            data.len(),
+            read_context,
+            0,
+            0,
+        );
+
+        // max_records=2 cuts between -U (offset 1) and +U (offset 2); the pairing
+        // guard pulls the +U so the batch ends on a complete pair.
+        let records = fetch.fetch_records(2)?;
+        assert_eq!(records.len(), 3, "pair guard should append the matching +U");
+        assert_eq!(*records[0].change_type(), ChangeType::Insert);
+        assert_eq!(*records[1].change_type(), ChangeType::UpdateBefore);
+        assert_eq!(*records[2].change_type(), ChangeType::UpdateAfter);
+
+        let rest = fetch.fetch_records(10)?;
+        assert!(rest.is_empty(), "all records consumed");
 
         Ok(())
     }
