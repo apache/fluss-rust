@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     env:
-      OTP_VERSION: "28.0.2"
+      OTP_VERSION: "28.5.0.2"
       ELIXIR_VERSION: "1.19.5"
       FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/target/debug/fluss-test-cluster
       MIX_ENV: test
