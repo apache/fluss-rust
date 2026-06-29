@@ -20,6 +20,7 @@ use crate::client::connection::FlussConnection;
 use crate::client::credentials::SecurityTokenManager;
 use crate::client::metadata::Metadata;
 use crate::client::table::batch_scanner::LimitBatchScanner;
+use crate::client::table::kv_batch_scanner::KvBatchScanner;
 use crate::client::table::log_fetch_buffer::{
     CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
     LogFetchBuffer, RemotePendingFetch,
@@ -162,6 +163,54 @@ impl<'a> TableScan<'a> {
             self.projected_fields,
             table_bucket,
             limit,
+        ))
+    }
+
+    /// Creates a stateful unbounded scanner of a PK table bucket using the
+    /// ScanKv protocol. The first [`KvBatchScanner::next_batch`] opens the
+    /// server-side scanner; subsequent calls iterate until the bucket is drained.
+    pub fn create_kv_batch_scanner(self, table_bucket: TableBucket) -> Result<KvBatchScanner> {
+        if !self.table_info.has_primary_key() {
+            return Err(Error::UnsupportedOperation {
+                message: "KvBatchScanner is only supported for primary key tables".to_string(),
+            });
+        }
+        if table_bucket.table_id() != self.table_info.table_id {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Bucket table_id {} does not match scan table_id {}",
+                    table_bucket.table_id(),
+                    self.table_info.table_id
+                ),
+            });
+        }
+        let num_buckets = self.table_info.get_num_buckets();
+        if table_bucket.bucket_id() < 0 || table_bucket.bucket_id() >= num_buckets {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Bucket id {} out of range for table with {num_buckets} buckets",
+                    table_bucket.bucket_id()
+                ),
+            });
+        }
+        let latest = SchemaInfo::new(
+            self.table_info.get_schema().clone(),
+            self.table_info.get_schema_id(),
+        );
+        let schema_getter = Arc::new(ClientSchemaGetter::new(
+            self.table_info.table_path.clone(),
+            self.conn.get_admin()?,
+            latest,
+        ));
+        let batch_size_bytes = self.conn.config().scanner_kv_fetch_max_bytes;
+        Ok(KvBatchScanner::new(
+            self.conn.get_connections(),
+            self.metadata.clone(),
+            self.table_info,
+            schema_getter,
+            self.projected_fields,
+            table_bucket,
+            batch_size_bytes,
         ))
     }
 

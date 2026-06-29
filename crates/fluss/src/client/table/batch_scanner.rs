@@ -219,10 +219,10 @@ fn decode_log_batch(
     ))
 }
 
-/// Decode a KV limit-scan [`ValueRecordBatch`] into a single Arrow
-/// `RecordBatch`, decoding each record by its own schema id and projecting onto
-/// the current schema.
-async fn decode_kv_batch(
+/// Decode a KV [`ValueRecordBatch`] into a single Arrow `RecordBatch`,
+/// decoding each record by its own schema id and projecting onto the current
+/// schema.
+pub(super) async fn decode_kv_batch(
     table_info: &TableInfo,
     schema_getter: &ClientSchemaGetter,
     projected_fields: Option<&[usize]>,
@@ -279,7 +279,7 @@ async fn decode_kv_batch(
 /// Build one [`FixedSchemaDecoder`] per distinct schema id. The current schema
 /// decodes without projection; older schemas are fetched and projected onto the
 /// current schema.
-async fn build_kv_decoders(
+pub(super) async fn build_kv_decoders(
     schema_getter: &ClientSchemaGetter,
     target_schema: &Schema,
     target_schema_id: i16,
@@ -304,7 +304,7 @@ async fn build_kv_decoders(
 
 /// Decode every value record into a row shaped by `target_row_type`, build a
 /// single Arrow batch, keep the last `limit` rows, then apply column projection.
-fn value_records_to_record_batch(
+pub(super) fn value_records_to_record_batch(
     batch: &ValueRecordBatch,
     ranges: &[Range<usize>],
     decoders: &HashMap<i16, FixedSchemaDecoder>,
@@ -332,7 +332,7 @@ fn value_records_to_record_batch(
 }
 
 /// Read the leading little-endian schema id from a `[schema_id | row]` payload.
-fn read_schema_id(payload: &[u8]) -> Result<i16> {
+pub(super) fn read_schema_id(payload: &[u8]) -> Result<i16> {
     if payload.len() < SCHEMA_ID_LENGTH {
         return Err(Error::UnexpectedError {
             message: format!(
@@ -366,7 +366,7 @@ fn take_last_rows(batch: RecordBatch, base_offset: i64, limit: usize) -> (Record
 }
 
 /// An empty `RecordBatch` with the (optionally projected) target schema.
-fn empty_record_batch(
+pub(super) fn empty_record_batch(
     target_row_type: &RowType,
     projected_fields: Option<&[usize]>,
 ) -> Result<RecordBatch> {
@@ -375,7 +375,7 @@ fn empty_record_batch(
 }
 
 /// Project `batch` (shaped by `target_row_type`) onto the requested columns.
-fn project_batch(
+pub(super) fn project_batch(
     batch: RecordBatch,
     target_row_type: &RowType,
     projected_fields: Option<&[usize]>,

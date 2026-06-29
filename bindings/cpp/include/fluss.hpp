@@ -1421,6 +1421,8 @@ struct Configuration {
     size_t lookup_max_inflight_requests{128};
     // Maximum number of lookup retries
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
+    // Maximum bytes to fetch per KV scanner batch request
+    int32_t scanner_kv_fetch_max_bytes{4 * 1024 * 1024};
 };
 
 class Connection {
