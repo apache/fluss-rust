@@ -66,7 +66,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Cache Mix deps and build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             bindings/elixir/deps
@@ -95,7 +95,7 @@ jobs:
         run: mix credo
 
       - name: Cache PLT
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: bindings/elixir/priv/plts/
           key: ${{ runner.os }}-otp-${{ steps.beam.outputs.otp-version }}-elixir-${{ steps.beam.outputs.elixir-version }}-mix-${{ hashFiles('bindings/elixir/mix.lock') }}-plt
