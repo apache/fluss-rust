@@ -482,7 +482,7 @@ impl TableInfo {
 #[pyclass]
 #[derive(Clone)]
 pub struct LakeSnapshot {
-    snapshot_id: i64,
+    snapshot_id: fcore::SnapshotId,
     table_buckets_offset: HashMap<fcore::metadata::TableBucket, i64>,
 }
 
@@ -599,7 +599,7 @@ impl TableBucket {
 impl LakeSnapshot {
     /// Create a new LakeSnapshot
     #[new]
-    pub fn new(snapshot_id: i64) -> Self {
+    pub fn new(snapshot_id: fcore::SnapshotId) -> Self {
         Self {
             snapshot_id,
             table_buckets_offset: HashMap::new(),
@@ -608,7 +608,7 @@ impl LakeSnapshot {
 
     /// Get snapshot ID
     #[getter]
-    pub fn snapshot_id(&self) -> i64 {
+    pub fn snapshot_id(&self) -> fcore::SnapshotId {
         self.snapshot_id
     }
 
