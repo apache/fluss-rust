@@ -15,8 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[target.aarch64-apple-darwin]
+[target.'cfg(target_os = "linux")']
 rustflags = [
-    "-C", "link-arg=-undefined",
-    "-C", "link-arg=dynamic_lookup",
+  "-C",
+  "link-arg=-Wl,--gc-sections",
+  "-C",
+  "link-arg=-Wl,--as-needed",
+  "-C",
+  "link-arg=-Wl,-z,norelro",
+  "-C",
+  "relocation-model=pic",
 ]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
