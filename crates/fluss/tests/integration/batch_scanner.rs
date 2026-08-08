@@ -379,6 +379,235 @@ mod batch_scanner_test {
         assert!(table.new_scan().limit(-5).is_err());
     }
 
+    // ---- KvBatchScanner tests (ScanKv protocol) --------------------------------
+
+    /// Full scan of a PK table bucket: upsert rows, scan without limit, verify
+    /// all rows are returned.
+    #[tokio::test]
+    async fn kv_batch_scanner_reads_all_rows() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_batch_scan_all");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["id".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+
+        let expected: HashMap<i32, &str> = (1..=10)
+            .map(|i| {
+                (
+                    i,
+                    ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"][i as usize - 1],
+                )
+            })
+            .collect();
+        for (&id, &name) in &expected {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, name);
+            writer.upsert(&row).expect("upsert row");
+        }
+        writer.flush().await.expect("flush");
+
+        let table_info = table.get_table_info();
+        let bucket = TableBucket::new(table_info.table_id, 0);
+
+        let mut scanner = table
+            .new_scan()
+            .create_kv_batch_scanner(bucket.clone())
+            .expect("create kv batch scanner");
+
+        let batches = match scanner.collect_all_batches().await {
+            Ok(b) => b,
+            // ScanKv (API 1061) is not supported on every server build
+            // (e.g. 0.9.x); tolerate the server's "unsupported" signal rather
+            // than failing the suite. Any other error is a real failure.
+            Err(fluss::error::Error::UnsupportedVersion { .. }) => return,
+            Err(e) => panic!("collect: {e}"),
+        };
+        let total_rows: usize = batches.iter().map(|b| b.num_records()).sum();
+        assert_eq!(total_rows, 10, "should return all 10 upserted rows");
+
+        let mut found = HashMap::new();
+        for batch in &batches {
+            let rows = batch.batch();
+            let ids = rows
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("id column");
+            let names = rows
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("name column");
+            for i in 0..rows.num_rows() {
+                found.insert(ids.value(i), names.value(i).to_string());
+            }
+        }
+        for (&id, &name) in &expected {
+            assert_eq!(
+                found.get(&id).map(|s| s.as_str()),
+                Some(name),
+                "missing or wrong row for id={id}"
+            );
+        }
+    }
+
+    /// KvBatchScanner on an empty PK table returns no batches.
+    #[tokio::test]
+    async fn kv_batch_scanner_empty_table() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_batch_scan_empty");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("val", DataTypes::string())
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["id".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let table_info = table.get_table_info();
+        let bucket = TableBucket::new(table_info.table_id, 0);
+
+        let mut scanner = table
+            .new_scan()
+            .create_kv_batch_scanner(bucket)
+            .expect("create kv batch scanner");
+
+        let batches = match scanner.collect_all_batches().await {
+            Ok(b) => b,
+            // ScanKv (API 1061) is not supported on every server build
+            // (e.g. 0.9.x); tolerate the server's "unsupported" signal rather
+            // than failing the suite. Any other error is a real failure.
+            Err(fluss::error::Error::UnsupportedVersion { .. }) => return,
+            Err(e) => panic!("collect: {e}"),
+        };
+        let total_rows: usize = batches.iter().map(|b| b.num_records()).sum();
+        assert_eq!(total_rows, 0, "empty table should yield 0 rows");
+    }
+
+    /// KvBatchScanner with column projection.
+    #[tokio::test]
+    async fn kv_batch_scanner_with_projection() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_batch_scan_proj");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("score", DataTypes::bigint())
+                    .primary_key(vec!["id"])
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["id".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+
+        for i in 1..=3 {
+            let mut row = GenericRow::new(3);
+            row.set_field(0, i);
+            row.set_field(1, format!("name_{i}"));
+            row.set_field(2, (i as i64) * 100);
+            writer.upsert(&row).expect("upsert");
+        }
+        writer.flush().await.expect("flush");
+
+        let table_info = table.get_table_info();
+        let bucket = TableBucket::new(table_info.table_id, 0);
+
+        let mut scanner = table
+            .new_scan()
+            .project(&[0, 2])
+            .expect("project")
+            .create_kv_batch_scanner(bucket)
+            .expect("kv batch scanner");
+
+        let batches = match scanner.collect_all_batches().await {
+            Ok(b) => b,
+            // ScanKv (API 1061) is not supported on every server build
+            // (e.g. 0.9.x); tolerate the server's "unsupported" signal rather
+            // than failing the suite. Any other error is a real failure.
+            Err(fluss::error::Error::UnsupportedVersion { .. }) => return,
+            Err(e) => panic!("collect: {e}"),
+        };
+        for batch in &batches {
+            let rows = batch.batch();
+            assert_eq!(rows.num_columns(), 2, "projected to id + score");
+            assert_eq!(rows.schema().field(0).name(), "id");
+            assert_eq!(rows.schema().field(1).name(), "score");
+        }
+    }
+
+    /// KvBatchScanner must reject log tables (no primary key).
+    #[tokio::test]
+    async fn kv_batch_scanner_rejects_log_table() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_batch_scan_log_reject");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let bucket = TableBucket::new(table.get_table_info().table_id, 0);
+        assert!(
+            table.new_scan().create_kv_batch_scanner(bucket).is_err(),
+            "must reject non-PK table"
+        );
+    }
+
     /// A configured limit must be rejected by the log scanners rather than
     /// silently ignored.
     #[tokio::test]

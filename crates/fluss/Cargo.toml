@@ -41,6 +41,9 @@ storage-fs = ["opendal/services-fs"]
 storage-s3 = ["opendal/services-s3"]
 storage-oss = ["opendal/services-oss"]
 integration_tests = []
+# Gates tests that exercise APIs only available on Fluss 1.x servers.
+# Enable alongside `integration_tests` when running against a 1.x server image.
+fluss_v1 = []
 
 [dependencies]
 arrow = { workspace = true }

@@ -21,6 +21,9 @@ extern crate fluss;
 #[cfg(feature = "integration_tests")]
 mod integration {
     mod admin;
+    mod admin_extended;
+    #[cfg(feature = "fluss_v1")]
+    mod admin_v1;
     mod batch_scanner;
     mod fluss_cluster;
     mod kv_changelog;
