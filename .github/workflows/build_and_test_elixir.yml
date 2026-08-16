@@ -48,7 +48,7 @@ jobs:
       FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/target/debug/fluss-test-cluster
       MIX_ENV: test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up BEAM
         id: beam
