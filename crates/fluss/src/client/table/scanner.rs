@@ -32,7 +32,7 @@ use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{
     LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TablePath,
 };
-use crate::metrics::ScannerMetrics;
+use crate::metrics::{SCANNER_ERROR_KIND_BUCKET, SCANNER_ERROR_KIND_RPC, ScannerMetrics};
 use crate::proto::{
     ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
 };
@@ -1496,6 +1496,7 @@ impl LogFetcher {
                         warn!(
                             "Retrying after error fetching log from destination node {server_node:?}: {e:?}"
                         );
+                        metrics.record_error(SCANNER_ERROR_KIND_RPC);
                         Self::handle_fetch_failure(metadata, &leader, &fetch_request).await;
                         return;
                     }
@@ -1574,6 +1575,7 @@ impl LogFetcher {
                 if let Some(error_code) = fetch_log_for_bucket.error_code
                     && error_code != FlussError::None.code()
                 {
+                    metrics.record_error(SCANNER_ERROR_KIND_BUCKET);
                     let api_error: ApiError = ErrorResponse {
                         error_code,
                         error_message: fetch_log_for_bucket.error_message.clone(),
