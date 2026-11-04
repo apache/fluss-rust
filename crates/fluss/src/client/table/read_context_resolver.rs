@@ -62,7 +62,7 @@ struct ResolvedContexts {
 
 impl ReadContextResolver {
     /// Create a new resolver with the initial schema's ReadContexts.
-    pub fn new(
+    pub(crate) fn new(
         initial_schema_id: i16,
         local_context: Arc<ReadContext>,
         remote_context: Arc<ReadContext>,
@@ -87,12 +87,12 @@ impl ReadContextResolver {
         }
     }
 
-    pub fn with_schema_getter(mut self, schema_getter: Arc<ClientSchemaGetter>) -> Self {
+    pub(crate) fn with_schema_getter(mut self, schema_getter: Arc<ClientSchemaGetter>) -> Self {
         self.schema_getter = Some(schema_getter);
         self
     }
 
-    pub fn with_fixed_schema(mut self, fixed_schema: bool) -> Self {
+    pub(crate) fn with_fixed_schema(mut self, fixed_schema: bool) -> Self {
         self.fixed_schema = fixed_schema;
         if fixed_schema {
             let fixed_target = {
@@ -115,7 +115,7 @@ impl ReadContextResolver {
     /// Resolve the ReadContext for the given schema_id.
     /// Returns the initial context if projection is active (schema pinned).
     /// Returns None if the schema_id is not yet cached.
-    pub fn resolve(&self, schema_id: i16, is_remote: bool) -> Option<Arc<ReadContext>> {
+    pub(crate) fn resolve(&self, schema_id: i16, is_remote: bool) -> Option<Arc<ReadContext>> {
         // If projection is active, always return the initial context
         let effective_id = if self.projected_fields.is_some() {
             self.initial_schema_id
@@ -138,7 +138,7 @@ impl ReadContextResolver {
     /// Callers should invoke this only after encountering a concrete batch
     /// whose schema is absent. This keeps remote log files streaming: no scan
     /// of the remaining segment is needed to discover all schema IDs up front.
-    pub async fn fetch_and_register(&self, schema_id: i16) -> Result<()> {
+    pub(crate) async fn fetch_and_register(&self, schema_id: i16) -> Result<()> {
         if self.projected_fields.is_some() || self.contexts.read().contains_key(&schema_id) {
             return Ok(());
         }
@@ -158,7 +158,7 @@ impl ReadContextResolver {
 
     /// Register a new schema by its ID. Builds ReadContexts from the Schema.
     /// No-op if already cached or if projection is active.
-    pub fn register_schema(&self, schema_id: i16, schema: &Schema) -> Result<()> {
+    pub(crate) fn register_schema(&self, schema_id: i16, schema: &Schema) -> Result<()> {
         if self.projected_fields.is_some() {
             // Projection pins the schema, no need to register new ones
             return Ok(());
@@ -203,13 +203,13 @@ impl ReadContextResolver {
     }
 
     /// Returns the initial schema ID.
-    pub fn initial_schema_id(&self) -> i16 {
+    pub(crate) fn initial_schema_id(&self) -> i16 {
         self.initial_schema_id
     }
 
     /// Returns the projection fields if active, used for fetch request pushdown.
     #[allow(dead_code)]
-    pub fn projected_fields(&self) -> Option<&[usize]> {
+    pub(crate) fn projected_fields(&self) -> Option<&[usize]> {
         self.projected_fields.as_deref()
     }
 }

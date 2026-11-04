@@ -28,7 +28,7 @@ use std::cmp::max;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
-pub struct InnerWriteBatch {
+pub(crate) struct InnerWriteBatch {
     batch_id: i64,
     physical_table_path: Arc<PhysicalTablePath>,
     create_ms: i64,
@@ -112,7 +112,7 @@ impl InnerWriteBatch {
     }
 }
 
-pub enum WriteBatch {
+pub(crate) enum WriteBatch {
     ArrowLog(ArrowLogWriteBatch),
     Kv(KvWriteBatch),
 }
@@ -236,7 +236,7 @@ impl WriteBatch {
     }
 }
 
-pub struct ArrowLogWriteBatch {
+pub(crate) struct ArrowLogWriteBatch {
     pub write_batch: InnerWriteBatch,
     pub arrow_builder: MemoryLogRecordsArrowBuilder,
     built_records: Option<Bytes>,
@@ -326,7 +326,7 @@ impl ArrowLogWriteBatch {
     }
 }
 
-pub struct KvWriteBatch {
+pub(crate) struct KvWriteBatch {
     write_batch: InnerWriteBatch,
     kv_batch_builder: KvRecordBatchBuilder,
     target_columns: Option<Arc<Vec<usize>>>,

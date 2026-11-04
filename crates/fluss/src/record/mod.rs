@@ -23,9 +23,10 @@ use std::collections::HashMap;
 
 mod arrow;
 mod error;
-pub mod kv;
+pub(crate) mod kv;
 
-pub use arrow::*;
+pub use arrow::{from_arrow_field, to_arrow_schema, to_arrow_type};
+pub(crate) use arrow::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {
@@ -88,7 +89,7 @@ impl fmt::Display for ChangeType {
 
 #[derive(Clone)]
 pub struct ScanRecord {
-    pub row: ColumnarRow,
+    row: ColumnarRow,
     offset: i64,
     timestamp: i64,
     change_type: ChangeType,

@@ -136,7 +136,7 @@ pub mod metrics;
 
 mod bucketing;
 mod compression;
-pub mod io;
+mod io;
 mod util;
 
 #[cfg(test)]

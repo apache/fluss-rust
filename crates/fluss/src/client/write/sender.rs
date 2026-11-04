@@ -53,7 +53,7 @@ type DrainResult<'a> = (
 );
 
 #[allow(dead_code)]
-pub struct Sender {
+pub(crate) struct Sender {
     running: AtomicBool,
     metadata: Arc<Metadata>,
     accumulator: Arc<RecordAccumulator>,

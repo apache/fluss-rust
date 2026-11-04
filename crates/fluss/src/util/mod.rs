@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod murmur_hash;
-pub mod partition;
-pub mod varint;
+pub(crate) mod murmur_hash;
+pub(crate) mod partition;
+pub(crate) mod varint;
 
 use crate::TableId;
 use crate::metadata::TableBucket;
@@ -27,7 +27,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn current_time_ms() -> i64 {
+pub(crate) fn current_time_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(std::time::Duration::ZERO)
@@ -38,7 +38,7 @@ pub fn current_time_ms() -> i64 {
 // File cleanup is now handled via RAII with FileCleanupGuard in arrow.rs
 // which uses Rust's drop order to ensure files are closed before deletion.
 
-pub struct FairBucketStatusMap<S> {
+pub(crate) struct FairBucketStatusMap<S> {
     map: LinkedHashMap<TableBucket, Arc<S>>,
     size: usize,
 }

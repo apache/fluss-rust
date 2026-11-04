@@ -1464,7 +1464,7 @@ impl TableBucket {
         self.partition_id
     }
 
-    pub fn to_pb(&self) -> crate::proto::PbTableBucket {
+    pub(crate) fn to_pb(&self) -> crate::proto::PbTableBucket {
         crate::proto::PbTableBucket {
             table_id: self.table_id,
             partition_id: self.partition_id,
@@ -1472,7 +1472,7 @@ impl TableBucket {
         }
     }
 
-    pub fn from_pb(pb: &crate::proto::PbTableBucket) -> Self {
+    pub(crate) fn from_pb(pb: &crate::proto::PbTableBucket) -> Self {
         Self {
             table_id: pb.table_id,
             partition_id: pb.partition_id,

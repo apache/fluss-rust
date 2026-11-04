@@ -324,13 +324,13 @@ impl Config {
     /// Returns true when the security protocol indicates SASL authentication
     /// should be performed. Matches Java's `SaslAuthenticationPlugin` which
     /// registers as `"sasl"` (case-insensitive).
-    pub fn is_sasl_enabled(&self) -> bool {
+    pub(crate) fn is_sasl_enabled(&self) -> bool {
         self.security_protocol.eq_ignore_ascii_case("sasl")
     }
     /// Validates security configuration. Returns `Ok(())` when the config is
     /// consistent, or an error message when SASL is enabled but the config is
     /// incomplete or uses an unsupported mechanism.
-    pub fn validate_security(&self) -> Result<(), String> {
+    pub(crate) fn validate_security(&self) -> Result<(), String> {
         if !self.is_sasl_enabled() {
             return Ok(());
         }
@@ -352,7 +352,7 @@ impl Config {
         }
         Ok(())
     }
-    pub fn validate_scanner(&self) -> Result<(), String> {
+    pub(crate) fn validate_scanner(&self) -> Result<(), String> {
         if self.scanner_remote_log_prefetch_num == 0 {
             return Err("scanner_remote_log_prefetch_num must be > 0".to_string());
         }
@@ -390,7 +390,7 @@ impl Config {
         Ok(())
     }
 
-    pub fn validate_writer(&self) -> Result<(), String> {
+    pub(crate) fn validate_writer(&self) -> Result<(), String> {
         if self.writer_request_max_size <= 0 {
             return Err("writer_request_max_size must be > 0".to_string());
         }

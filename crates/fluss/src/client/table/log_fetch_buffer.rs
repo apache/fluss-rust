@@ -60,7 +60,7 @@ pub(crate) struct FetchErrorContext {
 }
 
 /// Represents a completed fetch that can be consumed
-pub trait CompletedFetch: Send + Sync {
+pub(crate) trait CompletedFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn api_error(&self) -> Option<&ApiError>;
     fn fetch_error_context(&self) -> Option<&FetchErrorContext>;
@@ -101,14 +101,14 @@ enum FetchStep<T> {
 }
 
 /// Represents a pending fetch that is waiting to be completed
-pub trait PendingFetch: Send + Sync {
+pub(crate) trait PendingFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn is_completed(&self) -> bool;
     fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>>;
 }
 
 /// Thread-safe buffer for completed fetches
-pub struct LogFetchBuffer {
+pub(crate) struct LogFetchBuffer {
     resolver: Arc<ReadContextResolver>,
     completed_fetches: Mutex<VecDeque<Box<dyn CompletedFetch>>>,
     pending_fetches: Mutex<HashMap<TableBucket, VecDeque<Box<dyn PendingFetch>>>>,
@@ -357,7 +357,7 @@ impl PendingFetch for CompletedPendingFetch {
 
 /// Default implementation of CompletedFetch for in-memory log records
 /// Used for local fetches from tablet server
-pub struct DefaultCompletedFetch {
+pub(crate) struct DefaultCompletedFetch {
     table_bucket: TableBucket,
     api_error: Option<ApiError>,
     fetch_error_context: Option<FetchErrorContext>,
@@ -807,7 +807,7 @@ impl CompletedFetch for DefaultCompletedFetch {
 /// Completed fetch for remote log segments
 /// Matches Java's RemoteCompletedFetch design - separate class for remote vs local
 /// Holds RAII permit until consumed (data is in inner)
-pub struct RemoteCompletedFetch {
+pub(crate) struct RemoteCompletedFetch {
     inner: DefaultCompletedFetch,
     permit: Option<PrefetchPermit>,
 }
@@ -887,7 +887,7 @@ impl CompletedFetch for RemoteCompletedFetch {
 // Permit released explicitly in drain() or automatically when struct drops
 
 /// Pending fetch that waits for remote log file to be downloaded
-pub struct RemotePendingFetch {
+pub(crate) struct RemotePendingFetch {
     segment: RemoteLogSegment,
     download_future: RemoteLogDownloadFuture,
     pos_in_log_segment: i32,

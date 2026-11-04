@@ -55,50 +55,50 @@ use std::{
 use crate::error::Error::IllegalArgument;
 use arrow::ipc::writer::IpcWriteOptions;
 /// const for record batch
-pub const BASE_OFFSET_LENGTH: usize = 8;
-pub const LENGTH_LENGTH: usize = 4;
-pub const MAGIC_LENGTH: usize = 1;
-pub const COMMIT_TIMESTAMP_LENGTH: usize = 8;
-pub const CRC_LENGTH: usize = 4;
-pub const SCHEMA_ID_LENGTH: usize = 2;
-pub const ATTRIBUTE_LENGTH: usize = 1;
-pub const LAST_OFFSET_DELTA_LENGTH: usize = 4;
-pub const WRITE_CLIENT_ID_LENGTH: usize = 8;
-pub const BATCH_SEQUENCE_LENGTH: usize = 4;
-pub const RECORDS_COUNT_LENGTH: usize = 4;
+pub(crate) const BASE_OFFSET_LENGTH: usize = 8;
+pub(crate) const LENGTH_LENGTH: usize = 4;
+pub(crate) const MAGIC_LENGTH: usize = 1;
+pub(crate) const COMMIT_TIMESTAMP_LENGTH: usize = 8;
+pub(crate) const CRC_LENGTH: usize = 4;
+pub(crate) const SCHEMA_ID_LENGTH: usize = 2;
+pub(crate) const ATTRIBUTE_LENGTH: usize = 1;
+pub(crate) const LAST_OFFSET_DELTA_LENGTH: usize = 4;
+pub(crate) const WRITE_CLIENT_ID_LENGTH: usize = 8;
+pub(crate) const BATCH_SEQUENCE_LENGTH: usize = 4;
+pub(crate) const RECORDS_COUNT_LENGTH: usize = 4;
 
-pub const BASE_OFFSET_OFFSET: usize = 0;
-pub const LENGTH_OFFSET: usize = BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH;
-pub const MAGIC_OFFSET: usize = LENGTH_OFFSET + LENGTH_LENGTH;
-pub const COMMIT_TIMESTAMP_OFFSET: usize = MAGIC_OFFSET + MAGIC_LENGTH;
-pub const CRC_OFFSET: usize = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
-pub const SCHEMA_ID_OFFSET: usize = CRC_OFFSET + CRC_LENGTH;
-pub const ATTRIBUTES_OFFSET: usize = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
-pub const LAST_OFFSET_DELTA_OFFSET: usize = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
-pub const WRITE_CLIENT_ID_OFFSET: usize = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
-pub const BATCH_SEQUENCE_OFFSET: usize = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
-pub const RECORDS_COUNT_OFFSET: usize = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
-pub const RECORDS_OFFSET: usize = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
+pub(crate) const BASE_OFFSET_OFFSET: usize = 0;
+pub(crate) const LENGTH_OFFSET: usize = BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH;
+pub(crate) const MAGIC_OFFSET: usize = LENGTH_OFFSET + LENGTH_LENGTH;
+pub(crate) const COMMIT_TIMESTAMP_OFFSET: usize = MAGIC_OFFSET + MAGIC_LENGTH;
+pub(crate) const CRC_OFFSET: usize = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
+pub(crate) const SCHEMA_ID_OFFSET: usize = CRC_OFFSET + CRC_LENGTH;
+pub(crate) const ATTRIBUTES_OFFSET: usize = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
+pub(crate) const LAST_OFFSET_DELTA_OFFSET: usize = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+pub(crate) const WRITE_CLIENT_ID_OFFSET: usize = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
+pub(crate) const BATCH_SEQUENCE_OFFSET: usize = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
+pub(crate) const RECORDS_COUNT_OFFSET: usize = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
+pub(crate) const RECORDS_OFFSET: usize = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
 
-pub const RECORD_BATCH_HEADER_SIZE: usize = RECORDS_OFFSET;
-pub const ARROW_CHANGETYPE_OFFSET: usize = RECORD_BATCH_HEADER_SIZE;
-pub const LOG_OVERHEAD: usize = LENGTH_OFFSET + LENGTH_LENGTH;
+pub(crate) const RECORD_BATCH_HEADER_SIZE: usize = RECORDS_OFFSET;
+pub(crate) const ARROW_CHANGETYPE_OFFSET: usize = RECORD_BATCH_HEADER_SIZE;
+pub(crate) const LOG_OVERHEAD: usize = LENGTH_OFFSET + LENGTH_LENGTH;
 
 /// Bit 0 of the attributes byte. When set, the batch is append-only and carries
 /// no change-type vector; when clear, a `record_count`-byte change-type vector
 /// precedes the Arrow IPC payload (the changelog of a primary-key table). Shares
 /// the wire layout of the Java client's `DefaultLogRecordBatch`.
-pub const APPEND_ONLY_FLAG_MASK: u8 = 0x01;
+pub(crate) const APPEND_ONLY_FLAG_MASK: u8 = 0x01;
 
 /// Maximum batch size matches Java's Integer.MAX_VALUE limit.
 /// Java uses int type for batch size, so max value is 2^31 - 1 = 2,147,483,647 bytes (~2GB).
 /// This is the implicit limit in FileLogRecords.java and other Java components.
-pub const MAX_BATCH_SIZE: usize = i32::MAX as usize; // 2,147,483,647 bytes (~2GB)
+pub(crate) const MAX_BATCH_SIZE: usize = i32::MAX as usize; // 2,147,483,647 bytes (~2GB)
 
 /// const for record
 /// The "magic" values.
 #[derive(Debug, Clone, Copy)]
-pub enum LogMagicValue {
+pub(crate) enum LogMagicValue {
     V0 = 0,
 }
 
@@ -145,15 +145,15 @@ fn validate_batch_size(batch_size_bytes: i32) -> Result<usize> {
 
 // NOTE: Rust layout/offsets currently match Java only for V0.
 // TODO: Add V1 layout/offsets to keep parity with Java's V1 format.
-pub const CURRENT_LOG_MAGIC_VALUE: u8 = LogMagicValue::V0 as u8;
+pub(crate) const CURRENT_LOG_MAGIC_VALUE: u8 = LogMagicValue::V0 as u8;
 
 /// Value used if writer ID is not available or non-idempotent.
-pub const NO_WRITER_ID: i64 = -1;
+pub(crate) const NO_WRITER_ID: i64 = -1;
 
 /// Value used if batch sequence is not available.
-pub const NO_BATCH_SEQUENCE: i32 = -1;
+pub(crate) const NO_BATCH_SEQUENCE: i32 = -1;
 
-pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
+pub(crate) const BUILDER_DEFAULT_OFFSET: i64 = 0;
 
 /// Initial capacity for Arrow column vectors (pre-allocation hint, not a record cap).
 /// Matching Java's `ArrowWriter.INITIAL_CAPACITY`.
@@ -163,7 +163,7 @@ const INITIAL_ROW_CAPACITY: usize = 1024;
 /// Matching Java's `ArrowWriter.BUFFER_USAGE_RATIO`.
 const BUFFER_USAGE_RATIO: f32 = 0.95;
 
-pub struct MemoryLogRecordsArrowBuilder {
+pub(crate) struct MemoryLogRecordsArrowBuilder {
     base_log_offset: i64,
     schema_id: i32,
     magic: u8,
@@ -190,7 +190,7 @@ pub struct MemoryLogRecordsArrowBuilder {
     estimated_compression_ratio: f32,
 }
 
-pub trait ArrowRecordBatchInnerBuilder: Send {
+pub(crate) trait ArrowRecordBatchInnerBuilder: Send {
     fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>>;
 
     fn append(&mut self, row: &dyn InternalRow) -> Result<bool>;
@@ -208,7 +208,7 @@ pub trait ArrowRecordBatchInnerBuilder: Send {
 }
 
 #[derive(Default)]
-pub struct PrebuiltRecordBatchBuilder {
+pub(crate) struct PrebuiltRecordBatchBuilder {
     arrow_record_batch: Option<Arc<RecordBatch>>,
     records_count: i32,
 }
@@ -253,7 +253,7 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
     }
 }
 
-pub struct RowAppendRecordBatchBuilder {
+pub(crate) struct RowAppendRecordBatchBuilder {
     table_schema: SchemaRef,
     column_writers: Vec<ColumnWriter>,
     records_count: i32,
@@ -631,7 +631,7 @@ fn estimate_arrow_ipc_overhead(
     Ok(ipc_message_len.saturating_sub(raw_data))
 }
 
-pub trait ToArrow {
+pub(crate) trait ToArrow {
     fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()>;
 }
 
@@ -834,7 +834,7 @@ impl LogRecordsSource {
     }
 }
 
-pub struct LogRecordsBatches {
+pub(crate) struct LogRecordsBatches {
     source: LogRecordsSource,
     current_pos: usize,
     remaining_bytes: usize,
@@ -910,7 +910,7 @@ impl Iterator for LogRecordsBatches {
     }
 }
 
-pub struct LogRecordBatch {
+pub(crate) struct LogRecordBatch {
     data: Bytes,
 }
 
@@ -1433,7 +1433,7 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
 }
 
 #[derive(Clone)]
-pub struct ReadContext {
+pub(crate) struct ReadContext {
     target_schema: SchemaRef,
     full_schema: SchemaRef,
     row_type: Arc<RowType>,
@@ -1740,7 +1740,7 @@ fn align_record_batch_to_schema(
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
-pub enum LogRecordIterator {
+pub(crate) enum LogRecordIterator {
     Empty,
     Arrow(ArrowLogRecordIterator),
 }
@@ -1784,7 +1784,7 @@ impl BatchChangeTypes {
     }
 }
 
-pub struct ArrowLogRecordIterator {
+pub(crate) struct ArrowLogRecordIterator {
     reader: ArrowReader,
     base_offset: i64,
     timestamp: i64,
@@ -1842,7 +1842,7 @@ impl Iterator for ArrowLogRecordIterator {
     }
 }
 
-pub struct ArrowReader {
+pub(crate) struct ArrowReader {
     batch: Arc<TypedBatch>,
 }
 
@@ -1871,7 +1871,7 @@ impl ArrowReader {
         ColumnarRow::from_typed_batch(Arc::clone(&self.batch), row_id)
     }
 }
-pub struct MyVec<T>(pub StreamReader<T>);
+pub(crate) struct MyVec<T>(pub(crate) StreamReader<T>);
 
 #[cfg(test)]
 mod tests {
