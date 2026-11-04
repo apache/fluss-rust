@@ -32,6 +32,7 @@
 
 use crate::client::admin::FlussAdmin;
 use crate::client::table::RecordBatchLogScanner;
+use crate::client::table::stream::{RecordBatchStream, ScanBatchStream};
 use crate::error::{Error, Result};
 use crate::metadata::TableBucket;
 use crate::record::ScanBatch;
@@ -224,6 +225,33 @@ impl RecordBatchLogReader {
             reader: self,
             handle,
         }
+    }
+
+    /// Converts this reader into a [ScanBatchStream] yielding [ScanBatch] items.
+    ///
+    /// The returned stream is fused: once 
+ext_batch returns Ok(None) or Err(_),
+    /// subsequent polls return None.
+    pub fn into_stream(self) -> ScanBatchStream {
+        let schema = self.schema();
+        let stream = futures::stream::unfold((self, false), |(mut reader, terminated)| async move {
+            if terminated {
+                return None;
+            }
+            match reader.next_batch().await {
+                Ok(Some(batch)) => Some((Ok(batch), (reader, false))),
+                Ok(None) => None,
+                Err(e) => Some((Err(e), (reader, true))),
+            }
+        });
+        ScanBatchStream::new(Box::pin(stream), schema)
+    }
+
+    /// Converts this reader into a [RecordBatchStream] yielding bare Arrow [RecordBatch]es.
+    ///
+    /// This is an async bridge for DataFusion (RecordBatchStreamAdapter) and PyArrow interop.
+    pub fn into_record_batch_stream(self) -> RecordBatchStream {
+        self.into_stream().into_record_batch_stream()
     }
 }
 

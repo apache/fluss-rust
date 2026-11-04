@@ -521,4 +521,124 @@ mod reader_test {
             .await
             .expect("Failed to drop table");
     }
+
+    #[tokio::test]
+    async fn record_batch_log_reader_stream_and_bridges() {
+        use arrow::record_batch::RecordBatchReader;
+        use futures::StreamExt;
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_reader_stream_bridges");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3]),
+                    ("name", Utf8, ["a", "b", "c"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch");
+        writer.flush().await.expect("Failed to flush");
+
+        // 1. Test into_stream()
+        let scanner = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create record batch scanner");
+        scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let reader = RecordBatchLogReader::new_until_latest(scanner, &admin)
+            .await
+            .expect("Failed to create reader");
+
+        assert_eq!(reader.schema().fields().len(), 2);
+        let mut stream = reader.into_stream();
+        assert_eq!(stream.schema().fields().len(), 2);
+
+        let mut batches = Vec::new();
+        while let Some(batch_res) = stream.next().await {
+            batches.push(batch_res.expect("stream batch Ok"));
+        }
+        assert_eq!(extract_ids_from_batches(&batches), vec![1, 2, 3]);
+
+        // 2. Test into_record_batch_stream()
+        let scanner2 = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create scanner");
+        scanner2
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let reader2 = RecordBatchLogReader::new_until_latest(scanner2, &admin)
+            .await
+            .expect("Failed to create reader");
+
+        let mut rb_stream = reader2.into_record_batch_stream();
+        assert_eq!(rb_stream.schema().fields().len(), 2);
+
+        let mut rb_count = 0;
+        while let Some(rb_res) = rb_stream.next().await {
+            let rb = rb_res.expect("rb stream batch Ok");
+            rb_count += rb.num_rows();
+        }
+        assert_eq!(rb_count, 3);
+
+        // 3. Test to_record_batch_reader()
+        let scanner3 = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create scanner");
+        scanner3
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let reader3 = RecordBatchLogReader::new_until_latest(scanner3, &admin)
+            .await
+            .expect("Failed to create reader");
+
+        let mut sync_reader = reader3.to_record_batch_reader(tokio::runtime::Handle::current());
+        assert_eq!(sync_reader.schema().fields().len(), 2);
+
+        let mut sync_count = 0;
+        for rb_res in &mut sync_reader {
+            let rb = rb_res.expect("sync reader batch Ok");
+            sync_count += rb.num_rows();
+        }
+        assert_eq!(sync_count, 3);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
 }

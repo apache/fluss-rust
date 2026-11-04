@@ -34,16 +34,18 @@ mod read_context_resolver;
 mod reader;
 mod remote_log;
 mod scanner;
+mod stream;
 mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
-pub use batch_scanner::LimitBatchScanner;
+pub use batch_scanner::{LimitBatchScanner, SyncRecordBatchLimitScanner};
 pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
 pub use reader::{RecordBatchLogReader, SyncRecordBatchLogReader};
 pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
 pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
+pub use stream::{RecordBatchStream, ScanBatchStream, SyncRecordBatchStreamReader};
 pub use upsert::{TableUpsert, UpsertWriter};
 
 #[allow(dead_code)]
